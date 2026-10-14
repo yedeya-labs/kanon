@@ -271,8 +271,41 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
     expect(mutate((w) => grant(job(w, 'metrics-page.yml', 'page'))))
       .toEqual(["metrics-page.yml: job page holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may"]);
     // The Explorer's read job, reading the page view, is neither holder (its callers then name it too).
-    expect(mutate((w) => { (job(w, 'agent-explore-telemetry.yml', 'aggregate').steps as Array<{ run?: string }>)[3]!.run = 'node "$KANON/scripts/aggregate-read.mjs" page'; }))
+    expect(mutate((w) => { (job(w, 'agent-explore-telemetry.yml', 'aggregate').steps as Array<{ run?: string }>)[1]!.run = 'node "$KANON/scripts/aggregate-read.mjs" page'; }))
       .toContain("agent-explore-telemetry.yml: job aggregate holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may");
+    // Plan 0008 J5: the Explorer's job is on the token, and the metrics page's SigV4 shape, with
+    // the Explorer's own read, is not the Explorer's any more.
+    expect(mutate((w) => {
+      const sigv4 = structuredClone(job(w, 'metrics-page.yml', 'aggregate'));
+      (sigv4.steps as Array<{ run?: string }>)[3]!.run = 'node "$KANON/scripts/aggregate-read.mjs"';
+      w['agent-explore-telemetry.yml']!.jobs.aggregate = sigv4;
+    })).toContain("agent-explore-telemetry.yml: job aggregate holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may");
+  });
+
+  // Plan 0008 §2.2, step J5: the store admits a token by the workflow file it was minted in, not by
+  // the job, so in each workflow the store admits, every job that can mint one is named here, the
+  // Overseer's QA store `export` job included, which holds the token for the QA store's role and so
+  // could also mint one for the telemetry store's audience. Each is held to its shape above.
+  it('names every job that can mint a token in each workflow the telemetry store admits', () => {
+    const w = load();
+    const holders = (file: string) => Object.entries(w[file]!.jobs).filter(([, j]) => idTokenSource(w[file]!, j)).map(([n]) => n).sort();
+    expect({
+      'telemetry-collect.yml': holders('telemetry-collect.yml'),
+      'agent-overseer.yml': holders('agent-overseer.yml'),
+      'agent-explore-telemetry.yml': holders('agent-explore-telemetry.yml'),
+      'metrics-page.yml': holders('metrics-page.yml'),
+    }).toEqual({
+      'telemetry-collect.yml': ['collect'],
+      'agent-overseer.yml': ['export', 'telemetry'],
+      'agent-explore-telemetry.yml': ['aggregate'],
+      'metrics-page.yml': ['aggregate'],
+    });
+    // The Overseer's `export` is a QA store job in the block's shape alone: no step of its own.
+    const exp = job(w, 'agent-overseer.yml', 'export');
+    expect(isStoreJob(exp)).toBe(true);
+    expect((exp.steps ?? []).map((st) => (st as { uses?: string }).uses)).toEqual(['$/actions/qa-store']);
+    expect(mutate((x) => { job(x, 'agent-overseer.yml', 'export').steps!.push({ run: 'node "$KANON/scripts/overseer-telemetry.mjs" read' }); }))
+      .toContain("agent-overseer.yml: job export holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may");
   });
 
   it('the collector job declares no environment', () => {

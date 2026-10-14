@@ -60,10 +60,12 @@ describe('requirements.json', () => {
     // The lanes that call the store (kanon#471's `qaStore`), not every lane holding id-token.
     const coupled = Object.entries(lanes).filter(([, l]) => l.qaStore).map(([n]) => n);
     expect(coupled).toEqual(['agent-code-audit', 'agent-dispatch-sweep', 'agent-explore', 'agent-overseer']);
+    // The two reading lanes' roles (kanon#470, kanon#471), read by no job since plan 0008 J5 and
+    // declared until the release after, so a caller may leave them out: not store secrets.
+    const extra: Record<string, string[]> = { 'agent-overseer': ['KANON_TELEMETRY_READER_ROLE'], 'agent-explore-telemetry': ['KANON_AGGREGATE_ROLE'] };
     for (const [name, l] of Object.entries(lanes)) {
-      // The Overseer also takes its telemetry reader role, optionally (kanon#470): not a store secret.
-      const extra = name === 'agent-overseer' ? ['KANON_TELEMETRY_READER_ROLE'] : [];
-      expect(l.optionalSecrets, name).toEqual(coupled.includes(name) ? [...extra, 'QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'] : undefined);
+      const want = [...(extra[name] ?? []), ...(coupled.includes(name) ? ['QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'] : [])];
+      expect(l.optionalSecrets, name).toEqual(want.length ? want : undefined);
       for (const n of l.optionalSecrets ?? []) expect(l.secrets, name).toContain(n);
     }
   });

@@ -3,7 +3,7 @@
 // (plan 0002 §3, §5).
 //
 //   node infra/telemetry/render.mjs --register <register.json> --out <dir> [--verify] [--importer] [--backfill]
-//       [--operator-job-roles <role ARN>,<role ARN>]
+//       [--operator-job-roles <role ARN>,<role ARN>] [--min-token-version <X.Y.Z>]
 //
 // Writes <dir>/template.json, which `aws cloudformation package` takes, and <dir>/parameters.json,
 // which `aws cloudformation deploy --parameter-overrides file://...` takes. Both hold the
@@ -38,8 +38,16 @@
 // lowercase `[a-z0-9]` run, as the scrub's `nameContext` hashes them, NEVER THE WORDS, so the
 // function's configuration names no repository. Lambda holds a function's whole environment to
 // 4 KB, so a register too large for it is refused here, before a deploy.
+//
+// THE TOKEN PATH'S TWO PARAMETERS (plan 0008 §9 step 3a, step J5). `--min-token-version` writes
+// `MinTokenVersion`, the lowest Kanon release whose workflows both functions' token URLs admit;
+// left out, it is not written, so a later deploy keeps the stack's value, and a stack that never
+// had one keeps the token path closed. `CursorKey`, which seals `GET /v1/rows/self`'s cursor, is
+// new on every render, as the template asks of every deploy: 32 random bytes as hex, written to
+// parameters.json only, never printed.
 
 import { Buffer } from 'node:buffer';
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -332,19 +340,28 @@ export function invokerResources(entry, invokePolicy, subjects) {
 /** A comma-separated list of role ARNs, each as `owner_principal_arn` must be. @param {string} v */
 export const operatorJobRolesOk = (v) => v.split(',').every((a) => OWNER.test(a));
 
+/** A release as the template's `MinTokenVersion` allows it: `X.Y.Z`, no leading zero, no `v`, no suffix. */
+export const MIN_TOKEN_VERSION = /^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$/;
+
+/** A fresh `CursorKey`: 32 random bytes, as the template's 64 hex characters. */
+export const freshCursorKey = () => randomBytes(32).toString('hex');
+
 /**
  * The deployable template and its parameter overrides.
  * @param {Register} register
- * @param {{ verify?: boolean, importer?: boolean, backfill?: boolean, operatorJobRoles?: string, templateText?: string, functionDir?: string, gh?: (args: string[]) => string, now?: number }} [opts]
+ * @param {{ verify?: boolean, importer?: boolean, backfill?: boolean, operatorJobRoles?: string, minTokenVersion?: string, cursorKey?: () => string, templateText?: string, functionDir?: string, gh?: (args: string[]) => string, now?: number }} [opts]
  *   `gh` runs `gh` for GitHub's API; the default is the real one. `operatorJobRoles`, the operator's
  *   private jobs' roles, comma-separated, which the register table's resource policy lets in (plan
  *   0008 §5.3), sets `OperatorJobRoleArns`; left out, the parameter is not written, so a deploy of
- *   an existing stack keeps its previous value.
+ *   an existing stack keeps its previous value. `minTokenVersion` sets `MinTokenVersion` the same
+ *   way (plan 0008 §9 step 3a). `cursorKey` makes the fresh `CursorKey` every render writes; the
+ *   default is 32 random bytes.
  * @returns {{ template: any, parameters: string[], subjects: Record<string, Subjects> }} `subjects` by key
  */
 export function render(register, opts = {}) {
   const problems = registerProblems(register, opts.now);
   if (opts.operatorJobRoles !== undefined && !operatorJobRolesOk(opts.operatorJobRoles)) problems.push('--operator-job-roles must list role ARNs, comma-separated');
+  if (opts.minTokenVersion !== undefined && !MIN_TOKEN_VERSION.test(opts.minTokenVersion)) problems.push('--min-token-version must be a release as X.Y.Z, with no v and no suffix');
   if (problems.length) throw new Error(`register: ${problems.join('; ')}`);
   /** @type {Record<string, Subjects>} */
   const subjects = {};
@@ -390,7 +407,11 @@ export function render(register, opts = {}) {
     `EnableImporter=${opts.importer ? 'true' : 'false'}`,
     `EnableBackfill=${opts.backfill ? 'true' : 'false'}`,
     ...(opts.operatorJobRoles !== undefined ? [`OperatorJobRoleArns=${opts.operatorJobRoles}`] : []),
+    ...(opts.minTokenVersion !== undefined ? [`MinTokenVersion=${opts.minTokenVersion}`] : []),
+    `CursorKey=${(opts.cursorKey ?? freshCursorKey)()}`,
   ];
+  const cursor = /** @type {string} */ (parameters.at(-1)).slice('CursorKey='.length);
+  if (!/^[0-9a-f]{64}$/.test(cursor)) throw new Error('render: the CursorKey made is not 64 hex characters');
   return { template, parameters, subjects };
 }
 
@@ -403,10 +424,11 @@ if (isCliEntry(import.meta.url)) {
       importer: { type: 'boolean', default: false },
       backfill: { type: 'boolean', default: false },
       'operator-job-roles': { type: 'string' },
+      'min-token-version': { type: 'string' },
     },
   });
   if (!values.register || !values.out) {
-    console.error('usage: render.mjs --register <register.json> --out <dir> [--verify] [--importer] [--backfill] [--operator-job-roles <role ARN>,<role ARN>]');
+    console.error('usage: render.mjs --register <register.json> --out <dir> [--verify] [--importer] [--backfill] [--operator-job-roles <role ARN>,<role ARN>] [--min-token-version <X.Y.Z>]');
     process.exit(2);
   }
   try {
@@ -415,7 +437,7 @@ if (isCliEntry(import.meta.url)) {
     let register;
     // JSON.parse's message quotes the text around the fault, which may be a key.
     try { register = JSON.parse(text); } catch { throw new Error(`register: ${values.register} is not JSON`); }
-    const { template, parameters, subjects } = render(register, { ...values, operatorJobRoles: values['operator-job-roles'] });
+    const { template, parameters, subjects } = render(register, { ...values, operatorJobRoles: values['operator-job-roles'], minTokenVersion: values['min-token-version'] });
     // The Owner checks these before deploying: each is what that repository's tokens carry. By
     // repository, never by key.
     for (const e of register.repositories) {

@@ -57,6 +57,7 @@ The library scripts that decide a verdict, gate a lane, mint or narrow what a to
 - `^scripts/upstream-names\.mjs$` `pipeline` `always` — the names the scrub removes from a finding
 - `^scripts/aggregate-mask\.mjs$` `pipeline` `always` — the masking of the aggregate function's URL and the account id in a role's ARN in every log
 - `^scripts/telemetry-collect\.mjs$` `pipeline` `always` — the collector, which holds the telemetry writer's credentials and decides which rows, and which findings at which level, leave a repository
+- `^scripts/lib/telemetry-token\.mjs$` `auth` `always` — the telemetry store's token client (plan 0008 §2.1): which URL a GitHub OIDC token minted for the store's audience is sent to, and its mask; the collector, the Overseer's read, the Explorer's and the metrics page's import it
 - `^scripts/telemetry/jev\.mjs$` `pipeline` `always` — the decision whether a private upstream finding becomes a public issue
 
 Code Kanon's own workflows run from this tree, on the branch they run on, with a credential. Kanon's lanes run the library at the release their callers pin, but three workflows don't, so each entry file and every local file it imports, directly or through another, is the Owner's; the scripts above already cover the rest of their imports (`lane-gate.mjs`, `caller-pin.mjs`, `app-register.mjs`, `declarations.mjs`, `spec-lib.mjs`, `aggregate-mask.mjs`), and `actions/`, `infra/telemetry/function/` and `.github/` cover theirs:

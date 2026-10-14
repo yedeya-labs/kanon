@@ -77,11 +77,11 @@
       "name": "Explore the telemetry",
       "group": "explore",
       "does": "Reads Kanon's hosted telemetry aggregate weekly, never a row, and files or drafts the anomalies it finds in Kanon's lanes: failures by lane, stage, error and Kanon version, and costs per lane and model.",
-      "needs": ["an aggregate invoker role from Kanon's telemetry register (`aggregate_invoker`), whose ARN is the secret `KANON_AGGREGATE_ROLE`, and the repository variable `KANON_AGGREGATE_URL` (docs/telemetry.md)"],
+      "needs": ["a registration with Kanon's telemetry store that sets `aggregate_invoker`, which Kanon's operator sets; the lane reads the aggregate with GitHub's OIDC token, so no role, secret or variable (docs/telemetry.md)"],
       "cost": "A model run weekly, skipped when the aggregate holds no cell and no signal.",
       "minutes": "At Kanon's pace, about 1 runner-minute a day: about 6 per weekly run.",
       "recommend": [],
-      "when": "When your telemetry register entry has an aggregate invoker role, so you can read the aggregate."
+      "when": "When your telemetry registration sets `aggregate_invoker`, so you can read the aggregate."
     },
     "agent-triage": {
       "name": "Triage and fix",

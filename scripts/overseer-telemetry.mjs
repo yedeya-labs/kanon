@@ -1,51 +1,61 @@
 #!/usr/bin/env node
 // The Overseer's own-adopter cost view (kanon#470; plan 0002 §6, plan 0004 §3.2 and step 13):
-// `token-trend.md` and `cache-ttl.md`, computed from this repository's own telemetry rows, read
-// with its telemetry reader role, and handed to the agent as two Markdown files, never as rows.
+// `token-trend.md` and `cache-ttl.md`, computed from this repository's own telemetry rows, and
+// handed to the agent as two Markdown files, never as rows.
 //
-//   node "$KANON/scripts/overseer-telemetry.mjs" mask    the lane's `telemetry` job, first; it also
-//                                                        resolves and checks the table and region
-//   node "$KANON/scripts/overseer-telemetry.mjs" read    the lane's `telemetry` job, after the
-//                                                        credentials step
-//   node "$KANON/scripts/overseer-telemetry.mjs" report  the lane's `telemetry` job, last: the
-//                                                        headline indicators, to its job summary
-//   node "$KANON/scripts/overseer-telemetry.mjs" merge   the agent's job, before the agent
+//   node "$KANON/scripts/overseer-telemetry.mjs" consent  the lane's `gate` job: does this
+//                                                         repository send telemetry?
+//   node "$KANON/scripts/overseer-telemetry.mjs" read     the lane's `telemetry` job, first
+//   node "$KANON/scripts/overseer-telemetry.mjs" report   the lane's `telemetry` job, last: the
+//                                                         headline indicators, to its job summary
+//   node "$KANON/scripts/overseer-telemetry.mjs" merge    the agent's job, before the agent
+//
+// THROUGH THE STORE'S OWN-ROWS ENDPOINT, ON GITHUB'S TOKEN (plan 0008 §3.5, step J5). Both reads
+// call `GET /v1/rows/self` on the store's ingest function with a fresh GitHub OIDC token for the
+// store's audience on every request (`scripts/lib/telemetry-token.mjs`): no role, no secret, no
+// table, no region. The function finds the repository's key from the token's `repository_id`,
+// reads under a session policy scoped to that key, and never returns the key, so nothing here
+// sees it or has it to mask. The store admits the token only from `agent-overseer.yml` at a Kanon
+// release, from a schedule or a dispatch on the repository's default branch (§2.2). A self-hosted
+// store is named by two repository variables together, `KANON_TELEMETRY_TOKEN_URL` (its
+// `IngestTokenUrl` output) and `KANON_TELEMETRY_AUDIENCE`, never one without the other.
 //
 // WHO READS WHAT (the Owner's decision on kanon#470, option A). The lane's `telemetry` job is the
-// only one that holds the reader role's credentials, a store job of its own whose shape the
-// id-token guard holds (`tests/unit/helpers/store-jobs.ts`). It assumes the adopter's existing
-// reader role, `kanon-telemetry-<key>-reader`, which the hosted store trusts for the adopter's
-// default branch and allows to `Query` only partitions under `<key>#` (plan 0002 §3). The role's
-// ARN is a secret the caller maps by name, `KANON_TELEMETRY_READER_ROLE` (like the aggregate
-// invoker's, kanon#471); the key is read from the role's name, so nothing else is configured. It
-// reads each of Kanon's lanes' partitions for the last `WINDOW_DAYS`, projected to the fields the
-// two reports use, writes the two files, and uploads them as an artifact kept one day. The rows
-// never leave the job: not to the log, not to the artifact, not to the agent (plan 0004 step 13).
+// only one that mints a token for the telemetry store, a job of its own whose shape the id-token
+// guard holds (`tests/unit/helpers/store-jobs.ts`). It reads each of Kanon's lanes' rows for the
+// last `WINDOW_DAYS`, projected to the fields the two reports use, writes the two files, and
+// uploads them as an artifact kept one day. The rows never leave the job: not to the log, not to
+// the artifact, not to the agent (plan 0004 step 13).
+//
+// ONLY WITH CONSENT (ADR 0007). The gate job reads whether the repository sends telemetry: a
+// workflow on its default branch that calls Kanon's collector, whose caller is the consent (plan
+// 0008 §3.3). Without one, no token is ever minted for the store, so a repository that didn't
+// opt in never names itself to it.
 //
 // THE STATUS IS ALWAYS SAID. The agent's job adds the files to the QA store's export, and writes
 // the read's status into the export's manifest as `telemetry`: `ran` (the read worked, and the two
-// files are Kanon's), `not configured` (no reader role is mapped: the repository didn't opt in to
-// telemetry, or hasn't mapped the secret), `not run on this trigger` (the runtime-version
-// trigger's `pull_request_target`, whose token the reader role refuses, so the lane doesn't try;
-// the Owner's decision on kanon#499) or `failed` (the table or region isn't valid, the role
-// couldn't be assumed, or no partition could be read). The prompt reports that status and nothing more: a missing file never
-// means the store is absent. A repository whose own store hook writes the two files keeps them
-// whenever this read didn't run.
+// files are Kanon's), `not configured` (the repository doesn't send telemetry, isn't registered
+// with the store yet, or this release doesn't publish the hosted store's URL), `not run on this
+// trigger` (the runtime-version trigger's `pull_request_target`, whose token the store refuses,
+// so the lane doesn't try; the Owner's decision on kanon#499) or `failed` (the store refused the
+// read, or no partition could be read). The prompt reports that status and nothing more: a missing
+// file never means the store is absent. A repository whose own store hook writes the two files
+// keeps them whenever this read didn't run.
 //
 // THE HEADLINE INDICATORS, TO THE JOB SUMMARY (kanon#668; plan 0003 §6.4, option A). The same
 // job, in its last step, runs `kanon metrics report` over this repository's own rows: the
-// work-item partition, `<key>#work`, whole, and each lane's partition over the store's thirteen
-// months (plan 0002 §10), every attribute, since the report reads most of them. It writes the
-// report's Markdown to the job's summary, and nothing else anywhere: the rows stay in the step's
-// memory, never in a file, the log or the artifact. A partition it can't read withholds the whole
-// report, naming the partition: a report missing a lane's cost, or the work items, would print
-// numbers that are wrong. It never fails the job, so the agent's two files are never held up by it
-// (kanon#682): it holds a deadline of its own, `REPORT_BY_MS` after the mask step stamped the job's
-// start, well inside the job's `timeout-minutes`; no query outlives it, and a report not read by
-// then is withheld with a warning. Any throw on the way, from the report or from the summary's
-// write, is a warning too, and the step exits 0.
+// work-item partition, `work`, whole, and each lane's over the store's thirteen months (plan 0002
+// §10), every field, since the report reads most of them. It writes the report's Markdown to the
+// job's summary, and nothing else anywhere: the rows stay in the step's memory, never in a file,
+// the log or the artifact. A partition it can't read withholds the whole report, naming the
+// partition: a report missing a lane's cost, or the work items, would print numbers that are
+// wrong. It never fails the job, so the agent's two files are never held up by it (kanon#682): it
+// holds a deadline of its own, `REPORT_BY_MS` after the read stamped the job's start, well inside
+// the job's `timeout-minutes`; no request outlives it, and a report not read by then is withheld
+// with a warning. Any throw on the way, from the report or from the summary's write, is a warning
+// too, and the step exits 0.
 //
-// `node:` built-ins and the `aws` CLI on GitHub's runner only (`K-SELF-8`).
+// `node:` built-ins, and `gh` for the gate's read of the default branch (`K-SELF-8`).
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -55,57 +65,43 @@ import { join } from 'node:path';
 import { RETENTION_MONTHS, addMonths } from '../infra/telemetry/function/index.mjs';
 import { LANES, RESERVED_PARTITION } from '../infra/telemetry/function/schema.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { readSnapshot, resolveCaller } from './lib/lane-caller.mjs';
+import { HOSTED_INGEST_URL, TokenError, codeOf, runnerMask, storeOf, storeRequest } from './lib/telemetry-token.mjs';
 import { metricsReport, renderReport } from './metrics/report.mjs';
 import { metricsViews, renderViews } from './metrics/views.mjs';
 import { DAY_MS, TREND_ATTRIBUTES, render as renderTrend, summarize as summarizeTrend } from './lib/token-trend.mjs';
 import { TTL_ATTRIBUTES, pinnedLanes, render as renderTtl, summarize as summarizeTtl } from './lib/cache-ttl.mjs';
 
-/** The hosted store's table and region (docs/telemetry.md), the defaults. A repository reading a
- *  self-hosted telemetry store sets the variables KANON_TELEMETRY_TABLE and KANON_TELEMETRY_REGION
- *  (the Owner's decision on kanon#499); `checkStore` resolves and checks both before any use. */
-export const TABLE = 'kanon-telemetry';
-export const REGION = 'eu-central-1';
-/** A DynamoDB table name, as AWS allows it. */
-export const TABLE_PATTERN = /^[A-Za-z0-9_.-]{3,255}$/;
-/** An AWS region code: `eu-central-1`, `us-gov-west-1`, `ap-southeast-2`. */
-export const REGION_PATTERN = /^[a-z]{2}(?:-gov|-iso[a-z]?)?-[a-z]+-\d{1,2}$/;
-
-/**
- * The table and region to read, or why they can't be: an empty value is the default.
- * @param {{ TABLE?: string, REGION?: string }} env
- * @returns {{ table: string, region: string, problems: string[] }}
- */
-export function checkStore(env) {
-  const table = String(env.TABLE ?? '').trim() || TABLE;
-  const region = String(env.REGION ?? '').trim() || REGION;
-  /** @type {string[]} */
-  const problems = [];
-  if (!TABLE_PATTERN.test(table)) problems.push(`the KANON_TELEMETRY_TABLE variable \`${table.slice(0, 80)}\` is not a DynamoDB table name (3 to 255 of A-Z, a-z, 0-9, \`_\`, \`-\` and \`.\`)`);
-  if (!REGION_PATTERN.test(region)) problems.push(`the KANON_TELEMETRY_REGION variable \`${region.slice(0, 80)}\` is not an AWS region code such as \`eu-central-1\``);
-  return { table, region, problems };
-}
 /** Two weeks: the token trend compares this week with the one before. */
 export const WINDOW_DAYS = 14;
 /** The headline report reads back as far as the store keeps a row: thirteen months (plan 0002 §10). */
 export const REPORT_MONTHS = RETENTION_MONTHS;
 /** The `telemetry` job's `timeout-minutes` (`.github/workflows/agent-overseer.yml`). */
 export const JOB_TIMEOUT_MINUTES = 10;
-/** The report's deadline, counted from the mask step's stamp: two minutes short of the job's
- *  timeout, for the job's setup, the steps before the mask and the post-steps after the report. */
+/** The report's deadline, counted from the read step's stamp: two minutes short of the job's
+ *  timeout, for the job's setup, the step before the read and the post-steps after the report. */
 export const REPORT_BY_MS = (JOB_TIMEOUT_MINUTES - 2) * 60_000;
 /** The report's own budget when the job's start can't be read: from the step's start. */
 export const REPORT_FALLBACK_MS = 3 * 60_000;
-/** One query's own limit, when the deadline is further off. */
+/** One request's own limit, when the deadline is further off. */
 export const QUERY_TIMEOUT_MS = 120_000;
-/** Where the mask step stamps the job's start, under the runner's temp directory: never under the
+/** At most this many pages of one partition (1,000 rows each, plan 0008 §3.2): a cursor that never
+ *  ends is a failed read, not a hung job. */
+export const MAX_PAGES = 200;
+/** Where the read stamps the job's start, under the runner's temp directory: never under the
  *  read's output directory, which is uploaded. */
 export const STARTED_FILE = 'kanon-overseer-telemetry-started';
 
+/** The variables that name a self-hosted store, together or not at all (plan 0008 §2.1). */
+export const TOKEN_VARIABLES = /** @type {const} */ ({ url: 'KANON_TELEMETRY_TOKEN_URL', audience: 'KANON_TELEMETRY_AUDIENCE' });
+/** Kanon's collector, whose caller on the default branch is the repository's consent (plan 0008 §3.3). */
+export const COLLECTOR_LANE = 'telemetry-collect';
+
 /**
- * When the report must have read every partition: `REPORT_BY_MS` after the job's start, as the mask
+ * When the report must have read every partition: `REPORT_BY_MS` after the job's start, as the read
  * step stamped it, or `REPORT_FALLBACK_MS` after `at` when the stamp is missing or not a time
  * before `at` within the job's timeout.
- * @param {string | undefined} stamp the stamp's text, as the mask step wrote it
+ * @param {string | undefined} stamp the stamp's text, as the read step wrote it
  * @param {number} at the step's start
  */
 export function deadlineOf(stamp, at) {
@@ -122,152 +118,203 @@ export const STATUSES = /** @type {const} */ (['ran', 'not configured', 'not run
 /** Kanon's lane definitions, the release this runs from: where the 5m pins are read. */
 const WORKFLOWS = fileURLToPath(new URL('../.github/workflows', import.meta.url));
 
-/** A reader role's ARN, and the key in its name (plan 0002 §3). */
-const READER_ARN = /^arn:aws[a-z-]*:iam::(\d{12}):role\/(?:[\w+=,.@-]+\/)*kanon-telemetry-([a-z0-9][a-z0-9-]{0,31})-reader$/;
+/**
+ * The fields the cost view asks for: the two reports' attributes, with the time each row was
+ * recorded in place of the store's sort key, which the endpoint doesn't return (plan 0008 §3.2).
+ */
+export const VIEW_FIELDS = [...new Set([...TREND_ATTRIBUTES, ...TTL_ATTRIBUTES].filter((a) => a !== 'sk')), 'recorded_at'];
 
 /**
- * The account id and the key in a reader role's ARN, or `null` when it isn't one.
- * @param {string | undefined} role
- * @returns {{ account: string, key: string } | null}
+ * The store this repository's rows are read from: Kanon's hosted one, or the self-hosted one the
+ * two variables name together (`storeOf`). `hostedUrl` is the hosted ingest function's token URL,
+ * the constant, which a test replaces.
+ * @param {Record<string, string | undefined>} env @param {string} [hostedUrl]
  */
-export function readerOf(role) {
-  const m = READER_ARN.exec(String(role ?? '').trim());
-  return m ? { account: /** @type {string} */ (m[1]), key: /** @type {string} */ (m[2]) } : null;
-}
-
-/**
- * The values to mask before any other step names them: the ARN (a secret, masked already), the
- * account id inside it, and the adopter's key, which is in every partition name.
- * @param {{ ROLE?: string }} env
- * @returns {string[]}
- */
-export function masksOf(env) {
-  const role = String(env.ROLE ?? '').trim();
-  if (!role) return [];
-  const r = readerOf(role);
-  const account = /^arn:aws[a-z-]*:iam::(\d{12}):/.exec(role)?.[1];
-  return [...new Set([role, ...(account ? [account] : []), ...(r ? [r.key] : [])])];
-}
+export const overseerStore = (env, hostedUrl = HOSTED_INGEST_URL) =>
+  storeOf({ url: env[TOKEN_VARIABLES.url] ?? '', audience: env[TOKEN_VARIABLES.audience] ?? '', hostedUrl, names: { url: `the ${TOKEN_VARIABLES.url} variable`, audience: `the ${TOKEN_VARIABLES.audience} variable` } });
 
 /** @param {number} ms */
-const stamp = (ms) => `${new Date(ms).toISOString().slice(0, 19).replace(/[-:]/g, '')}Z`;
+const iso = (ms) => new Date(ms).toISOString();
+/** The store's sort-key stamp of a row's `recorded_at`, compact ISO, as the reports read it. @param {string} at */
+const compactOf = (at) => `${at.slice(0, 19).replace(/[-:]/g, '')}Z`;
 
 /**
- * One `aws dynamodb query` of a partition, every page: since `from` when given, or the whole
- * partition; projected to `attributes` when given, or every attribute. The CLI is killed outright
- * once `timeout` milliseconds have passed, and the query throws.
- * @param {{ pk: string, from?: string, attributes?: readonly string[], table?: string, region?: string, timeout?: number }} q
- * @returns {import('./lib/token-trend.mjs').Item[]}
+ * A row as the store's endpoint answers it, as the item the two reports read (`token-trend.mjs`
+ * `Item`): each string, number and boolean as its attribute, and `sk` from `recorded_at`. Any
+ * other value is left out.
+ * @param {Record<string, unknown>} row
+ * @returns {import('./lib/token-trend.mjs').Item}
  */
-export function awsQuery({ pk, from, attributes, table = TABLE, region = REGION, timeout = QUERY_TIMEOUT_MS }) {
-  const names = Object.fromEntries((attributes ?? []).map((a, i) => [`#a${i}`, a]));
-  const out = execFileSync('aws', [
-    'dynamodb', 'query',
-    '--table-name', table,
-    '--region', region,
-    '--key-condition-expression', from === undefined ? '#pk = :p' : '#pk = :p AND #sk > :from',
-    ...(attributes ? ['--projection-expression', Object.keys(names).join(', ')] : []),
-    '--expression-attribute-names', JSON.stringify({ ...names, '#pk': 'pk', ...(from === undefined ? {} : { '#sk': 'sk' }) }),
-    '--expression-attribute-values', JSON.stringify({ ':p': { S: pk }, ...(from === undefined ? {} : { ':from': { S: from } }) }),
-    '--output', 'json',
-  ], { encoding: 'utf8', timeout, killSignal: 'SIGKILL', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
-  return JSON.parse(out).Items ?? [];
+export function itemOf(row) {
+  /** @type {import('./lib/token-trend.mjs').Item} */
+  const item = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (typeof v === 'string') item[k] = { S: v };
+    else if (typeof v === 'number' && Number.isFinite(v)) item[k] = { N: String(v) };
+    else if (typeof v === 'boolean') item[k] = { BOOL: v };
+  }
+  if (typeof row.recorded_at === 'string') item.sk = { S: compactOf(row.recorded_at) };
+  return item;
 }
 
 /**
- * A stored item as the row it was written from: each attribute's value, without the store's own
- * key. The writer stores strings, numbers and booleans only (`toAttributes`).
- * @param {import('./lib/token-trend.mjs').Item} item
+ * A row as the store's endpoint answers it, kept to its string, number and boolean fields, as
+ * the headline report reads them.
+ * @param {Record<string, unknown>} row
  * @returns {Record<string, string | number | boolean>}
  */
-export function rowOf(item) {
+export function rowOf(row) {
   /** @type {Record<string, string | number | boolean>} */
-  const row = {};
-  for (const [k, v] of Object.entries(item)) {
-    if (k === 'pk' || k === 'sk' || !v) continue;
-    if (v.S !== undefined) row[k] = v.S;
-    else if (v.N !== undefined) row[k] = Number(v.N);
-    else if (v.BOOL !== undefined) row[k] = v.BOOL;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) if (typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))) out[k] = v;
+  return out;
+}
+
+/** The store refused the read for the whole registration (plan 0008 §3.1): no other partition is asked. */
+export class RefusedError extends Error {
+  /** @param {number} status @param {string | null} code */
+  constructor(status, code) {
+    super(`the store answered ${status}${code ? ` (${code})` : ''}`);
+    this.status = status;
+    this.code = code;
   }
-  return row;
+}
+
+/** The deadline passed before or while a partition was read. */
+export class LateError extends Error {
+  constructor() { super('out of time'); }
 }
 
 /**
- * A failed query's reason, one line, with the key and any account id taken out: it goes into a
- * file the agent reads.
- * @param {unknown} e @param {string} key
+ * What a refusal means, in a sentence for the summary: the store's code, and what to do.
+ * @param {RefusedError} e
  */
-export function reasonOf(e, key) {
-  const err = /** @type {{ stderr?: string | Buffer, message?: string }} */ (e);
-  const raw = String(err?.stderr || err?.message || (e instanceof Error ? '' : e ?? '')).split('\n').map((l) => l.trim()).find(Boolean) ?? 'the query failed';
-  return (key ? raw.split(key).join('<key>') : raw).replace(/\b\d{12}\b/g, '<account>').replace(/arn:aws[^\s"')]*/g, '<arn>').slice(0, 200);
+export function refusalWords(e) {
+  if (e.status === 404 && e.code === 'not-registered') return `${e.message}: this repository is not registered with the store yet, and its telemetry collector's first default-branch run registers it`;
+  if (e.status === 403 && e.code === 'suspended') return `${e.message}: Kanon's operator has suspended this repository's registration`;
+  if (e.status === 410 || e.code === 'erased') return `${e.message}: this repository's telemetry was erased`;
+  if (e.status === 403 && e.code === 'ref') return `${e.message}: the store reads a repository's rows on its default branch only, so a dispatch from another branch reads nothing`;
+  if (e.status === 403 && e.code === 'workflow') return `${e.message}: the store admits the Overseer's lane at a Kanon release no older than its minimum, so check the caller's pin`;
+  if (e.status === 429) return `${e.message}: the repository's hourly request quota is spent; the next run reads again`;
+  return e.message;
+}
+
+/**
+ * Every page of one partition of this repository's own rows (`GET /v1/rows/self`), each request
+ * with a fresh token, none started after `deadline` and none given longer than what is left of
+ * it. Throws `RefusedError` on a 401, 403, 404, 410 or 429, which hold for the whole
+ * registration, and `LateError` past the deadline; any other failure throws an `Error` naming it,
+ * never with the URL or a token.
+ * @param {import('./lib/telemetry-token.mjs').Store} store
+ * @param {{ lane: string, from?: string, fields?: readonly string[] }} q
+ * @param {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void, clock?: () => number, deadline?: number }} io
+ * @returns {Promise<Record<string, unknown>[]>}
+ */
+export async function readPartition(store, q, { env, fetchImpl = fetch, mask = runnerMask, clock = Date.now, deadline = Infinity }) {
+  /** @type {Record<string, unknown>[]} */
+  const rows = [];
+  /** @type {string | undefined} */
+  let cursor;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const left = deadline - clock();
+    if (!(left > 0)) throw new LateError();
+    const timeout = Math.ceil(Math.min(QUERY_TIMEOUT_MS, left));
+    /** @type {typeof fetch} */
+    const timed = /** @type {any} */ ((/** @type {any} */ url, /** @type {any} */ init) => fetchImpl(url, { ...init, signal: globalThis.AbortSignal.timeout(timeout) }));
+    /** @type {Record<string, string>} */
+    const query = { lane: q.lane, ...(q.from ? { from: q.from } : {}), ...(q.fields ? { fields: q.fields.join(',') } : {}), ...(cursor ? { cursor } : {}) };
+    /** @type {import('./lib/telemetry-token.mjs').Answer} */
+    let res;
+    try {
+      res = await storeRequest(store, { method: 'GET', path: 'v1/rows/self', query }, { env, fetchImpl: timed, mask });
+    } catch (e) {
+      if (!(deadline - clock() > 0)) throw new LateError();
+      if (e instanceof TokenError) throw e;
+      throw new Error(`the store could not be reached (${e instanceof Error ? e.name : 'error'})`);
+    }
+    if ([401, 403, 404, 410, 429].includes(res.status)) throw new RefusedError(res.status, codeOf(res.json));
+    if (res.status !== 200) throw new Error(`the store answered ${res.status}${codeOf(res.json) ? ` (${codeOf(res.json)})` : ''}`);
+    const got = res.json?.rows;
+    if (!Array.isArray(got)) throw new Error('the store answered no list of rows');
+    for (const r of got) if (r && typeof r === 'object' && !Array.isArray(r)) rows.push(r);
+    cursor = typeof res.json?.cursor === 'string' ? res.json.cursor : undefined;
+    if (!cursor) return rows;
+  }
+  throw new Error(`the store answered more than ${MAX_PAGES} pages`);
+}
+
+/**
+ * @typedef {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void, hostedUrl?: string }} StoreIo
+ */
+
+/**
+ * The store to read, its URL masked when it is self-hosted, or the status and line that say why
+ * there is none.
+ * @param {StoreIo} io @param {string} what
+ * @returns {{ store: import('./lib/telemetry-token.mjs').Store, refused?: undefined } | { store?: undefined, refused: { status: 'not configured' | 'failed', line: string } }}
+ */
+function storeFor({ env, mask = runnerMask, hostedUrl = HOSTED_INGEST_URL }, what) {
+  const store = overseerStore(env, hostedUrl);
+  if (!store.ok) return { refused: { status: store.unpublished ? 'not configured' : 'failed', line: `${what}: ${store.why}.` } };
+  // A self-hosted store's URL is the adopter's to publish or not: masked before anything prints.
+  if (!store.hosted) mask(store.url);
+  return { store };
 }
 
 /**
  * The read: both reports from this repository's own rows, or why there are none.
- * @param {{ ROLE?: string, CREDENTIALS?: string, OUT?: string, TABLE?: string, REGION?: string }} env
- * @param {{ query?: typeof awsQuery, now?: number, workflows?: string }} [io]
- * @returns {{ status: 'ran' | 'failed', lines: string[], files: Record<string, string> }}
+ * @param {StoreIo & { now?: number, workflows?: string }} io
+ * @returns {Promise<{ status: 'ran' | 'not configured' | 'failed', lines: string[], files: Record<string, string> }>}
  */
-export function read(env, { query = awsQuery, now = Date.now(), workflows = WORKFLOWS } = {}) {
-  const refused = refusalOf(env);
-  if (refused) return { status: 'failed', files: {}, lines: [`The telemetry read failed: ${refused}`] };
-  const store = checkStore(env);
-  const reader = /** @type {{ key: string }} */ (readerOf(env.ROLE));
-  const from = stamp(now - WINDOW_DAYS * DAY_MS);
-  const attributes = [...new Set([...TREND_ATTRIBUTES, ...TTL_ATTRIBUTES])];
+export async function read({ now = Date.now(), workflows = WORKFLOWS, ...io }) {
+  const { store, refused } = storeFor(io, 'The telemetry read did not run');
+  if (!store) return { status: refused.status, files: {}, lines: [refused.line] };
+  const from = iso(now - WINDOW_DAYS * DAY_MS);
   /** @type {Array<{ lane: string, items: import('./lib/token-trend.mjs').Item[], error?: string }>} */
-  const partitions = LANES.map((lane) => {
+  const partitions = [];
+  for (const lane of LANES) {
     try {
-      return { lane, items: query({ pk: `${reader.key}#${lane}`, from, attributes, table: store.table, region: store.region }) };
+      const rows = await readPartition(store, { lane, from, fields: VIEW_FIELDS }, io);
+      partitions.push({ lane, items: rows.map(itemOf) });
     } catch (e) {
-      return { lane, items: [], error: reasonOf(e, reader.key) };
+      // A refusal holds for every partition: said once, and nothing more is asked.
+      if (e instanceof RefusedError) {
+        const words = refusalWords(e);
+        return e.code === 'not-registered'
+          ? { status: 'not configured', files: {}, lines: [`The telemetry read found nothing to read: ${words}.`] }
+          : { status: 'failed', files: {}, lines: [`The telemetry read failed: ${words}.`] };
+      }
+      partitions.push({ lane, items: [], error: e instanceof Error ? e.message : 'the read failed' });
     }
-  });
-  const read = partitions.filter((p) => !p.error);
-  if (!read.length) {
+  }
+  const got = partitions.filter((p) => !p.error);
+  if (!got.length) {
     return { status: 'failed', files: {}, lines: [`The telemetry read failed: none of the ${LANES.length} lane partitions could be read (${partitions[0]?.error ?? 'no lanes'}).`] };
   }
-  const rows = read.reduce((n, p) => n + p.items.length, 0);
+  const rows = got.reduce((n, p) => n + p.items.length, 0);
   const trend = renderTrend(summarizeTrend(partitions, now));
-  const ttl = renderTtl(summarizeTtl(read, pinnedLanes(workflows, LANES), partitions.filter((p) => p.error).map((p) => p.lane)), WINDOW_DAYS);
+  const ttl = renderTtl(summarizeTtl(got, pinnedLanes(workflows, LANES), partitions.filter((p) => p.error).map((p) => p.lane)), WINDOW_DAYS);
   return {
     status: 'ran',
     files: { 'token-trend.md': `${trend}\n`, 'cache-ttl.md': `${ttl}\n` },
     // Counts only: the rows themselves are never printed.
-    lines: [`The telemetry read ran: ${read.length} of ${LANES.length} lane partitions read, ${rows} row(s) over the last ${WINDOW_DAYS} days, summarised into ${FILES.join(' and ')}.`],
+    lines: [`The telemetry read ran: ${got.length} of ${LANES.length} lane partitions read, ${rows} row(s) over the last ${WINDOW_DAYS} days, summarised into ${FILES.join(' and ')}.`],
   };
-}
-
-/**
- * Why a read can't start, or `null`: a malformed table or region, a role that isn't a reader
- * role, or credentials that weren't issued. The read and the report check the same.
- * @param {{ ROLE?: string, CREDENTIALS?: string, TABLE?: string, REGION?: string }} env
- */
-function refusalOf(env) {
-  const store = checkStore(env);
-  if (store.problems.length) return `${store.problems.join('; ')}.`;
-  if (!readerOf(env.ROLE)) return 'the KANON_TELEMETRY_READER_ROLE secret is not a telemetry reader role\'s ARN (`arn:aws:iam::<account>:role/kanon-telemetry-<key>-reader`, the stack\'s `ReaderRole<id>` output; docs/telemetry.md).';
-  if (env.CREDENTIALS !== 'success') return 'the reader role could not be assumed. Its trust names the default branch\'s ref, so a run on another ref (a dispatch from a branch) is refused; on the default branch, check the role\'s trust and the secret.';
-  return null;
 }
 
 /**
  * The headline report (kanon#668): `kanon metrics report`'s Markdown over this repository's own
  * work items and runs, or why there is none. Every partition is read, or no report is made.
- * Every partition is read by `deadline` too (kanon#682): none is started after it, and none is
- * given longer than what is left of it, so the step never holds the job past its timeout.
- * @param {{ ROLE?: string, CREDENTIALS?: string, TABLE?: string, REGION?: string }} env
- * @param {{ query?: typeof awsQuery, now?: number, clock?: () => number, deadline?: number }} [io]
+ * Every partition is read by `deadline` too (kanon#682): no request is started after it, and none
+ * is given longer than what is left of it, so the step never holds the job past its timeout.
+ * @param {StoreIo & { now?: number, clock?: () => number, deadline?: number }} io
  *   `now` dates the report; `clock` measures the time left before `deadline`
- * @returns {{ status: 'ran' | 'failed', markdown: string, lines: string[] }}
+ * @returns {Promise<{ status: 'ran' | 'failed', markdown: string, lines: string[] }>}
  */
-export function headline(env, { query = awsQuery, now = Date.now(), clock = Date.now, deadline = Infinity } = {}) {
-  const refused = refusalOf(env);
-  if (refused) return { status: 'failed', markdown: '', lines: [`The headline report was not made: ${refused}`] };
-  const { table, region } = checkStore(env);
-  const { key } = /** @type {{ key: string }} */ (readerOf(env.ROLE));
-  const from = stamp(addMonths(now, -REPORT_MONTHS));
+export async function headline({ now = Date.now(), clock = Date.now, deadline = Infinity, ...io }) {
+  const { store, refused } = storeFor(io, 'The headline report was not made');
+  if (!store) return { status: 'failed', markdown: '', lines: [refused.line] };
+  const from = iso(addMonths(now, -REPORT_MONTHS));
   // A work item's sort key is its PR number, not a time, so its partition is read whole; the
   // store's TTL keeps it to thirteen months after each item closed.
   const partitions = [{ name: RESERVED_PARTITION, from: undefined }, ...LANES.map((lane) => ({ name: lane, from }))];
@@ -277,18 +324,18 @@ export function headline(env, { query = awsQuery, now = Date.now(), clock = Date
   /** @param {string} name @param {string} when */
   const late = (name, when) => ({ status: /** @type {const} */ ('failed'), markdown: '', lines: [`The headline report was not made: its time ran out ${when} the \`${name}\` partition was read (the step keeps inside the job's ${JOB_TIMEOUT_MINUTES}-minute timeout), and a report without it would be wrong.`] });
   for (const p of partitions) {
-    const left = deadline - clock();
-    if (!(left > 0)) return late(p.name, 'before');
-    /** @type {import('./lib/token-trend.mjs').Item[]} */
+    if (!(deadline - clock() > 0)) return late(p.name, 'before');
+    /** @type {Record<string, unknown>[]} */
     let got;
     try {
-      got = query({ pk: `${key}#${p.name}`, ...(p.from === undefined ? {} : { from: p.from }), table, region, timeout: Math.ceil(Math.min(QUERY_TIMEOUT_MS, left)) });
+      got = await readPartition(store, { lane: p.name, ...(p.from === undefined ? {} : { from: p.from }) }, { ...io, clock, deadline });
     } catch (e) {
-      if (!(deadline - clock() > 0)) return late(p.name, 'while');
-      return { status: 'failed', markdown: '', lines: [`The headline report was not made: the \`${p.name}\` partition could not be read (${reasonOf(e, key)}), and a report without it would be wrong.`] };
+      if (e instanceof LateError) return late(p.name, 'while');
+      const why = e instanceof RefusedError ? refusalWords(e) : e instanceof Error ? e.message : 'the read failed';
+      return { status: 'failed', markdown: '', lines: [`The headline report was not made: the \`${p.name}\` partition could not be read (${why}), and a report without it would be wrong.`] };
     }
     if (p.name === RESERVED_PARTITION) items = got.length;
-    for (const item of got) rows.push(rowOf(item));
+    for (const r of got) rows.push(rowOf(r));
   }
   // The same Markdown as `kanon metrics report` with its defaults: the indicators, then the views
   // (kanon#669), so the summary and the command never differ.
@@ -306,10 +353,10 @@ export function headline(env, { query = awsQuery, now = Date.now(), clock = Date
  * The report step, whole (kanon#682): the headline report's Markdown to the job summary, or a
  * warning saying why there is none. It never throws: a throw from the report or from a write is
  * a warning, so the step exits 0 and the job keeps its status.
- * @param {{ ROLE?: string, CREDENTIALS?: string, TABLE?: string, REGION?: string, GITHUB_STEP_SUMMARY?: string, RUNNER_TEMP?: string }} env
- * @param {{ query?: typeof awsQuery, now?: number, clock?: () => number, append?: (path: string, text: string) => void, log?: (line: string) => void, stamp?: () => string | undefined }} [io]
+ * @param {Record<string, string | undefined>} env
+ * @param {{ fetchImpl?: typeof fetch, mask?: (secret: string) => void, hostedUrl?: string, now?: number, clock?: () => number, append?: (path: string, text: string) => void, log?: (line: string) => void, stamp?: () => string | undefined }} [io]
  */
-export function reportStep(env, io = {}) {
+export async function reportStep(env, io = {}) {
   const { clock = Date.now, append = appendFileSync, log = console.log } = io;
   const summary = env.GITHUB_STEP_SUMMARY;
   /** @param {string} line */
@@ -327,7 +374,10 @@ export function reportStep(env, io = {}) {
     /** @type {string | undefined} */
     let started;
     try { started = readStamp(); } catch { started = undefined; }
-    const { status, markdown, lines } = headline(env, { ...(io.query ? { query: io.query } : {}), now: io.now ?? at, clock, deadline: deadlineOf(started, at) });
+    const { status, markdown, lines } = await headline({
+      env, now: io.now ?? at, clock, deadline: deadlineOf(started, at),
+      ...(io.fetchImpl ? { fetchImpl: io.fetchImpl } : {}), ...(io.mask ? { mask: io.mask } : {}), ...(io.hostedUrl !== undefined ? { hostedUrl: io.hostedUrl } : {}),
+    });
     // The Markdown goes to the summary only: the log says counts, or why there is no report.
     if (status === 'ran' && summary) append(summary, markdown);
     for (const l of lines) {
@@ -338,8 +388,36 @@ export function reportStep(env, io = {}) {
       }
     }
   } catch (e) {
-    warn(`The headline report stopped on an error (${reasonOf(e, readerOf(env.ROLE)?.key ?? '')}); the job is not failed for it.`);
+    warn(`The headline report stopped on an error (${e instanceof Error ? e.name : 'error'}); the job is not failed for it.`);
   }
+}
+
+/**
+ * The gate's question (plan 0008 §3.3; ADR 0007): does this repository send telemetry, so that
+ * the lane may ask the store for its rows? `true` when a workflow on its default branch calls
+ * Kanon's collector and there is a store to read; `false` when none does, or this release
+ * doesn't publish the hosted store's URL; `unknown` when the default branch can't be read or the
+ * store's two variables are wrong, which the lane reports as a `failed` read.
+ * @param {Record<string, string | undefined>} env
+ * @param {{ json: (args: string[]) => any, hostedUrl?: string }} io
+ * @returns {{ reader: 'true' | 'false' | 'unknown', line: string }}
+ */
+export function consentOf(env, { json, hostedUrl = HOSTED_INGEST_URL }) {
+  const store = overseerStore(env, hostedUrl);
+  if (!store.ok && store.unpublished) return { reader: 'false', line: `The telemetry read is not configured: ${store.why}.` };
+  if (!store.ok) return { reader: 'unknown', line: `The telemetry read can't run: ${store.why}.` };
+  /** @type {import('./lib/lane-caller.mjs').Snapshot} */
+  let snapshot;
+  try {
+    const repo = env.GITHUB_REPOSITORY;
+    if (!repo) throw new Error('GITHUB_REPOSITORY must be set');
+    snapshot = readSnapshot({ repo, json });
+  } catch (e) {
+    return { reader: 'unknown', line: `The telemetry read can't run: whether this repository sends telemetry could not be read (${String(e instanceof Error ? e.message : e).split('\n')[0]?.slice(0, 200)}).` };
+  }
+  const caller = resolveCaller(COLLECTOR_LANE, snapshot);
+  if (caller.how === 'fallback') return { reader: 'false', line: "The telemetry read is not configured: no workflow on the default branch calls Kanon's telemetry collector, so this repository doesn't send telemetry, and no token is minted for the store." };
+  return { reader: 'true', line: `This repository sends telemetry (${caller.file} calls Kanon's collector), so the lane reads its own rows.` };
 }
 
 /**
@@ -390,45 +468,38 @@ const say = (line) => {
 
 if (isCliEntry(import.meta.url)) {
   const mode = process.argv[2];
-  if (mode === 'mask') {
+  if (mode === 'consent') {
+    // THE GATE'S READ (ADR 0007): the default branch's workflows, with the workflow token, before
+    // any token is minted for the store. Its answer is this step's output, `reader`.
+    const json = (/** @type {string[]} */ args) => JSON.parse(execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
+    const { reader, line } = consentOf(process.env, { json });
+    if (reader === 'unknown') console.log(`::warning title=overseer telemetry::${line}`);
+    else console.log(line);
+    writeOutputs({ reader });
+  } else if (mode === 'read') {
     // The job's start, for the report's deadline (kanon#682): this is the job's first step after
     // Kanon's path. Only a time, under the runner's temp directory, never the uploaded one.
     try {
       if (process.env.RUNNER_TEMP) writeFileSync(join(process.env.RUNNER_TEMP, STARTED_FILE), `${Date.now()}\n`);
     } catch { /* the report falls back to a budget of its own */ }
-    for (const m of masksOf(process.env)) process.stdout.write(`::add-mask::${m}\n`);
-    console.log('Masked the reader role, its account id and its key.');
-    // THE TABLE AND REGION ARE RESOLVED HERE, ONCE (the Owner's decision on kanon#499): the
-    // repository variables, or the hosted store's when unset or empty, checked, and written as this
-    // step's outputs, which the credentials step and the read use. A value of the wrong shape stops
-    // the job by name, and the agent's job reports the read `failed`.
-    const { table, region, problems } = checkStore(process.env);
-    if (problems.length) {
-      for (const p of problems) console.log(`::error title=overseer telemetry::${p}`);
-      process.exitCode = 1;
-    } else {
-      writeOutputs({ table, region });
-      console.log(`Reading the telemetry table ${table} in ${region}.`);
-    }
-  } else if (mode === 'read') {
-    const { status, files, lines } = read(process.env);
+    const { status, files, lines } = await read({ env: process.env });
     const out = process.env.OUT ?? '';
     if (status === 'ran') {
       mkdirSync(out, { recursive: true });
       for (const [f, text] of Object.entries(files)) writeFileSync(join(out, f), text);
-    } else {
+    } else if (status === 'failed') {
       for (const l of lines) console.log(`::warning title=overseer telemetry::${l}`);
     }
     for (const l of lines) say(l);
     writeOutputs({ status });
   } else if (mode === 'report') {
-    reportStep(process.env);
+    await reportStep(process.env);
     process.exitCode = 0;
   } else if (mode === 'merge') {
     const { line } = merge(process.env);
     say(line);
   } else {
-    console.error('usage: overseer-telemetry.mjs mask|read|report|merge');
+    console.error('usage: overseer-telemetry.mjs consent|read|report|merge');
     process.exitCode = 2;
   }
 }

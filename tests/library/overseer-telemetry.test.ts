@@ -4,146 +4,209 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { keysOf, toAttributes } from '../../infra/telemetry/function/index.mjs';
-import { LANES } from '../../infra/telemetry/function/schema.mjs';
-import { report as cliReport } from '../../cli/metrics-report.mjs';
 import { parse } from 'yaml';
-import { FILES, JOB_TIMEOUT_MINUTES, QUERY_TIMEOUT_MS, REGION, REPORT_BY_MS, REPORT_FALLBACK_MS, REPORT_MONTHS, STARTED_FILE, STATUSES, TABLE, WINDOW_DAYS, checkStore, deadlineOf, headline, masksOf, merge, read, readerOf, reasonOf, reportStep, rowOf } from '../../scripts/overseer-telemetry.mjs';
+import { LANES, SCHEMAS } from '../../infra/telemetry/function/schema.mjs';
+import { report as cliReport } from '../../cli/metrics-report.mjs';
+import {
+  COLLECTOR_LANE, FILES, JOB_TIMEOUT_MINUTES, MAX_PAGES, QUERY_TIMEOUT_MS, REPORT_BY_MS, REPORT_FALLBACK_MS, REPORT_MONTHS, STARTED_FILE, STATUSES, VIEW_FIELDS, WINDOW_DAYS,
+  consentOf, deadlineOf, headline, itemOf, merge, overseerStore, read, readPartition, reportStep, rowOf,
+} from '../../scripts/overseer-telemetry.mjs';
+import { HOSTED_INGEST_URL } from '../../scripts/lib/telemetry-token.mjs';
 import { UNTIL, ago, itemRow, risingRows, runRow } from '../unit/helpers/metrics-rows.js';
 import { SPAWNS } from '../unit/helpers/spawns.js';
-import { writeStub } from '../unit/helpers/stub-bin.js';
+import { HOSTED_URL, RUNNER_ENV, SELF_AUDIENCE, SELF_URL, TOKEN, tokenNet, type StoreCall } from '../unit/helpers/token-net.js';
 
 /**
  * kanon#470 (the Owner's decision, option A): the Overseer's own cost view. The lane's
- * `telemetry` job reads this repository's own rows with its telemetry reader role and hands the
- * agent `token-trend.md` and `cache-ttl.md`, never rows; the agent's job adds them to the export
- * and writes the read's status into the manifest, which the prompt reports and never reads as an
- * absent store.
+ * `telemetry` job reads this repository's own rows and hands the agent `token-trend.md` and
+ * `cache-ttl.md`, never rows; the agent's job adds them to the export and writes the read's status
+ * into the manifest, which the prompt reports and never reads as an absent store.
+ *
+ * Plan 0008 §3.5, step J5: both reads go through the store's `GET /v1/rows/self`, with a fresh
+ * GitHub OIDC token per request, and only for a repository that sends telemetry. The store never
+ * returns the key, so nothing here has one to hide.
  */
 const SCRIPT = fileURLToPath(new URL('../../scripts/overseer-telemetry.mjs', import.meta.url));
 const WORKFLOWS = fileURLToPath(new URL('../../.github/workflows', import.meta.url));
-// Built, so the tree holds no twelve-digit literal (public-tree.test.ts).
-const ACCOUNT = `${'1234567890'}12`;
-const KEY = 'a1b2c3d4';
-const ROLE = `arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-${KEY}-reader`;
 const NOW = Date.UTC(2026, 9, 7, 12, 0, 0);
-
-const item = (daysAgo: number, cost: number, extra: Record<string, unknown> = {}) => {
-  const sk = `${new Date(NOW - daysAgo * 86_400_000).toISOString().slice(0, 19).replace(/[-:]/g, '')}Z#1-1-0`;
-  return { sk: { S: sk }, tag: { S: 'run' }, outcome: { S: 'ok' }, total_cost_usd: { N: String(cost) }, changed_lines: { N: '300' }, cache_write_tokens: { N: '100' }, cache_write_1h_tokens: { N: '100' }, ...extra };
-};
+const quiet = () => {};
 
 let dirs: string[] = [];
 afterEach(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); dirs = []; });
 const temp = () => { const d = mkdtempSync(join(tmpdir(), 'overseer-telemetry-')); dirs.push(d); return d; };
 
-describe('the reader role', () => {
-  it('reads the account id and the key from a reader role\'s ARN, and nothing else', () => {
-    expect(readerOf(ROLE)).toEqual({ account: ACCOUNT, key: KEY });
-    expect(readerOf(` ${ROLE}\n`)).toEqual({ account: ACCOUNT, key: KEY });
-    expect(readerOf(`arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-${KEY}-writer`)).toBeNull();
-    expect(readerOf(`arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-${KEY}-aggregates`)).toBeNull();
-    expect(readerOf('')).toBeNull();
-    expect(readerOf(undefined)).toBeNull();
+type Row = Record<string, unknown>;
+/** A run row of the cost view, as the endpoint answers it: `recorded_at` in place of the sort key. */
+const viewRow = (daysAgo: number, cost: number, extra: Row = {}): Row => ({
+  recorded_at: new Date(NOW - daysAgo * 86_400_000).toISOString(), tag: 'run', outcome: 'ok', total_cost_usd: cost, changed_lines: 300,
+  cache_write_tokens: 100, cache_write_1h_tokens: 100, ...extra,
+});
+
+/**
+ * The store's own-rows endpoint, as the function answers it (plan 0008 §3.2): one partition a
+ * request by `lane`, `tag=run` unless asked, `recorded_at` within `from`, projected to `fields`,
+ * `pageSize` rows a page with an opaque cursor. `refuse` answers a status and code for a lane.
+ */
+function selfStore(byLane: (lane: string) => Row[], { pageSize = 1000, refuse = () => null as null | { status: number; json?: unknown } }: { pageSize?: number; refuse?: (lane: string, call: StoreCall) => null | { status: number; json?: unknown } } = {}) {
+  return tokenNet((call) => {
+    const lane = call.query.lane!;
+    const r = refuse(lane, call);
+    if (r) return r;
+    if (call.path !== '/v1/rows/self' || call.method !== 'GET') return { status: 404, json: { error: 'path' } };
+    const all = byLane(lane).filter((x) => (x.tag ?? 'run') === (call.query.tag ?? 'run'))
+      .filter((x) => call.query.from === undefined || String(x.recorded_at) >= call.query.from);
+    const at = Number(call.query.cursor?.replace(/^c/, '') ?? 0);
+    const page = all.slice(at, at + pageSize).map((x) => (call.query.fields ? Object.fromEntries(call.query.fields.split(',').filter((f) => f in x).map((f) => [f, x[f]])) : x));
+    return { status: 200, json: { rows: page, ...(at + pageSize < all.length ? { cursor: `c${at + pageSize}` } : {}) } };
+  });
+}
+const io = (net: ReturnType<typeof tokenNet>, extra: Record<string, unknown> = {}) => ({ env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: quiet, hostedUrl: HOSTED_URL, ...extra });
+
+describe('which store (plan 0008 §2.1)', () => {
+  it('reads the hosted store, unpublished until the operator publishes its URL, or a self-hosted one by its two variables together', () => {
+    if (!HOSTED_INGEST_URL) expect(overseerStore({})).toMatchObject({ ok: false, unpublished: true });
+    expect(overseerStore({}, HOSTED_URL)).toEqual({ ok: true, url: HOSTED_URL, audience: 'kanon-telemetry', hosted: true });
+    expect(overseerStore({ KANON_TELEMETRY_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE }, HOSTED_URL)).toEqual({ ok: true, url: SELF_URL, audience: SELF_AUDIENCE, hosted: false });
+    expect(overseerStore({ KANON_TELEMETRY_TOKEN_URL: SELF_URL }, HOSTED_URL)).toMatchObject({ ok: false, why: expect.stringMatching(/name a self-hosted store together/) });
+    expect(overseerStore({ KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE }, HOSTED_URL)).toMatchObject({ ok: false });
+    expect(overseerStore({ KANON_TELEMETRY_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: 'kanon-telemetry' }, HOSTED_URL)).toMatchObject({ ok: false, why: expect.stringMatching(/only ever sent to the hosted store's URL/) });
+    // The SigV4 variables a caller below vM still sets are not read at all: no fallback to them.
+    expect(overseerStore({ KANON_TELEMETRY_URL: SELF_URL, KANON_TELEMETRY_TABLE: 'x', KANON_TELEMETRY_REGION: 'eu-central-1' }, HOSTED_URL)).toMatchObject({ ok: true, url: HOSTED_URL });
   });
 
-  it('masks the ARN, the account id and the key, and nothing when no role is set', () => {
-    expect(masksOf({ ROLE })).toEqual([ROLE, ACCOUNT, KEY]);
-    expect(masksOf({ ROLE: '' })).toEqual([]);
-    expect(masksOf({})).toEqual([]);
+  it('asks only for fields the run schema has, the reports\' own and the time each row was recorded', () => {
+    const allowed = new Set(Object.values(SCHEMAS.run as Record<string, Record<string, unknown>>).flatMap((v) => Object.keys(v)));
+    expect(VIEW_FIELDS.filter((f) => !allowed.has(f))).toEqual([]);
+    expect(VIEW_FIELDS).toEqual(expect.arrayContaining(['recorded_at', 'tag', 'total_cost_usd', 'cache_write_1h_tokens']));
+    expect(VIEW_FIELDS).not.toContain('sk');
   });
 
-  it('reads the hosted store by default, where it lives', () => {
-    expect(TABLE).toBe('kanon-telemetry');
-    expect(REGION).toBe('eu-central-1');
-    expect(WINDOW_DAYS).toBe(14);
-    expect(checkStore({})).toEqual({ table: TABLE, region: REGION, problems: [] });
-    expect(checkStore({ TABLE: '', REGION: ' ' })).toEqual({ table: TABLE, region: REGION, problems: [] });
+  it('turns an answered row into the item the reports read, with its sort key from recorded_at', () => {
+    expect(itemOf({ recorded_at: '2026-10-01T10:20:30.123Z', lane: 'review', total_cost_usd: 1.25, is_error: false, odd: { x: 1 }, gone: null }))
+      .toEqual({ recorded_at: { S: '2026-10-01T10:20:30.123Z' }, sk: { S: '20261001T102030Z' }, lane: { S: 'review' }, total_cost_usd: { N: '1.25' }, is_error: { BOOL: false } });
+    expect(rowOf({ lane: 'review', total_cost_usd: 1.25, pr_number: 2, cache_1h: true, odd: [1], nan: Number.NaN })).toEqual({ lane: 'review', total_cost_usd: 1.25, pr_number: 2, cache_1h: true });
+  });
+});
+
+describe('readPartition: one partition, every page, a fresh token per request', () => {
+  const STORE = { ok: true as const, url: HOSTED_URL, audience: 'kanon-telemetry', hosted: true };
+  it('follows the cursor to the last page, minting a token for each request', async () => {
+    const rows = Array.from({ length: 5 }, (_, i) => viewRow(1, i));
+    const net = selfStore(() => rows, { pageSize: 2 });
+    const masked: string[] = [];
+    const got = await readPartition(STORE, { lane: 'review', from: '2026-09-23T12:00:00.000Z', fields: ['recorded_at', 'total_cost_usd'] }, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: (x) => masked.push(x) });
+    expect(got.map((r) => r.total_cost_usd)).toEqual([0, 1, 2, 3, 4]);
+    expect(net.calls.map((c) => c.query)).toEqual([
+      { lane: 'review', from: '2026-09-23T12:00:00.000Z', fields: 'recorded_at,total_cost_usd' },
+      { lane: 'review', from: '2026-09-23T12:00:00.000Z', fields: 'recorded_at,total_cost_usd', cursor: 'c2' },
+      { lane: 'review', from: '2026-09-23T12:00:00.000Z', fields: 'recorded_at,total_cost_usd', cursor: 'c4' },
+    ]);
+    // A token of its own for each request, masked before it is sent, and sent as a bearer.
+    expect(net.calls.map((c) => c.auth)).toEqual([`Bearer ${TOKEN}1`, `Bearer ${TOKEN}2`, `Bearer ${TOKEN}3`]);
+    expect(masked).toEqual([`${TOKEN}1`, `${TOKEN}2`, `${TOKEN}3`]);
+    expect(new Set(net.calls.map((c) => `${c.method} ${c.host}${c.path}`))).toEqual(new Set([`GET ${new URL(HOSTED_URL).host}/v1/rows/self`]));
   });
 
-  // kanon#499: a self-hosted store's table and region, as the caller sets them, held to their shapes.
-  it('takes a self-hosted table and region, and refuses one of the wrong shape by name', () => {
-    expect(checkStore({ TABLE: 'acme_telemetry.v2', REGION: 'us-gov-west-1' })).toEqual({ table: 'acme_telemetry.v2', region: 'us-gov-west-1', problems: [] });
-    expect(checkStore({ REGION: 'ap-southeast-2' }).problems).toEqual([]);
-    for (const table of ['ab', 'a b', 'kanon/telemetry', '${{ x }}', 't'.repeat(256)]) expect(checkStore({ TABLE: table }).problems, table).toEqual([expect.stringMatching(/the KANON_TELEMETRY_TABLE variable .* is not a DynamoDB table name/)]);
-    for (const region of ['eu-central', 'EU-CENTRAL-1', 'eu-central-1; rm', 'europe', '1-a-1']) expect(checkStore({ REGION: region }).problems, region).toEqual([expect.stringMatching(/the KANON_TELEMETRY_REGION variable .* is not an AWS region code/)]);
+  it('stops at a cursor that never ends', async () => {
+    const net = tokenNet(() => ({ status: 200, json: { rows: [], cursor: 'again' } }));
+    await expect(readPartition(STORE, { lane: 'review' }, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: quiet })).rejects.toThrow(`more than ${MAX_PAGES} pages`);
+    expect(net.calls).toHaveLength(MAX_PAGES);
+  });
+
+  it('refuses an answer with no list of rows, and names a store it couldn\'t reach without its URL', async () => {
+    await expect(readPartition(STORE, { lane: 'review' }, { env: RUNNER_ENV, fetchImpl: tokenNet(() => ({ status: 200, json: { rows: 'x' } })).fetchImpl, mask: quiet })).rejects.toThrow('the store answered no list of rows');
+    await expect(readPartition(STORE, { lane: 'review' }, { env: RUNNER_ENV, fetchImpl: tokenNet(() => ({ status: 503, json: { error: 'jwks-unavailable' } })).fetchImpl, mask: quiet })).rejects.toThrow('the store answered 503 (jwks-unavailable)');
+    const down = tokenNet(() => { throw new TypeError('fetch failed'); });
+    const e = await readPartition(STORE, { lane: 'review' }, { env: RUNNER_ENV, fetchImpl: down.fetchImpl, mask: quiet }).catch((x: Error) => x);
+    expect((e as Error).message).toBe('the store could not be reached (TypeError)');
+    expect((e as Error).message).not.toContain('hosted0123');
   });
 });
 
 describe('the read', () => {
-  type Q = { pk: string, from?: string, attributes?: readonly string[], table?: string, region?: string };
-  const queried: Q[] = [];
-  const query = (items: (lane: string) => unknown[]) => (q: Q) => {
-    queried.push(q);
-    return items(q.pk.slice(q.pk.indexOf('#') + 1)) as never;
-  };
-
-  it('reads its own key\'s partition for each of Kanon\'s lanes, over the window, projected', () => {
-    queried.length = 0;
-    const r = read({ ROLE, CREDENTIALS: 'success' }, { query: query(() => []), now: NOW, workflows: WORKFLOWS });
+  it('reads each of Kanon\'s lanes over the window, projected, from the store it names', async () => {
+    const net = selfStore(() => []);
+    const r = await read({ ...io(net), now: NOW, workflows: WORKFLOWS });
     expect(r.status).toBe('ran');
-    expect(queried.map((q) => q.pk)).toEqual(LANES.map((l) => `${KEY}#${l}`));
-    expect(new Set(queried.map((q) => q.from))).toEqual(new Set(['20260923T120000Z']));
-    expect(queried[0]!.attributes).toEqual(expect.arrayContaining(['sk', 'tag', 'total_cost_usd', 'cache_write_1h_tokens']));
+    expect(net.calls.map((c) => c.query.lane)).toEqual([...LANES]);
+    expect(new Set(net.calls.map((c) => c.query.from))).toEqual(new Set(['2026-09-23T12:00:00.000Z']));
+    expect(new Set(net.calls.map((c) => c.query.fields))).toEqual(new Set([VIEW_FIELDS.join(',')]));
+    expect(WINDOW_DAYS).toBe(14);
   });
 
-  it('writes the two reports from the rows, and says only counts', () => {
-    const r = read({ ROLE, CREDENTIALS: 'success' }, {
-      query: query((lane) => (lane === 'review' ? [item(1, 2), item(2, 3), item(9, 2), item(10, 2)] : [])), now: NOW, workflows: WORKFLOWS,
-    });
+  it('writes the two reports from the rows, and says only counts', async () => {
+    const net = selfStore((lane) => (lane === 'review' ? [viewRow(1, 2), viewRow(2, 3), viewRow(9, 2), viewRow(10, 2), viewRow(20, 50)] : []));
+    const r = await read({ ...io(net), now: NOW, workflows: WORKFLOWS });
     expect(r.status).toBe('ran');
     expect(Object.keys(r.files).sort()).toEqual([...FILES].sort());
     expect(r.files['token-trend.md']).toMatch(/^## Token efficiency — 7 days to 2026-10-07/);
     expect(r.files['token-trend.md']).toMatch(/\*\*\$5\.00 across 2 run\(s\)\*\*/);
     expect(r.files['cache-ttl.md']).toMatch(/^cache-ttl: 0 of 4 row\(s\) across \d+ lane partition\(s\) over the last 14 days/);
     expect(r.lines).toEqual([`The telemetry read ran: ${LANES.length} of ${LANES.length} lane partitions read, 4 row(s) over the last 14 days, summarised into token-trend.md and cache-ttl.md.`]);
-    // Neither the key nor the account reaches anything the agent or the log reads.
-    for (const text of [...Object.values(r.files), ...r.lines]) {
-      expect(text).not.toContain(KEY);
-      expect(text).not.toContain(ACCOUNT);
+  });
+
+  it('names a partition it couldn\'t read in both reports, and still ran', async () => {
+    const net = selfStore(() => [], { refuse: (lane) => (lane === 'implement' ? { status: 502, json: { error: 'read' } } : null) });
+    const r = await read({ ...io(net), now: NOW, workflows: WORKFLOWS });
+    expect(r.status).toBe('ran');
+    expect(r.files['token-trend.md']).toMatch(/UNAVAILABLE:\*\* could not read `implement` \(the store answered 502 \(read\)\)/);
+    expect(r.files['cache-ttl.md']).toMatch(/UNREADABLE \(implement\)/);
+  });
+
+  it('fails, writing nothing, when no partition can be read', async () => {
+    const net = selfStore(() => [], { refuse: () => ({ status: 503, json: { error: 'jwks-unavailable' } }) });
+    const r = await read({ ...io(net), now: NOW, workflows: WORKFLOWS });
+    expect(r).toMatchObject({ status: 'failed', files: {} });
+    expect(r.lines[0]).toMatch(/none of the \d+ lane partitions could be read \(the store answered 503 \(jwks-unavailable\)\)/);
+  });
+
+  it('stops at the first refusal, which holds for the whole registration, and says it in the store\'s code', async () => {
+    const cases: Array<[number, string, string, RegExp]> = [
+      [404, 'not-registered', 'not configured', /^The telemetry read found nothing to read: the store answered 404 \(not-registered\): this repository is not registered with the store yet/],
+      [403, 'suspended', 'failed', /^The telemetry read failed: the store answered 403 \(suspended\): Kanon's operator has suspended/],
+      [410, 'erased', 'failed', /\(erased\): this repository's telemetry was erased/],
+      [403, 'ref', 'failed', /default branch only/],
+      [403, 'workflow', 'failed', /check the caller's pin/],
+      [429, 'quota', 'failed', /quota is spent/],
+      [401, 'aud', 'failed', /^The telemetry read failed: the store answered 401 \(aud\)\.$/],
+    ];
+    for (const [status, code, want, says] of cases) {
+      const net = selfStore(() => [], { refuse: () => ({ status, json: { error: code } }) });
+      const r = await read({ ...io(net), now: NOW, workflows: WORKFLOWS });
+      expect(r.status, code).toBe(want);
+      expect(r.files).toEqual({});
+      expect(r.lines[0], code).toMatch(says);
+      expect(net.calls, code).toHaveLength(1);
     }
   });
 
-  it('names an unreadable partition in both reports, without its key, and still ran', () => {
-    const r = read({ ROLE, CREDENTIALS: 'success' }, {
-      query: (q) => { if (q.pk.endsWith('#implement')) throw Object.assign(new Error('x'), { stderr: `An error occurred (AccessDeniedException) on ${KEY}#implement for ${ROLE}\nmore` }); return []; },
-      now: NOW, workflows: WORKFLOWS,
-    });
-    expect(r.status).toBe('ran');
-    expect(r.files['token-trend.md']).toMatch(/UNAVAILABLE:\*\* could not read `implement` \(An error occurred \(AccessDeniedException\) on <key>#implement for <arn>\)/);
-    expect(r.files['cache-ttl.md']).toMatch(/UNREADABLE \(implement\)/);
-    expect(JSON.stringify(r)).not.toContain(KEY);
+  it('reads nothing, minting no token, while the hosted URL is unpublished or the variables are wrong', async () => {
+    const net = selfStore(() => []);
+    const unpublished = await read({ ...io(net, { hostedUrl: '' }), now: NOW, workflows: WORKFLOWS });
+    expect(unpublished).toMatchObject({ status: 'not configured', files: {} });
+    expect(unpublished.lines[0]).toMatch(/^The telemetry read did not run: the hosted store's URL is not published/);
+    const alone = await read({ ...io(net, { env: { ...RUNNER_ENV, KANON_TELEMETRY_TOKEN_URL: SELF_URL } }), now: NOW, workflows: WORKFLOWS });
+    expect(alone).toMatchObject({ status: 'failed', files: {} });
+    expect(alone.lines[0]).toMatch(/KANON_TELEMETRY_TOKEN_URL variable` and `the KANON_TELEMETRY_AUDIENCE variable` name a self-hosted store together/);
+    expect(net.minted).toEqual([]);
+    expect(net.calls).toEqual([]);
   });
 
-  it('fails, writing nothing, when no partition can be read', () => {
-    const r = read({ ROLE, CREDENTIALS: 'success' }, { query: () => { throw new Error('ExpiredToken'); }, now: NOW, workflows: WORKFLOWS });
-    expect(r).toMatchObject({ status: 'failed', files: {} });
-    expect(r.lines[0]).toMatch(/none of the \d+ lane partitions could be read \(ExpiredToken\)/);
+  it('masks a self-hosted store\'s URL before its first request, and never the hosted one', async () => {
+    const masked: string[] = [];
+    const net = selfStore(() => []);
+    await read({ ...io(net, { env: { ...RUNNER_ENV, KANON_TELEMETRY_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE }, mask: (x: string) => masked.push(x) }), now: NOW, workflows: WORKFLOWS });
+    expect(masked[0]).toBe(SELF_URL);
+    expect(net.calls.every((c) => c.url.startsWith(SELF_URL))).toBe(true);
+    const hosted: string[] = [];
+    await read({ ...io(selfStore(() => []), { mask: (x: string) => hosted.push(x) }), now: NOW, workflows: WORKFLOWS });
+    expect(hosted).not.toContain(HOSTED_URL);
   });
 
-  it('reads the table and region it is given, and refuses a malformed one before any query', () => {
-    queried.length = 0;
-    read({ ROLE, CREDENTIALS: 'success', TABLE: 'acme-telemetry', REGION: 'us-east-2' }, { query: query(() => []), now: NOW, workflows: WORKFLOWS });
-    expect(new Set(queried.map((q) => `${q.table}@${q.region}`))).toEqual(new Set(['acme-telemetry@us-east-2']));
-    const never = () => { throw new Error('must not query'); };
-    const bad = read({ ROLE, CREDENTIALS: 'success', REGION: 'nowhere' }, { query: never, now: NOW, workflows: WORKFLOWS });
-    expect(bad).toMatchObject({ status: 'failed', files: {} });
-    expect(bad.lines[0]).toMatch(/^The telemetry read failed: the KANON_TELEMETRY_REGION variable `nowhere` is not an AWS region code/);
-  });
-
-  it('fails, reading nothing, when the role could not be assumed or isn\'t a reader role', () => {
-    const never = () => { throw new Error('must not query'); };
-    const refused = read({ ROLE, CREDENTIALS: 'failure' }, { query: never, now: NOW, workflows: WORKFLOWS });
-    expect(refused).toMatchObject({ status: 'failed', files: {} });
-    expect(refused.lines[0]).toMatch(/the reader role could not be assumed/);
-    const wrong = read({ ROLE: `arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-${KEY}-writer`, CREDENTIALS: 'success' }, { query: never, now: NOW, workflows: WORKFLOWS });
-    expect(wrong).toMatchObject({ status: 'failed', files: {} });
-    expect(wrong.lines[0]).toMatch(/is not a telemetry reader role's ARN/);
-  });
-
-  it('takes the key, account ids and ARNs out of a failure\'s reason', () => {
-    expect(reasonOf({ stderr: `denied for ${ROLE} on ${KEY}#review (account ${ACCOUNT})\nsecond line` }, KEY)).toBe('denied for <arn> on <key>#review (account <account>)');
-    expect(reasonOf(new Error(''), KEY)).toBe('the query failed');
+  it('fails when the job holds no OIDC token, naming why', async () => {
+    const r = await read({ ...io(selfStore(() => []), { env: {} }), now: NOW, workflows: WORKFLOWS });
+    expect(r.status).toBe('failed');
+    expect(r.lines[0]).toMatch(/the job holds no OIDC token: it needs `id-token: write`/);
   });
 });
 
@@ -153,30 +216,16 @@ describe('the read', () => {
  * the Markdown to the job summary. The rows never leave the job: only the report's figures do.
  */
 describe('the headline report (kanon#668)', () => {
-  type Q = { pk: string, from?: string, attributes?: readonly string[], table?: string, region?: string, timeout?: number };
-  /** Rows as the store holds them: each attribute typed, under its partition and sort key. */
-  const store = (rows: Record<string, unknown>[]) => rows.map((r) => {
-    const { pk, sk } = keysOf(KEY, r);
-    return { pk: { S: pk }, sk: { S: sk }, ...toAttributes({ ...r, received_at: r.recorded_at, expires_at: 1_900_000_000, source: 'writer' }) };
-  });
-  const rows = [
+  const rows: Row[] = [
     ...risingRows({ S: 12, M: 12, L: 12, XL: 12 }),
     itemRow(900, { closed: ago(3), fate: 'closed_unmerged', band: 'M' }),
     runRow('implement', { pr: 900, at: ago(4), cost: 2 }),
     runRow('explore', { at: ago(2), cost: 1.5 }),
     runRow('implement', { pr: 1, at: ago(2), cost: 99, tag: 'smoke' }),
   ];
+  const partitionOf = (r: Row) => (r.row_kind === 'work_item' ? 'work' : String(r.lane));
+  const byLane = (lane: string) => rows.filter((r) => partitionOf(r) === lane);
   const NOW_MS = UNTIL.getTime();
-  const fake = (items: ReturnType<typeof store>, fail: (pk: string) => unknown = () => null) => {
-    const queried: Q[] = [];
-    const query = (q: Q) => {
-      queried.push(q);
-      const e = fail(q.pk);
-      if (e) throw e;
-      return items.filter((i) => i.pk.S === q.pk && (q.from === undefined || i.sk.S > q.from)) as never;
-    };
-    return { queried, query };
-  };
   /** What `kanon metrics report` prints for the same rows, the same day. */
   const cli = (input: unknown[]) => {
     const out: string[] = [];
@@ -185,63 +234,53 @@ describe('the headline report (kanon#668)', () => {
     return out.join('\n');
   };
 
-  it('reads the store as rows: each attribute\'s value, without the store\'s key', () => {
-    expect(rowOf({ pk: { S: `${KEY}#review` }, sk: { S: '20261001T000000Z#1-1-2' }, lane: { S: 'review' }, total_cost_usd: { N: '1.25' }, pr_number: { N: '2' }, cache_1h: { BOOL: true } }))
-      .toEqual({ lane: 'review', total_cost_usd: 1.25, pr_number: 2, cache_1h: true });
-  });
-
-  it('reads the work-item partition whole and every lane\'s partition over thirteen months, unprojected', () => {
-    const { queried, query } = fake(store(rows));
-    const r = headline({ ROLE, CREDENTIALS: 'success', TABLE: 'acme-telemetry', REGION: 'us-east-2' }, { query, now: NOW_MS });
+  it('reads the work-item partition whole and every lane\'s over thirteen months, every field', async () => {
+    const net = selfStore(byLane);
+    const r = await headline({ ...io(net), now: NOW_MS });
     expect(r.status).toBe('ran');
     expect(REPORT_MONTHS).toBe(13);
-    expect(queried.map((q) => q.pk)).toEqual([`${KEY}#work`, ...LANES.map((l) => `${KEY}#${l}`)]);
+    expect(net.calls.map((c) => c.query.lane)).toEqual(['work', ...LANES]);
     // A work item's sort key is its PR number, not a time: the partition is read whole.
-    expect(queried[0]!.from).toBeUndefined();
-    expect(new Set(queried.slice(1).map((q) => q.from))).toEqual(new Set(['20250910T000000Z']));
-    expect(queried.every((q) => q.attributes === undefined)).toBe(true);
-    expect(new Set(queried.map((q) => `${q.table}@${q.region}`))).toEqual(new Set(['acme-telemetry@us-east-2']));
+    expect(net.calls[0]!.query.from).toBeUndefined();
+    expect(new Set(net.calls.slice(1).map((c) => c.query.from))).toEqual(new Set(['2025-09-10T00:00:00.000Z']));
+    expect(net.calls.every((c) => c.query.fields === undefined)).toBe(true);
   });
 
-  it('is `kanon metrics report`\'s Markdown for the same rows, and says only counts', () => {
-    const { query } = fake(store(rows));
-    const r = headline({ ROLE, CREDENTIALS: 'success' }, { query, now: NOW_MS });
+  it('is `kanon metrics report`\'s Markdown for the same rows, and says only counts', async () => {
+    const r = await headline({ ...io(selfStore(byLane)), now: NOW_MS });
     expect(r.status).toBe('ran');
-    expect(r.markdown).toBe(`${cli(rows)}\n`);
+    // The store answers `tag: run` rows unless asked: the smoke row never reaches the report.
+    const run = rows.filter((x) => (x.tag ?? 'run') === 'run');
+    expect(r.markdown).toBe(`${cli(run)}\n`);
     expect(r.markdown).toMatch(/^## Kanon metrics, /);
     // The fixture is big enough for numbers, so the comparison isn't of two empty reports.
     expect(r.markdown).toMatch(/\| Cost per merged item, median \| \$\d/);
-    expect(r.markdown).toMatch(/Rows read: 98 runs .* and 49 work items; left out: 1 not `tag: run`/);
-    const runs = rows.filter((x) => x.row_kind === 'run').length;
+    const runs = run.filter((x) => x.row_kind === 'run').length;
     expect(r.lines).toEqual([`The headline report ran: ${LANES.length + 1} partitions read, 49 work item(s) and ${runs} run row(s) over the last 13 months, written to the job summary.`]);
-    for (const text of [r.markdown, ...r.lines]) {
-      expect(text).not.toContain(KEY);
-      expect(text).not.toContain(ACCOUNT);
-    }
   });
 
-  it('withholds the report when any partition can\'t be read, naming it without its key', () => {
+  // J5's check: the report withholds itself when one partition's read is refused, as it does today.
+  it('withholds the report when any partition\'s read is refused or fails, naming it', async () => {
     for (const lane of ['work', 'implement']) {
-      const denied = Object.assign(new Error('x'), { stderr: `An error occurred (AccessDeniedException) on ${KEY}#${lane} for ${ROLE}` });
-      const { query } = fake(store(rows), (pk) => (pk === `${KEY}#${lane}` ? denied : null));
-      const r = headline({ ROLE, CREDENTIALS: 'success' }, { query, now: NOW_MS });
-      expect(r, lane).toMatchObject({ status: 'failed', markdown: '' });
-      expect(r.lines, lane).toEqual([`The headline report was not made: the \`${lane}\` partition could not be read (An error occurred (AccessDeniedException) on <key>#${lane} for <arn>), and a report without it would be wrong.`]);
+      for (const [status, code, says] of [[403, 'suspended', "the store answered 403 (suspended): Kanon's operator has suspended this repository's registration"], [502, 'read', 'the store answered 502 (read)']] as const) {
+        const net = selfStore(byLane, { refuse: (l) => (l === lane ? { status, json: { error: code } } : null) });
+        const r = await headline({ ...io(net), now: NOW_MS });
+        expect(r, `${lane} ${code}`).toMatchObject({ status: 'failed', markdown: '' });
+        expect(r.lines, `${lane} ${code}`).toEqual([`The headline report was not made: the \`${lane}\` partition could not be read (${says}), and a report without it would be wrong.`]);
+        // Nothing after the refused partition is asked.
+        expect(net.calls.at(-1)!.query.lane).toBe(lane);
+      }
     }
   });
 
-  it('reads nothing when the store, the role or the credentials are not right', () => {
-    const never = () => { throw new Error('must not query'); };
-    const cases: Array<[Record<string, string>, RegExp]> = [
-      [{ ROLE, CREDENTIALS: 'success', REGION: 'nowhere' }, /^The headline report was not made: the KANON_TELEMETRY_REGION variable `nowhere` is not an AWS region code/],
-      [{ ROLE: `arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-${KEY}-writer`, CREDENTIALS: 'success' }, /^The headline report was not made: the KANON_TELEMETRY_READER_ROLE secret is not a telemetry reader role's ARN/],
-      [{ ROLE, CREDENTIALS: 'failure' }, /^The headline report was not made: the reader role could not be assumed/],
-    ];
-    for (const [env, says] of cases) {
-      const r = headline(env, { query: never, now: NOW_MS });
-      expect(r, JSON.stringify(env)).toMatchObject({ status: 'failed', markdown: '' });
-      expect(r.lines[0]).toMatch(says);
+  it('reads nothing while the hosted URL is unpublished or the variables are wrong', async () => {
+    const net = selfStore(byLane);
+    for (const extra of [{ hostedUrl: '' }, { env: { ...RUNNER_ENV, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE } }]) {
+      const r = await headline({ ...io(net, extra), now: NOW_MS });
+      expect(r).toMatchObject({ status: 'failed', markdown: '' });
+      expect(r.lines[0]).toMatch(/^The headline report was not made: /);
     }
+    expect(net.minted).toEqual([]);
   });
 });
 
@@ -251,18 +290,12 @@ describe('the headline report (kanon#668)', () => {
  */
 describe('the report step never fails the job (kanon#682)', () => {
   const NOW_MS = UNTIL.getTime();
-  const ok = (items: unknown[] = []) => () => items as never;
-  /** A store that takes `ms` of the fake clock per query, and records each query's limit. */
+  /** A store that takes `ms` of the fake clock per request. */
   const slow = (ms: number) => {
     let t = NOW_MS;
-    const timeouts: number[] = [];
     const clock = () => t;
-    const query = (q: { timeout?: number }) => {
-      timeouts.push(q.timeout!);
-      t += ms;
-      return [] as never;
-    };
-    return { clock, query, timeouts };
+    const net = tokenNet(() => { t += ms; return { status: 200, json: { rows: [] } }; });
+    return { clock, net };
   };
 
   it('keeps its deadline inside the job\'s timeout, the workflow\'s own', () => {
@@ -281,59 +314,93 @@ describe('the report step never fails the job (kanon#682)', () => {
     }
   });
 
-  it('starts no partition after its deadline, and withholds the report, naming the partition', () => {
-    const { clock, query, timeouts } = slow(60_000);
-    const r = headline({ ROLE, CREDENTIALS: 'success' }, { query, now: NOW_MS, clock, deadline: NOW_MS + 5 * 60_000 });
+  it('starts no partition after its deadline, and withholds the report, naming the partition', async () => {
+    const { clock, net } = slow(60_000);
+    const r = await headline({ ...io(net), now: NOW_MS, clock, deadline: NOW_MS + 5 * 60_000 });
     expect(r).toMatchObject({ status: 'failed', markdown: '' });
-    // Five queries of a minute each use the five minutes; the sixth partition is never started.
-    expect(timeouts).toHaveLength(5);
+    // Five requests of a minute each use the five minutes; the sixth partition is never started.
+    expect(net.calls).toHaveLength(5);
     expect(r.lines).toEqual([`The headline report was not made: its time ran out before the \`${LANES[4]}\` partition was read (the step keeps inside the job's ${JOB_TIMEOUT_MINUTES}-minute timeout), and a report without it would be wrong.`]);
   });
 
-  it('gives no query longer than what is left of its deadline', () => {
-    const { clock, query, timeouts } = slow(1_000);
-    const r = headline({ ROLE, CREDENTIALS: 'success' }, { query, now: NOW_MS, clock, deadline: NOW_MS + QUERY_TIMEOUT_MS + 2_500 });
-    expect(r.status).toBe('ran');
-    expect(timeouts.slice(0, 5)).toEqual([QUERY_TIMEOUT_MS, QUERY_TIMEOUT_MS, QUERY_TIMEOUT_MS, QUERY_TIMEOUT_MS - 500, QUERY_TIMEOUT_MS - 1_500]);
-    // Without a deadline, a query keeps its own limit.
-    const plain = slow(1_000);
-    headline({ ROLE, CREDENTIALS: 'success' }, { query: plain.query, now: NOW_MS, clock: plain.clock });
-    expect(new Set(plain.timeouts)).toEqual(new Set([QUERY_TIMEOUT_MS]));
-  });
-
-  it('says a query cut off by the deadline ran out of time, not that the store refused it', () => {
+  it('gives no request longer than what is left of its deadline, and aborts one that outlives it', async () => {
+    // A store that never answers: only the request's own signal ends it.
+    const hung = tokenNet(() => new Promise(() => {}));
+    const fetchImpl = (async (url: string, init: { signal?: AbortSignal } = {}) => {
+      if (url.includes('runner.example')) return hung.fetchImpl(url as never, init as never);
+      return new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)));
+    }) as unknown as typeof fetch;
     let t = NOW_MS;
-    const query = (q: { timeout?: number }) => { t += q.timeout!; throw Object.assign(new Error('spawnSync aws ETIMEDOUT'), { code: 'ETIMEDOUT' }); };
-    const r = headline({ ROLE, CREDENTIALS: 'success' }, { query, now: NOW_MS, clock: () => t, deadline: NOW_MS + 30_000 });
+    const began = Date.now();
+    const r = await headline({ env: RUNNER_ENV, fetchImpl, mask: quiet, hostedUrl: HOSTED_URL, now: NOW_MS, clock: () => { t = NOW_MS + (Date.now() - began); return t; }, deadline: NOW_MS + 300 });
+    expect(Date.now() - began).toBeLessThan(5_000);
     expect(r.lines).toEqual([expect.stringMatching(/^The headline report was not made: its time ran out while the `work` partition was read/)]);
+    expect(QUERY_TIMEOUT_MS).toBe(120_000);
   });
 
-  it('a step out of time warns, writes no report, and returns', () => {
-    const { clock, query } = slow(60_000);
+  it('a step out of time warns, writes no report, and returns', async () => {
+    const { clock, net } = slow(60_000);
     const log: string[] = [];
     const summary: string[] = [];
-    reportStep({ ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: 'summary' }, { query, now: NOW_MS, clock, stamp: () => String(NOW_MS - REPORT_BY_MS + 90_000), append: (_p, t) => { summary.push(t); }, log: (l) => { log.push(l); } });
+    await reportStep({ GITHUB_STEP_SUMMARY: 'summary', ...RUNNER_ENV }, { fetchImpl: net.fetchImpl, mask: quiet, hostedUrl: HOSTED_URL, now: NOW_MS, clock, stamp: () => String(NOW_MS - REPORT_BY_MS + 90_000), append: (_p, t) => { summary.push(t); }, log: (l) => { log.push(l); } });
     expect(log).toEqual([expect.stringMatching(/^::warning title=overseer metrics::The headline report was not made: its time ran out before the `\S+` partition was read/)]);
     expect(summary.join('')).not.toContain('## Kanon metrics');
     expect(summary.join('')).toMatch(/^The headline report was not made: its time ran out/);
   });
 
-  it('a throw from the report warns, without the key, and returns', () => {
+  it('writes the report to the summary, and only counts to the log', async () => {
     const log: string[] = [];
     const summary: string[] = [];
-    // A row the store couldn't hold: making the report throws.
-    reportStep({ ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: 'summary' }, { query: ok([null]), now: NOW_MS, append: (_p, t) => { summary.push(t); }, log: (l) => { log.push(l); } });
-    expect(log).toEqual([expect.stringMatching(/^::warning title=overseer metrics::The headline report stopped on an error \(.+\); the job is not failed for it\.$/)]);
-    expect(summary).toEqual([expect.stringMatching(/^The headline report stopped on an error/)]);
+    await reportStep({ GITHUB_STEP_SUMMARY: 'summary', ...RUNNER_ENV }, { fetchImpl: selfStore(() => []).fetchImpl, mask: quiet, hostedUrl: HOSTED_URL, now: NOW_MS, append: (_p, t) => { summary.push(t); }, log: (l) => { log.push(l); } });
+    expect(summary[0]).toMatch(/^## Kanon metrics, /);
+    expect(log).toEqual([expect.stringMatching(/^The headline report ran: \d+ partitions read/)]);
   });
 
-  it('a throw from the summary\'s write warns, and returns', () => {
+  it('a throw from the summary\'s write warns, and returns', async () => {
     const log: string[] = [];
-    const append = () => { throw Object.assign(new Error(`EISDIR: illegal operation on a directory, open '/tmp/${KEY}'`), { code: 'EISDIR' }); };
-    expect(() => reportStep({ ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: 'summary' }, { query: ok(), now: NOW_MS, append, log: (l) => { log.push(l); } })).not.toThrow();
-    expect(log).toEqual([`::warning title=overseer metrics::The headline report stopped on an error (EISDIR: illegal operation on a directory, open '/tmp/<key>'); the job is not failed for it.`]);
+    const append = () => { throw Object.assign(new Error('EISDIR: illegal operation on a directory'), { code: 'EISDIR' }); };
+    const opts = { fetchImpl: selfStore(() => []).fetchImpl, mask: quiet, hostedUrl: HOSTED_URL, now: NOW_MS, append };
+    await expect(reportStep({ GITHUB_STEP_SUMMARY: 'summary', ...RUNNER_ENV }, { ...opts, log: (l) => { log.push(l); } })).resolves.toBeUndefined();
+    expect(log).toEqual(['::warning title=overseer metrics::The headline report stopped on an error (Error); the job is not failed for it.']);
     // Even a log that throws doesn't throw out of the step.
-    expect(() => reportStep({ ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: 'summary' }, { query: ok(), now: NOW_MS, append, log: () => { throw new Error('EPIPE'); } })).not.toThrow();
+    await expect(reportStep({ GITHUB_STEP_SUMMARY: 'summary', ...RUNNER_ENV }, { ...opts, log: () => { throw new Error('EPIPE'); } })).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * ADR 0007, plan 0008 §3.3: the collector's caller is the repository's consent. The gate reads the
+ * default branch's workflows and lets the read run only when one calls Kanon's collector, so a
+ * repository that didn't opt in never mints a token for the store.
+ */
+describe('the gate: does this repository send telemetry?', () => {
+  const caller = (pin = 'v0.41.0') => `name: Telemetry\non:\n  schedule:\n    - cron: "17 * * * *"\n  workflow_dispatch:\npermissions:\n  actions: read\n  id-token: write\njobs:\n  collect:\n    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@${pin}\n`;
+  const lane = 'name: Overseer\non:\n  schedule:\n    - cron: "0 7 * * 1"\njobs:\n  oversee:\n    uses: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@v0.41.0\n';
+  const snapshot = (files: Record<string, string>) => () => ({ data: { repository: { workflows: { entries: Object.entries(files).map(([name, text]) => ({ name, type: 'blob', object: { text } })) }, record: null } } });
+  const ENV = { GITHUB_REPOSITORY: 'acme/widgets' };
+
+  it('reads true when a workflow on the default branch calls Kanon\'s collector, whatever its name', () => {
+    expect(COLLECTOR_LANE).toBe('telemetry-collect');
+    expect(consentOf(ENV, { json: snapshot({ 'telemetry.yml': caller(), 'overseer.yml': lane }), hostedUrl: HOSTED_URL }))
+      .toEqual({ reader: 'true', line: "This repository sends telemetry (telemetry.yml calls Kanon's collector), so the lane reads its own rows." });
+    expect(consentOf(ENV, { json: snapshot({ 'send-rows.yml': caller(), 'overseer.yml': lane }), hostedUrl: HOSTED_URL }).reader).toBe('true');
+  });
+
+  it('reads false when none does: the repository didn\'t opt in', () => {
+    const r = consentOf(ENV, { json: snapshot({ 'overseer.yml': lane }), hostedUrl: HOSTED_URL });
+    expect(r).toEqual({ reader: 'false', line: expect.stringMatching(/no workflow on the default branch calls Kanon's telemetry collector/) });
+    // A collector caller only in a comment, or one calling another workflow, is not consent.
+    expect(consentOf(ENV, { json: snapshot({ 'overseer.yml': `# uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v1\n${lane}` }), hostedUrl: HOSTED_URL }).reader).toBe('false');
+  });
+
+  it('reads false while the hosted URL is unpublished, and unknown on a wrong pair or an unreadable branch, before reading anything it needn\'t', () => {
+    let reads = 0;
+    const json = () => { reads += 1; return snapshot({ 'telemetry.yml': caller() })(); };
+    expect(consentOf(ENV, { json, hostedUrl: '' })).toMatchObject({ reader: 'false', line: expect.stringMatching(/not published/) });
+    expect(consentOf({ ...ENV, KANON_TELEMETRY_TOKEN_URL: SELF_URL }, { json, hostedUrl: HOSTED_URL })).toMatchObject({ reader: 'unknown', line: expect.stringMatching(/name a self-hosted store together/) });
+    expect(reads).toBe(0);
+    expect(consentOf({ ...ENV, KANON_TELEMETRY_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE }, { json, hostedUrl: '' }).reader).toBe('true');
+    const broken = () => { throw new Error('HTTP 502\nmore'); };
+    expect(consentOf(ENV, { json: broken, hostedUrl: HOSTED_URL })).toEqual({ reader: 'unknown', line: "The telemetry read can't run: whether this repository sends telemetry could not be read (HTTP 502)." });
   });
 });
 
@@ -399,157 +466,70 @@ describe('the merge into the export', () => {
   });
 });
 
-// Its cases run the script in `node` against a stub `aws`, so the block takes the spawn budget (#436).
+// Its cases run the script in `node`, so the block takes the spawn budget (#436). None reaches a
+// network: the hosted URL is unpublished in this tree, and a self-hosted one is refused before any
+// request when the job holds no OIDC token.
 describe('the script, as the lane runs it', SPAWNS, () => {
-  /** A stand-in `aws` on the PATH that records its arguments and answers rows. */
-  const fakeAws = (answer: string) => {
-    const bin = temp();
-    const log = join(bin, 'calls');
-    // A link to the shared shim, never a new executable that macOS scans on its first run (#436).
-    writeStub(join(bin, 'aws'), `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${log}"\nprintf '%s' '${answer}'\n`);
-    return { bin, log };
-  };
-  const run = (mode: string, env: Record<string, string>) => spawnSync(process.execPath, [SCRIPT, mode], { env: { PATH: process.env.PATH ?? '', ...env }, encoding: 'utf8' });
+  const run = (mode: string, env: Record<string, string>) => spawnSync(process.execPath, [SCRIPT, mode], { env: { PATH: process.env.PATH ?? '', ...env }, encoding: 'utf8', timeout: 20_000 });
+  const SELF = { KANON_TELEMETRY_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE };
 
-  it('read: queries the hosted table, writes the two files, outputs `ran`, and prints no row', () => {
-    const rowCost = '7.25';
-    const { bin, log } = fakeAws(JSON.stringify({ Items: [item(1, Number(rowCost))] }));
-    const out = join(temp(), 'out');
-    const outputs = join(temp(), 'outputs');
-    const r = run('read', { PATH: `${bin}:${process.env.PATH}`, ROLE, CREDENTIALS: 'success', OUT: out, GITHUB_OUTPUT: outputs });
-    expect(r.status, r.stderr).toBe(0);
-    expect(readFileSync(outputs, 'utf8')).toBe('status=ran\n');
-    expect(readdirSync(out).sort()).toEqual(['cache-ttl.md', 'token-trend.md']);
-    const calls = readFileSync(log, 'utf8').trim().split('\n');
-    expect(calls).toHaveLength(LANES.length);
-    expect(calls[0]).toContain('dynamodb query --table-name kanon-telemetry --region eu-central-1');
-    expect(calls[0]).toContain(`"S":"${KEY}#${LANES[0]}"`);
-    expect(calls[0]).toContain('--projection-expression');
-    // The rows reach the files as figures, never the log.
-    expect(r.stdout).not.toContain(rowCost);
-    expect(r.stdout).not.toContain('Items');
-  });
-
-  it('read: a refused role outputs `failed`, writes nothing, warns, and exits 0', () => {
-    const out = join(temp(), 'out');
-    const outputs = join(temp(), 'outputs');
-    const r = run('read', { ROLE, CREDENTIALS: 'failure', OUT: out, GITHUB_OUTPUT: outputs });
-    expect(r.status).toBe(0);
-    expect(readFileSync(outputs, 'utf8')).toBe('status=failed\n');
-    expect(existsSync(out)).toBe(false);
-    expect(r.stdout).toMatch(/::warning title=overseer telemetry::The telemetry read failed/);
-  });
-
-  // kanon#499: the variables are resolved once, here; an unset or an empty one is the hosted store's.
-  it('mask: resolves an unset or empty variable to the hosted store\'s table and region, as its outputs', () => {
-    for (const env of [{}, { TABLE: '', REGION: '' }, { TABLE: '  ', REGION: '\n' }] as Array<Record<string, string>>) {
-      const outputs = join(temp(), 'outputs');
-      const r = run('mask', { ROLE, GITHUB_OUTPUT: outputs, ...env });
-      expect(r.status, JSON.stringify(env)).toBe(0);
-      expect(readFileSync(outputs, 'utf8'), JSON.stringify(env)).toBe('table=kanon-telemetry\nregion=eu-central-1\n');
-    }
-    const outputs = join(temp(), 'outputs');
-    expect(run('mask', { ROLE, GITHUB_OUTPUT: outputs, TABLE: 'acme-telemetry', REGION: 'us-east-2' }).status).toBe(0);
-    expect(readFileSync(outputs, 'utf8')).toBe('table=acme-telemetry\nregion=us-east-2\n');
-  });
-
-  it('mask: registers the three masks first, then checks the table and region', () => {
-    const ok = run('mask', { ROLE, GITHUB_OUTPUT: join(temp(), 'o') });
-    expect(ok.status).toBe(0);
-    expect(ok.stdout.split('\n').slice(0, 3)).toEqual([`::add-mask::${ROLE}`, `::add-mask::${ACCOUNT}`, `::add-mask::${KEY}`]);
-    expect(ok.stdout).toContain('Reading the telemetry table kanon-telemetry in eu-central-1.');
-    const badOut = join(temp(), 'o');
-    const bad = run('mask', { ROLE, TABLE: 'a b', REGION: 'eu-central-1', GITHUB_OUTPUT: badOut });
-    expect(bad.status).toBe(1);
-    // A refused value hands nothing on: the credentials step gets no region at all.
-    expect(existsSync(badOut)).toBe(false);
-    expect(bad.stdout.split('\n').slice(0, 3)).toEqual([`::add-mask::${ROLE}`, `::add-mask::${ACCOUNT}`, `::add-mask::${KEY}`]);
-    expect(bad.stdout).toMatch(/::error title=overseer telemetry::the KANON_TELEMETRY_TABLE variable `a b` is not a DynamoDB table name/);
-  });
-
-  it('read: queries the table and region it is handed', () => {
-    const { bin, log } = fakeAws(JSON.stringify({ Items: [] }));
-    const r = run('read', { PATH: `${bin}:${process.env.PATH}`, ROLE, CREDENTIALS: 'success', OUT: join(temp(), 'out'), GITHUB_OUTPUT: join(temp(), 'o'), TABLE: 'acme-telemetry', REGION: 'us-east-2' });
-    expect(r.status, r.stderr).toBe(0);
-    expect(readFileSync(log, 'utf8').split('\n')[0]).toContain('dynamodb query --table-name acme-telemetry --region us-east-2');
-  });
-
-  // kanon#668: the report step, the job's last.
-  it('report: writes the Markdown to the job summary, queries every partition, prints no row, and exits 0', () => {
-    const rowCost = '7.25';
-    const items = [
-      { pk: { S: `${KEY}#work` }, sk: { S: 'pr-0000000007' }, row_kind: { S: 'work_item' }, tag: { S: 'run' }, pr_number: { N: '7' }, closed_at: { S: '2026-10-01T00:00:00Z' }, recorded_at: { S: '2026-10-01T00:00:00Z' }, fate: { S: 'merged' } },
-      { pk: { S: `${KEY}#implement` }, sk: { S: '20260930T000000Z#1-1-7' }, row_kind: { S: 'run' }, tag: { S: 'run' }, lane: { S: 'implement' }, pr_number: { N: '7' }, recorded_at: { S: '2026-09-30T00:00:00Z' }, total_cost_usd: { N: rowCost } },
-    ];
-    const { bin, log } = fakeAws(JSON.stringify({ Items: items }));
-    const summary = join(temp(), 'summary');
-    const r = run('report', { PATH: `${bin}:${process.env.PATH}`, ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: summary });
-    expect(r.status, r.stderr).toBe(0);
-    const calls = readFileSync(log, 'utf8').trim().split('\n');
-    expect(calls).toHaveLength(LANES.length + 1);
-    expect(calls[0]).toContain('dynamodb query --table-name kanon-telemetry --region eu-central-1');
-    expect(calls[0]).toContain(`"S":"${KEY}#work"`);
-    expect(calls[0]).not.toContain(':from');
-    expect(calls.every((c) => !c.includes('--projection-expression'))).toBe(true);
-    const text = readFileSync(summary, 'utf8');
-    expect(text).toMatch(/^## Kanon metrics, /);
-    expect(text).toMatch(/The headline report ran: \d+ partitions read/);
-    // The rows reach the summary as figures, never the log.
-    expect(r.stdout).not.toContain(rowCost);
-    expect(r.stdout).not.toContain('Items');
-    expect(r.stdout).not.toContain('Kanon metrics');
-  });
-
-  it('report: a refused role warns, says so in the summary, writes no report, and exits 0', () => {
-    const summary = join(temp(), 'summary');
-    const r = run('report', { ROLE, CREDENTIALS: 'failure', GITHUB_STEP_SUMMARY: summary });
-    expect(r.status).toBe(0);
-    expect(r.stdout).toMatch(/::warning title=overseer metrics::The headline report was not made: the reader role could not be assumed/);
-    expect(readFileSync(summary, 'utf8')).toMatch(/^The headline report was not made: the reader role could not be assumed/);
-    expect(readFileSync(summary, 'utf8')).not.toContain('## Kanon metrics');
-  });
-
-  // kanon#682: the job's start, for the report's deadline; the step's outputs are unchanged.
-  it('mask: stamps the job\'s start under the runner\'s temp directory, outside the uploaded one', () => {
+  it('read: stamps the job\'s start outside the uploaded directory, and outputs its status', () => {
     const runnerTemp = temp();
+    const out = join(temp(), 'out');
     const outputs = join(temp(), 'outputs');
     const before = Date.now();
-    expect(run('mask', { ROLE, GITHUB_OUTPUT: outputs, RUNNER_TEMP: runnerTemp }).status).toBe(0);
+    const r = run('read', { OUT: out, GITHUB_OUTPUT: outputs, RUNNER_TEMP: runnerTemp });
+    expect(r.status, r.stderr).toBe(0);
     expect(readdirSync(runnerTemp)).toEqual([STARTED_FILE]);
     const started = Number(readFileSync(join(runnerTemp, STARTED_FILE), 'utf8'));
     expect(started).toBeGreaterThanOrEqual(before);
     expect(started).toBeLessThanOrEqual(Date.now());
-    expect(readFileSync(outputs, 'utf8')).toBe('table=kanon-telemetry\nregion=eu-central-1\n');
+    expect(existsSync(out)).toBe(false);
+    if (!HOSTED_INGEST_URL) {
+      expect(readFileSync(outputs, 'utf8')).toBe('status=not configured\n');
+      expect(r.stdout).toMatch(/The telemetry read did not run: the hosted store's URL is not published/);
+      expect(r.stdout).not.toContain('::warning');
+    }
   });
 
-  it('report: a query past the deadline is killed, the report withheld, the outputs untouched, and it exits 0', () => {
-    const bin = temp();
-    // A store that never answers in time: the CLI must be killed, not waited for.
-    writeStub(join(bin, 'aws'), '#!/usr/bin/env bash\nexec sleep 30\n');
-    const runnerTemp = temp();
-    // The job started so long ago that half a second of the report's time is left.
-    writeFileSync(join(runnerTemp, STARTED_FILE), `${Date.now() - REPORT_BY_MS + 500}\n`);
-    const summary = join(temp(), 'summary');
+  it('read: a job with no OIDC token outputs `failed`, writes nothing, warns, and exits 0', () => {
+    const out = join(temp(), 'out');
     const outputs = join(temp(), 'outputs');
-    writeFileSync(outputs, 'status=ran\n');
-    const began = Date.now();
-    const r = run('report', { PATH: `${bin}:${process.env.PATH}`, ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: summary, GITHUB_OUTPUT: outputs, RUNNER_TEMP: runnerTemp });
-    expect(Date.now() - began).toBeLessThan(10_000);
+    const r = run('read', { ...SELF, OUT: out, GITHUB_OUTPUT: outputs });
     expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout).toMatch(/::warning title=overseer metrics::The headline report was not made: its time ran out (while|before) the `work` partition was read/);
+    expect(readFileSync(outputs, 'utf8')).toBe('status=failed\n');
+    expect(existsSync(out)).toBe(false);
+    expect(r.stdout).toMatch(/::warning title=overseer telemetry::The telemetry read failed: none of the \d+ lane partitions could be read \(the job holds no OIDC token/);
+    // The self-hosted URL is masked before anything else prints.
+    expect(r.stdout.split('\n')[0]).toBe(`::add-mask::${SELF_URL}`);
+  });
+
+  it('read: one variable without the other outputs `failed`, before any token', () => {
+    const outputs = join(temp(), 'outputs');
+    const r = run('read', { KANON_TELEMETRY_TOKEN_URL: SELF_URL, ...RUNNER_ENV, OUT: join(temp(), 'out'), GITHUB_OUTPUT: outputs });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(outputs, 'utf8')).toBe('status=failed\n');
+    expect(r.stdout).toMatch(/::warning title=overseer telemetry::The telemetry read did not run: `the KANON_TELEMETRY_TOKEN_URL variable` and `the KANON_TELEMETRY_AUDIENCE variable` name a self-hosted store together/);
+  });
+
+  it('report: a report it can\'t make warns, says so in the summary, and exits 0', () => {
+    const summary = join(temp(), 'summary');
+    const r = run('report', { ...SELF, GITHUB_STEP_SUMMARY: summary });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/::warning title=overseer metrics::The headline report was not made: the `work` partition could not be read \(the job holds no OIDC token/);
+    expect(readFileSync(summary, 'utf8')).toMatch(/^The headline report was not made/);
     expect(readFileSync(summary, 'utf8')).not.toContain('## Kanon metrics');
-    expect(readFileSync(outputs, 'utf8')).toBe('status=ran\n');
   });
 
-  it('report: a summary it can\'t write warns, and exits 0', () => {
-    const { bin } = fakeAws(JSON.stringify({ Items: [] }));
-    const r = run('report', { PATH: `${bin}:${process.env.PATH}`, ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: temp() });
+  it('consent: one variable without the other is `unknown`, said as a warning, before reading the branch', () => {
+    const outputs = join(temp(), 'outputs');
+    const r = run('consent', { KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE, GITHUB_OUTPUT: outputs, GITHUB_REPOSITORY: 'acme/widgets' });
     expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout).toMatch(/::warning title=overseer metrics::The headline report stopped on an error \(.+\); the job is not failed for it\./);
-    expect(r.stdout).not.toContain(KEY);
+    expect(readFileSync(outputs, 'utf8')).toBe('reader=unknown\n');
+    expect(r.stdout).toMatch(/^::warning title=overseer telemetry::The telemetry read can't run: /);
   });
 
-  it('refuses an unknown mode', () => {
-    expect(run('dump', {}).status).toBe(2);
+  it('refuses an unknown mode, and the old ones', () => {
+    for (const mode of ['dump', 'mask']) expect(run(mode, {}).status, mode).toBe(2);
   });
 });
