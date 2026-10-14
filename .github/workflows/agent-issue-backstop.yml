@@ -30,9 +30,13 @@
 # `qa:needs-severity` it adds should read as the Lead's, the role that keeps the issue queue,
 # and the timeline shows the App, not `github-actions`.
 #
-# ONLY MEMBERS (K-AGENT-45). The gate judges the user who opened the issue, by their permission
-# on the repository (triage or more), before any token is minted. So an issue opened by someone
-# outside the repository is refused and gets no bucket from this lane: a person files it.
+# EVERY OPENED ISSUE, AN OUTSIDER'S INCLUDED (K-AGENT-45's exception, Owner decision 2026-10-14).
+# The gate still runs first, but this lane's gate step sets `LANE_GATE_ISSUE_OPENED=anyone`, so on
+# `issues: opened` it admits whoever opened the issue, with no permission lookup. That is safe
+# here and nowhere else: the lane runs no model, reads no issue text, and writes only a bucket and
+# labels, so an outsider can't steer it, and an outsider's issue (an issue form on a public
+# repository) is exactly the one that arrives bare. A dispatch is still judged as a member's, and
+# the Kanon pin is still checked. No other lane sets the variable (tests/unit/lane-gate-run.test.ts).
 #
 # SAFE BY DEFAULT: the opened event applies; a dispatch is a DRY RUN unless `apply` is ticked.
 #
@@ -107,15 +111,17 @@ jobs:
     permissions:
       contents: read
     steps:
-      # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted: on
-      # an opened issue the actor is whoever opened it, on a dispatch whoever ran it. A refusal
-      # leaves `member=false`, a notice and a step-summary line, and every later step skips.
-      # `kanon-path` first, which also gives the steps below Kanon's scripts and Node.
+      # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted. On
+      # an opened issue it admits whoever opened it (`LANE_GATE_ISSUE_OPENED`, the exception the
+      # header explains); on a dispatch it judges whoever ran it. A refusal leaves `member=false`,
+      # a notice and a step-summary line, and every later step skips. `kanon-path` first, which
+      # also gives the steps below Kanon's scripts and Node.
       - uses: $/actions/kanon-path
       - name: Is the actor a member?
         id: gate
         env:
           GH_TOKEN: ${{ github.token }}
+          LANE_GATE_ISSUE_OPENED: anyone
         run: node "$KANON/scripts/lane-gate.mjs"
 
       # THE APP REGISTER, AND NOTHING ELSE (`K-LAYOUT-6`): the rubric comment opens with the

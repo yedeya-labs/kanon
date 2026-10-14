@@ -130,7 +130,7 @@ The Reviewer ends every verdict with `<!-- qa:open-items N -->`: the actionable 
 
 ## Only members start a lane
 
-Every lane starts real work only when the actor of its triggering event is a member: GitHub's `author_association` of `OWNER`, `MEMBER` or `COLLABORATOR`, or one of your agent Apps listed in the App register (`K-AGENT-45`). One exception: on a schedule, the merge queue (the table below). The check is the first step of the lane's first job, [`scripts/lane-gate.mjs`](../scripts/lane-gate.mjs), before any token is minted (the Merger, whose review and sweep start different jobs, runs it first in each), so it runs on a private repository exactly as on a public one (`K-PRIN-20`).
+Every lane starts real work only when the actor of its triggering event is a member: GitHub's `author_association` of `OWNER`, `MEMBER` or `COLLABORATOR`, or one of your agent Apps listed in the App register (`K-AGENT-45`). Two exceptions: on a schedule, the merge queue, and on the issue backstop, whoever opened the issue (the table below). The check is the first step of the lane's first job, [`scripts/lane-gate.mjs`](../scripts/lane-gate.mjs), before any token is minted (the Merger, whose review and sweep start different jobs, runs it first in each), so it runs on a private repository exactly as on a public one (`K-PRIN-20`).
 
 | Event | The actor | How it is checked |
 |---|---|---|
@@ -139,7 +139,7 @@ Every lane starts real work only when the actor of its triggering event is a mem
 | A merge (`pull_request: closed`) | whoever merged it | the same |
 | A merge (`pull_request_target: closed`) | whoever merged it, `merged_by` alone (through a merge queue, the member who queued it) | the same. A pull request closed unmerged is refused ([#484](https://github.com/yedeya-labs/kanon/issues/484)) |
 | A closed issue (`issues: closed`) | whoever closed it | the same |
-| An opened issue (`issues: opened`) | whoever opened it | the same, so the issue backstop gives no bucket to an issue opened by someone without triage access ([#768](https://github.com/yedeya-labs/kanon/issues/768)) |
+| An opened issue (`issues: opened`), on the issue backstop alone | whoever opened it | not checked: admitted, an outsider included, since the backstop runs no model, reads no issue text and writes only a bucket and labels (Owner decision 2026-10-14, [#768](https://github.com/yedeya-labs/kanon/issues/768)). Every other lane refuses an opened issue |
 | A dispatch | whoever ran it, re-runs included | the same; only write access can dispatch, so this refuses only an unregistered App |
 | A pull request opened (`pull_request_target`) | whoever opened it | the same |
 | A finished workflow (`workflow_run`) | whoever pushed the commit it ran on | the same |
@@ -455,7 +455,7 @@ Each write is made only when it is missing, so running it again on the same issu
 - **Keeps two triggers:** `issues: [opened]`, which applies, and a dispatch with `issue_number` and `apply`, which without `apply` is a dry run that says what it would write.
 - **Grants `contents: read`.** Every write is on the App token.
 
-It needs the Author App (the Lead's), with `Issues: write` on the installation, and the two bucket milestones, which `kanon init` creates with [`kanon milestones`](install.md). The membership gate judges whoever opened the issue (`K-AGENT-45`), so an issue opened by someone without triage access gets no bucket from it, and stays bare until a person places it.
+It needs the Author App (the Lead's), with `Issues: write` on the installation, and the two bucket milestones, which `kanon init` creates with [`kanon milestones`](install.md). It buckets an outsider's issue too: on an opened issue its membership gate admits whoever opened it, the one lane that does (`K-AGENT-45`'s exception, Owner decision 2026-10-14), because it runs no model, reads no issue text and writes only a bucket and labels. A dispatch is still a member's.
 
 ## The code audit
 
