@@ -340,6 +340,79 @@ Each is a `- ` bullet at the start of its line, its bold label, and its value as
 
 The reconciler reads it from your default branch, through [`scripts/lib/deploy-declaration.mjs`](../scripts/lib/deploy-declaration.mjs), the one parser of the section. Without it, the reconciler names the missing declaration when a project reaches its deploy phase, and that project can't close. A step of your own that needs the same names, such as a probe that your Author App (the Lead's) can read Actions, prints one with `node "$KANON/scripts/reference-deploy.mjs" workflow` (or `job`, or `environment`), with `GITHUB_REPOSITORY` and a `gh` token in its environment. Add the declaration before, or with, the upgrade that brings it.
 
+## The deploy lane
+
+The deploy lane deploys your published releases to the environments your adoption record declares ([plan 0010](plans/0010-deployment-lane.md)). It runs no model: every decision is a script's, and every refusal has a name. It is not one of the features: a repository that declares no environment has no deploy lane.
+
+<!-- deploy-lane:table -->
+
+| Lane | What it does | Needs | Cost |
+|---|---|---|---|
+| `deploy-release.yml` and `deploy.yml` | Deploys each published release of a green default-branch commit to the environments the adoption record's `## Deploy` section declares, in order, the last being production: a gate, a trust probe of each environment's cloud role, and one job per environment that runs your deploy and smoke hooks with that environment's OIDC credential. Records a `deploy` row per environment and keeps one issue per environment for its failures. | a `## Deploy` section in `docs/qa/adoption.md` listing your environments; a GitHub environment per declared environment, production with required reviewers, or the record's fallback marker; a cloud role per environment that trusts only that environment's OIDC subject, readable from outside the environment (a repository variable); the Releaser, so a release starts the lane; `.github/actions/deploy/action.yml`; `.github/actions/smoke/action.yml`; the environment secret `KANON_DEPLOY_SECRET`, if your deploy needs one | No model. The gate waits for the release commit's CI, up to the declared CI wait (90 minutes by default); each environment costs what your deploy command costs. |
+
+<!-- /deploy-lane:table -->
+
+**The declaration.** List your environments, in deploy order, in the `## Deploy` section of `docs/qa/adoption.md`. The last one is production; every other one is pre-production. Each deploys only after the one before it succeeded on the same release:
+
+```markdown
+## Deploy
+- **Environments:** `staging`, `production`
+- **CI wait:** `90`
+```
+
+The CI wait is how long the gate waits for the release commit's CI, in minutes from 1 to 360; without it, 90. The lane reads the section **at the release's commit**, through [`scripts/lib/deploy-declaration.mjs`](../scripts/lib/deploy-declaration.mjs), so the declaration that deploys a release is the one reviewed with it.
+
+**The two workflows, and the caller.** [`deploy-release.yml`](../.github/workflows/deploy-release.yml) runs once per release: the gate, the trust probe, and, when the run stops there, one row and one issue for the first environment. [`deploy.yml`](../.github/workflows/deploy.yml) runs once per environment: `declare`, then `deploy`, `record` and `report`. Your caller, `.github/workflows/deploy.yml`, calls the first, then the second once per environment, each `needs:` the one before. `kanon init` writes it from the declaration ([plan 0010](plans/0010-deployment-lane.md) step D6); for the declaration above it reads:
+
+<!-- x-release-please-start-version -->
+```yaml
+name: Deploy
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release: { type: string, required: true }
+jobs:
+  release:
+    uses: yedeya-labs/kanon/.github/workflows/deploy-release.yml@v0.39.0
+    with: { environments: 'staging production' }
+  deploy-1:
+    name: staging
+    needs: release
+    uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.39.0
+    with: { environment: staging, position: 1 }
+  deploy-2:
+    name: production
+    needs: deploy-1
+    uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.39.0
+    with: { environment: production, position: 2 }
+```
+<!-- x-release-please-end -->
+
+Grant each job the permissions its workflow asks for (`requirements.json`'s `deploy` entry lists them), and map no secret. A run lists each environment's job as `staging / deploy`, the caller's job name then the lane's, which is what a reference deploy declaration names. Publish releases with the Releaser: a release the workflow token creates starts no run.
+
+**Dispatch at the release's tag, always.** To deploy a release again, or to roll back to an earlier one, dispatch the caller at that release's tag, naming it as the input too: `gh workflow run deploy.yml --ref <tag> -f release=<tag>`. The gate refuses a dispatch run at any other ref, the default branch included, as `no-release`, before the probe or any environment runs. That way no job of the lane carries the default branch's OIDC subject, which your QA store's role, and any other role that trusts the default branch, would accept: every job carries the tag's subject or its environment's ([#914](https://github.com/yedeya-labs/kanon/issues/914)).
+
+**The gate** refuses, by name, before anything deploys: `draft` or `no-release` (the release is a draft or missing, its tag moved, or a dispatch ran at another ref than the release's tag), `not-default-branch` (the commit is not on the default branch), `declaration-mismatch` (the caller's list is not the record's at that commit, in order), and `ci-red` or `ci-timeout` (`ci.yml`'s push run on that commit is not green, or still runs after the CI wait; `K-SHIP-8`).
+
+**The hooks.** Two composite actions you write, as you write the project-setup hook:
+
+| Hook | Inputs | Must |
+|---|---|---|
+| `.github/actions/deploy/action.yml` | `environment`, `role` (`production` or `pre-production`), `release`, `sha`, `artifact`, `probe` (`'true'` or `'false'`), `environments` | Obtain the environment's cloud credential and deploy. With `probe: 'true'`, only try to obtain each listed environment's credential, and write the answer, one of `refused`, `obtained` or `unconfigured` per environment, as a JSON object to `$RUNNER_TEMP/kanon-deploy-probe.json` |
+| `.github/actions/smoke/action.yml` | `environment`, `role`, `release` | Check the deployed system answers as the release expects, and fail otherwise |
+
+The lane judges each hook by whether it succeeded. The deploy hook's step alone receives `KANON_DEPLOY_SECRET` in its environment: an environment secret of the environment it deploys, empty when the environment holds none. GitHub masks it in the log; write it nowhere but `$RUNNER_TEMP`. `artifact` is empty until the build job, plan 0010's next step, fills it with the one build every environment deploys.
+
+**The trust probe.** Before anything deploys, a job outside every environment, with `id-token: write`, runs your deploy hook with `probe: 'true'`. Each environment's cloud role must trust only that environment's OIDC subject, `…:environment:<name>`, so every attempt must be refused. The lane prints `kanon-deploy-probe/v1 {"staging":"refused","production":"refused"}` for doctor and goes on only when every declared environment answered `refused`: an `obtained` fails `trust-unbound`, and anything else, a missing answer included, `probe-unconfigured`. Keep each environment's role identifier where a job outside the environment can read it, such as a repository variable: an environment's own variables don't resolve in the probe. The lane reads no role itself; where your hook finds each is yours.
+
+**Each environment.** `declare` checks the environment is at its position in the record and derives its role from it. `deploy` sets the environment, so GitHub runs it only after the environment's protection rules pass, and holds one concurrency group per environment, queued and never cancelled mid-run. Once it runs, it refuses `superseded` for a release older than the environment's last successful deploy; a dispatch of an earlier release rolls back, and its row says so. Then your two hooks run on the release's commit.
+
+**After each environment.** `record` writes a `deploy` row (its role and position, never its name) as the artifact `kanon-deploy-row-<run id>-<attempt>-<position>`. A rejected approval concludes the job as a plain failure, so `record` reads the run's approvals to tell a rejection from a failure. `report` keeps one issue per environment, titled `Deploy to <environment> failed`: a failure or a refusal files it, labelled `bug` and `sev:high` for production or `sev:medium` otherwise, or comments on the open one; the next success closes it. A rejection or a cancellation files nothing.
+
+**Where the plan has no environments or no reviewers.** Mark it in the section, `- **Fallback:** \`no-environments\`` or `\`no-reviewers\`` ([plan 0010](plans/0010-deployment-lane.md) §13), and state it under `## Plan`. Under `no-environments` the jobs set no environment and the probe is skipped. Under either marker a published release deploys the pre-production environments and holds production: its job is skipped, no row is written and no issue touched, and the run's summary says production waits for the Maintainer's dispatch. The Maintainer the record's `## People` table names then dispatches the caller at the release's tag (`gh workflow run deploy.yml --ref <tag> -f release=<tag>`). A dispatch started by anyone else still deploys every pre-production environment, but its production step is refused. The lane checks whoever started the attempt, so a re-run of the Maintainer's dispatch by someone else is refused at production too, including a re-run of the failed jobs alone.
+
 ## The red-test check
 
 On an agent-authored pull request, one labelled `agent:implement` or `agent:triage`, the red-test check reverts the non-test part of the change to the merge base, re-runs the changed tests, and fails when they still pass (`K-MERGE-13`). A person's pull request is not subject to it, and concludes skipped. It is not a lane: [`red-test.yml`](../.github/workflows/red-test.yml) runs no agent and takes no secret, so `lane-check` holds its caller only to the pin. Call it from a caller of your own on `pull_request`:

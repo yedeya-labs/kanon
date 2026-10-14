@@ -1,6 +1,6 @@
 // `kanon metrics report` (plan 0003 §7, M6, kanon#659 and kanon#669): the three headline
-// indicators by band, their secondary measures, and the trend, by-version and A/B views, from one
-// adopter's stored rows. It reads the rows from local files, and prints Markdown, or one JSON
+// indicators by band, their secondary measures, the trend, by-version and A/B views, and, given
+// deploy rows, the deploy views (plan 0010 §11), from one adopter's stored rows. It reads the rows from local files, and prints Markdown, or one JSON
 // document with `--json` (docs/cli-json.md). It calls nothing: no GitHub, no store. The Overseer's
 // `telemetry` job reads the rows through the store's `GET /v1/rows/self` and runs it; a caller by
 // hand exports them with the adopter's reader role until plan 0008 J9 removes the roles at vM+1
@@ -18,7 +18,7 @@
 // Node built-ins only, like the other commands; the file reading is `kanon metrics`'s.
 
 import { metricsReport, renderReport, WINDOW_DAYS } from '../scripts/metrics/report.mjs';
-import { metricsViews, renderViews, TREND_WINDOWS } from '../scripts/metrics/views.mjs';
+import { DEPLOY_WEEKS, metricsViews, renderViews, TREND_WINDOWS } from '../scripts/metrics/views.mjs';
 
 /** The JSON output's contract (docs/metrics.md). A breaking change to it changes this. */
 export const SCHEMA = 'kanon-metrics-report/v1';
@@ -35,12 +35,15 @@ human-correction rate beside it, and their secondary measures: cost per acceptan
 cache savings, review rounds, lead time by stage and human wait. Each with its 95% interval; a
 cell below its minimum sample says "not enough data (N)". When cost doesn't rise with the band,
 the pooled view replaces the banded one, with a warning. Then the views (plan 0003 §6.1): the
-trend over consecutive windows of --days, the indicators by Kanon version, and the configuration A/B per lane.
-Reads only the files it is given; calls nothing.
+trend over consecutive windows of --days, the indicators by Kanon version, and the configuration
+A/B per lane. Given deploy rows, the deploy views (plan 0010 §11) follow: deployment frequency,
+change-failure rate, time to restore and release lead time, over the ${DEPLOY_WEEKS} weeks that end at
+--until, whatever --days and --windows say. Reads only the files it is given; calls nothing.
 
 Options:
-  --rows <file>          one adopter's stored rows, run and work-item, as a JSON array, JSON
-                         Lines, or a JSON object with a "rows" array. Repeat for several files
+  --rows <file>          one adopter's stored rows, run, work-item and deploy, as a JSON array,
+                         JSON Lines, or a JSON object with a "rows" array. Repeat for several
+                         files
   --until <YYYY-MM-DD>   the window's end, 00:00 UTC, not included (default: now)
   --days <n>             the window's length in days, by close date (default: ${WINDOW_DAYS})
   --windows <n>          the trend's windows, ending at --until; the by-version and A/B views

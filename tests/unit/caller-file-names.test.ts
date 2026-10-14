@@ -42,6 +42,12 @@ type Site = {
   constant?: string;
   /** `caller`: the line names the file `laneCallerFile` resolved for the lane `reaches` (kanon#726). */
   via?: 'caller';
+  /**
+   * The deploy lane's workflow that runs the line (plan 0010 D4). The deploy lane is not an agent
+   * lane, so no `# READS WORKFLOW:` line and no `lane-check` caller requires the name: doctor's
+   * `deploy.ci-push-missing` does (plan 0010 §12, step D7).
+   */
+  deployLane?: string;
 };
 
 const SITES: Site[] = [
@@ -64,6 +70,8 @@ const SITES: Site[] = [
   { file: 'scripts/telemetry-collect.mjs', line: '/actions/workflows/${encodeURIComponent(file)}/runs', reaches: 'self' },
   // A re-ask's due check lists its own caller's runs, by the file `GITHUB_WORKFLOW_REF` names (kanon#813).
   { file: 'scripts/reask-due.mjs', line: '/actions/workflows/${file}/runs', reaches: 'self' },
+  // The deploy gate waits for the release commit's `ci.yml` push run (`K-SHIP-8`, plan 0010 §3 check 4).
+  { file: 'scripts/deploy-gate.mjs', line: '/actions/workflows/${CI_WORKFLOW}/runs', reaches: 'ci.yml', constant: 'CI_WORKFLOW', deployLane: 'deploy-release.yml' },
 ];
 
 /** Code lines only: a comment that names a workflow reaches nothing. */
@@ -108,7 +116,11 @@ describe('every workflow Kanon reaches by file name is one K-LAYOUT-18 fixes', (
     expect(read(s.file)).toMatch(new RegExp(`laneCallerFile\\(${s.constant}, \\{ repo(?:: REPO)?, json \\}\\)`));
   });
 
-  it.each(SITES.filter((s) => s.reaches !== 'declared' && s.reaches !== 'callers' && s.reaches !== 'self'))('$file reaches $reaches, a name the rule fixes', (s) => {
+  it.each(SITES.filter((s) => s.deployLane))('$file reaches $reaches from the deploy lane, $deployLane, where doctor requires it', (s) => {
+    expect(read(`.github/workflows/${s.deployLane}`)).toContain(`"$KANON/${s.file}"`);
+  });
+
+  it.each(SITES.filter((s) => !s.deployLane && s.reaches !== 'declared' && s.reaches !== 'callers' && s.reaches !== 'self'))('$file reaches $reaches, a name the rule fixes', (s) => {
     if (LANES.includes(s.reaches)) return; // a caller has its lane's file name
     const lanes = lanesReaching(s.file);
     expect(lanes.length, `${s.file} runs in no lane`).toBeGreaterThan(0);

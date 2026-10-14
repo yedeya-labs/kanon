@@ -1,0 +1,45 @@
+# Kanon's Slack hook (plan 0011 §7.2): one Kanon notification, posted to one Slack incoming webhook
+# as Block Kit with a `text` fallback.
+#
+# An adopter never calls this action from a lane. `kanon init --chat slack` writes
+# `actions/notify/hooks/slack.yml` to `.github/actions/notify/action.yml`, the hook path every
+# notifying lane's `notify` job calls (§6.1), and that file's one step is this action at a Kanon
+# release (§7.1). It takes the hook interface's four inputs and nothing else.
+#
+# The inputs reach the script only through the environment, never interpolated into a shell line:
+# the message is a file path, and the secret is the kind's webhook URL, which the `notify` block has
+# already masked. The script reads `secret` as one Slack incoming-webhook URL and refuses anything
+# else without echoing it (decision 4); `slack.mjs` holds the rendering, the escaping and the retry.
+#
+# The script is read from this action's own directory ($GITHUB_ACTION_PATH), with Kanon's contract
+# library beside it at the same release, so the two can't drift apart. Requires Node 20 or later on
+# the runner (for `fetch`); GitHub's hosted runners have it, and the action does not install Node.
+name: Kanon notify, Slack
+description: Posts one Kanon notification (kanon-notify version 1) to the one Slack incoming webhook in `secret`, as Block Kit with a text fallback.
+author: yedeya-labs
+
+inputs:
+  message-v1:
+    description: Path to the validated message, version 1, as JSON.
+    required: true
+  text:
+    description: Path to the message's plain-text rendering. Unused; Slack gets its own rendering.
+    required: true
+  kind:
+    description: The message's kind, for the log line.
+    required: true
+  secret:
+    description: This kind's Slack incoming-webhook URL (https://hooks.slack.com/services/…).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Post to Slack
+      shell: bash
+      env:
+        MESSAGE_FILE: ${{ inputs.message-v1 }}
+        TEXT_FILE: ${{ inputs.text }}
+        KIND: ${{ inputs.kind }}
+        SECRET: ${{ inputs.secret }}
+      run: node "$GITHUB_ACTION_PATH/slack.mjs"

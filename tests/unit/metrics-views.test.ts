@@ -7,7 +7,7 @@ import { metrics } from '../../cli/metrics.mjs';
 import { PRICES, cacheSavings, priceOf } from '../../scripts/metrics/prices.mjs';
 import { MINIMUM, metricsReport, renderReport } from '../../scripts/metrics/report.mjs';
 import { bootstrapDifference, newcombe } from '../../scripts/metrics/stats.mjs';
-import { AB_MARGINS, metricsViews, renderViews } from '../../scripts/metrics/views.mjs';
+import { AB_MARGINS, DEPLOY_WEEKS, metricsViews, renderViews } from '../../scripts/metrics/views.mjs';
 import { DAY, UNTIL, ago, itemRow, mergedWithRuns, risingRows, runRow } from './helpers/metrics-rows.js';
 
 /**
@@ -684,5 +684,30 @@ describe('kanon metrics report prints the views', () => {
     const summary = doc.slice(doc.indexOf('## `kanon metrics report`')).split('\n\n')[1];
     expect(summary).toMatch(/^`kanon metrics report` reports/);
     for (const heading of headings) expect(summary, heading).toContain(named[heading]);
+  });
+
+  it('names every view it prints in its --help text and its header comment (kanon#910)', async () => {
+    // How the --help text and cli/metrics-report.mjs's header comment name each view heading.
+    const named: Record<string, RegExp> = {
+      'Trend': /trend/,
+      'By Kanon version': /by[- ]version/,
+      'Configuration A/B': /A\/B/,
+      'Deploys to production': /deploy views/,
+    };
+    const text = renderViews(views([...risingRows({ S: 12, M: 12, L: 12, XL: 12 }), ...history(1)])).join('\n');
+    const headings = [...text.matchAll(/^### ([^,\n]+)/gm)].map((m) => m[1]!);
+    expect(headings).toEqual(Object.keys(named));
+    const out: string[] = [];
+    expect(await metrics(['report', '--help'], { out: (l) => out.push(l), err: () => {}, readFile: () => null, release: () => 'v9.9.9', now: () => UNTIL })).toBe(0);
+    const help = out.join('\n').replace(/\s+/g, ' ');
+    const source = readFileSync('cli/metrics-report.mjs', 'utf8');
+    const header = source.slice(0, source.indexOf('\n\n')).replace(/^\/\/ ?/gm, '').replace(/\s+/g, ' ');
+    for (const heading of headings) {
+      expect(help, `--help: ${heading}`).toMatch(named[heading]!);
+      expect(header, `header: ${heading}`).toMatch(named[heading]!);
+    }
+    // The deploy rows are input, and the deploy views' span is their own, not --days or --windows.
+    expect(help).toMatch(/--rows <file> [^-]*\brun, work-item and deploy\b/);
+    expect(help).toMatch(new RegExp(`deploy views[^.]*${DEPLOY_WEEKS} weeks (that end|ending) at --until`));
   });
 });

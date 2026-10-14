@@ -71,6 +71,10 @@ const workRow = (over: Claims = {}): Claims => ({
   schema_version: 1, row_kind: 'work_item', tag: 'run', recorded_at: iso(NOW - 60_000), pr_number: 42,
   closed_at: '2026-10-10T08:00:00Z', fate: 'merged', ...over,
 });
+const deployRow = (over: Claims = {}): Claims => ({
+  schema_version: 1, row_kind: 'deploy', tag: 'run', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 2,
+  kanon_version: '0.50.0', role: 'production', position: 1, outcome: 'ok', ...over,
+});
 const findingRow = (over: Claims = {}): Claims => ({
   schema_version: 1, row_kind: 'finding', tag: 'test', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 2,
   finding_index: 3, reporter: 'overseer', subject: 'guard', kanon_version: '0.40.0', fix_category: 'guard', evidence_level: 'codes', ...over,
@@ -391,21 +395,24 @@ describe('the erasure walk on the `erase` alias (§7)', () => {
     seedRegistration(f, OPERATOR);
     seedOther(f);
     for (const lane of PARTITIONS) {
-      if (lane === 'work' || lane === 'finding') continue;
+      if (lane === 'work' || lane === 'finding' || lane === 'deploy') continue;
       seedRow(f, `${KEY_MARK}seed`, lane);
     }
     seedRow(f, `${KEY_MARK}seed`, 'work');
     for (let i = 0; i < 30; i += 1) seedRow(f, `${KEY_MARK}seed`, 'work', { pr_number: 100 + i });
     f.seed(ROWS, { ...findingRow(), pk: `${KEY_MARK}seed#finding`, sk: 'x', expires_at: 1 });
+    f.seed(ROWS, { ...deployRow(), pk: `${KEY_MARK}seed#deploy`, sk: 'x', expires_at: 1 });
     seedRow(f, `${KEY_MARK}other`, 'review');
     seedRow(f, `${KEY_MARK}other`, 'work');
   });
 
-  it('empties every partition, `work` and `finding` among them, leaves the tombstone alone, and the next POST /v1/rows gets 410', async () => {
+  it('empties every partition, `work`, `finding` and `deploy` among them, leaves the tombstone alone, and the next POST /v1/rows gets 410', async () => {
     const s = seeded();
+    expect(s.f.partition(`${KEY_MARK}seed#deploy`)).toHaveLength(1);
     expect((await s.erase()).status).toBe(202);
     expect(await s.walk()).toEqual({ status: 200, body: { done: true } });
     for (const p of PARTITIONS) expect(s.f.partition(`${KEY_MARK}seed#${p}`), p).toEqual([]);
+    expect(s.f.partition(`${KEY_MARK}seed#deploy`)).toEqual([]);
     // Another key's rows are untouched.
     expect(s.f.partition(`${KEY_MARK}other#review`)).toHaveLength(1);
     expect(s.f.partition(`${KEY_MARK}other#work`)).toHaveLength(1);
@@ -450,10 +457,11 @@ describe('the erasure walk on the `erase` alias (§7)', () => {
 });
 
 describe('POST /v1/rows (§3.2)', () => {
-  it('200: run, finding and work-item rows mixed, each under its partition; a re-sent work item overwrites its pr- item', async () => {
+  it('200: run, finding, work-item and deploy rows mixed, each under its partition; a re-sent work item overwrites its pr- item', async () => {
     const s = store((f) => seedRegistration(f));
-    const r = await s.post([runRow(), findingRow(), workRow()]);
-    expect(r).toMatchObject({ status: 200, body: { results: [{ status: 'stored' }, { status: 'stored' }, { status: 'stored' }] } });
+    const r = await s.post([runRow(), findingRow(), workRow(), deployRow()]);
+    expect(r).toMatchObject({ status: 200, body: { results: [{ status: 'stored' }, { status: 'stored' }, { status: 'stored' }, { status: 'stored' }] } });
+    expect(s.f.partition(`${KEY_MARK}seed#deploy`)).toEqual([expect.objectContaining({ sk: '20261012T115900Z#33679229731-2-1', row_kind: 'deploy', source: 'collector' })]);
     expect(s.f.partition(`${KEY_MARK}seed#review`)).toEqual([expect.objectContaining({ sk: '20261012T115900Z#33679229731-2-42', source: 'collector' })]);
     expect(s.f.partition(`${KEY_MARK}seed#finding`)).toEqual([expect.objectContaining({ sk: '20261012T115900Z#33679229731-2-3' })]);
     expect(s.f.partition(`${KEY_MARK}seed#work`)).toEqual([expect.objectContaining({ sk: 'pr-0000000042', fate: 'merged' })]);

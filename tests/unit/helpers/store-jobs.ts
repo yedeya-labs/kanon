@@ -527,13 +527,84 @@ export const ID_TOKEN_HOLDERS: IdTokenHolder[] = [
   { is: isMetricsPageJob, says: 'the metrics page read job', cited: '`metrics-page.yml`' },
 ];
 
+/** The deploy lane's two workflows (plan 0010, step D4). */
+export const DEPLOY_FILES = ['deploy-release.yml', 'deploy.yml'];
+/** The one secret the deploy lane reads, in the deploy hook step's `env:` of `deploy.yml`'s `deploy` job alone. */
+const DEPLOY_SECRET = { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' };
+const DEPLOY_JOB_KEYS = ['name', 'needs', 'if', 'runs-on', 'timeout-minutes', 'environment', 'concurrency', 'permissions', 'outputs', 'steps'];
+const MARK = 'echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"';
+/** A step as the shapes below read it: the action it uses, or what it runs. */
+const runs = (s: Step | undefined) => (s?.uses ?? String(s?.run ?? '').trim());
+const checkoutOf = (s: Step | undefined, ref: string) => /^actions\/checkout@v\d+$/.test(String(s?.uses ?? ''))
+  && JSON.stringify(s?.with) === JSON.stringify({ ref, 'persist-credentials': false }) && s?.env === undefined;
+const noSecret = (x: unknown) => !/secrets\s*[.[]/.test(JSON.stringify(x));
+
+/**
+ * The deploy lane's trust probe (plan 0010 §5): `probe` in `deploy-release.yml`, outside every
+ * environment, with `contents: read` and `id-token: write` alone, no secret, a checkout of the
+ * gate's commit that persists no credential, the adopter's deploy hook in probe mode, and Kanon's
+ * judge. It runs the release's commit, on the default branch and green (the gate's checks 2 and 4).
+ */
+export function isDeployProbeJob(file: string | undefined, name: string, j: Job): boolean {
+  if (file !== 'deploy-release.yml' || name !== 'probe' || !only(j, DEPLOY_JOB_KEYS) || j.environment !== undefined) return false;
+  if (JSON.stringify(j.permissions) !== JSON.stringify({ contents: 'read', 'id-token': 'write' }) || !noSecret(j)) return false;
+  const steps = j.steps ?? [];
+  const hook = steps[3];
+  return steps.length === 5
+    && runs(steps[0]) === '$/actions/kanon-path' && steps[0]!.with === undefined
+    && checkoutOf(steps[1], '${{ needs.gate.outputs.sha }}')
+    && runs(steps[2]) === 'rm -f "$RUNNER_TEMP/kanon-deploy-probe.json"' && steps[2]!.env === undefined
+    && hook?.uses === './.github/actions/deploy' && hook.with?.probe === 'true' && hook.env === undefined
+    && runs(steps[4]) === 'node "$KANON_PATH/scripts/deploy-gate.mjs" probe'
+    && only(steps[4]!.env, ['KANON_PATH', 'ENVIRONMENTS']);
+}
+
+/**
+ * The deploy lane's environment job (plan 0010 §4, §5): `deploy` in `deploy.yml`, setting the
+ * environment the declaration names, with `contents: read`, `deployments: read` and
+ * `id-token: write` alone; Kanon's supersede check, a checkout of the release's commit that
+ * persists no credential, the adopter's deploy and smoke hooks, and the marks that time them; and
+ * one secret, `KANON_DEPLOY_SECRET`, in the deploy hook step's `env:` alone.
+ */
+export function isDeployEnvJob(file: string | undefined, name: string, j: Job): boolean {
+  if (file !== 'deploy.yml' || name !== 'deploy' || !only(j, DEPLOY_JOB_KEYS)) return false;
+  if (j.environment !== '${{ needs.declare.outputs.environment }}') return false;
+  if (JSON.stringify(j.permissions) !== JSON.stringify({ contents: 'read', deployments: 'read', 'id-token': 'write' })) return false;
+  const steps = j.steps ?? [];
+  const hook = steps[5];
+  return steps.length === 9
+    && runs(steps[0]) === MARK
+    && runs(steps[1]) === '$/actions/kanon-path'
+    && runs(steps[2]) === 'node "$KANON/scripts/deploy-gate.mjs" supersede' && only(steps[2]!.env, ['GH_TOKEN', 'ENVIRONMENT', 'SHA', 'FALLBACK', 'ROLE'])
+    && checkoutOf(steps[3], '${{ needs.declare.outputs.sha }}')
+    && runs(steps[4]) === MARK
+    && hook?.uses === './.github/actions/deploy' && hook.with?.probe === 'false' && JSON.stringify(hook.env) === JSON.stringify(DEPLOY_SECRET)
+    && runs(steps[6]) === MARK
+    && steps[7]!.uses === './.github/actions/smoke'
+    && runs(steps[8]) === MARK
+    && steps.every((s, i) => i === 5 || noSecret(s)) && noSecret({ ...j, steps: [] });
+}
+
+/**
+ * The deploy lane's two holders (plan 0010 D4), admitted in their shapes beside `ID_TOKEN_HOLDERS`.
+ * They are not among those: they reach no store of Kanon's (Kanon's repository calls neither
+ * workflow), so the listings of the stores' holders don't name them; the guard's message names
+ * them for a job of the deploy lane's own files.
+ */
+export const DEPLOY_ID_TOKEN_HOLDERS: Array<Omit<IdTokenHolder, 'cited'>> = [
+  { is: isDeployProbeJob, says: "deploy-release.yml's probe" },
+  { is: isDeployEnvJob, says: "deploy.yml's deploy" },
+];
+const MAY_HOLD_DEPLOY = `in the deploy lane only ${DEPLOY_ID_TOKEN_HOLDERS.map((h) => h.says).join(' and ')} may, each in its shape (plan 0010 D4)`;
+
 /**
  * A job that may hold `id-token: write`: one that runs the qa-store block alone (kanon#225's
  * allow-list: the block, plus the download of the report a `put` writes), or one of
- * `ID_TOKEN_HOLDERS`, some of which need their workflow's file name.
+ * `ID_TOKEN_HOLDERS` or `DEPLOY_ID_TOKEN_HOLDERS`, some of which need their workflow's file name.
  */
 export function mayHoldIdToken(name: string, j: Job, file?: string): boolean {
   if (ID_TOKEN_HOLDERS.some((h) => h.is(file, name, j))) return true;
+  if (DEPLOY_ID_TOKEN_HOLDERS.some((h) => h.is(file, name, j))) return true;
   return isStoreJob(j) && !isAgentJob(j) && !isDeleteJob(j) && extraStepProblems(name, j, 'store').length === 0;
 }
 
@@ -579,7 +650,7 @@ export function idTokenProblems(workflows: Record<string, Workflow>): string[] {
         }
         continue;
       }
-      if (!mayHoldIdToken(name, j, file)) out.push(`${file}: job ${name} holds id-token: write (${how}); ${MAY_HOLD}`);
+      if (!mayHoldIdToken(name, j, file)) out.push(`${file}: job ${name} holds id-token: write (${how}); ${DEPLOY_FILES.includes(file) ? MAY_HOLD_DEPLOY : MAY_HOLD}`);
     }
   }
   return out;
