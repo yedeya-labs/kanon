@@ -1,0 +1,212 @@
+# The deploy lane, once per environment (plan 0010 §4 to §8, step D4). The adopter's deploy
+# caller calls it once per declared environment, in order, each call `needs:` the one before, so
+# an environment deploys only after the one before it succeeded on the same release. Called with
+# the environment and its position only: the role (`production` for the last, `pre-production`
+# for the others) is read from the adoption record at the release's commit, never passed in.
+#
+#   declare → deploy (environment, concurrency, approval) → record → report
+#
+# DECLARE (`scripts/deploy-gate.mjs declare`), with `contents: read` alone and no credential: the
+# release again, and the adoption record's `## Deploy` list at its commit must hold this
+# environment at this position, else `declaration-mismatch`. It outputs the role, and the
+# environment the deploy job sets: none under the record's `no-environments` marker (plan 0010
+# §13; kanon#890 measured that an empty `environment:` leaves the job without one, so one deploy
+# job serves both). And THE HOLD (kanon#894): under either fallback marker, on a `release` run,
+# the last environment is `held`, its deploy job skipped, no row written and no issue touched;
+# the run's summary says production waits for the Maintainer's dispatch, which `declare` admits
+# only from the Maintainer the record's `## People` names. The hold lives here, not in the
+# caller, so the caller `kanon init` writes is the same with or without a fallback.
+#
+# THE DEPLOY JOB sets `environment:`, so GitHub runs it only after the environment's protection
+# rules pass, and its OIDC token's subject is `…:environment:<name>`, which each environment's
+# cloud role trusts alone (plan 0010 §5). One concurrency group per environment, queued, never
+# cancelled mid-run (§6): `cancel-in-progress: false`, `queue: max`. Once it holds its slot and
+# its approval, the supersede check refuses, on a release, a commit older than the environment's
+# last successful deploy (`superseded`); a dispatch may roll back, and its row says so. Then it
+# checks out the release's commit, with no credential persisted, and runs the adopter's hooks:
+# `.github/actions/deploy`, which obtains the environment's credential and deploys, then
+# `.github/actions/smoke`. The deploy hook's step alone receives `KANON_DEPLOY_SECRET`, an
+# environment secret, empty when the environment holds none (plan 0010 §7, `K-AGENT-47`). From
+# plan 0010's D5 the job also downloads the build's artifact and checks its digest before the
+# deploy hook, which then receives its path as `artifact`.
+#
+# AFTER (plan 0010 §8): `record` writes this environment's `deploy` row (`scripts/deploy-row.mjs`),
+# reading the run's approvals to tell a rejection from a failure (kanon#890), and `report` files,
+# comments on or closes this environment's issue (`scripts/deploy-report.mjs`), with no checkout.
+#
+# NO MODEL IN THE DEPLOY PATH (plan 0010 §9): no agent, no Claude credential, no App key or App
+# token (`tests/unit/deploy-lane.test.ts`).
+name: Deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: The environment to deploy, as the adoption record's `## Deploy` list names it.
+        required: true
+        type: string
+      position:
+        description: The environment's place in the declared list, from 1. The lane refuses a call whose environment isn't at this position.
+        required: true
+        type: number
+
+# Each job declares its own, and none is granted more than it uses.
+permissions: {}
+
+jobs:
+  declare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      refusal: ${{ steps.check.outputs.refusal }}
+      sha: ${{ steps.check.outputs.sha }}
+      tag: ${{ steps.check.outputs.tag }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+      published-at: ${{ steps.check.outputs.published-at }}
+      role: ${{ steps.check.outputs.role }}
+      environment: ${{ steps.check.outputs.environment }}
+      fallback: ${{ steps.check.outputs.fallback }}
+      held: ${{ steps.check.outputs.held }}
+      unauthorized: ${{ steps.check.outputs.unauthorized }}
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Check this environment against the declaration at the release's commit
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_DRAFT: ${{ github.event.release.draft }}
+          DISPATCH_RELEASE: ${{ github.event.inputs.release }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          POSITION: ${{ inputs.position }}
+        # The dispatch's actor is the runner's own `GITHUB_ACTOR`, which a workflow can't override.
+        run: node "$KANON/scripts/deploy-gate.mjs" declare
+
+  deploy:
+    name: deploy
+    needs: declare
+    if: needs.declare.outputs.held == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: ${{ needs.declare.outputs.environment }}
+    concurrency:
+      group: kanon-deploy-${{ github.repository }}-${{ inputs.environment }}
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      deployments: read
+      id-token: write
+    outputs:
+      started-at: ${{ steps.start.outputs.at }}
+      refusal: ${{ steps.supersede.outputs.refusal }}
+      redeploy: ${{ steps.supersede.outputs.redeploy }}
+      rollback: ${{ steps.supersede.outputs.rollback }}
+      deploy-started-at: ${{ steps.before-deploy.outputs.at }}
+      deploy-ended-at: ${{ steps.after-deploy.outputs.at }}
+      deploy-outcome: ${{ steps.deploy.outcome }}
+      smoke-outcome: ${{ steps.smoke.outcome }}
+      ended-at: ${{ steps.end.outputs.at }}
+    steps:
+      - name: Mark the job's start
+        id: start
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: $/actions/kanon-path
+      - name: Refuse an older commit than the last successful deploy
+        id: supersede
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          SHA: ${{ needs.declare.outputs.sha }}
+        run: node "$KANON/scripts/deploy-gate.mjs" supersede
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.declare.outputs.sha }}
+          persist-credentials: false
+      - name: Mark the deploy's start
+        id: before-deploy
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Deploy
+        id: deploy
+        uses: ./.github/actions/deploy
+        env:
+          KANON_DEPLOY_SECRET: ${{ secrets.KANON_DEPLOY_SECRET }}
+        with:
+          environment: ${{ inputs.environment }}
+          role: ${{ needs.declare.outputs.role }}
+          release: ${{ needs.declare.outputs.tag }}
+          sha: ${{ needs.declare.outputs.sha }}
+          artifact: ""
+          probe: "false"
+          environments: ""
+      - name: Mark the deploy's end
+        id: after-deploy
+        if: always() && steps.deploy.outcome == 'success'
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Smoke
+        id: smoke
+        uses: ./.github/actions/smoke
+        with:
+          environment: ${{ inputs.environment }}
+          role: ${{ needs.declare.outputs.role }}
+          release: ${{ needs.declare.outputs.tag }}
+      - name: Mark the job's end
+        id: end
+        if: always()
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+  record:
+    needs: [declare, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      written: ${{ steps.row.outputs.written }}
+      outcome: ${{ steps.row.outputs.outcome }}
+      stage: ${{ steps.row.outputs.stage }}
+      refusal: ${{ steps.row.outputs.refusal }}
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Write the row
+        id: row
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS: ${{ toJSON(needs) }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          POSITION: ${{ inputs.position }}
+          KANON_WORKFLOW_REF: ${{ job.workflow_ref }}
+          KANON_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: node "$KANON/scripts/deploy-row.mjs" environment
+      - name: Upload the row
+        if: steps.row.outputs.written == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-deploy-row-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.position }}
+          path: ${{ runner.temp }}/kanon-deploy-row/kanon-deploy-row.json
+          retention-days: 90
+          if-no-files-found: error
+
+  # This environment's issue: filed or commented on after a failure or a refusal, closed after a
+  # success. No checkout.
+  report:
+    needs: [declare, deploy, record]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - uses: $/actions/kanon-path
+      - name: File, comment on or close this environment's issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS: ${{ toJSON(needs) }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          POSITION: ${{ inputs.position }}
+          RELEASE: ${{ needs.declare.outputs.tag || github.event.release.tag_name || github.event.inputs.release }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node "$KANON/scripts/deploy-report.mjs" environment

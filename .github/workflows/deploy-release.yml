@@ -1,0 +1,181 @@
+# The deploy lane, once per release (plan 0010 §3 to §8, step D4): the gate, the trust probe, and
+# the row and the issue when the run stops before any environment. `deploy.yml` deploys each
+# environment, one call per environment.
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S DEPLOY CALLER, `.github/workflows/deploy.yml` in
+# the adopter's repository, which `kanon init` writes from the adoption record's `## Deploy`
+# list (plan 0010 §4, step D6): one `release` job calling this file with the declared list, then
+# one `deploy-<position>` job per environment calling `deploy.yml`, chained by `needs:`. The
+# caller holds the triggers and maps no secret (`K-AGENT-47`): the one secret the lane reads is
+# an environment secret, which resolves only in `deploy.yml`'s job that sets `environment:`.
+#
+# THE CALLER'S TRIGGERS (`K-LAYOUT-18`) — this lane's contract with it:
+#   release:
+#     types: [published]        — a stable release and a pre-release alike (decision 4)
+#   workflow_dispatch:
+#     inputs:
+#       release: { type: string, required: true }   — an existing release's tag, to deploy again
+# A release made with the workflow token starts no run, so the deploy lane needs the Releaser
+# (plan 0010 §3, decision 3).
+#
+# THE GATE (`scripts/deploy-gate.mjs gate`) holds no secret and no cloud credential, and refuses,
+# by code: a draft or missing release, or a tag that moved (`draft`, `no-release`); a commit off
+# the default branch (`not-default-branch`); a caller list that isn't the adoption record's at
+# that commit, in order (`declaration-mismatch`); and a commit whose `ci.yml` push run isn't
+# green, waited for up to the record's CI wait, 90 minutes by default (`ci-red`, `ci-timeout`;
+# `K-SHIP-8`). The job's limit is a hosted job's, 360 minutes, the CI wait's bound.
+#
+# THE TRUST PROBE (plan 0010 §5, decision 6). A job outside every environment, with
+# `id-token: write`, runs the adopter's deploy hook with `probe: 'true'` and the declared list.
+# The hook tries to obtain each environment's cloud credential exactly as it would deploy, from
+# role identifiers it can read outside the environments (the hook decides where; the docs
+# suggest repository variables), and writes one word per environment, `refused`, `obtained` or
+# `unconfigured`, as JSON to `$RUNNER_TEMP/kanon-deploy-probe.json`. The judge prints the line
+# doctor reads, `kanon-deploy-probe/v1 {...}`, and passes only when every environment refused:
+# `obtained` fails `trust-unbound`, anything else `probe-unconfigured`. Under the adoption
+# record's `no-environments` marker the probe is SKIPPED (the probe decision): every role then
+# trusts the release tags' subject, which the probe's own job carries.
+#
+# THE BUILD (plan 0010 decision 8, step D5) comes next, in this file: a `build` job after the
+# gate and the probe (or the gate alone, under the marker), with no credential, running the
+# adopter's `.github/actions/build` once and uploading the artifact every environment deploys.
+# `record` and `report` then read its result too. It is not here yet: D4 and D5 ship in one
+# release, and until D5 the deploy hook's `artifact` input is empty.
+#
+# AFTER (plan 0010 §8). A run that stops before any environment never starts the environment
+# calls, so `record` writes one `deploy` row for the first environment (open-question decision
+# 4), and `report` files on, or comments on, the first environment's issue. A run that goes on
+# writes nothing here: each environment's call records and reports its own.
+#
+# NO MODEL IN THE DEPLOY PATH (plan 0010 §9): no agent, no Claude credential, no App key or App
+# token, in either deploy workflow (`tests/unit/deploy-lane.test.ts`).
+name: Deploy release
+
+on:
+  workflow_call:
+    inputs:
+      environments:
+        description: The declared environments, in deploy order, separated by spaces, exactly as the adoption record's `## Deploy` list names them. The gate refuses any other list.
+        required: true
+        type: string
+
+# Each job declares its own, and none is granted more than it uses.
+permissions: {}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+    outputs:
+      refusal: ${{ steps.gate.outputs.refusal }}
+      sha: ${{ steps.gate.outputs.sha }}
+      tag: ${{ steps.gate.outputs.tag }}
+      prerelease: ${{ steps.gate.outputs.prerelease }}
+      published-at: ${{ steps.gate.outputs.published-at }}
+      fallback: ${{ steps.gate.outputs.fallback }}
+      environments: ${{ steps.gate.outputs.environments }}
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Check the release, its branch, the declaration and CI
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_DRAFT: ${{ github.event.release.draft }}
+          DISPATCH_RELEASE: ${{ github.event.inputs.release }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ENVIRONMENTS: ${{ inputs.environments }}
+        run: node "$KANON/scripts/deploy-gate.mjs" gate
+
+  # THE TRUST PROBE: the one job here holding `id-token: write`, and no environment, no secret.
+  probe:
+    needs: gate
+    if: needs.gate.outputs.fallback != 'no-environments'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      refusal: ${{ steps.judge.outputs.refusal }}
+    steps:
+      - id: kanon
+        uses: $/actions/kanon-path
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+      - name: Clear any earlier answer
+        run: rm -f "$RUNNER_TEMP/kanon-deploy-probe.json"
+      - name: Try each environment's credential from outside it
+        uses: ./.github/actions/deploy
+        with:
+          environment: ""
+          role: ""
+          release: ${{ needs.gate.outputs.tag }}
+          sha: ${{ needs.gate.outputs.sha }}
+          artifact: ""
+          probe: "true"
+          environments: ${{ needs.gate.outputs.environments }}
+      # Kanon's path from the step's output, not `KANON`: the hook could rewrite `$GITHUB_ENV`.
+      - name: Judge the answer
+        id: judge
+        env:
+          KANON_PATH: ${{ steps.kanon.outputs.path }}
+          ENVIRONMENTS: ${{ needs.gate.outputs.environments }}
+        run: node "$KANON_PATH/scripts/deploy-gate.mjs" probe
+
+  # One row for the first environment, only when the run stopped here.
+  record:
+    needs: [gate, probe]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      written: ${{ steps.row.outputs.written }}
+      outcome: ${{ steps.row.outputs.outcome }}
+      stage: ${{ steps.row.outputs.stage }}
+      refusal: ${{ steps.row.outputs.refusal }}
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Write the row
+        id: row
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          ENVIRONMENTS: ${{ inputs.environments }}
+          KANON_WORKFLOW_REF: ${{ job.workflow_ref }}
+          KANON_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: node "$KANON/scripts/deploy-row.mjs" release
+      - name: Upload the row
+        if: steps.row.outputs.written == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-deploy-row-${{ github.run_id }}-${{ github.run_attempt }}-1
+          path: ${{ runner.temp }}/kanon-deploy-row/kanon-deploy-row.json
+          retention-days: 90
+          if-no-files-found: error
+
+  # The first environment's issue, only when the run stopped here. No checkout.
+  report:
+    needs: [gate, probe, record]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - uses: $/actions/kanon-path
+      - name: File on the first environment's issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS: ${{ toJSON(needs) }}
+          ENVIRONMENTS: ${{ inputs.environments }}
+          RELEASE: ${{ needs.gate.outputs.tag || github.event.release.tag_name || github.event.inputs.release }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node "$KANON/scripts/deploy-report.mjs" release

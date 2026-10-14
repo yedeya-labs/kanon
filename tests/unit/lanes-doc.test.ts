@@ -282,6 +282,39 @@ describe("docs/lanes.md's features table is the features of docs/lanes.json (pla
   });
 });
 
+/**
+ * The deploy lane's table (plan 0010, step D4), built from `requirements.json`'s `deploy` entry:
+ * docs/lanes.json's description, the hooks the two workflows call and the environment secret the
+ * deploy hook receives.
+ */
+type Deploy = { workflows: Record<string, string>; hooks: Array<{ path: string }>; environmentSecrets: string[]; catalogue: { does: string; needs: string[]; cost: string } };
+const deployTable = (): string => {
+  const d = (loadRequirements() as unknown as { deploy: Deploy }).deploy;
+  const needs = [
+    ...d.catalogue.needs,
+    ...d.hooks.map((h) => `\`${h.path}\``),
+    ...d.environmentSecrets.map((s) => `the environment secret \`${s}\`, if your deploy needs one`),
+  ];
+  const files = Object.values(d.workflows).map((f) => `\`${f}.yml\``).join(' and ');
+  return `\n\n| Lane | What it does | Needs | Cost |\n|---|---|---|---|\n| ${files} | ${d.catalogue.does} | ${needs.join('; ')} | ${d.catalogue.cost} |\n\n`;
+};
+
+describe("docs/lanes.md's deploy-lane table is the requirements' deploy entry (plan 0010 D4)", () => {
+  const OPEN = '<!-- deploy-lane:table -->';
+  const CLOSE = '<!-- /deploy-lane:table -->';
+  const doc = read('docs/lanes.md');
+  if (process.env.KANON_WRITE_LANES_DOC && doc.includes(OPEN)) writeFileSync(join(ROOT, 'docs/lanes.md'), `${doc.slice(0, doc.indexOf(OPEN) + OPEN.length)}${deployTable()}${doc.slice(doc.indexOf(CLOSE))}`);
+
+  it('is built from the entry, cell for cell', () => {
+    expect(between(read('docs/lanes.md'), OPEN, CLOSE), "docs/lanes.md's deploy-lane table is stale: rebuild it with KANON_WRITE_LANES_DOC=1 npx vitest run tests/unit/lanes-doc.test.ts").toBe(deployTable());
+  });
+
+  it('names both workflows and both hooks, so the check above is not vacuous', () => {
+    const t = deployTable();
+    for (const s of ['`deploy-release.yml`', '`deploy.yml`', '`.github/actions/deploy/action.yml`', '`.github/actions/smoke/action.yml`', '`KANON_DEPLOY_SECRET`']) expect(t).toContain(s);
+  });
+});
+
 // #626: the review lane reviews a pull request only once it carries one of its labels, or when
 // dispatched, and a person installing it read that nowhere they looked. Both of docs/lanes.md's
 // tables state it in the review lane's row, with the labels the lane gates on.
