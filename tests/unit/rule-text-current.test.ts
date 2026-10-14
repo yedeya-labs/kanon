@@ -139,6 +139,15 @@ describe("K-MERGE-4 says a library the project's own lanes run only at a pinned 
     expect(why).toMatch(/bump changes the pins under `\.github\/`/);
   });
 
+  it('puts the library sentence after the one its "high-risk paths" come from, so "It also goes to a human" is still the PR (kanon#905)', () => {
+    const sentences = paragraph(rule, 'Rule').trim().split(/(?<=\.)\s+(?=[A-Z])/);
+    const highRisk = sentences.findIndex((s) => /^It also goes to a human if it changes one of the project's own high-risk paths/.test(s));
+    expect(sentences[0]).toMatch(/^A PR always goes to a human if it changes \*\*the pipeline itself\*\*/);
+    expect(highRisk).toBe(1);
+    expect(sentences.findIndex((s) => /high-risk paths/.test(s))).toBe(highRisk);
+    expect(sentences.findIndex((s) => LIBRARY.test(s))).toBeGreaterThan(highRisk);
+  });
+
   it('records the change in CHANGES.md under K-MERGE-4, dated 2026-10-14, linking #728', () => {
     const section = /^## `K-MERGE-4`\n([\s\S]*?)(?=^## )/m.exec(read('rulebook/CHANGES.md'))?.[1] ?? '';
     expect(section).toMatch(/^- \*\*2026-10-14\.\*\* [^\n]*pinned release[^\n]*\[#728\]\(https:\/\/github\.com\/yedeya-labs\/kanon\/issues\/728\)/m);
