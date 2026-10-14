@@ -155,10 +155,11 @@ jobs:
         run: node "$KANON/scripts/lane-gate.mjs"
       # IS THERE A FUNCTION TO CALL? (plan 0008 §2.1, §3.3): the self-hosted store the two
       # variables name together, or Kanon's hosted one, once this release publishes its URL, for a
-      # repository whose default branch calls Kanon's collector without naming a store of its own.
-      # No token is minted here. One variable without the other, or a collector's caller that names
-      # its own store while the two are unset, stops the run here, by name: never sent to the
-      # hosted store (`K-OBS-18`; the Owner's decision on #842).
+      # repository whose default branch calls Kanon's collector without `url:`, `audience:` or
+      # `writer-role:`. No token is minted here. One variable without the other, or a collector's
+      # caller that names another store while the two are unset (`audience:`, a store of its own;
+      # `url:` or `writer-role:` alone, a caller written before vM, given both ways out), stops the
+      # run here, by name: never sent to the hosted store (`K-OBS-18`; the Owner's decision on #842).
       - name: Is the aggregate function configured?
         id: configured
         if: steps.gate.outputs.member == 'true'

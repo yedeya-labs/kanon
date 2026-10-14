@@ -10,9 +10,10 @@
 // both ways out (as doctor's `telemetry.legacy-inputs` gives them), never told it is self-hosted.
 // A repository whose caller names another store never opted in to
 // the hosted service, so a reading lane must not send a token minted for the hosted audience on
-// its behalf, which would name the repository to Kanon's operator. Such a lane is told to name
-// the adopter's own store with its own two variables, and refuses until it does: never a quiet
-// fallback to the hosted store (the Owner's decision on #842, refuse rather than redirect).
+// its behalf, which would name the repository to Kanon's operator. Such a lane refuses: a caller
+// with `audience:` is told to name its own store with the lane's two variables, and a caller with
+// only `url:` or `writer-role:` is given both ways out; never a quiet fallback to the hosted store
+// (the Owner's decision on #842, refuse rather than redirect).
 //
 // `node:` built-ins only, and the snapshot `lane-caller.mjs` reads (`K-SELF-8`).
 
@@ -66,8 +67,11 @@ export function collectorConsent(snapshot) {
 }
 
 /**
- * Why a lane about to read the HOSTED store must not, or null: the collector's caller names a
- * store of its own. `variables` are the lane's two variables that name the adopter's store.
+ * Why a lane about to read the HOSTED store must not, or null: the collector's caller names
+ * another store. With `audience:` it names a store of the adopter's own, and the refusal names
+ * `variables`, the lane's two variables that name it; with only `url:` or `writer-role:`, a caller
+ * written before vM, its store can't be told, and the refusal gives both ways out
+ * (`kanon init --telemetry` for the hosted store, or `audience:` and `variables`).
  * @param {{ ownStore: string[], caller: string | null }} consent
  * @param {{ url: string, audience: string }} variables
  */

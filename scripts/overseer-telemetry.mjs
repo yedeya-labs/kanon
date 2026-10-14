@@ -402,10 +402,11 @@ export async function reportStep(env, io = {}) {
  * the lane may ask the store for its rows? `true` when a workflow on its default branch calls
  * Kanon's collector and there is a store to read; `false` when none does, or this release
  * doesn't publish the hosted store's URL; `unknown` when the default branch can't be read, the
- * store's two variables are wrong, or the collector's caller names a store of its own while the
- * two variables are unset (`K-OBS-18`; the Owner's decision on #842): that repository never opted
- * in to the hosted store, so it is refused, naming the variables to set, never sent there. The
- * lane reports `unknown` as a `failed` read.
+ * store's two variables are wrong, or the collector's caller names another store while the two
+ * variables are unset (`K-OBS-18`; the Owner's decision on #842): `audience:` names a store of its
+ * own, refused naming the variables to set; `url:` or `writer-role:` without it, a caller written
+ * before vM, refused with both ways out. Neither is ever sent to the hosted store. The lane reports
+ * `unknown` as a `failed` read.
  * @param {Record<string, string | undefined>} env
  * @param {{ json: (args: string[]) => any, hostedUrl?: string }} io
  * @returns {{ reader: 'true' | 'false' | 'unknown', line: string }}

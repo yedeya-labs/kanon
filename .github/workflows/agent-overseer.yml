@@ -231,9 +231,10 @@ jobs:
       # a workflow there calls Kanon's collector and there is a store to read: Kanon's hosted one,
       # once this release publishes its URL, or the self-hosted one the two variables name
       # together. `false` is the read `not configured`; `unknown` (the branch unreadable, one
-      # variable without the other, or a collector's caller that names a store of its own while the
-      # two are unset, which is never sent to the hosted store) is a `failed` read. No token is
-      # minted here.
+      # variable without the other, or a collector's caller that names another store while the two
+      # are unset: `audience:`, a store of its own, or `url:` or `writer-role:` alone, a caller
+      # written before vM, given both ways out; never sent to the hosted store) is a `failed` read.
+      # No token is minted here.
       - name: Does this repository send telemetry?
         id: reader
         if: steps.runtime.outputs.due == 'true'

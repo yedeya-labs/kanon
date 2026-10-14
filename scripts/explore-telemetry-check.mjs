@@ -14,8 +14,10 @@
 // this release, or no workflow on the default branch calls Kanon's collector, so the repository
 // isn't registered and no token is sent to name it. Exit 1, naming the problem: one variable
 // without the other or of the wrong shape, a default branch that can't be read, or a collector's
-// caller that names a store of its own while the two variables are unset (`K-OBS-18`; the Owner's
-// decision on #842: refused, never redirected to the hosted store).
+// caller that names another store while the two variables are unset: with `audience:`, a store of
+// its own, named by the variables to set; with only `url:` or `writer-role:`, a caller written
+// before vM, given both ways out (`K-OBS-18`; the Owner's decision on #842: refused, never
+// redirected to the hosted store).
 //
 // `node:` built-ins, and `gh` for the default branch (`K-SELF-8`).
 
