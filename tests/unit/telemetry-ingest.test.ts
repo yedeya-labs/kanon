@@ -286,6 +286,78 @@ describe('a deploy row is stored under <key>#deploy (plan 0010 §10, D9)', () =>
   });
 });
 
+describe('a notify row is stored in its lane\'s partition under notify# (plan 0011 §11, N5)', () => {
+  const notifyRow = (over: Row = {}): Row => ({
+    schema_version: 1, row_kind: 'notify', tag: 'run', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 2,
+    producer_attempt: 2, lane: 'project-digest', kanon_version: '0.12.0', kind: 'project-digest', contract_version: 1,
+    hook: 'slack', outcome: 'posted', duration_ms: 900, ...over,
+  });
+  /** The run row the same run's producer wrote: same lane, run and attempt, same second. */
+  const producerRow = () => runRow({ lane: 'project-digest', role: 'overseer', run_attempt: 2, pr_number: undefined });
+
+  it('is keyed <key>#<lane>, under notify#, by time, run and attempt', () => {
+    expect(keysOf('k1', notifyRow())).toEqual({ pk: 'k1#project-digest', sk: 'notify#20261002T115900Z#33679229731-2' });
+  });
+
+  it('never collides with the run row of the same run, and a re-run of notify alone is its own item', () => {
+    const run = keysOf('k1', producerRow());
+    const notify = keysOf('k1', notifyRow());
+    expect(notify.pk).toBe(run.pk);
+    expect(notify.sk).not.toBe(run.sk);
+    expect(keysOf('k1', notifyRow({ run_attempt: 3, producer_attempt: 2 })).sk).not.toBe(notify.sk);
+  });
+
+  it('falls outside every time window a run-row read asks for, whose sort keys begin with the time', () => {
+    // GET /v1/rows/self reads a lane between compact(from) and compact(to) + '~': here the day both rows were written.
+    const within = (sk: string) => sk >= '20261002T000000Z' && sk <= '20261002T235959Z~';
+    expect(within(keysOf('k1', producerRow()).sk)).toBe(true);
+    expect(within(keysOf('k1', notifyRow()).sk)).toBe(false);
+  });
+
+  it('a row of each outcome is stored from the writer, and from the importer under its own key', async () => {
+    const rows = [
+      notifyRow(),
+      notifyRow({ outcome: 'failed', failure: 'hook-step-failed', run_id: 2 }),
+      notifyRow({ outcome: 'skipped', skip_reason: 'no-secret', producer_attempt: undefined, contract_version: undefined, run_id: 3 }),
+    ].map((r) => Object.fromEntries(Object.entries(r).filter(([, v]) => v !== undefined)));
+    const writer = await call(event(rows));
+    expect(writer.status).toBe(200);
+    expect(writer.puts.map((p) => [p.pk, String(p.sk).slice(0, 7), p.source])).toEqual([
+      ['k1#project-digest', 'notify#', 'collector'], ['k1#project-digest', 'notify#', 'collector'], ['k1#project-digest', 'notify#', 'collector'],
+    ]);
+    expect(writer.puts[0]).toMatchObject({ expires_at: Math.floor(addMonths(NOW - 60_000, 13) / 1000) });
+    const importer = await call(event([notifyRow()], { role: 'kanon-telemetry-importer', key: 'k2' }), { IMPORTER_ROLE: 'kanon-telemetry-importer' });
+    expect(importer.puts).toEqual([expect.objectContaining({ pk: 'k2#project-digest', source: 'import' })]);
+  });
+
+  it('a smoke notify row keeps 30 days; the backfill role may not send one', async () => {
+    const smoke = await call(event([notifyRow({ tag: 'smoke' })]));
+    expect(smoke.puts[0]).toMatchObject({ expires_at: Math.floor((NOW - 60_000 + 30 * DAY) / 1000) });
+    const backfill = await call(event([notifyRow()], { role: 'kanon-telemetry-backfill', key: 'k2' }), { BACKFILL_ROLE: 'kanon-telemetry-backfill' });
+    expect(backfill.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
+    expect(backfill.puts).toEqual([]);
+  });
+
+  it('beside its producer\'s run row, both are stored, in the same partition under different keys', async () => {
+    const r = await call(event([producerRow(), notifyRow()]));
+    expect(r.body.results.map((x: { status: string }) => x.status)).toEqual(['stored', 'stored']);
+    expect(new Set(r.puts.map((p) => p.pk))).toEqual(new Set(['k1#project-digest']));
+    expect(new Set(r.puts.map((p) => p.sk)).size).toBe(2);
+  });
+
+  it('a row carrying a URL is refused whole, naming the field, and the value reaches neither the answer nor the log', async () => {
+    const r = await call(event([notifyRow({ url: 'https://hooks.slack.com/services/T0/B0/secret' })]));
+    expect(r.status).toBe(422);
+    expect(r.body.results[0].errors).toEqual([{ field: 'url', problem: 'unknown' }]);
+    expect(r.puts).toEqual([]);
+    expect(JSON.stringify(r.body) + r.logs.join('\n')).not.toContain('hooks.slack.com');
+  });
+
+  it('erasure reaches it: its partition is one PARTITIONS names', () => {
+    expect(PARTITIONS.map((p) => `k1#${p}`)).toContain(keysOf('k1', notifyRow()).pk);
+  });
+});
+
 describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
   // Invented repositories: k1's words are `acme`, `corp`, `widget` and `shop`; k2's are not. Since
   // plan 0008 J3 the SigV4 path reads them from each key's registration, as the import writes them.

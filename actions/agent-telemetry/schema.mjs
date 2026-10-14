@@ -15,14 +15,17 @@
 // offending FIELDS only. It never echoes a value: a rejected row may hold the content this
 // schema exists to keep out, and the rejection is what reaches a log.
 //
-// FOUR ROW KINDS, each with its own version (plan 0002 §2.2). A `run` row (version 2) describes
+// FIVE ROW KINDS, each with its own version (plan 0002 §2.2). A `run` row (version 2) describes
 // one agent run. A `work_item` row (version 1, plan 0003 §3.3) describes one pull request; S1
 // ships its field list only, and nothing writes one until plan 0003's M4. A `finding` row
 // (version 1, plan 0006 §2) carries one upstream finding, a finding only Kanon can act on; F1
 // ships its field list and checks; the Overseer's and the telemetry Explorer's filing steps write
 // them (F3, `scripts/lib/finding-rows.mjs`), and the collector sends them (F4). A `deploy` row
 // (version 1, plan 0010 §10) describes one environment's deploy of one release; D3 ships its field
-// list and checks, the deploy lane writes it (D4), and the store takes it (D9).
+// list and checks, the deploy lane writes it (D4), and the store takes it (D9). A `notify` row
+// (version 1, plan 0011 §11) records one `notify` job's outcome: whether the adopter's hook posted
+// the message, failed, or was skipped, and the hook's kind, never a URL, a channel or any text. N5
+// ships its field list and checks and the store takes it; the `notify` block writes it (N6).
 
 import { KANON_PATH, SCRUB_VERSION, verify } from './scrub.mjs';
 
@@ -223,6 +226,27 @@ export const DEPLOY_REFUSALS = Object.freeze([
 ]);
 /** The deploy caller's two triggers (plan 0010 §3). */
 export const DEPLOY_TRIGGERS = Object.freeze(['release', 'workflow_dispatch']);
+
+/**
+ * The message kinds a `notify` row names (plan 0011 §3.2, §11): `KINDS` in
+ * `scripts/lib/notify-contract.mjs`. This module imports nothing outside its directory, so the
+ * schema test holds this copy to that one.
+ */
+export const NOTIFY_KINDS = Object.freeze(['project-digest', 'weekly-digest', 'deploy']);
+/** The hook's kind (plan 0011 §5.1 step 4, §11): Kanon's two prebuilt hooks, or the adopter's own. */
+export const NOTIFY_HOOKS = Object.freeze(['slack', 'webhook', 'custom']);
+/** How one `notify` job ended (plan 0011 §11, decision 14). */
+export const NOTIFY_OUTCOMES = Object.freeze(['posted', 'failed', 'skipped']);
+/**
+ * Why a `notify` job posted nothing without failing (plan 0011 §5.1 step 1, decision 21): the
+ * kind's secret is unset, or the producer wrote no message. Only with `skipped`.
+ */
+export const NOTIFY_SKIP_REASONS = Object.freeze(['no-message', 'no-secret']);
+/**
+ * Why a `notify` job failed (plan 0011 §11): Kanon's validator refused the message, or the hook's
+ * step failed. Only with `failed`.
+ */
+export const NOTIFY_FAILURES = Object.freeze(['invalid-message', 'hook-step-failed']);
 
 // ------------------------------------------------------------------ field types
 
@@ -513,6 +537,37 @@ const DEPLOY_V1 = Object.freeze({
 });
 
 /**
+ * The notify row, version 1: sixteen fields (plan 0011 §11). One `notify` job's outcome, written
+ * by the job that knows it, and stored in its lane's partition, `<key>#<lane>`, under an `sk` that
+ * begins `notify#`. No URL, channel, host, text, status body or secret: every field is a number, a
+ * time or a closed word, so `validate` refuses any of those as `unknown` (decision 14).
+ * `run_id` and `run_attempt` are the `notify` job's; `producer_attempt` is the attempt in the
+ * producer's artifact name, so a re-run of `notify` alone is told apart from a fresh run.
+ */
+const NOTIFY_V1 = Object.freeze({
+  // Row
+  schema_version: req(oneOf([1])),
+  row_kind: req(oneOf(['notify'])),
+  tag: req(oneOf(TAGS)),
+  recorded_at: req(time),
+  // Run
+  run_id: req(int(RUN_ID_MAX)),
+  run_attempt: req(count),
+  producer_attempt: /** @type {Field} */ ({ type: 'int', min: 1, max: INT_MAX }),
+  lane: req(oneOf(LANES)),
+  kanon_version: RUN_V2.kanon_version,
+  // The message and the hook
+  kind: req(oneOf(NOTIFY_KINDS)),
+  contract_version: /** @type {Field} */ ({ type: 'int', min: 1, max: INT_MAX }),
+  hook: req(oneOf(NOTIFY_HOOKS)),
+  // Outcome
+  outcome: req(oneOf(NOTIFY_OUTCOMES)),
+  skip_reason: oneOf(NOTIFY_SKIP_REASONS),
+  failure: oneOf(NOTIFY_FAILURES),
+  duration_ms: count,
+});
+
+/**
  * Every field list, by row kind and then version (plan 0002 §2.2). A new version is a Kanon
  * release that adds a list; the old one stays until no supported release writes it.
  * @type {Readonly<Record<string, Readonly<Record<number, Readonly<Record<string, Field>>>>>>}
@@ -522,6 +577,7 @@ export const SCHEMAS = Object.freeze({
   work_item: Object.freeze({ 1: WORK_ITEM_V1 }),
   finding: Object.freeze({ 1: FINDING_V1 }),
   deploy: Object.freeze({ 1: DEPLOY_V1 }),
+  notify: Object.freeze({ 1: NOTIFY_V1 }),
 });
 
 /** Set by the store, never by a row: a row that sends one is rejected (plan 0002 §2.1). */
@@ -675,6 +731,28 @@ function deployPairings(row) {
   return out;
 }
 
+/**
+ * The cross-field rules of a notify row (plan 0011 §11): `skip_reason` only with `skipped`, and a
+ * skip names its reason; `failure` only with `failed`, and a failure names its cause. The job
+ * always knows which, so a row without it is a bug in the block, refused like the deploy row's
+ * refusal without its code.
+ * @param {Record<string, unknown>} row
+ * @returns {{ field: string, problem: string }[]}
+ */
+function notifyPairings(row) {
+  /** @type {{ field: string, problem: string }[]} */
+  const out = [];
+  const outcome = typeof row.outcome === 'string' && NOTIFY_OUTCOMES.includes(row.outcome) ? row.outcome : null;
+  if (!outcome) return out;
+  const skip = Object.hasOwn(row, 'skip_reason');
+  if (outcome === 'skipped' && !skip) out.push({ field: 'skip_reason', problem: 'required' });
+  if (outcome !== 'skipped' && skip) out.push({ field: 'skip_reason', problem: 'outcome-mismatch' });
+  const failure = Object.hasOwn(row, 'failure');
+  if (outcome === 'failed' && !failure) out.push({ field: 'failure', problem: 'required' });
+  if (outcome !== 'failed' && failure) out.push({ field: 'failure', problem: 'outcome-mismatch' });
+  return out;
+}
+
 /** The run field an imported row leaves absent (decision 17): no Kanon version ran it. */
 export const IMPORT_ABSENT = 'kanon_version';
 
@@ -726,6 +804,7 @@ export function validate(row, { imported = false } = {}) {
   if (kind === 'run') errors.push(...runPairings(r, importedRun));
   if (kind === 'finding') errors.push(...findingPairings(r));
   if (kind === 'deploy') errors.push(...deployPairings(r));
+  if (kind === 'notify') errors.push(...notifyPairings(r));
   return errors.length ? { ok: false, errors } : { ok: true };
 }
 
