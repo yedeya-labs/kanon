@@ -1,0 +1,45 @@
+# Kanon's generic webhook hook (plan 0011 §7.3): one Kanon notification, posted as the contract's own
+# JSON to one URL, for any system that takes a JSON body at a URL.
+#
+# An adopter never calls this action from a lane. `kanon init --chat webhook` writes
+# `actions/notify/hooks/webhook.yml` to `.github/actions/notify/action.yml`, the hook path every
+# notifying lane's `notify` job calls (§6.1), and that file's one step is this action at a Kanon
+# release (§7.1). It takes the hook interface's four inputs and nothing else.
+#
+# The inputs reach the script only through the environment, never interpolated into a shell line:
+# the message is a file path, and the secret is the kind's URL, which the `notify` block has already
+# masked. The script refuses a URL that isn't `https://` without echoing it; `webhook.mjs` holds the
+# request and the retry. There is no signature in version 1 (decision 20): the URL is the secret.
+#
+# The script is read from this action's own directory ($GITHUB_ACTION_PATH). Requires Node 20 or
+# later on the runner (for `fetch`); GitHub's hosted runners have it, and the action does not
+# install Node.
+name: Kanon notify, generic webhook
+description: Posts one Kanon notification (kanon-notify version 1), as the contract's JSON, to the one https URL in `secret`.
+author: yedeya-labs
+
+inputs:
+  message-v1:
+    description: Path to the validated message, version 1, as JSON. Posted as it is.
+    required: true
+  text:
+    description: Path to the message's plain-text rendering. Unused; the receiver gets the message itself.
+    required: true
+  kind:
+    description: The message's kind, for the log line.
+    required: true
+  secret:
+    description: This kind's https URL, which the message is posted to.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Post to the webhook
+      shell: bash
+      env:
+        MESSAGE_FILE: ${{ inputs.message-v1 }}
+        TEXT_FILE: ${{ inputs.text }}
+        KIND: ${{ inputs.kind }}
+        SECRET: ${{ inputs.secret }}
+      run: node "$GITHUB_ACTION_PATH/webhook.mjs"

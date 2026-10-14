@@ -18,9 +18,15 @@
 // deployed from such a release can refuse that repository's rows. Deploying first doesn't help
 // it: the deploy itself turns it red, until its pin moves past the narrowing.
 //
-// It reads `SCHEMAS` alone. The cross-field rules in `validate` are code, not data, so a change to
-// them is not seen here; the scrub's rules are, through `scrub_version`, which a change to them
-// raises (plan 0006 §4.2).
+// Beside `SCHEMAS`, it reads the one list in the ingest function's code that refuses a row the
+// schema accepts: `STORED_KINDS`, in `infra/telemetry/function/rows.mjs` (kanon#918). A kind the
+// schema knows but the function doesn't store is a 422 `row_kind` `not-allowed`, so a kind the
+// release stores and the deployed intake doesn't is a widening, as plan 0010 D9's `deploy` was,
+// and a kind it stops storing a narrowing. A ref with no `rows.mjs`, every release before
+// kanon#753, stored every kind its schema knew; a `rows.mjs` that exports no `STORED_KINDS` is a
+// ref this can't read, never a guess. The other cross-field rules in `validate` are code, not
+// data, so a change to them is not seen here; the scrub's rules are, through `scrub_version`,
+// which a change to them raises (plan 0006 §4.2).
 //
 // It exits 0 when it names nothing, 1 when it names widenings alone, 3 when it names a narrowing,
 // with or without widenings, and 2 when `--deployed` is missing or it can't read a ref.
@@ -35,12 +41,17 @@ import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 
 /** Where the schema the lanes write and the function validates with lives, in every release. */
 export const SCHEMA_DIR = 'actions/agent-telemetry';
+/** Where the ingest function lives, and the module of it that names the kinds it stores. */
+export const FUNCTION_DIR = 'infra/telemetry/function';
+export const ROWS_MODULE = `${FUNCTION_DIR}/rows.mjs`;
 
 const INT_MAX = 2 ** 31 - 1;
 
 /**
  * @typedef {Record<string, unknown> & { type: string, required?: boolean }} Field
  * @typedef {Record<string, Record<string, Record<string, Field>>>} Schemas
+ * @typedef {{ schemas: Schemas, stored: readonly string[] }} Intake a release's schemas, and the
+ *   row kinds its ingest function stores
  */
 
 const article = (/** @type {string} */ t) => (/^[aeiou]/.test(t) ? `an ${t}` : `a ${t}`);
@@ -128,6 +139,50 @@ export const narrowings = (deployed, release) =>
   accepted(release, deployed, { other: 'the release', absent: 'absent from every row the deployed intake accepts' });
 
 /**
+ * Every kind `to` stores that `from`, named `other`, doesn't, one line each, in `to`'s order. A
+ * kind either schema lacks is left to `accepted`, which names it, or to `to`'s own `validate`.
+ * @param {Intake} from
+ * @param {Intake} to
+ * @param {string} other
+ * @returns {string[]}
+ */
+const stores = (from, to, other) => to.stored
+  .filter((k) => Object.hasOwn(to.schemas, k) && Object.hasOwn(from.schemas, k) && !from.stored.includes(k))
+  .map((k) => `${k}: a row kind ${other} knows but does not store, which it refuses as row_kind not-allowed`);
+
+/**
+ * Every row kind the release's ingest function stores that the deployed intake's refuses
+ * (kanon#918), though both schemas know it.
+ * @param {Intake} deployed
+ * @param {Intake} release
+ * @returns {string[]}
+ */
+export const kindWidenings = (deployed, release) => stores(deployed, release, 'the deployed intake');
+
+/**
+ * Every row kind the deployed intake stores that the release's ingest function refuses
+ * (kanon#918), though both schemas know it.
+ * @param {Intake} deployed
+ * @param {Intake} release
+ * @returns {string[]}
+ */
+export const kindNarrowings = (deployed, release) => stores(release, deployed, 'the release');
+
+/**
+ * A ref's commit, and a `git` that runs in `cwd` and names the ref when it fails.
+ * @param {string} ref
+ * @param {string} cwd
+ */
+function gitAt(ref, cwd) {
+  const git = (/** @type {string[]} */ ...args) => {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    if (r.status !== 0) throw new Error(`git ${args[0]} ${ref}: ${(r.stderr || '').trim() || `exit ${r.status}`}`);
+    return r.stdout;
+  };
+  return { git, commit: git('rev-parse', '--verify', '--quiet', `${ref}^{commit}`).trim() };
+}
+
+/**
  * The `SCHEMAS` a ref holds: its `actions/agent-telemetry/` modules copied out of git into a
  * scratch directory and imported from there, so the checkout's own files play no part.
  * @param {string} ref
@@ -135,12 +190,7 @@ export const narrowings = (deployed, release) =>
  * @returns {Promise<Schemas>}
  */
 export async function schemasAt(ref, { cwd = process.cwd() } = {}) {
-  const git = (/** @type {string[]} */ ...args) => {
-    const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
-    if (r.status !== 0) throw new Error(`git ${args[0]} ${ref}: ${(r.stderr || '').trim() || `exit ${r.status}`}`);
-    return r.stdout;
-  };
-  const commit = git('rev-parse', '--verify', '--quiet', `${ref}^{commit}`).trim();
+  const { git, commit } = gitAt(ref, cwd);
   const files = git('ls-tree', '--name-only', commit, `${SCHEMA_DIR}/`).split('\n').filter((p) => p.endsWith('.mjs'));
   if (!files.some((p) => p === `${SCHEMA_DIR}/schema.mjs`)) throw new Error(`${ref} holds no ${SCHEMA_DIR}/schema.mjs`);
   const dir = mkdtempSync(join(tmpdir(), 'intake-first-'));
@@ -154,6 +204,55 @@ export async function schemasAt(ref, { cwd = process.cwd() } = {}) {
   }
 }
 
+/**
+ * The `STORED_KINDS` a ref's ingest function holds, or null for a ref with no `rows.mjs`, which
+ * stored every kind its schema knew. The function's modules are copied out of git into a scratch
+ * directory with each symlink followed, as `aws cloudformation package` follows them into the
+ * function's zip, and `rows.mjs` is imported from there.
+ * @param {string} ref
+ * @param {{ cwd?: string }} [opts]
+ * @returns {Promise<readonly string[] | null>}
+ */
+export async function storedKindsAt(ref, { cwd = process.cwd() } = {}) {
+  const { git, commit } = gitAt(ref, cwd);
+  const files = git('ls-tree', '--name-only', commit, `${FUNCTION_DIR}/`).split('\n').filter((p) => p.endsWith('.mjs'));
+  if (!files.includes(ROWS_MODULE)) return null;
+  const batch = spawnSync('git', ['cat-file', '--batch', '--follow-symlinks'], {
+    cwd, input: files.map((p) => `${commit}:${p}\n`).join(''), maxBuffer: 64 * 1024 * 1024,
+  });
+  if (batch.status !== 0) throw new Error(`git cat-file ${ref}: ${batch.stderr.toString().trim() || `exit ${batch.status}`}`);
+  const dir = mkdtempSync(join(tmpdir(), 'intake-first-'));
+  try {
+    // Each answer is `<oid> blob <size>\n<content>\n`; a link that leads nowhere is one line, so
+    // its module is left out, as the zip would leave it out, and an import of it fails.
+    let at = 0;
+    for (const p of files) {
+      const eol = batch.stdout.indexOf(0x0a, at);
+      const header = batch.stdout.subarray(at, eol).toString().split(' ');
+      at = eol + 1;
+      if (header[1] !== 'blob') continue;
+      const size = Number(header[2]);
+      writeFileSync(join(dir, p.slice(FUNCTION_DIR.length + 1)), batch.stdout.subarray(at, at + size));
+      at += size + 1;
+    }
+    const mod = await import(pathToFileURL(join(dir, 'rows.mjs')).href);
+    if (!Array.isArray(mod.STORED_KINDS)) throw new Error(`${ref}'s ${ROWS_MODULE} exports no STORED_KINDS`);
+    return mod.STORED_KINDS;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * A ref's schemas, and the kinds its ingest function stores.
+ * @param {string} ref
+ * @returns {Promise<Intake>}
+ */
+async function intakeAt(ref) {
+  const schemas = await schemasAt(ref);
+  return { schemas, stored: (await storedKindsAt(ref)) ?? Object.keys(schemas) };
+}
+
 async function main() {
   const { values } = parseArgs({ options: { deployed: { type: 'string' }, release: { type: 'string', default: 'HEAD' } } });
   if (!values.deployed) {
@@ -162,16 +261,16 @@ async function main() {
   }
   let wide, narrow;
   try {
-    const deployed = await schemasAt(values.deployed);
-    const release = await schemasAt(values.release);
-    wide = widenings(deployed, release);
-    narrow = narrowings(deployed, release);
+    const deployed = await intakeAt(values.deployed);
+    const release = await intakeAt(values.release);
+    wide = [...widenings(deployed.schemas, release.schemas), ...kindWidenings(deployed, release)];
+    narrow = [...narrowings(deployed.schemas, release.schemas), ...kindNarrowings(deployed, release)];
   } catch (e) {
     console.error(`intake-first: ${/** @type {Error} */ (e).message}`);
     return 2;
   }
   if (wide.length === 0) {
-    console.log(`Intake deployed from ${values.deployed} accepts every row ${values.release} can write, as far as the schema says.`);
+    console.log(`Intake deployed from ${values.deployed} accepts every row ${values.release} can write, as far as the schema and the kinds it stores say.`);
   } else {
     console.log(`Intake deployed from ${values.deployed} refuses rows ${values.release} can write:`);
     for (const line of wide) console.log(`  - ${line}`);

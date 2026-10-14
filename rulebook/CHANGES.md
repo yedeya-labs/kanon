@@ -29,6 +29,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-06.** The shared lane job turns git's `core.symlinks` off for a lane with project setup off, so the Lead's `Edit(/docs/**)` has no symlink in the tree to write through. [#327](https://github.com/yedeya-labs/kanon/issues/327)
 - **2026-10-07.** The grant probe battery covers both Lead lanes' flags, and the Owner decided the deny list that refuses a program handed to `git push` or `git fetch` for the far end. [#405](https://github.com/yedeya-labs/kanon/issues/405)
+- **2026-10-14.** The Owner decided that the `notify` job of `K-OBS-19` joins the guard's named exceptions in that rule's exact shape, and that it runs the adopter's notify hook at the run's commit on any branch, accepting that whoever can push a branch and dispatch a notifying lane can read that lane's chat secret. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)
 
 ## `K-MERGE-4`
 
@@ -67,6 +68,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-SHIP-10`
 
 - **2026-10-14.** The rule is prose only: Kanon's deploy lane announces nothing, so the announcement stays the project's own step. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+- **2026-10-14.** The rule is enforced by the `notify` job of `K-OBS-19`: a deploy's announcement is a `deploy` message posted by a job of its own, so a failed post never reads as a failed deploy, and the announced version moves only after the post. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)
 
 ## `K-PROJ-16`
 
@@ -76,6 +78,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-07.** [ADR 0007](../docs/decisions/0007-data-boundary.md) was amended so that an upstream-finding row sent with evidence may carry the finding's evidence and suggested fix as scrubbed text. [#573](https://github.com/yedeya-labs/kanon/pull/573)
 - **2026-10-14.** The Owner decided a fourth row kind, the deploy row, which records an environment's role and position in the declared chain, never its name, and no release tag or commit; [ADR 0007](../docs/decisions/0007-data-boundary.md) was amended to match. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+
+## `K-ADOPT-1`
+
+- **2026-10-14.** Step 10 names the adoption record's `- **Chat channel:**` bullet under `## Choices`, and the answers it records: Kanon's Slack hook, Kanon's generic JSON webhook hook, the project's own hook, or none yet. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)
 
 ## `K-ADOPT-3`
 
@@ -89,6 +95,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-LAYOUT-1`
 
 - **2026-10-14.** The deploy lane's three hooks, `.github/actions/build`, `.github/actions/deploy` and `.github/actions/smoke`, and the adoption record's `## Deploy` section, joined the fixed paths. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+- **2026-10-14.** The notify hook, `.github/actions/notify/action.yml`, joined the fixed paths. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)
 
 ## `K-LAYOUT-8`
 

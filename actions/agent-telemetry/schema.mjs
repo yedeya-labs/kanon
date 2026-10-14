@@ -186,7 +186,7 @@ export const GUARDS = Object.freeze([
 export const RULE_IDS = Object.freeze([
   ...range('PRIN', 20), ...range('WORK', 23), ...range('SPEC', 11), ...range('AGENT', 50),
   ...range('MERGE', 17), ...range('WS', 8), ...range('SHIP', 12), ...range('PROJ', 18),
-  ...range('OBS', 18), ...range('SELF', 18), ...range('ADOPT', 12), ...range('LAYOUT', 18),
+  ...range('OBS', 19), ...range('SELF', 18), ...range('ADOPT', 12), ...range('LAYOUT', 18),
 ]);
 
 /** The lanes that report upstream findings (plan 0006 §2.1), a subset of the lane list. */
@@ -213,12 +213,13 @@ export const DEPLOY_OUTCOMES = Object.freeze(['ok', 'failed', 'smoke_failed', 'r
 /** The deploy lane's stages, in the order a release runs them (plan 0010 §10). */
 export const DEPLOY_STAGES = Object.freeze(['gate', 'probe', 'build', 'approval', 'deploy', 'smoke']);
 /**
- * Why the lane refused (plan 0010 §3, §5, §10): the gate's codes, then the environment job's
- * supersede check and the trust probe's two. A refusal row carries one, and only a refusal row.
+ * Why the lane refused (plan 0010 §3, §5, §10, §13): the gate's codes, then the environment job's
+ * supersede check, the trust probe's two, and the fallback's production dispatch by anyone but the
+ * Maintainer. A refusal row carries one, and only a refusal row.
  */
 export const DEPLOY_REFUSALS = Object.freeze([
   'draft', 'no-release', 'not-default-branch', 'declaration-mismatch', 'ci-red', 'ci-timeout',
-  'superseded', 'trust-unbound', 'probe-unconfigured',
+  'superseded', 'trust-unbound', 'probe-unconfigured', 'not-maintainer',
 ]);
 /** The deploy caller's two triggers (plan 0010 §3). */
 export const DEPLOY_TRIGGERS = Object.freeze(['release', 'workflow_dispatch']);
