@@ -88,7 +88,7 @@ Plan 0003 §7 accepts M2 on the reference adopter, with the Owner:
 
 ## `kanon metrics report`
 
-`kanon metrics report` reports [plan 0003](plans/0003-metrics.md)'s three headline indicators by complexity band (§2, step M6, [#659](https://github.com/yedeya-labs/kanon/issues/659)), their secondary measures, and the trend, by-version and configuration A/B views (§6.1, [#669](https://github.com/yedeya-labs/kanon/issues/669)), from one adopter's stored rows. It reads only the files it's given, and calls nothing.
+`kanon metrics report` reports [plan 0003](plans/0003-metrics.md)'s three headline indicators by complexity band (§2, step M6, [#659](https://github.com/yedeya-labs/kanon/issues/659)), their secondary measures, the trend, by-version and configuration A/B views (§6.1, [#669](https://github.com/yedeya-labs/kanon/issues/669)), and, when it is given deploy rows, [the deploy views](#the-deploy-views) ([plan 0010](plans/0010-deployment-lane.md) §11), from one adopter's stored rows. It reads only the files it's given, and calls nothing.
 
 ```sh
 kanon metrics report --rows runs-and-items.json                       # Markdown, the last 28 days
