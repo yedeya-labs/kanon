@@ -474,10 +474,20 @@ describe("deploy-row.mjs: one environment's row (plan 0010 §8, §10)", () => {
     expect(r).toMatchObject({ wait_ms: 600_000, deploy_ms: 180_000, smoke_ms: 60_000, duration_ms: 300_000, since_release_ms: 75 * 60_000 });
   });
 
-  it('records the declaration\'s role, and a refused or failed declaration at the gate', () => {
+  it('records the declaration\'s role', () => {
     expect(row(ok, { role: 'pre-production', position: '1' })).toMatchObject({ role: 'pre-production', position: 1 });
-    const refused = environmentRow({ ...RUN, NEEDS: JSON.stringify({ declare: { result: 'failure', outputs: { refusal: 'declaration-mismatch', role: 'production' } }, deploy: { result: 'skipped' } }), ENVIRONMENT: 'staging', POSITION: '2' }, { api: () => [] });
-    expect(refused).toMatchObject({ outcome: 'refused', failed_stage: 'gate', refusal: 'declaration-mismatch', position: 2 });
+  });
+
+  it("records a refusal at the stage of the job that refused, not of its code: `declare`'s at `deploy` (kanon#886)", () => {
+    // `declaration-mismatch`, `no-release` and `draft` are the gate's codes too, but here the
+    // environment's `declare` job raised them, after the gate passed.
+    for (const refusal of ['declaration-mismatch', 'no-release', 'draft']) {
+      const refused = environmentRow({ ...RUN, NEEDS: JSON.stringify({ declare: { result: 'failure', outputs: { refusal, role: 'production' } }, deploy: { result: 'skipped' } }), ENVIRONMENT: 'staging', POSITION: '2' }, { api: () => [] });
+      expect(refused, refusal).toMatchObject({ outcome: 'refused', failed_stage: 'deploy', refusal, position: 2 });
+      expect(validate(refused)).toEqual({ ok: true });
+    }
+    // MUTATION: the stage read from the code (the gate's codes at `gate`) turns this red; the
+    // gate's own refusal stays at `gate` (the release row's test).
   });
 
   it("a dispatch's rollback is marked; a release can't be one", () => {
@@ -498,11 +508,16 @@ describe("deploy-row.mjs: one environment's row (plan 0010 §8, §10)", () => {
     // `declare` failed before writing `held`, so `deploy` was skipped: the same skip a hold makes.
     const needs = { declare: { result: 'failure', outputs: {} }, deploy: { result: 'skipped', outputs: {} } };
     const r = environmentRow({ ...RUN, NEEDS: JSON.stringify(needs), ENVIRONMENT: 'production', POSITION: '2' }, { api: () => [] });
-    // `gate` is the closest existing stage, pending #886.
-    expect(r).toMatchObject({ outcome: 'failed', failed_stage: 'gate', role: 'production', position: 2 });
+    // At `deploy`, the stage of the environment's call that `declare` opens (kanon#886).
+    expect(r).toMatchObject({ outcome: 'failed', failed_stage: 'deploy', role: 'production', position: 2 });
     expect(validate(r)).toEqual({ ok: true });
-    const filed = reportFrom({ NEEDS: JSON.stringify({ ...needs, record: { result: 'success', outputs: { written: 'true', outcome: 'failed', stage: 'gate', refusal: '' } } }), ENVIRONMENT: 'production', POSITION: '2' }, 'environment');
-    expect(filed).toMatchObject({ outcome: 'failed', failed_stage: 'gate' });
+    expect(classifyEnvironment({ declare: { result: 'cancelled', outputs: {} }, deploy: { result: 'skipped' }, environment: 'production' }))
+      .toEqual({ outcome: 'cancelled', failed_stage: 'deploy' });
+    const filed = reportFrom({ NEEDS: JSON.stringify({ ...needs, record: { result: 'success', outputs: { written: 'true', outcome: 'failed', stage: 'deploy', refusal: '' } } }), ENVIRONMENT: 'production', POSITION: '2' }, 'environment');
+    expect(filed).toMatchObject({ outcome: 'failed', failed_stage: 'deploy' });
+    // With no row recorded, the report classifies it the same way.
+    expect(reportFrom({ NEEDS: JSON.stringify({ ...needs, record: { result: 'failure', outputs: {} } }), ENVIRONMENT: 'production', POSITION: '2' }, 'environment'))
+      .toMatchObject({ outcome: 'failed', failed_stage: 'deploy' });
     // MUTATION: a record that treats deploy's `skipped` as the hold writes no row for this fixture.
     const skippedAsHeld = (n: typeof needs) => n.deploy.result === 'skipped' || heldOrUnrecorded(n.declare);
     expect(skippedAsHeld(needs)).toBe(true);
