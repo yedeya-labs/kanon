@@ -42,7 +42,7 @@
 #
 # NO MODEL. The only step after the gate that runs anything runs a library script and `gh`, so
 # this lane takes no Claude token, writes no telemetry row, and never calls the project-setup
-# hook. It checks out the App register alone.
+# hook. It checks out the App register alone, for the Lead's persona.
 #
 # INERT until: the caller is on the default branch + the Author App installed, with the
 # Lead's row in the App register + these secrets (plan 0001 §8):
