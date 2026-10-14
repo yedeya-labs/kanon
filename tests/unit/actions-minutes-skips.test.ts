@@ -172,10 +172,12 @@ describe(`docs/actions-minutes.md's "Its short and skipped runs" column is the l
   });
 
   describe('the mutations: each goes red, for its reason', () => {
-    it('a label the filter compares, taken out of the row or changed in the filter', () => {
+    it('a label the filter compares, taken out of the row or changed in the filter, or one it doesn\'t, added to the row', () => {
       const triage = lane('agent-triage');
       red('agent-triage', { ...triage, cell: triage.cell.replace('`qa:needs-triage`', 'its own') }, /compare the label qa:needs-triage, which the row doesn't name/);
       red('agent-triage', withIf(triage, 'filter', (s) => s.replace('qa:needs-triage', 'qa:triage')), /names the label qa:needs-triage, which its jobs don't compare/);
+      const extra = { ...triage, cell: triage.cell.replace('`qa:needs-triage`', '`qa:needs-triage` or `qa:verify`') };
+      expect(problems('agent-triage', extra)).toEqual(["the row names the label qa:verify, which its jobs don't compare"]);
       const review = lane('agent-review');
       red('agent-review', { ...review, cell: review.cell.replace(', `agent:reviewer` among them', '') }, /label agent:reviewer, which the row doesn't name/);
     });
