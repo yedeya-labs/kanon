@@ -69,13 +69,18 @@ export function ranJob(jobs, job, step) {
 /**
  * The decision, pure. `runs` are the caller's runs created inside the window, any order;
  * `jobsOf(id)` reads one run's jobs and may throw.
- * @param {{ runs: Array<{ id: number | string, created_at?: string }>, jobsOf: (id: number | string) => Job[], job: string, step?: string, runId?: string | number }} o
+ *
+ * A run that concluded `skipped` ran no job at all, so it is dropped before any jobs are read
+ * (kanon#835). Those are the re-asks a lane turns away at its first job, and they come far more
+ * often than real runs: counted, the newest `MAX_RUNS_READ` could all be skips, and a re-ask
+ * would act inside the window it exists to keep.
+ * @param {{ runs: Array<{ id: number | string, created_at?: string, conclusion?: string | null }>, jobsOf: (id: number | string) => Job[], job: string, step?: string, runId?: string | number }} o
  * @returns {{ due: boolean, why: string, by?: { id: number | string } }}
  */
 export function reaskDue({ runs, jobsOf, job, step, runId }) {
   const what = step ? `\`${job}\`'s step "${step}"` : `\`${job}\``;
   const others = [...runs]
-    .filter((r) => String(r.id) !== String(runId ?? ''))
+    .filter((r) => String(r.id) !== String(runId ?? '') && r.conclusion !== 'skipped')
     .sort((a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? ''));
   for (const r of others.slice(0, MAX_RUNS_READ)) {
     if (ranJob(jobsOf(r.id), job, step)) return { due: false, why: `run ${r.id} ran ${what} inside the window`, by: r };

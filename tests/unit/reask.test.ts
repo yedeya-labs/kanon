@@ -162,6 +162,19 @@ describe('scripts/reask-due.mjs', () => {
     expect(seen).toEqual([2, 1]); // newest first, and not run 3, the run asking
   });
 
+  // kanon#835: the turned-away re-asks outnumber real runs, and must not use up the reads.
+  it('drops runs that skipped whole before reading any jobs, so they cannot hide a sweep', () => {
+    const skips = Array.from({ length: MAX_RUNS_READ + 5 }, (_v, i) => ({ id: 100 + i, conclusion: 'skipped', created_at: new Date(Date.UTC(2026, 9, 14, 10, i)).toISOString() }));
+    const read: Array<number | string> = [];
+    const d = reaskDue({
+      runs: [...skips, { id: 1, conclusion: 'success', created_at: at(1) }],
+      jobsOf: (id) => { read.push(id); return id === 1 ? [job('s / sweep', 'success')] : []; },
+      job: 'sweep',
+    });
+    expect(d).toMatchObject({ due: false, by: { id: 1 } });
+    expect(read).toEqual([1]);
+  });
+
   it(`reads at most ${MAX_RUNS_READ} runs, and is due past them`, () => {
     let reads = 0;
     const runs = Array.from({ length: MAX_RUNS_READ + 5 }, (_v, i) => ({ id: i + 1, created_at: new Date(Date.UTC(2026, 9, 14, 0, i)).toISOString() }));
