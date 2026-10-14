@@ -61,24 +61,22 @@ export { DEPLOY_ARTIFACT_FILE, DEPLOY_ARTIFACT_PREFIX, deployArtifactName };
  */
 
 /**
- * The stage a refusal stopped at (§10): the probe's two at `probe`; `superseded` and
- * `not-maintainer`, which the environment's job checks before the deploy hook, at `deploy`; the
- * gate's codes at `gate`.
- */
-export const stageOfRefusal = (/** @type {string} */ code) =>
-  (code === 'trust-unbound' || code === 'probe-unconfigured' ? 'probe' : code === 'superseded' || code === 'not-maintainer' ? 'deploy' : 'gate');
-
-/**
  * A job's refusal code: its `refusal` output, or the Maintainer check's `unauthorized`, which
  * `declare` and the `deploy` job output apart from it (§13).
  * @param {JobResult | undefined} job
  */
 const refusalOf = (job) => job?.outputs?.refusal || job?.outputs?.unauthorized;
 
-/** @param {JobResult | undefined} job @param {string} stage @returns {Ending} */
+/**
+ * How a job that didn't succeed stopped, at its own stage. A refusal records the stage of the job
+ * that refused, never one read from its code (§10, kanon#886): `declare` raises three of the
+ * gate's codes again (`declaration-mismatch`, `no-release`, `draft`), after the gate passed, and
+ * `declare` or the `deploy` job raises `not-maintainer`, all at `deploy`.
+ * @param {JobResult | undefined} job @param {string} stage @returns {Ending}
+ */
 const stopped = (job, stage) => {
   const refusal = refusalOf(job);
-  if (refusal) return { outcome: 'refused', failed_stage: stageOfRefusal(refusal), refusal };
+  if (refusal) return { outcome: 'refused', failed_stage: stage, refusal };
   if (job?.result === 'cancelled') return { outcome: 'cancelled', failed_stage: stage };
   return { outcome: 'failed', failed_stage: stage };
 };
@@ -118,11 +116,10 @@ export function rejectedIn(approvals, environment) {
  */
 export function classifyEnvironment({ declare, deploy, approvals = () => [], environment }) {
   // A failed `declare` is never a hold: the hold is read from its `held` output alone
-  // (`isHeld`), which a failed job leaves empty, never inferred from `deploy` being skipped. Its
-  // refusal keeps its own stage (`not-maintainer` at `deploy`); any other failure's stage is
-  // `gate`, the closest existing one, PENDING #886, which decides the stage of a failure before
-  // the environment's job.
-  if (declare?.result !== 'success') return stopped(declare, 'gate');
+  // (`isHeld`), which a failed job leaves empty, never inferred from `deploy` being skipped. It
+  // stops at `deploy`, the environment's call it opens, as the `deploy` job's own checks before
+  // the deploy hook do, and so does its refusal, `not-maintainer` among them (§10, kanon#886).
+  if (declare?.result !== 'success') return stopped(declare, 'deploy');
   const o = deploy?.outputs ?? {};
   const started = Boolean(o['started-at']);
   switch (deploy?.result) {
