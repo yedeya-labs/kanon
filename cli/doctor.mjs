@@ -56,7 +56,7 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, BRIEF_TEMPLATE_PATH, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
+import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -251,6 +251,7 @@ export const FINDINGS = {
   'hook.input-missing': { category: 'declaration', blocking: true },
   'workflow.missing': { category: 'declaration', blocking: true },
   'lead.template-missing': { category: 'declaration', blocking: false },
+  'lead.template-stale': { category: 'declaration', blocking: false },
   'waiver.stale': { category: 'declaration', blocking: false },
   'caller.lane-removed': { category: 'caller', blocking: true },
   'caller.misplaced': { category: 'caller', blocking: true },
@@ -318,6 +319,7 @@ login; the command says which one it used and whose it is.`;
  *   listFiles: (dir: string) => string[],
  *   requirements: () => Requirements,
  *   release: () => string,
+ *   briefTemplate: () => string,
  *   labels: () => Array<{ name: string, color: string, description: string }>,
  *   now: () => number,
  * }} Deps
@@ -364,6 +366,7 @@ export const realDeps = {
   listFiles,
   requirements: loadRequirements,
   release: kanonRelease,
+  briefTemplate,
   labels: () => JSON.parse(readFileSync(new URL('../rulebook/labels.json', import.meta.url), 'utf8')).labels,
   now: () => Date.now(),
 };
@@ -732,6 +735,20 @@ export const requirementsAt = async (deps, release) => {
   } catch {
     throw new Error(`Kanon ${release}'s requirements.json is not a requirements file this doctor reads`);
   }
+};
+
+/**
+ * A release's brief template (`K-LAYOUT-11`): this tree's own when it is that release, otherwise
+ * read from Kanon's repository at the release's tag, as `requirementsAt` reads its requirements.
+ * Throws naming the release when it can't be read.
+ * @param {Deps} deps @param {string} release
+ * @returns {Promise<string>}
+ */
+export const briefTemplateAt = async (deps, release) => {
+  if (release === deps.release()) return deps.briefTemplate();
+  const r = await deps.gh(['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${KANON_REPO}/contents/rulebook/templates/brief.md?ref=${encodeURIComponent(release)}`]);
+  if (r.status !== 0) throw new Error(`could not read Kanon ${release}'s brief template (${r.stderr.trim() || `exit ${r.status}`})`);
+  return r.stdout;
 };
 
 /**
@@ -1621,15 +1638,37 @@ export const diagnose = async (deps, opts) => {
   // The Lead writes each brief from the brief template, which an adopter copies unchanged from
   // Kanon's (K-LAYOUT-11), and init writes beside the Lead's caller (#749).
   const leadCallers = [...new Set(callers.filter((c) => c.lane === LEAD_LANE).map((c) => c.file))];
-  if (leadCallers.length && read(BRIEF_TEMPLATE_PATH) === null) {
-    find('lead.template-missing', BRIEF_TEMPLATE_PATH, `is missing; the Lead, which ${leadCallers.join(', ')} call${leadCallers.length > 1 ? '' : 's'}, writes each brief from it (K-LAYOUT-11).`, {
+  const template = leadCallers.length ? read(BRIEF_TEMPLATE_PATH) : null;
+  const lead = `the Lead, which ${leadCallers.join(', ')} call${leadCallers.length > 1 ? '' : 's'}, writes each brief from it`;
+  const copy = {
+    commands: [
+      `mkdir -p ${dirname(BRIEF_TEMPLATE_PATH)}`,
+      `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/${KANON_REPO}/contents/rulebook/templates/brief.md?ref=${checked}' > ${BRIEF_TEMPLATE_PATH}`,
+    ],
+    url: `https://github.com/${KANON_REPO}/blob/${checked}/rulebook/templates/brief.md`,
+  };
+  if (leadCallers.length && template === null) {
+    find('lead.template-missing', BRIEF_TEMPLATE_PATH, `is missing; ${lead} (K-LAYOUT-11).`, {
       text: `Copy Kanon's brief template to it unchanged, as kanon init writes it, from the release you check (${checked}):`,
-      commands: [
-        `mkdir -p ${dirname(BRIEF_TEMPLATE_PATH)}`,
-        `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/${KANON_REPO}/contents/rulebook/templates/brief.md?ref=${checked}' > ${BRIEF_TEMPLATE_PATH}`,
-      ],
-      url: `https://github.com/${KANON_REPO}/blob/${checked}/rulebook/templates/brief.md`,
+      ...copy,
     });
+  } else if (template !== null) {
+    // The adopter replaces the copy when Kanon's template changes (#755), and nothing else says
+    // that it has: a checkout's line endings are not a change.
+    /** @type {string | null} */
+    let kanons = null;
+    try {
+      kanons = await briefTemplateAt(deps, checked);
+    } catch (e) {
+      unchecked.push({ check: 'brief-template', subject: BRIEF_TEMPLATE_PATH, reason: `${/** @type {Error} */ (e).message}, so doctor can't tell whether the copy is Kanon's` });
+    }
+    const lf = (/** @type {string} */ t) => t.replace(/\r\n/g, '\n');
+    if (kanons !== null && lf(template) !== lf(kanons)) {
+      find('lead.template-stale', BRIEF_TEMPLATE_PATH, `differs from Kanon's brief template at ${checked}; ${lead}, and the brief guard holds those briefs to ${checked}'s rules (K-LAYOUT-11).`, {
+        text: `Replace it with Kanon's brief template, unchanged, as kanon init writes it, from the release you check (${checked}):`,
+        ...copy,
+      });
+    }
   }
 
   // ── The apps-check caller ───────────────────────────────────────────────────────────────────

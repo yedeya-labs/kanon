@@ -82,7 +82,7 @@ A lane's caller goes at the lane's file name, `.github/workflows/<lane>.yml` (`K
 
 ### The Lead's brief template
 
-The Lead writes each brief from `docs/projects/_template.md`, which an adopter copies unchanged from Kanon's [`rulebook/templates/brief.md`](../rulebook/templates/brief.md) (`K-LAYOUT-11`). **`init` writes it wherever it writes the Lead's caller** ([#749](https://github.com/yedeya-labs/kanon/issues/749)): with the **Full pipeline** feature, or a customised set of lanes that holds `lead`, never with Review or Review + build. It copies the template of the release it runs from, and a template the repository has is the project's, `kept` and left alone. Without one, [`kanon doctor`](doctor.md) reports `lead.template-missing`.
+The Lead writes each brief from `docs/projects/_template.md`, which an adopter copies unchanged from Kanon's [`rulebook/templates/brief.md`](../rulebook/templates/brief.md) (`K-LAYOUT-11`). **`init` writes it wherever it writes the Lead's caller** ([#749](https://github.com/yedeya-labs/kanon/issues/749)): with the **Full pipeline** feature, or a customised set of lanes that holds `lead`, never with Review or Review + build. It copies the template of the release it runs from, and a template the repository has is the project's, `kept` and left alone. Without one, [`kanon doctor`](doctor.md) reports `lead.template-missing`, and with one that differs from the template of the release it checks, `lead.template-stale` ([#755](https://github.com/yedeya-labs/kanon/issues/755)): `init` doesn't replace a kept copy, so after an upgrade that changes Kanon's template, doctor is what says the copy is behind.
 
 ## The JSON output
 

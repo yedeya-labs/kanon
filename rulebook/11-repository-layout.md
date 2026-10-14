@@ -436,7 +436,7 @@ Kanon's own repository is the one exception. There, `.github/workflows/<lane>.ym
 
 **Why.** The template is held to the standard it teaches: the brief guard runs against it (`K-PRIN-11`). A template each adopter writes for itself is a template no guard has run against.
 
-**Enforced by.** The brief guard's template test (`K-PROJ-4`).
+**Enforced by.** The brief guard's template test (`K-PROJ-4`), on Kanon's own copy. On an adopter's, [`kanon doctor`](../docs/doctor.md), when it is run, reports a missing copy (`lead.template-missing`) and one that differs from the checked release's template (`lead.template-stale`), neither blocking.
 
 **Class.** framework
 
