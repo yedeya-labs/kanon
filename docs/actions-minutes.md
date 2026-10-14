@@ -16,24 +16,26 @@ The report below counts a run as short when no job in it ran for more than a min
 
 ## What starts each lane
 
-The "What starts it" column is each lane's caller triggers, `TRIGGERS` in [`cli/callers.mjs`](../cli/callers.mjs), in words. [`tests/unit/actions-minutes-triggers.test.ts`](../tests/unit/actions-minutes-triggers.test.ts) builds each row's phrases from that entry and fails when a lane gains or loses a trigger and its row doesn't follow ([#808](https://github.com/yedeya-labs/kanon/issues/808)). The other columns are read from the lanes' jobs by hand.
+The "What starts it" column is each lane's caller triggers, `TRIGGERS` in [`cli/callers.mjs`](../cli/callers.mjs), in words. [`tests/unit/actions-minutes-triggers.test.ts`](../tests/unit/actions-minutes-triggers.test.ts) builds each row's phrases from that entry and fails when a lane gains or loses a trigger and its row doesn't follow ([#808](https://github.com/yedeya-labs/kanon/issues/808)).
+
+The "Its short and skipped runs" column is held to the lanes' jobs by [`tests/unit/actions-minutes-skips.test.ts`](../tests/unit/actions-minutes-skips.test.ts) ([#837](https://github.com/yedeya-labs/kanon/issues/837)). It reads each lane's job conditions and fails when a row doesn't name every label the lane's jobs compare (and names a label they don't), when a lane gains or loses a model run and its row's "runs no model" doesn't follow, when "(skipped, nothing billed)" appears without a filter job that skips the run, or when a lane's jobs start testing a filter output the test hasn't tied to a phrase in the row. The words between those anchors are still checked by hand. The "What its minutes grow with" column is read from the lanes' jobs by hand.
 
 | Lane | What starts it | Its short and skipped runs | What its minutes grow with |
 |---|---|---|---|
-| `agent-review` | CI finishing on a pull request's head; a pull request opened or labelled; a dispatch | A head with no review label, a head already reviewed, a label that isn't a review label ([#627](https://github.com/yedeya-labs/kanon/issues/627)) | Pushes to pull requests that carry a review label |
+| `agent-review` | CI finishing on a pull request's head; a pull request opened or labelled; a dispatch | A head with no review label (`review:please`, `agent:implement` or `agent:triage`), or a head already reviewed; any other label, `agent:reviewer` among them (skipped, nothing billed) ([#627](https://github.com/yedeya-labs/kanon/issues/627)) | Pushes to pull requests that carry a review label |
 | `agent-merge-reconcile` | A pull request closed; a review submitted; a dispatch | A review on a pull request still open, or a pull request closed unmerged (skipped, nothing billed); a merged one whose reviews are all the Reviewer's and whose latest verdict declares nothing open | Merged pull requests with an open review item |
 | `agent-implement` | An issue labelled; a dispatch | Every label other than `agent:implement` (skipped, nothing billed) | Issues labelled `agent:implement` |
-| `agent-implement-revise` | A review submitted; a pull request labelled; a dispatch | A label other than `agent:revise` (skipped, nothing billed); a review on a pull request that isn't the Implementer's, or a round past its cap | Change requests on the Implementer's pull requests |
+| `agent-implement-revise` | A review submitted; a pull request labelled; a dispatch | A label other than `agent:revise` (skipped, nothing billed); a review that doesn't request changes, a review on a pull request that isn't the Implementer's, or a round past its cap | Change requests on the Implementer's pull requests |
 | `agent-explore` | A daily schedule; a dispatch | A commit the QA store already holds a green sweep of | Days, and how long your sweep hook takes |
 | `agent-code-audit` | A schedule every three days; a dispatch | None to speak of | Days, and the size of the code areas it reads |
-| `agent-explore-telemetry` | A weekly schedule; a dispatch | An aggregate with no cell and no signal | Weeks |
+| `agent-explore-telemetry` | A weekly schedule; a dispatch | An aggregate with no cell and no signal; no aggregate function configured, or a dispatch from a branch other than the default (a short job that says so) | Weeks |
 | `agent-triage` | An issue labelled; a dispatch | Every label other than `qa:needs-triage` (skipped, nothing billed) | Bugs filed for triage |
 | `agent-issue-backstop` | An issue opened; a dispatch | None: it runs no model, so every run is short | Issues opened |
 | `agent-lead` | A dispatch | None: it runs only when you dispatch it | Mandates you dispatch |
-| `agent-lead-revise` | A review submitted; a pull request labelled; a dispatch | A review or label on a pull request that isn't the Lead's brief | Change requests on briefs |
-| `agent-lead-split` | An issue labelled; a dispatch | Every label other than its own (skipped, nothing billed) | Issues labelled for a split |
+| `agent-lead-revise` | A review submitted; a pull request labelled; a dispatch | A label other than `agent:lead-revise`, or a review that doesn't request changes (skipped, nothing billed); a review or label on a pull request that isn't the Lead's brief, or a round past its cap | Change requests on briefs |
+| `agent-lead-split` | An issue labelled; a dispatch | Every label other than `qa:needs-split` (skipped, nothing billed) | Issues labelled for a split |
 | `agent-lead-reconcile` | A pull request or issue closed; an hourly schedule; a dispatch | None: it runs no model, so every run is short | Closed pull requests and issues, and hours |
-| `agent-verify-acs` | An issue labelled; a dispatch | Every label other than its own (skipped, nothing billed) | Projects verified |
+| `agent-verify-acs` | An issue labelled; a dispatch | Every label other than `qa:verify` (skipped, nothing billed) | Projects verified |
 | `agent-overseer` | A weekly schedule; a merged change to its caller; a dispatch | A merged caller change that doesn't move the agent runtime forward (a short gate job) | Weeks |
 | `agent-project-digest` | A daily schedule; a dispatch | None to speak of | Days, and open projects |
 | `agent-weekly-digest` | A weekly schedule; a dispatch | None to speak of | Weeks |
