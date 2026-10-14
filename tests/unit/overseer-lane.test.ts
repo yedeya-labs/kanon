@@ -638,6 +638,21 @@ describe('the telemetry read job (kanon#470)', () => {
     expect((wf.jobs.gate as { outputs?: Record<string, string> }).outputs?.reader).toBe('${{ steps.reader.outputs.reader }}');
   });
 
+  // kanon#854 (`K-AGENT-20`): the pages an adopter reads about the read say what turns it on, the
+  // collector's caller, and never a reader role, which no job reads since plan 0008 J5.
+  it('is described where an adopter reads about it as on where the repository sends telemetry, never with a reader role', () => {
+    const para = (file: string, start: string) => readFileSync(file, 'utf8').split('\n').find((l) => l.startsWith(start)) ?? '';
+    const pages = {
+      "docs/qa-store.md's Overseer inputs": para('docs/qa-store.md', '| `token-trend.md`, `cache-ttl.md`, `qa-clusters.md` |'),
+      "docs/qa-store.md's No cost rows": para('docs/qa-store.md', '**No cost rows**'),
+      "docs/metrics.md's weekly report": para('docs/metrics.md', '**The Overseer runs it every week**'),
+    };
+    for (const [name, text] of Object.entries(pages)) {
+      expect(text, name).toMatch(/sends telemetry/);
+      expect(text, name).not.toMatch(/reader role/i);
+    }
+  });
+
   it('hands the agent\'s job a status and the artifact, never the role, and deletes the artifact after it', () => {
     expect(handedIn(LANE_FILE, 'overseer', 'telemetry-status')).toBe("${{ needs.gate.outputs.reader == 'false' && 'not configured' || github.event_name == 'pull_request_target' && 'not run on this trigger' || (needs.telemetry.outputs.attempt == github.run_attempt && (needs.telemetry.outputs.status == 'ran' || needs.telemetry.outputs.status == 'not configured')) && needs.telemetry.outputs.status || 'failed' }}");
     expect(handedIn(LANE_FILE, 'overseer', 'telemetry-artifact-name')).toBe('kanon-overseer-telemetry-${{ github.run_id }}-${{ github.run_attempt }}');
