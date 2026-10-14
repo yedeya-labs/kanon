@@ -60,14 +60,15 @@ export { DEPLOY_ARTIFACT_FILE, DEPLOY_ARTIFACT_PREFIX, deployArtifactName };
  * @typedef {{ outcome: string, failed_stage?: string, refusal?: string }} Ending
  */
 
-/** The stage a refusal stopped at (§10): the probe's two at `probe`, `superseded` at `deploy`, the gate's codes at `gate`. */
-export const stageOfRefusal = (/** @type {string} */ code) =>
-  (code === 'trust-unbound' || code === 'probe-unconfigured' ? 'probe' : code === 'superseded' ? 'deploy' : 'gate');
-
-/** @param {JobResult | undefined} job @param {string} stage @returns {Ending} */
+/**
+ * How a job that didn't succeed stopped, at its own stage. A refusal records the stage of the job
+ * that refused, never one read from its code (§10, kanon#886): `declare` raises three of the
+ * gate's codes again (`declaration-mismatch`, `no-release`, `draft`), after the gate passed.
+ * @param {JobResult | undefined} job @param {string} stage @returns {Ending}
+ */
 const stopped = (job, stage) => {
   const refusal = job?.outputs?.refusal;
-  if (refusal) return { outcome: 'refused', failed_stage: stageOfRefusal(refusal), refusal };
+  if (refusal) return { outcome: 'refused', failed_stage: stage, refusal };
   if (job?.result === 'cancelled') return { outcome: 'cancelled', failed_stage: stage };
   return { outcome: 'failed', failed_stage: stage };
 };
@@ -108,9 +109,9 @@ export function rejectedIn(approvals, environment) {
 export function classifyEnvironment({ declare, deploy, approvals = () => [], environment }) {
   // A failed `declare` is never a hold: the hold is read from its `held` output alone
   // (`heldOrUnrecorded`), which a failed job leaves empty, never inferred from `deploy` being
-  // skipped. Its stage is `gate`, the closest existing one, PENDING #886, which decides the stage
-  // of a failure before the environment's job.
-  if (declare?.result !== 'success') return stopped(declare, 'gate');
+  // skipped. It stops at `deploy`, the environment's call it opens, as the `deploy` job's own
+  // checks before the deploy hook do (§10, kanon#886).
+  if (declare?.result !== 'success') return stopped(declare, 'deploy');
   const o = deploy?.outputs ?? {};
   const started = Boolean(o['started-at']);
   switch (deploy?.result) {
