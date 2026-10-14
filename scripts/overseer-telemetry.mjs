@@ -30,9 +30,10 @@
 // ONLY WITH CONSENT (ADR 0007). The gate job reads whether the repository sends telemetry: a
 // workflow on its default branch that calls Kanon's collector, whose caller is the consent (plan
 // 0008 §3.3). Without one, no token is ever minted for the store, so a repository that didn't
-// opt in never names itself to it. A caller that names a store of its own (`url:`, `audience:` or
-// `writer-role:`) is consent to that store, not to Kanon's hosted one: until the two variables
-// name it, the gate refuses the read, naming them, and never sends the token to the hosted store
+// opt in never names itself to it. A caller that names a store of its own with `audience:` is
+// consent to that store, not to Kanon's hosted one, and one still passing `url:` or `writer-role:`
+// without it can't be told apart: until the caller or the two variables say which, the gate
+// refuses the read with the way out, and never sends the token to the hosted store
 // (`K-OBS-18`; the Owner's decision on #842; `scripts/lib/telemetry-consent.mjs`).
 //
 // THE STATUS IS ALWAYS SAID. The agent's job adds the files to the QA store's export, and writes

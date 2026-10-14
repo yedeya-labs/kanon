@@ -390,10 +390,14 @@ describe('the gate: does this repository send telemetry?', () => {
   // mints a token for the hosted audience on its behalf.
   it('reads unknown, never true, when the collector\'s caller names a store of its own and the two variables are unset', () => {
     const own = (w: string) => caller().replace('@v0.41.0\n', `@v0.41.0\n    with:\n${w}`);
-    for (const w of ['      url: https://x\n      audience: acme\n', '      url: ${{ vars.KANON_TELEMETRY_URL }}\n      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}\n']) {
-      expect(consentOf(ENV, { json: snapshot({ 'telemetry.yml': own(w), 'overseer.yml': lane }), hostedUrl: HOSTED_URL }), w)
-        .toEqual({ reader: 'unknown', line: expect.stringMatching(/^The telemetry read can't run: telemetry\.yml sends this repository's rows to a store of its own .* set the repository variables KANON_TELEMETRY_TOKEN_URL and KANON_TELEMETRY_AUDIENCE/) });
-    }
+    expect(consentOf(ENV, { json: snapshot({ 'telemetry.yml': own('      url: https://x\n      audience: acme\n'), 'overseer.yml': lane }), hostedUrl: HOSTED_URL }))
+      .toEqual({ reader: 'unknown', line: expect.stringMatching(/^The telemetry read can't run: telemetry\.yml sends this repository's rows to a store of its own .* set the repository variables KANON_TELEMETRY_TOKEN_URL and KANON_TELEMETRY_AUDIENCE/) });
+    // A caller written before vM, a hosted adopter's included: its store can't be told, so both
+    // ways out, and never the claim that it is self-hosted (#852's third review).
+    const legacy = consentOf(ENV, { json: snapshot({ 'telemetry.yml': own('      url: ${{ vars.KANON_TELEMETRY_URL }}\n      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}\n'), 'overseer.yml': lane }), hostedUrl: HOSTED_URL });
+    expect(legacy.reader).toBe('unknown');
+    expect(legacy.line).toMatch(/^The telemetry read can't run: telemetry\.yml still passes `url:` and `writer-role:` to Kanon's collector without `audience:`.*write the new caller with `kanon init --telemetry`.*add `audience:` to the caller and set the repository variables KANON_TELEMETRY_TOKEN_URL and KANON_TELEMETRY_AUDIENCE/);
+    expect(legacy.line).not.toContain('store of its own');
     // Nested in a local reusable workflow, the call's `with:` is still read.
     const outer = 'name: T\non:\n  schedule:\n    - cron: "1 * * * *"\njobs:\n  t:\n    uses: ./.github/workflows/inner.yml\n';
     const inner = 'name: Inner\non: workflow_call\njobs:\n  collect:\n    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.41.0\n    with:\n      audience: acme\n';

@@ -49,9 +49,17 @@ describe('exploreCheck', () => {
 
   // #852's review: a collector that names a store of its own is no consent to the hosted one.
   it('refuses, naming the variables, a repository whose collector names a store of its own, and never sends it to the hosted store', () => {
-    for (const w of ['      url: https://x\n      audience: acme\n', '      url: https://x\n      writer-role: arn\n', '      audience: acme\n']) {
+    for (const w of ['      url: https://x\n      audience: acme\n', '      audience: acme\n', '      url: https://x\n      audience: acme\n      writer-role: arn\n']) {
       const r = exploreCheck(ENV, { json: snapshot({ 'telemetry.yml': caller(w) }), hostedUrl: HOSTED_URL });
       expect(r, w).toEqual({ error: expect.stringMatching(/^telemetry\.yml sends this repository's rows to a store of its own .* set the repository variables KANON_AGGREGATE_TOKEN_URL and KANON_TELEMETRY_AUDIENCE/) });
+    }
+    // #852's third review: a caller written before vM passes `url:` and `writer-role:`, a hosted
+    // adopter's too, so its store can't be told: refused with both ways out, never told it is
+    // self-hosted.
+    for (const w of ['      url: ${{ vars.KANON_TELEMETRY_URL }}\n      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}\n', '      url: https://x\n']) {
+      const r = exploreCheck(ENV, { json: snapshot({ 'telemetry.yml': caller(w) }), hostedUrl: HOSTED_URL }) as { error: string };
+      expect(r.error, w).toMatch(/^telemetry\.yml still passes `url:`.* to Kanon's collector without `audience:`.*for Kanon's hosted store, write the new caller with `kanon init --telemetry`.*for a store of your own, add `audience:` to the caller and set the repository variables KANON_AGGREGATE_TOKEN_URL and KANON_TELEMETRY_AUDIENCE/);
+      expect(r.error, w).not.toContain('store of its own');
     }
     // With its own two variables set, the same repository reads its own store.
     expect(exploreCheck({ ...ENV, ...SELF }, { json: snapshot({ 'telemetry.yml': caller('      url: https://x\n      audience: acme\n') }), hostedUrl: HOSTED_URL })).toEqual({ configured: 'true' });

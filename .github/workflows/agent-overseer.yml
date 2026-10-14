@@ -53,9 +53,11 @@
 # writes the two files itself keeps them whenever the read didn't run. A repository reading a
 # self-hosted store sets two repository variables together, KANON_TELEMETRY_TOKEN_URL (its
 # `IngestTokenUrl` output) and KANON_TELEMETRY_AUDIENCE, which the gate checks before any token is
-# minted. A repository whose collector's caller names a store of its own (`url:`, `audience:` or
-# `writer-role:`) must set them: until it does, the gate refuses it, by name, and never sends it to
-# Kanon's hosted store, to which it never consented (`K-OBS-18`; the Owner's decision on #842).
+# minted. A repository whose collector's caller names a store of its own with `audience:` must set
+# them, and one still passing `url:` or `writer-role:` without it (a caller written before the
+# token path, whose store can't be told) must move its caller first: until then the gate refuses
+# it, by name, with the way out, and never sends it to Kanon's hosted store (`K-OBS-18`; the
+# Owner's decision on #842).
 #
 # ── WHO FILES WHAT (decision 12) ─────────────────────────────────────────────────────────
 #

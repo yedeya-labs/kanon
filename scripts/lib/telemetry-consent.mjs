@@ -4,8 +4,11 @@
 // THE COLLECTOR'S CALLER IS THE CONSENT, AND IT NAMES THE STORE. A workflow on the default branch
 // that calls Kanon's collector is the repository's yes. That caller also says which store it
 // sends to: Kanon's hosted one when it passes none of `url:`, `audience:` and `writer-role:`, or
-// a store of its own when it passes any of them (the SigV4 inputs before vM, `url:` and
-// `audience:` from vM). A repository whose caller names a store of its own never opted in to
+// another store when it passes any of them. From vM, `audience:` names a store of the adopter's
+// own. `url:` or `writer-role:` without it is a caller written before vM: every such caller
+// passes them, a hosted adopter's included, so its store is ambiguous, and it is refused with
+// both ways out (as doctor's `telemetry.legacy-inputs` gives them), never told it is self-hosted.
+// A repository whose caller names another store never opted in to
 // the hosted service, so a reading lane must not send a token minted for the hosted audience on
 // its behalf, which would name the repository to Kanon's operator. Such a lane is told to name
 // the adopter's own store with its own two variables, and refuses until it does: never a quiet
@@ -70,5 +73,10 @@ export function collectorConsent(snapshot) {
  */
 export function hostedRefusal(consent, variables) {
   if (!consent.ownStore.length) return null;
+  const file = consent.caller ?? "the collector's caller";
+  // A caller written before vM: its store may be Kanon's or the adopter's, so both ways out.
+  if (!consent.ownStore.includes('audience')) {
+    return `${file} still passes ${consent.ownStore.map((k) => `\`${k}:\``).join(' and ')} to Kanon's collector without \`audience:\`, as every caller written before the token path does, so which store it sends to can't be told, and this lane reads none: for Kanon's hosted store, write the new caller with \`kanon init --telemetry\` (it drops both lines); for a store of your own, add \`audience:\` to the caller and set the repository variables ${variables.url} and ${variables.audience} to that store's token URL and audience (docs/telemetry.md, "Collect the rows")`;
+  }
   return `${consent.caller ?? 'the collector\'s caller'} sends this repository's rows to a store of its own (it passes ${consent.ownStore.map((k) => `\`${k}:\``).join(', ')} to Kanon's collector), so this lane never reads Kanon's hosted store for it: set the repository variables ${variables.url} and ${variables.audience} to that store's token URL and audience (docs/telemetry.md)`;
 }

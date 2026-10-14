@@ -21,9 +21,11 @@
 # repository's default branch, for a registration with `aggregate_invoker`; anything else is
 # refused with its code (403 `invoker`, 404 `not-registered`), which the read names, red. A
 # self-hosted store's aggregate is named by two repository variables together,
-# `KANON_AGGREGATE_TOKEN_URL` (its `AggregateTokenUrl` output) and `KANON_TELEMETRY_AUDIENCE`; a
-# repository whose collector's caller names a store of its own must set them, and the gate refuses
-# it, by name, until it does, never sending it to the hosted store (`K-OBS-18`; #842). While the
+# `KANON_AGGREGATE_TOKEN_URL` (its `AggregateTokenUrl` output) and `KANON_TELEMETRY_AUDIENCE`. A
+# repository whose collector's caller names a store of its own with `audience:` must set them, and
+# one still passing `url:` or `writer-role:` without it (a caller written before the token path)
+# must move its caller first; until then the gate refuses it, by name, with the way out, never
+# sending it to the hosted store (`K-OBS-18`; #842). While the
 # hosted store's URL is not published in this release (plan 0008 Owner decision 10), or no
 # workflow calls Kanon's collector, the lane says so and stops after its gate, green.
 #
