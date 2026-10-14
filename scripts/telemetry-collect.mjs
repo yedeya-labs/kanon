@@ -20,9 +20,11 @@
 // token for the store's audience (`scripts/lib/telemetry-token.mjs`), which the store checks claim
 // by claim: this repository, its default branch, and Kanon's collector at a release. The hosted
 // store's URL is a constant, and a self-hosted store is named by the `url` and `audience` inputs
-// together, never one alone (`check`, the step before any token is minted). The caller's `url`
-// and `writer-role`, which named the SigV4 path's URL and role, are deprecated and ignored: a
-// caller that still passes the pair is warned, and sends to the hosted store.
+// together, never one alone (`check`, the step before any token is minted). A caller that still
+// passes the SigV4 path's `url` and `writer-role` without an `audience` is refused there, red,
+// before any token: it sends nothing and registers nothing, and its URL is never swapped for the
+// hosted store's (Owner decision of 2026-10-14, #842). `writer-role` beside a self-hosted `url`
+// and `audience` is ignored, with a warning.
 //
 // REGISTRATION IS THE FIRST RUN (§3.2, §3.3, §8). `POST /v1/rows`; on 404 `not-registered`,
 // `POST /v1/registrations` once, then the rows again. A run with no row to send asks
@@ -331,11 +333,18 @@ const yesNo = (v) => {
   return t === '' || t === 'no' || t === 'false' ? false : t === 'yes' || t === 'true' ? true : null;
 };
 
+/** Why a caller with the SigV4 path's inputs is refused, and what to do (Owner decision of 2026-10-14, #842). */
+export const LEGACY_REFUSAL = "the caller passes `url` or `writer-role` without `audience`, the inputs of the SigV4 path this release no longer takes, so nothing is sent and nothing is registered: no token is minted, and the URL is never swapped for another store's. Run `kanon init` again to write the new caller, which passes neither and sends to Kanon's hosted store; or, for a store of your own, add `audience:` beside `url:` and remove `writer-role:` (docs/telemetry.md, \"Collect the rows\")";
+
 /**
  * The collect job's inputs, read before any token is minted: the store, the `erase` and `register`
  * dispatch inputs, and what to warn of. `LEGACY` is `true` when the caller still passes
- * `writer-role`: then its `url` is the SigV4 path's, and is ignored with it (deprecated at this
- * release, refused at the next), unless an `audience` beside it names a self-hosted store.
+ * `writer-role`. A caller written before the token path passes `url` and `writer-role`, and no
+ * `audience`: that is REFUSED HERE, before any token is minted, so nothing is sent and nothing is
+ * registered (Owner decision of 2026-10-14, #842). The `url` is never cleared to fall back to the
+ * hosted store: a caller that named a store of its own must not start sending to Kanon's.
+ * `writer-role` beside a `url` and an `audience` that name a self-hosted store is ignored, with a
+ * warning.
  * @param {Record<string, string | undefined>} env
  * @returns {{ store: ReturnType<typeof storeOf>, erase: boolean, register: boolean, problems: string[], warnings: string[] }}
  */
@@ -346,13 +355,18 @@ export function inputsOf(env) {
   const warnings = [];
   const legacy = String(env.LEGACY ?? '').trim() === 'true';
   const audience = String(env.KANON_TELEMETRY_AUDIENCE ?? '');
-  let url = String(env.KANON_TELEMETRY_URL ?? '');
-  if (legacy) {
-    warnings.push("the caller passes `writer-role`, which this release of the collector ignores, as it does `url` without an `audience`: rows go with GitHub's OIDC token, to the hosted store unless `url` and `audience` name another. Remove both lines from the caller, and the variables they read (docs/telemetry.md, \"Collect the rows\"); the next release refuses them.");
-    if (!audience.trim()) url = '';
+  const url = String(env.KANON_TELEMETRY_URL ?? '');
+  /** @type {ReturnType<typeof storeOf>} */
+  let store;
+  if (!audience.trim() && (legacy || url.trim())) {
+    // The caller's inputs are the SigV4 path's, or a URL alone: refused, never redirected (#842).
+    store = { ok: false, why: LEGACY_REFUSAL };
+    problems.push(LEGACY_REFUSAL);
+  } else {
+    if (legacy) warnings.push('the caller passes `writer-role`, which this release of the collector ignores: `url` and `audience` name the store, and GitHub\'s OIDC token is the credential. Remove the line from the caller (docs/telemetry.md, "Collect the rows"); the next release refuses it.');
+    store = storeOf({ url, audience, hostedUrl: HOSTED_INGEST_URL });
+    if (!store.ok && !store.unpublished) problems.push(store.why);
   }
-  const store = storeOf({ url, audience, hostedUrl: HOSTED_INGEST_URL });
-  if (!store.ok && !store.unpublished) problems.push(store.why);
   const erase = yesNo(env.ERASE);
   const register = yesNo(env.REGISTER);
   if (erase === null) problems.push('`erase` is neither yes nor no');

@@ -56,7 +56,7 @@ on:
       # so a token minted for Kanon's store can't be pointed at another host by an input (plan
       # 0008 §2.1). Neither is passed for Kanon's hosted store, whose URL is the collector's own.
       url:
-        description: A self-hosted store's token URL (its stack's `IngestTokenUrl` output), with `audience`. Leave both empty for Kanon's hosted store. Passed with `writer-role`, as callers before this release did, it is deprecated and ignored.
+        description: A self-hosted store's token URL (its stack's `IngestTokenUrl` output), with `audience`. Leave both empty for Kanon's hosted store. Passed without `audience`, as callers before this release did, it is refused before any token is minted (#842).
         required: false
         type: string
         default: ""
@@ -66,7 +66,7 @@ on:
         type: string
         default: ""
       writer-role:
-        description: Deprecated and ignored. The SigV4 path's writer role; the next release refuses it.
+        description: The SigV4 path's writer role, which this release no longer takes. Without `audience` it is refused before any token is minted (#842); beside a self-hosted `url` and `audience` it is ignored.
         required: false
         type: string
         default: ""

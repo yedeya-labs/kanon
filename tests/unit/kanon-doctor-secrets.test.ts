@@ -318,11 +318,26 @@ describe("kanon doctor and the telemetry collector's caller (#428, plan 0008 J5)
     expect(r.json.unchecked).toEqual(expect.arrayContaining([expect.objectContaining({ check: 'telemetry-runs', subject: TELEMETRY_CALLER_PATH })]));
   });
 
-  it('notes a caller that still passes the SigV4 path\'s url and writer-role, which the release ignores', async () => {
+  // Owner decision of 2026-10-14 (#842): the collector refuses these inputs, so doctor blocks on them.
+  it("blocks a caller that still passes the SigV4 path's url or writer-role without audience, with init's caller as the fix", async () => {
     const legacy = telemetryCallerFile(PINNED).replace('    with:\n', "    with:\n      url: ${{ vars.KANON_TELEMETRY_URL }}\n      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}\n");
     const r = await run(checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: legacy }), ran('success'), ['--json']);
-    expect(r.json.findings).toEqual([]);
-    expect(r.json.notes.join('\n')).toContain(`${TELEMETRY_CALLER_PATH} passes \`url:\` and \`writer-role:\` to Kanon's telemetry collector, which ${PINNED} ignores`);
+    expect(r.status, r.out).toBe(EXIT.findings);
+    expect(ids(r)).toEqual([`telemetry.legacy-inputs ${TELEMETRY_CALLER_PATH}`]);
+    const f = r.json.findings[0];
+    expect(f).toMatchObject({ category: 'caller', blocking: true });
+    expect(f.message).toContain('passes `url:` and `writer-role:` to Kanon\'s telemetry collector without `audience:`');
+    expect(f.message).toContain('nothing is sent or registered');
+    expect(f.message).not.toContain('hosted store unless');
+    expect(f.fix.text).toContain('Run kanon init again');
+    expect(f.fix.text).toContain('add `audience:` beside `url:`');
+    expect(f.fix.commands).toEqual(['kanon init --telemetry']);
+    // writer-role alone is the same finding.
+    const role = telemetryCallerFile(PINNED).replace('    with:\n', "    with:\n      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}\n");
+    expect(ids(await run(checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: role }), ran('success'), ['--json']))).toEqual([`telemetry.legacy-inputs ${TELEMETRY_CALLER_PATH}`]);
+    // A self-hosted url with its audience is not.
+    const self = telemetryCallerFile(PINNED).replace('    with:\n', '    with:\n      url: https://abc.lambda-url.eu-central-1.on.aws/\n      audience: acme-telemetry\n');
+    expect(ids(await run(checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: self }), ran('success'), ['--json']))).toEqual([]);
   });
 
   it("asks nothing of a repository without the collector's caller", async () => {

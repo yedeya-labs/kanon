@@ -32,7 +32,7 @@ describe('telemetry-collect.yml, the lane', () => {
     expect(Object.keys(inputs).sort()).toEqual(['audience', 'erase', 'register', 'url', 'window_minutes', 'writer-role']);
     for (const k of ['audience', 'url', 'window_minutes', 'writer-role']) expect(inputs[k]).toMatchObject({ type: 'string', default: '', required: false });
     for (const k of ['erase', 'register']) expect(inputs[k]).toMatchObject({ type: 'string', default: 'no', required: false });
-    expect(inputs['writer-role']!.description ?? '').toMatch(/deprecated and ignored/i);
+    expect(inputs['writer-role']!.description ?? '').toMatch(/refused before any token is minted/i);
     expect(lane.on.workflow_call.secrets).toBeUndefined();
   });
 

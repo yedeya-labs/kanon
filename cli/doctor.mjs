@@ -269,6 +269,7 @@ export const FINDINGS = {
   'apps-check.secret-stale': { category: 'caller', blocking: true },
   'telemetry.refused': { category: 'caller', blocking: false },
   'telemetry.not-run': { category: 'caller', blocking: false },
+  'telemetry.legacy-inputs': { category: 'caller', blocking: true },
   'qa-store.unmapped': { category: 'caller', blocking: false },
   'qa-store.variables': { category: 'secret', blocking: false },
   'label.missing': { category: 'label', blocking: false },
@@ -1839,11 +1840,17 @@ export const diagnose = async (deps, opts) => {
   // operator gave, which this release of doctor no longer asks for.
   if (collectorCallers.length && req.telemetry?.token) {
     for (const file of collectorCallers) {
-      // The deprecated inputs (plan 0008 §9 step 4): ignored at this release, refused at the next.
+      // The SigV4 path's inputs without `audience` (Owner decision of 2026-10-14, #842): the
+      // collector refuses them before any token, so the caller sends nothing and registers nothing.
       const wf = /** @type {Record<string, any>} */ (workflows.get(file));
-      const legacy = Object.values(isMap(wf.jobs) ? wf.jobs : {}).filter((j) => isMap(j) && kanonCall(j.uses)?.workflow === collector && isMap(j.with))
-        .flatMap((j) => ['url', 'writer-role'].filter((k) => k in j.with && !(k === 'url' && 'audience' in j.with)));
-      if (legacy.length) notes.push(`${file} passes ${[...new Set(legacy)].map((k) => `\`${k}:\``).join(' and ')} to Kanon's telemetry collector, which ${checked} ignores: it sends with GitHub's OIDC token, to the hosted store unless \`url:\` and \`audience:\` name another together. Remove ${legacy.length > 1 ? 'both lines' : 'the line'}, and the repository variables they read; the next release refuses them (docs/telemetry.md, "Collect the rows").`);
+      const legacy = [...new Set(Object.values(isMap(wf.jobs) ? wf.jobs : {}).filter((j) => isMap(j) && kanonCall(j.uses)?.workflow === collector && isMap(j.with) && !('audience' in j.with))
+        .flatMap((j) => ['url', 'writer-role'].filter((k) => k in j.with)))];
+      if (legacy.length) {
+        find('telemetry.legacy-inputs', file, `passes ${legacy.map((k) => `\`${k}:\``).join(' and ')} to Kanon's telemetry collector without \`audience:\`, the inputs of the SigV4 path ${checked} no longer takes. The collector refuses them before it mints a token, so every run is red, and nothing is sent or registered.`, {
+          text: "Run kanon init again to write the new caller, which passes neither and sends to Kanon's hosted store: init never overwrites a workflow, so it lists this one as differing, with the new caller's content to write in its place. Then delete the repository variables the old lines read. Or, for a store of your own, add `audience:` beside `url:` and remove `writer-role:` (docs/telemetry.md, \"Collect the rows\").",
+          commands: ['kanon init --telemetry'],
+        });
+      }
       const listed = await deps.gh(['run', 'list', '-R', repo, '--workflow', basename(file), '--branch', s.defaultBranch, '--status', 'completed', '--limit', '1', '--json', 'databaseId,conclusion,createdAt']);
       // A caller not yet on the default branch has no runs: GitHub knows no such workflow.
       const unknown = listed.status !== 0 && /could not find any workflows|HTTP 404/i.test(listed.stderr);
