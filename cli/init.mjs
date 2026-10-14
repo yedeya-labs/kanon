@@ -1045,12 +1045,13 @@ const RELEASER_QUESTION = 'Create the optional Releaser App, so the release PR r
  * owner's Apps it could reuse, the user owners of `*` in CODEOWNERS, why a test database is
  * inferred (or null), whether a workflow runs Kanon's DCO check, whether the default branch has a
  * commit, whether the repository is private, whether a feature's conditional lane's condition
- * holds here, the release init runs from, and the repository's secret names (null when the token
- * can't list them).
+ * holds here, the release init runs from, the repository's secret names (null when the token
+ * can't list them), and the Claude credential each installed model lane's caller maps.
  * @typedef {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements,
  *   installed?: string[], releases?: boolean, reusable?: (identities: string[]) => Array<{ app: string, slug: string, from?: string }>,
  *   codeowners?: string[] | null, database?: string | null, runsDco?: boolean, hasCommits?: boolean, isPrivate?: boolean,
- *   met?: (lane: string) => boolean, release?: string, secrets?: Set<string> | null }} AskContext
+ *   met?: (lane: string) => boolean, release?: string, secrets?: Set<string> | null,
+ *   claudeMapped?: ClaudeAuth[] }} AskContext
  */
 
 /**
@@ -1132,21 +1133,48 @@ export const derive = (a, ctx, g = {}) => {
 /** @typedef {'subscription' | 'api-key'} ClaudeAuth */
 
 /**
- * The Claude credential, inferred from the repository's secret names (plan 0009 §9): the API key
- * when the repository holds `ANTHROPIC_API_KEY` and not `CLAUDE_CODE_OAUTH_TOKEN`; the
- * subscription's token otherwise. Holding both never prefers the key: an installation on the
- * token keeps it. Not a question (plan 0009, Owner decision 7): the summary shows it with where
- * it came from, and `--claude-auth` or **Change something** changes it.
+ * The Claude credential, inferred (plan 0009 §9). An installation keeps the one its callers map
+ * (#809): when every installed model lane's caller that maps one of its pair maps the same one,
+ * that one, so an installation on the key keeps the key while the repository still holds the old
+ * token, as `secret.stale` asks for a week. Otherwise, a fresh installation or callers that map a
+ * mix, from the repository's secret names: the API key when the repository holds
+ * `ANTHROPIC_API_KEY` and not `CLAUDE_CODE_OAUTH_TOKEN`; the subscription's token otherwise.
+ * Holding both never prefers the key: an installation on the token keeps it. Not a question
+ * (plan 0009, Owner decision 7): the summary shows it with where it came from, and
+ * `--claude-auth` or **Change something** changes it.
  * @param {Set<string> | null | undefined} secrets the names, or null when the token can't list them
+ * @param {ClaudeAuth[]} [mapped] the one each installed model lane's caller maps (`callersClaudeAuth`)
  * @returns {{ value: ClaudeAuth, why: Why }}
  */
-export const claudeAuthOf = (secrets) => {
+export const claudeAuthOf = (secrets, mapped = []) => {
+  const one = [...new Set(mapped)];
+  if (one.length === 1) return { value: /** @type {ClaudeAuth} */ (one[0]), why: { source: 'inferred', reason: "from the lanes' callers" } };
   const key = Boolean(secrets?.has(CLAUDE_SECRETS['api-key']));
   const token = Boolean(secrets?.has(CLAUDE_SECRETS.subscription));
   if (key && !token) return { value: 'api-key', why: { source: 'inferred', reason: "from the repository's secrets" } };
   if (token) return { value: 'subscription', why: { source: 'inferred', reason: "from the repository's secrets" } };
   return { value: 'subscription', why: { source: 'default', reason: secrets ? '' : "the token can't list the repository's secrets" } };
 };
+
+/**
+ * The Claude credential each installed model lane's caller maps, as `claudeAuthOf` reads them: one
+ * entry per caller whose job calls its lane and maps exactly one of the lane's `claude` pair. A
+ * caller that maps both or neither (doctor's `caller.claude-both`, `caller.claude-none`) says
+ * nothing of which one the installation runs on.
+ * @param {string[]} installed @param {Requirements} req @param {Map<string, Record<string, any>>} workflows
+ *   the checkout's, parsed (`checkoutWorkflows`) @param {Map<string, string>} callers lane → path (`callerPaths`)
+ * @returns {ClaudeAuth[]}
+ */
+export const callersClaudeAuth = (installed, req, workflows, callers) =>
+  installed.flatMap((lane) => {
+    const pair = req.lanes[lane]?.claude ?? [];
+    const wf = workflows.get(callers.get(lane) ?? `.github/workflows/${lane}.yml`);
+    if (!pair.length || !wf || !isMap(wf.jobs)) return [];
+    const job = Object.values(wf.jobs).find((j) => isMap(j) && typeof j.uses === 'string' && `uses: ${j.uses}`.startsWith(callsLane(lane)));
+    const maps = isMap(job?.secrets) ? pair.filter((n) => Object.keys(job.secrets).includes(n)) : [];
+    const auth = /** @type {ClaudeAuth[]} */ (Object.keys(CLAUDE_SECRETS)).find((a) => maps.length === 1 && CLAUDE_SECRETS[a] === maps[0]);
+    return auth ? [auth] : [];
+  });
 
 /** The summary's `Claude` line for each credential, with its one-line consequence (plan 0009 §9). @type {Record<ClaudeAuth, string>} */
 export const CLAUDE_AUTH_LINES = {
@@ -1240,8 +1268,8 @@ export const askAll = async (deps, opts, ctx) => {
   const plugin = g.plugin ?? true;
   why.plugin = g.plugin !== undefined ? flag : { source: 'default', reason: '' };
   if (g.reuseApps !== undefined) why.reuseApps = flag;
-  // THE CLAUDE CREDENTIAL (plan 0009 §9): inferred from the secret names, never asked.
-  const inferredAuth = claudeAuthOf(ctx.secrets);
+  // THE CLAUDE CREDENTIAL (plan 0009 §9): inferred from the callers or the secret names, never asked.
+  const inferredAuth = claudeAuthOf(ctx.secrets, ctx.claudeMapped);
   const claudeAuth = g.claudeAuth ?? inferredAuth.value;
   why.claudeAuth = g.claudeAuth !== undefined ? flag : inferredAuth.why;
 
@@ -2043,6 +2071,7 @@ const run = async (deps, opts, req, rep) => {
     met,
     release,
     secrets: s.secrets,
+    claudeMapped: callersClaudeAuth(installed, req, workflows, callers),
   };
   const a = await askAll(deps, opts, ctx);
   // THE SUMMARY (plan 0007 §4): every value, and where it came from, before anything is written.

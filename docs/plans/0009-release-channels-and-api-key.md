@@ -190,7 +190,7 @@ A security fix, or a fix for a candidate or stable release that breaks adopters,
 
 **In `kanon init`, it is an inferred value, not a fourth question** ([Owner decision 7](#owner-decisions-2026-10-12)). #579 asks for "a question per #428"; plan 0007 replaced #428's question per input with three questions and a summary, and the Owner's decision of 2026-10-10 keeps it there. So:
 - a new flag, **`--claude-auth subscription|api-key`**, and a new answer, **`claudeAuth`**;
-- **inferred** from the repository's secret names, which `init` already lists: `api-key` when `ANTHROPIC_API_KEY` is set and `CLAUDE_CODE_OAUTH_TOKEN` isn't; `subscription` otherwise, the default, with the reason "the default" or "from the repository's secrets";
+- **inferred** from the repository's secret names, which `init` already lists: `api-key` when `ANTHROPIC_API_KEY` is set and `CLAUDE_CODE_OAUTH_TOKEN` isn't; `subscription` otherwise, the default, with the reason "the default" or "from the repository's secrets". From [#809](https://github.com/yedeya-labs/kanon/issues/809), an installation's callers come first: when every installed model lane's caller that maps one of the pair maps the same one, `init` infers that one, "from the lanes' callers", so an installation on the key keeps it while the old token waits out `secret.stale`'s week; a mix falls back to the secret names;
 - shown as one summary line, **`Claude: subscription token (default)`**, with its one-line consequence, which the person can change before confirming, as every other line;
 - written as the secret each caller maps ([§10](#10-the-secret-and-each-lanes-mapping));
 - in the JSON, `answers.claudeAuth`, and each feature's `secrets` list names the chosen credential. `kanon-init/v1` stays: the field is additive.
