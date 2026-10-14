@@ -190,6 +190,13 @@ const providerArn = {
     { 'Fn::Sub': `arn:\${AWS::Partition}:iam::\${AWS::AccountId}:oidc-provider/${OIDC_HOST}` },
   ],
 };
+/**
+ * The template's PermissionsBoundaryArn on a role, only when it is set (plan 0010 decision 15, D11),
+ * as the template's own roles carry it. A fresh object per role, so no two roles share one.
+ */
+const permissionsBoundary = () => ({
+  'Fn::If': ['HasPermissionsBoundary', { Ref: 'PermissionsBoundaryArn' }, { Ref: 'AWS::NoValue' }],
+});
 const tableArn = { 'Fn::Sub': 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry' };
 /** Lets the Owner assume a writer or reader role while EnableVerify is true, and only then. */
 const ownerForVerify = {
@@ -261,6 +268,7 @@ export function repositoryResources(entry, invokePolicy, subjects) {
       Type: 'AWS::IAM::Role',
       Properties: {
         RoleName: `kanon-telemetry-${entry.key}-writer`,
+        PermissionsBoundary: permissionsBoundary(),
         AssumeRolePolicyDocument: {
           Version: '2012-10-17',
           Statement: [oidcTrust(subjects.writer), ownerForVerify],
@@ -282,6 +290,7 @@ export function repositoryResources(entry, invokePolicy, subjects) {
       Type: 'AWS::IAM::Role',
       Properties: {
         RoleName: `kanon-telemetry-${entry.key}-reader`,
+        PermissionsBoundary: permissionsBoundary(),
         AssumeRolePolicyDocument: {
           Version: '2012-10-17',
           Statement: [oidcTrust(subjects.readers), ownerForVerify],
@@ -321,6 +330,7 @@ export function invokerResources(entry, invokePolicy, subjects) {
       Type: 'AWS::IAM::Role',
       Properties: {
         RoleName: `kanon-telemetry-${entry.key}-aggregates`,
+        PermissionsBoundary: permissionsBoundary(),
         AssumeRolePolicyDocument: { Version: '2012-10-17', Statement: [oidcTrust(subjects.writer)] },
         Policies: [{ PolicyName: 'invoke-aggregate-url', PolicyDocument: policy }],
       },

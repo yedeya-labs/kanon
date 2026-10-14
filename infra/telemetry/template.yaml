@@ -73,6 +73,11 @@ Parameters:
     Description: Each function's reserved concurrency (plan 0002, section 4; plan 0008, section 12). 0 sets none, for an account whose concurrency quota can't spare it.
     MinValue: 0
     Default: 2
+  PermissionsBoundaryArn:
+    Type: String
+    Description: A managed policy every role this stack creates carries as its permissions boundary (plan 0010, decision 15), for a deploy whose service role may create roles only with it. Empty sets none.
+    AllowedPattern: '^$|^arn:aws:iam::(\d{12}|aws):policy/(?:[\w+=,.@-]+/)*[\w+=,.@-]+$'
+    Default: ''
 
 # Kept in Frankfurt by the account's SCP (§5), and by this template too.
 Rules:
@@ -89,6 +94,7 @@ Conditions:
   VerifyOn: { 'Fn::Equals': [{ Ref: EnableVerify }, 'true'] }
   HasOperatorJobRoles: { 'Fn::Not': [{ 'Fn::Equals': [{ 'Fn::Join': ['', { Ref: OperatorJobRoleArns }] }, ''] }] }
   HasReservedConcurrency: { 'Fn::Not': [{ 'Fn::Equals': [{ Ref: ReservedConcurrency }, 0] }] }
+  HasPermissionsBoundary: { 'Fn::Not': [{ 'Fn::Equals': [{ Ref: PermissionsBoundaryArn }, ''] }] }
 
 Resources:
   # Its lifecycle is independent of the stack (K-OBS-17): retained on delete and on replace,
@@ -202,6 +208,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: kanon-telemetry-ingest
+      PermissionsBoundary: { 'Fn::If': [HasPermissionsBoundary, { Ref: PermissionsBoundaryArn }, { Ref: AWS::NoValue }] }
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -309,6 +316,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: kanon-telemetry-self-read
+      PermissionsBoundary: { 'Fn::If': [HasPermissionsBoundary, { Ref: PermissionsBoundaryArn }, { Ref: AWS::NoValue }] }
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -430,6 +438,7 @@ Resources:
     Condition: ImporterOn
     Properties:
       RoleName: kanon-telemetry-importer
+      PermissionsBoundary: { 'Fn::If': [HasPermissionsBoundary, { Ref: PermissionsBoundaryArn }, { Ref: AWS::NoValue }] }
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -462,6 +471,7 @@ Resources:
     Condition: BackfillOn
     Properties:
       RoleName: kanon-telemetry-backfill
+      PermissionsBoundary: { 'Fn::If': [HasPermissionsBoundary, { Ref: PermissionsBoundaryArn }, { Ref: AWS::NoValue }] }
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -483,6 +493,7 @@ Resources:
     Condition: VerifyOn
     Properties:
       RoleName: kanon-telemetry-verify-probe
+      PermissionsBoundary: { 'Fn::If': [HasPermissionsBoundary, { Ref: PermissionsBoundaryArn }, { Ref: AWS::NoValue }] }
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -516,6 +527,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: kanon-telemetry-aggregate
+      PermissionsBoundary: { 'Fn::If': [HasPermissionsBoundary, { Ref: PermissionsBoundaryArn }, { Ref: AWS::NoValue }] }
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
