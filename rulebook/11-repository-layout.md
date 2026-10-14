@@ -27,6 +27,7 @@ What a file *contains* is still the project's (its specs, its signals, its escal
 | `docs/qa/exemptions.md` | What a guard exempts by name: pre-standard briefs and path mentions | `K-LAYOUT-15` |
 | `docs/qa/test-database.md` | The test-database declaration, when the lanes need a database | `K-LAYOUT-16` |
 | `.github/actions/qa-store/action.yml` | The QA store hook, when the adopter runs a store | `K-OBS-17` |
+| `.github/actions/notify/action.yml` | The notify hook, which posts the lanes' chat messages, when the adopter posts any: Kanon's Slack hook, its generic JSON webhook hook, or the adopter's own | `K-OBS-19` |
 | `.github/actions/build/action.yml`, `.github/actions/deploy/action.yml`, `.github/actions/smoke/action.yml` | The deploy lane's build, deploy and smoke hooks, when the adoption record declares a deploy environment | `K-SHIP-12` |
 | `docs/qa/stack.md` | The stack document: the project's gates, schema procedure, isolation rules and generated files | `K-LAYOUT-17` |
 | `docs/qa/triage-fix-playbook.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md`, `docs/qa/lead-playbook.md` | The Implementer's, Reviewer's, Explorer's and Lead's playbooks | `K-LAYOUT-17` |
