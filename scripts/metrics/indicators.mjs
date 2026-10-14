@@ -13,6 +13,9 @@
 // and the escaped-defect rate (§2.4), with first-review approval and the human-correction rate
 // beside it. Each cell is by band, plus pooled with the band mix printed beside it.
 //
+// THE DEPLOY METRICS (plan 0010 §11), at the end: deployment frequency, change-failure rate, time
+// to restore and release lead time, from the deploy rows of production alone.
+//
 // A CELL BELOW ITS MINIMUM IS "NOT ENOUGH DATA (N)", never a number (§2.1, decision 11): medians
 // from 10 items, p90 from 30, proportions and yield from 20, escape rates from 50. Every interval
 // is 95%: order statistics for cost, a seeded bootstrap for yield, Wilson for proportions.
@@ -494,5 +497,127 @@ export function byVersionOf(ctx, { start, end }) {
     })),
     fewer: ordered.filter((v) => /** @type {number} */ (counts.get(v)) < MINIMUM.median).map((v) => ({ version: v, items: /** @type {number} */ (counts.get(v)) })),
     unversioned: mergedInSpan.filter((i) => versionOf(i) === null).length,
+  };
+}
+
+// ── The deploy metrics (plan 0010 §11, decision 12) ──────────────────────────────────────────
+//
+// FOUR VIEWS, ON PRODUCTION ONLY. Plan 0003 defines no deploy metric; plan 0010 §11 adds four,
+// from the deploy rows (§10) with `tag: run` and `role: production`: the last environment of each
+// adopter's chain, whatever its length. Production is selected by `role`, never by `position`:
+// the last position is 1 on a chain of one and 3 on a chain of three. A pre-production row counts
+// in none of the four; it is only tallied, beside them, as left out.
+//
+// WHAT THEY CAN'T SEE: a production fault found days later and fixed forward, with no rollback and
+// no failed smoke. The row carries no commit (§10), so it can't be joined to plan 0003's reverts
+// and linked fixes.
+
+/** The deployment frequency's weeks: the median over the last 13 (plan 0010 §11). */
+export const DEPLOY_WEEKS = 13;
+
+const WEEK_MS = 7 * DAY_MS;
+
+/**
+ * @typedef {Record<string, unknown> & { recorded_at: string, role: 'production' | 'pre-production', outcome: string,
+ *   failed_stage?: string, rollback?: boolean, since_release_ms?: number, run_id?: number, run_attempt?: number }} DeployRow
+ */
+
+/** A rollback row: a dispatch to a commit older than the environment's last success (§10). @param {DeployRow} r */
+const isRollback = (r) => r.rollback === true;
+/** A forward `ok`: deployed, and not a rollback. @param {DeployRow} r */
+const isForwardOk = (r) => r.outcome === 'ok' && !isRollback(r);
+/** Failed at the deploy stage itself, or its smoke check failed. @param {DeployRow} r */
+const isDeployFailure = (r) => (r.outcome === 'failed' && r.failed_stage === 'deploy') || r.outcome === 'smoke_failed';
+
+/**
+ * One adopter's deploy rows: the production rows with `tag: run`, oldest first (by `recorded_at`,
+ * then `run_id` and `run_attempt`); the pre-production rows apart, which no metric reads; and a
+ * tally of the deploy rows that aren't `tag: run` or are unreadable (missing their time, role or
+ * outcome). A row of another kind isn't a deploy row and isn't tallied.
+ * @param {readonly unknown[]} rows
+ */
+export function productionDeploys(rows) {
+  /** @type {DeployRow[]} */
+  const production = [];
+  /** @type {DeployRow[]} */
+  const preProduction = [];
+  const leftOut = { notRun: 0, unreadable: 0 };
+  for (const row of rows) {
+    if (row === null || typeof row !== 'object' || Array.isArray(row)) continue;
+    const r = /** @type {Record<string, unknown>} */ (row);
+    if (r.row_kind !== 'deploy') continue;
+    if (r.tag !== 'run') { leftOut.notRun += 1; continue; }
+    if (!isTime(r.recorded_at) || typeof r.outcome !== 'string' || (r.role !== 'production' && r.role !== 'pre-production')) { leftOut.unreadable += 1; continue; }
+    if (r.role !== 'production') { preProduction.push(/** @type {DeployRow} */ (r)); continue; }
+    production.push(/** @type {DeployRow} */ (r));
+  }
+  const num = (/** @type {unknown} */ v) => (typeof v === 'number' ? v : 0);
+  production.sort((a, b) => (a.recorded_at < b.recorded_at ? -1 : a.recorded_at > b.recorded_at ? 1 : num(a.run_id) - num(b.run_id) || num(a.run_attempt) - num(b.run_attempt)));
+  return { production, preProduction, leftOut };
+}
+
+/**
+ * The four deploy metrics (plan 0010 §11) over the `weeks` weeks that end at `end`, on production
+ * rows only. A row's time is its `recorded_at`, the end of its environment's job.
+ * - **Deployment frequency:** forward `ok` rows (`ok`, `rollback` not true) per week, the median
+ *   over the weeks, a week with none counting as 0.
+ * - **Change-failure rate:** of the forward rows in the span that reached the deploy stage (`ok`,
+ *   `failed` at `deploy`, `smoke_failed`), the share that failed there, or are `ok` and followed by
+ *   a rollback row before the next forward `ok`. A rollback row is a restore, not a change, so it
+ *   isn't in the share itself. The look ahead reads past the span's end.
+ * - **Time to restore:** from each failed row in the span to the next `ok` row, a rollback's
+ *   included, the median. A failure with no `ok` after it is counted as not restored.
+ * - **Release lead time:** `since_release_ms` of the forward `ok` rows in the span, the median.
+ * @param {readonly unknown[]} rows one adopter's stored rows, of any kind
+ * @param {{ end: number, weeks?: number }} opts
+ */
+export function deployMetricsOf(rows, { end, weeks = DEPLOY_WEEKS }) {
+  const start = end - weeks * WEEK_MS;
+  const { production, preProduction, leftOut } = productionDeploys(rows);
+  const at = (/** @type {DeployRow} */ r) => Date.parse(r.recorded_at);
+  const inSpan = (/** @type {DeployRow} */ r) => at(r) >= start && at(r) < end;
+
+  /** @type {number[]} */
+  const perWeek = Array.from({ length: weeks }, () => 0);
+  let reached = 0;
+  let failed = 0;
+  let rolledBack = 0;
+  /** @type {number[]} */
+  const restore = [];
+  let unrestored = 0;
+  /** @type {number[]} */
+  const lead = [];
+  let withoutLeadTime = 0;
+  production.forEach((r, k) => {
+    if (!inSpan(r)) return;
+    const after = production.slice(k + 1);
+    if (isForwardOk(r)) {
+      const w = Math.floor((at(r) - start) / WEEK_MS);
+      perWeek[w] = (perWeek[w] ?? 0) + 1;
+      if (isCount(r.since_release_ms)) lead.push(/** @type {number} */ (r.since_release_ms));
+      else withoutLeadTime += 1;
+    }
+    if (!isRollback(r) && (r.outcome === 'ok' || isDeployFailure(r))) {
+      reached += 1;
+      if (isDeployFailure(r)) failed += 1;
+      else {
+        const next = after.findIndex(isForwardOk);
+        if ((next === -1 ? after : after.slice(0, next)).some(isRollback)) { failed += 1; rolledBack += 1; }
+      }
+    }
+    if (isDeployFailure(r)) {
+      const ok = after.find((x) => x.outcome === 'ok');
+      if (ok) restore.push(at(ok) - at(r));
+      else unrestored += 1;
+    }
+  });
+  const sorted = (/** @type {number[]} */ xs) => [...xs].sort((a, b) => a - b);
+  return {
+    window: { from: date(start), until: date(end), weeks },
+    rows: { production: production.filter(inSpan).length, preProduction: preProduction.filter(inSpan).length, ...leftOut },
+    frequency: { perWeek, median: quantileEstimate(sorted(perWeek), 0.5, weeks) },
+    changeFailure: { rate: proportionEstimate(failed, reached, MINIMUM.proportion), reached, failed, rolledBack },
+    restore: { median: quantileEstimate(sorted(restore), 0.5, MINIMUM.median), unrestored },
+    leadTime: { median: quantileEstimate(sorted(lead), 0.5, MINIMUM.median), withoutLeadTime },
   };
 }

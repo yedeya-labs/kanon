@@ -430,6 +430,142 @@ describe('the difference intervals (§6.1)', () => {
   });
 });
 
+/**
+ * The deploy metrics (plan 0010 §11, D10): on deploy rows (§10) from chains of one, two and three
+ * environments, only production's rows (`role: production`) count, whatever the chain's length.
+ */
+const HOUR_MS = 3_600_000;
+let deployRunId = 5_000;
+/** A deploy row, version 1, recorded `hour` hours after the time `days` before UNTIL. */
+function deployRow(o: { days: number; hour?: number; chain: number; position: number; outcome?: string; failedStage?: string; rollback?: boolean; sinceReleaseMs?: number }) {
+  deployRunId += 1;
+  const outcome = o.outcome ?? 'ok';
+  return {
+    schema_version: 1,
+    row_kind: 'deploy',
+    tag: 'run',
+    recorded_at: new Date(UNTIL.getTime() - o.days * DAY + (o.hour ?? 0) * HOUR_MS).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    run_id: deployRunId,
+    run_attempt: 1,
+    trigger: o.rollback ? 'workflow_dispatch' : 'release',
+    kanon_version: '0.50.0',
+    role: o.position === o.chain ? 'production' : 'pre-production',
+    position: o.position,
+    outcome,
+    ...(outcome === 'ok' ? {} : { failed_stage: o.failedStage ?? 'deploy' }),
+    prerelease: false,
+    redeploy: false,
+    rollback: o.rollback ?? false,
+    since_release_ms: o.sinceReleaseMs ?? o.position * HOUR_MS,
+  };
+}
+/** One release through a chain of `chain`: every pre-production environment `ok`, an hour apart, then production's `outcome`. */
+const release = (chain: number, days: number, outcome = 'ok', failedStage?: string) =>
+  Array.from({ length: chain }, (_, k) => deployRow({ days, hour: k, chain, position: k + 1, ...(k + 1 === chain ? { outcome, failedStage } : {}) }));
+
+/**
+ * Thirteen weeks of one adopter's deploys through a chain of `chain`: two forward releases a week,
+ * reaching production `ok`; a release failed at production's deploy stage in week 3 and one whose
+ * smoke check failed in week 6, each restored by the next release; one stopped at production's
+ * build in week 9, which never reached the deploy stage; and in week 10 a rollback dispatched a
+ * few hours after that week's first `ok`, before the next. On every chain: 26 forward `ok`s, 28
+ * reached the deploy stage, 3 of them failed (two at the stage, one rolled back).
+ */
+function history(chain: number) {
+  const rows: Record<string, unknown>[] = [];
+  for (let w = 0; w < 13; w += 1) {
+    const first = 91 - w * 7 - 1;
+    rows.push(...release(chain, first), ...release(chain, first - 3));
+    if (w === 3) rows.push(...release(chain, first - 1, 'failed', 'deploy'));
+    if (w === 6) rows.push(...release(chain, first - 1, 'smoke_failed', 'smoke'));
+    if (w === 9) rows.push(...release(chain, first - 1, 'failed', 'build'));
+    if (w === 10) rows.push(deployRow({ days: first, hour: chain + 4, chain, position: chain, rollback: true, sinceReleaseMs: 200 * HOUR_MS }));
+  }
+  return rows;
+}
+const deployOf = (rows: unknown[]) => views(rows).deploy!;
+
+describe('the deploy metrics (plan 0010 §11)', () => {
+  it('reads fixture rows the telemetry schema accepts', () => {
+    for (const row of [...history(1), ...history(3)]) expect(validate(row), JSON.stringify(row)).toEqual({ ok: true });
+  });
+
+  for (const chain of [1, 2, 3]) {
+    describe(`on a chain of ${chain}`, () => {
+      const d = deployOf(history(chain));
+
+      it('counts only production\'s forward `ok` rows in the frequency: two a week, the rollback not among them', () => {
+        expect(d.window.weeks).toBe(13);
+        expect(d.frequency.perWeek).toEqual(Array(13).fill(2));
+        expect(d.frequency.median).toMatchObject({ status: 'ok', value: 2 });
+      });
+
+      it('counts an `ok` row followed by a rollback before the next forward `ok` as a failure', () => {
+        expect(d.changeFailure).toMatchObject({ reached: 28, failed: 3, rolledBack: 1 });
+        expect(d.changeFailure.rate).toMatchObject({ status: 'ok', n: 28, value: Number((3 / 28).toFixed(4)) });
+      });
+
+      it('counts pre-production rows in none of the four', () => {
+        // 29 releases, the stopped one's included, and the rollback: production's 30 rows.
+        expect(d.rows).toEqual({ production: 30, preProduction: 29 * (chain - 1), notRun: 0, unreadable: 0 });
+        expect(d.restore).toMatchObject({ median: { status: 'not-enough-data', n: 2 }, unrestored: 0 });
+        // Production is position `chain`, an hour per environment from the release: a pre-production row's time would lower it.
+        expect(d.leadTime.withoutLeadTime).toBe(0);
+        expect(d.leadTime.median).toMatchObject({ status: 'ok', n: 26, value: chain * HOUR_MS });
+      });
+    });
+  }
+
+  it('counts every row of a one-environment adopter as production', () => {
+    const rows = history(1);
+    expect(rows.every((r) => r.position === 1 && r.role === 'production')).toBe(true);
+    expect(deployOf(rows).rows).toMatchObject({ production: rows.length, preProduction: 0 });
+  });
+
+  it('measures time to restore from each failed production row to the next `ok`, a rollback included, and counts the unrestored', () => {
+    const rows = [
+      // Ten failures, restored after 1 to 10 hours, the tenth by a rollback.
+      ...Array.from({ length: 10 }, (_, k) => [
+        deployRow({ days: 80 - k * 7, chain: 2, position: 2, outcome: k % 2 ? 'smoke_failed' : 'failed', failedStage: k % 2 ? 'smoke' : 'deploy' }),
+        deployRow({ days: 80 - k * 7, hour: k + 1, chain: 2, position: 2, rollback: k === 9 }),
+      ]).flat(),
+      // A pre-production failure restores nothing and is restored by nothing.
+      deployRow({ days: 5, chain: 2, position: 1, outcome: 'failed' }),
+      // A failure before the gate's or approval's stage didn't reach the deploy stage; one at the end isn't restored.
+      deployRow({ days: 3, chain: 2, position: 2, outcome: 'rejected', failedStage: 'approval' }),
+      deployRow({ days: 1, chain: 2, position: 2, outcome: 'failed' }),
+    ];
+    const d = deployOf(rows);
+    expect(d.restore.unrestored).toBe(1);
+    expect(d.restore.median).toMatchObject({ status: 'ok', n: 10, value: 5.5 * HOUR_MS });
+    // Nine forward `ok`s and eleven failures reached the stage; the ninth `ok` is followed by the
+    // tenth failure's rollback before any forward `ok`, so it counts as failed too.
+    expect(d.changeFailure).toMatchObject({ reached: 9 + 11, failed: 12, rolledBack: 1 });
+  });
+
+  it('leaves out rows outside the 13 weeks, and other tags, and shows no deploy view without deploy rows', () => {
+    const old = deployRow({ days: 92, chain: 1, position: 1 });
+    const smoke = { ...deployRow({ days: 2, chain: 1, position: 1 }), tag: 'smoke' };
+    const d = deployOf([old, smoke]);
+    expect(d.rows).toEqual({ production: 0, preProduction: 0, notRun: 1, unreadable: 0 });
+    expect(d.frequency.median).toMatchObject({ status: 'ok', value: 0 });
+    expect(views(risingRows({ S: 12, M: 12, L: 12, XL: 12 })).deploy).toBeNull();
+    expect(renderViews(views(risingRows({ S: 12, M: 12, L: 12, XL: 12 }))).join('\n')).not.toMatch(/Deploys to production/);
+  });
+
+  it('prints the four on production, with what they can\'t see', () => {
+    const text = renderViews(views(history(3))).join('\n');
+    expect(text).toMatch(/### Deploys to production, 2026-07-11 to 2026-10-10/);
+    expect(text).toMatch(/\| Deployment frequency \| 2 a week /);
+    expect(text).toMatch(/\| Change-failure rate \| 10\.7% /);
+    expect(text).toMatch(/3 of 28 forward deploys/);
+    expect(text).toMatch(/\| Time to restore \| not enough data \(2\) /);
+    expect(text).toMatch(/\| Release lead time \| 3\.0 h /);
+    expect(text).toMatch(/Pre-production rows count in none of these: 58 in the span/);
+    expect(text).toMatch(/What they can't see: a production fault found days later and fixed forward/);
+  });
+});
+
 describe('kanon metrics report prints the views', () => {
   it('takes --windows, and prints the views after the headline, in Markdown and JSON', async () => {
     expect(parseReportArgs(['--rows', 'a', '--windows', '3']).windows).toBe(3);

@@ -98,7 +98,7 @@ kanon metrics report --rows runs-and-items.json --windows 12           # a trend
 
 **The Overseer runs it every week** ([#668](https://github.com/yedeya-labs/kanon/issues/668), §6.4), for a repository that sends telemetry, where a workflow on the default branch calls Kanon's collector ([The Overseer's cost view](telemetry.md#the-overseers-cost-view)). The last step of the lane's `telemetry` job reads, from vM through the store's `GET /v1/rows/self` with GitHub's OIDC token, the repository's work-item partition and each lane's partition, over the store's thirteen months, and writes this Markdown, for the default 28 days to the run's time, to the job's summary. The rows stay in that step: no file, log line or artifact holds one. A partition it can't read withholds the whole report and says which, since a report missing a lane's cost or the work items would be wrong. The report never fails the job.
 
-**Its input** is the adopter's run rows and work-item rows, exported from the telemetry store with its reader role ([plan 0002](plans/0002-hosted-telemetry-store.md) §6), as a JSON array, JSON Lines, or a JSON object with a `rows` array. Give `--rows` once per file. Only `tag: run` rows count (§2.1). A row of another kind, or one missing what the report needs to place it (a time, a lane, a PR number, a fate), is counted as left out, never guessed at. The window ends at `--until` (00:00 UTC, not included; default now) and reaches back `--days` (default 28), by close date.
+**Its input** is the adopter's run rows and work-item rows, and its deploy rows for [the deploy views](#the-deploy-views), exported from the telemetry store with its reader role ([plan 0002](plans/0002-hosted-telemetry-store.md) §6), as a JSON array, JSON Lines, or a JSON object with a `rows` array. Give `--rows` once per file. Only `tag: run` rows count (§2.1). A row of another kind, or one missing what the report needs to place it (a time, a lane, a PR number, a fate), is counted as left out, never guessed at. The window ends at `--until` (00:00 UTC, not included; default now) and reaches back `--days` (default 28), by close date.
 
 **What it prints**, always together, per band (S, M, L, XL) and pooled, with the pooled cells' band mix:
 
@@ -137,6 +137,19 @@ kanon metrics report --rows runs-and-items.json --windows 12           # a trend
 
 **Exit codes:** 0 the report was made (a cell with too little data or a pooled view is not a failure); 2 a usage error; 3 a rows file that can't be read or isn't JSON rows. The message names the file, never its content.
 
+### The deploy views
+
+[Plan 0010](plans/0010-deployment-lane.md) §11 (decision 12) adds four views from the deploy lane's rows ([§10](plans/0010-deployment-lane.md#10-the-deploy-row)), computed in `scripts/metrics/indicators.mjs` (`deployMetricsOf`) and printed after the A/B view as **Deploys to production**. They read the deploy rows with `tag: run` and `role: production`: the last environment of the adopter's declared chain, whatever its length, so a one-environment adopter's every row counts. Production is chosen by `role`, never by `position`, which is 1 on a chain of one and 3 on a chain of three. **Pre-production rows count in none of the four**; how many there were in the span is printed beside them. They cover the 13 weeks that end at `--until`, by each row's `recorded_at` (the end of its environment's job), whatever `--days` and `--windows` say. A report given no deploy row prints no deploy view.
+
+| View | What it is | Minimum |
+|---|---|---|
+| Deployment frequency | Forward deploys a week: production rows `ok` and not `rollback`, counted per week, the median over the 13 weeks (a week without one counts as 0). The weekly counts are printed beside it. | the 13 weeks |
+| Change-failure rate | Of the forward production rows that reached the deploy stage (`ok`, `failed` at `deploy`, `smoke_failed`), the share that are `failed` or `smoke_failed`, or `ok` and followed by a rollback row before the next forward `ok`. A rollback row is a restore, not a change, so it is not in the share. Wilson interval. | 20 |
+| Time to restore | From each production row `failed` at `deploy` or `smoke_failed` to the next `ok` production row, a rollback's included, the median. A failure with no `ok` after it is counted as not restored. | 10 |
+| Release lead time | `since_release_ms` of the forward `ok` production rows, the median: from the release's publication to its deploy to production, including the time in the pre-production environments and waiting for production's reviewer. | 10 |
+
+**What they can't see:** a production fault found days later and fixed forward, with no rollback and no failed smoke check. A deploy row carries no commit, so it can't be joined to the reverts and linked fixes the escape rate counts; the view says so under its table. The hosted aggregate stores deploy rows and publishes no deploy figure across adopters, so the public metrics page shows none.
+
 ### Its JSON output
 
 `--json` prints one document, `kanon-metrics-report/v1`, following [the convention](cli-json.md):
@@ -159,6 +172,7 @@ kanon metrics report --rows runs-and-items.json --windows 12           # a trend
 | `trend` | array | One entry per window, oldest first: `window`, `cost` (`median`, `p90`), `yield`, `escape` (`d30`, `d90`), `approval`, `correction` (each an estimate), `bandMix` and `versionsIntroduced`. |
 | `byVersion` | object | `minimum`, `versions` (each `version`, `items` and the trend's cells), `fewer` (`version`, `items`) and `unversioned`. |
 | `ab` | object | `margins` (`yield`, `escape30`) and `lanes`: each `lane`, `old` and `new` (`fingerprint`, `firstRun`, `lastRun`, `items`, `cost`, `yield`, `escape.rate`), `mixed`, `costAtEqualSize` (`{ "ok": true, "n", "pct", "loPct", "hiPct" }` or `{ "ok": false, "reason" }`), `yieldDifference` (`{ "status": "ok", "value", "low", "high" }`, `not-enough-data`, or `{ "status": "no-spend", "n" }` when an arm's delivery runs cost nothing, so yield has no value) and `escapeDifference` (`{ "status": "ok", "value", "low", "high" }` or `not-enough-data`), and `verdict`: `win`, `cheaper-quality-not-shown`, `not-shown-cheaper` or `not-enough-data`. |
+| `deploy` | object or null | [The deploy views](#the-deploy-views), null when no row is a deploy row: `window` (`from`, `until`, `weeks`); `rows` (`production` and `preProduction` in the span, and the deploy rows that are `notRun` or `unreadable`); `frequency` (`perWeek`, the 13 weekly counts, oldest first, and `median`); `changeFailure` (`rate`, `reached`, `failed`, `rolledBack`); `restore` (`median`, in milliseconds, and `unrestored`); `leadTime` (`median`, in milliseconds, and `withoutLeadTime`, forward `ok` rows without `since_release_ms`). |
 | `bootstrap` | object | `resamples` and `seed`. |
 
 `cells` holds `S`, `M`, `L`, `XL` in the banded view only, `pooled` always with its `bandMix`, and, for yield, `noPr`. Each estimate is `{ "status": "ok", "n", "value", "low", "high" }`, `{ "status": "not-enough-data", "n", "minimum" }` or, for a yield with no spend, `{ "status": "no-spend", "n" }`. Dollars and shares are rounded to four decimals.
