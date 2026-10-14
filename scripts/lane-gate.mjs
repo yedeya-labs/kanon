@@ -18,6 +18,9 @@
 //                            ticks on it (plan 0004 step 8): an issue a merge closes is closed
 //                            by whoever merged, and one closed by hand by whoever closed it.
 //   pull_request `opened`    whoever opened it, `sender`, checked the same way.
+//   issues `opened`          whoever opened it, `sender`, checked the same way. The issue
+//                            backstop runs on it (kanon#768), so an issue opened by someone
+//                            without triage access is refused and gets no bucket from it.
 //   pull_request_target      as `pull_request`: the review lane's label trigger runs the base
 //                            branch's copy of its caller, with the same payload. EXCEPT
 //                            `closed`, which a lane acts on only as a MERGE (the Overseer's
@@ -150,7 +153,7 @@ export function triggeringActor(eventName, event, env) {
     case 'pull_request':
     case 'pull_request_target':
       if (event.action === 'labeled') return found(event.sender?.login, 'user who applied the label');
-      if (eventName !== 'issues' && event.action === 'opened') return found(event.sender?.login, 'user who opened it');
+      if (event.action === 'opened') return found(event.sender?.login, 'user who opened it');
       if (event.action === 'closed') {
         // A `pull_request_target` close is acted on only as a merge, and judged by who merged it.
         if (eventName === 'pull_request_target') {

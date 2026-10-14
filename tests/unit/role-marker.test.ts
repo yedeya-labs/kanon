@@ -195,6 +195,7 @@ describe('the role the agent speaks as (agent-setup)', () => {
 const SIGNED: Record<string, string> = {
   'scripts/merge-gate.mjs': 'Merger',
   'scripts/dispatch-sweep.mjs': 'Lead',
+  'scripts/issue-backstop.mjs': 'Lead',
   'scripts/lead-reconcile.mjs': 'Lead',
   'scripts/overseer-file.mjs': 'Overseer',
   'scripts/telemetry-file.mjs': 'Explorer',

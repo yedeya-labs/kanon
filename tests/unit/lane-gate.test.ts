@@ -239,7 +239,11 @@ describe('who the actor is', () => {
       .toEqual({ actor: { login: 'labeller', source: 'user who applied the label' } });
     expect(triggeringActor('pull_request_target', { action: 'opened', sender: { login: 'opener' } }, env))
       .toEqual({ actor: { login: 'opener', source: 'user who opened it' } });
-    expect(triggeringActor('issues', { action: 'opened', sender: { login: 'opener' } }, env)).toHaveProperty('refuse');
+  });
+  it('an opened issue: whoever opened it, as for a pull request (the issue backstop, kanon#768)', () => {
+    expect(triggeringActor('issues', { action: 'opened', sender: { login: 'opener' } }, env))
+      .toEqual({ actor: { login: 'opener', source: 'user who opened it' } });
+    expect(triggeringActor('issues', { action: 'opened' }, env)).toHaveProperty('refuse');
   });
   it('a finished workflow: whoever pushed the commit it ran on, never the sender', () => {
     expect(triggeringActor('workflow_run', { workflow_run: { triggering_actor: { login: 'pusher' }, actor: { login: 'a' } }, sender: { login: 's' } }, env))

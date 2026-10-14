@@ -206,6 +206,32 @@
         "ANTHROPIC_API_KEY"
       ]
     },
+    "agent-issue-backstop": {
+      "identities": [
+        "author"
+      ],
+      "secrets": [
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "issue_number": {
+          "type": "string",
+          "description": "Issue to apply the backstop to"
+        },
+        "apply": {
+          "type": "string",
+          "description": "'true' to actually write on a dispatch (anything else = dry run)"
+        }
+      },
+      "grant": {
+        "contents": "read"
+      },
+      "reads": [],
+      "readsWorkflows": [],
+      "hooks": [],
+      "qaStore": false
+    },
     "agent-lead-reconcile": {
       "identities": [
         "author"
@@ -966,6 +992,21 @@
         ],
         "when": "When you file bugs for the agents to fix, or with explore or the code audit, whose findings it triages."
       },
+      "agent-issue-backstop": {
+        "name": "Issue backstop",
+        "group": "triage",
+        "does": "Gives an issue opened with no milestone a bucket milestone (`K-WORK-1`), and flags a reviewer follow-up filed with no severity or, at a gate severity, without `gate-candidate`.",
+        "needs": [
+          "the two bucket milestones, which `kanon milestones` creates"
+        ],
+        "cost": "No model; a short job per opened issue.",
+        "minutes": "Not measured: the lane is new, and Kanon doesn't call it yet; it runs once per opened issue, with no model, for well under a minute.",
+        "recommend": [
+          "agent-implement",
+          "agent-triage"
+        ],
+        "when": "With implement or triage, once the Author App is installed: an issue filed by hand or through an issue form otherwise stays bare, and drops out of every progress report (`K-WORK-1`)."
+      },
       "agent-lead": {
         "name": "Lead, brief",
         "group": "lead",
@@ -1150,6 +1191,7 @@
         "agent-triage",
         "agent-rebase",
         "agent-dispatch-sweep",
+        "agent-issue-backstop",
         "agent-merge-reconcile"
       ],
       "conditional": {},
@@ -1178,6 +1220,7 @@
         "agent-triage",
         "agent-rebase",
         "agent-dispatch-sweep",
+        "agent-issue-backstop",
         "agent-merge-reconcile",
         "agent-lead",
         "agent-lead-revise",

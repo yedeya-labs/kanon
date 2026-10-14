@@ -24,7 +24,7 @@ export const LANES = readdirSync(WORKFLOWS)
   .sort();
 
 /** The triggers each lane's caller holds (docs/lanes.md), as the event the gate sees. */
-export type Trigger = 'review' | 'issue-label' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-merged' | 'schedule';
+export type Trigger = 'review' | 'issue-label' | 'issue-opened' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-merged' | 'schedule';
 export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-implement-revise.yml': ['review', 'pr-label', 'dispatch'],
   'agent-implement.yml': ['issue-label', 'dispatch'],
@@ -43,6 +43,8 @@ export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-weekly-digest.yml': ['schedule', 'dispatch'],
   'agent-explore.yml': ['schedule', 'dispatch'],
   'agent-dispatch-sweep.yml': ['schedule', 'dispatch'],
+  // kanon#768: an opened issue, judged by who opened it.
+  'agent-issue-backstop.yml': ['issue-opened', 'dispatch'],
   'agent-code-audit.yml': ['schedule', 'dispatch'],
   'agent-explore-telemetry.yml': ['schedule', 'dispatch'],
   // The runtime-version trigger (kanon#423): a merged pull request, judged by who merged it.
@@ -230,6 +232,8 @@ export const eventFor = (trigger: Trigger, actor: Actor): { name: string; payloa
       return { name: 'pull_request_review', payload: { action: 'submitted', review: { state: 'changes_requested', user, author_association: actor.association ?? 'NONE' } }, env: {} };
     case 'issue-label':
       return { name: 'issues', payload: { action: 'labeled', sender: user }, env: {} };
+    case 'issue-opened':
+      return { name: 'issues', payload: { action: 'opened', issue: { number: 7 }, sender: user }, env: {} };
     case 'pr-label':
       return { name: 'pull_request', payload: { action: 'labeled', sender: user }, env: {} };
     case 'merged':

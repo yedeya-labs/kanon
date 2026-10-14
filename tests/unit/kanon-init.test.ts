@@ -1764,7 +1764,7 @@ describe('kanon init and the lane catalogue (#428)', () => {
 
   it('recommends what the repository calls already, and what is recommended with it', () => {
     const lanes = laneCatalogue(REQ, ['agent-implement']).flatMap((g) => g.lanes);
-    expect(lanes.filter((l) => l.recommended).map((l) => l.lane).sort()).toEqual(['agent-dispatch-sweep', 'agent-implement', 'agent-implement-revise', 'agent-overseer', 'agent-rebase', 'agent-review']);
+    expect(lanes.filter((l) => l.recommended).map((l) => l.lane).sort()).toEqual(['agent-dispatch-sweep', 'agent-implement', 'agent-implement-revise', 'agent-issue-backstop', 'agent-overseer', 'agent-rebase', 'agent-review']);
     expect(lanes.filter((l) => l.installed).map((l) => l.lane)).toEqual(['agent-implement']);
     // Transitively: the Lead recommends the reconciler, which recommends verify-acs and the daily digest.
     const lead = laneCatalogue(REQ, ['agent-lead']).flatMap((g) => g.lanes).filter((l) => l.recommended).map((l) => l.lane);
