@@ -56,7 +56,7 @@ describe('kanon doctor on a healthy installation', () => {
     await run(dir, github, ['--json']);
     expect(github.calls.length).toBeGreaterThan(5);
     for (const c of github.calls) {
-      expect(c[0] === 'api' ? !c.includes('-X') && !c.includes('--method') && !c.includes('-f') && !c.includes('-F') : (c[0] === 'secret' || c[0] === 'variable') && c[1] === 'list', c.join(' ')).toBe(true);
+      expect(c[0] === 'api' ? !c.includes('-X') && !c.includes('--method') && !c.includes('-f') && !c.includes('-F') : (c[0] === 'secret' || c[0] === 'variable' || c[0] === 'run') && c[1] === 'list', c.join(' ')).toBe(true);
     }
     // The one body it sends is the default branch's workflows (#418): a GraphQL query, never a mutation.
     expect(github.inputs.length).toBeGreaterThan(0);
@@ -804,7 +804,8 @@ describe("kanon doctor and the QA store's secrets (#433)", () => {
     expect(r.json.findings[0].fix.commands).toEqual(['      QA_STORE_BUCKET: ${{ secrets.QA_STORE_BUCKET }}', '      QA_STORE_ROLE_ARN: ${{ secrets.QA_STORE_ROLE_ARN }}']);
     put(dir, { [CALLER]: readFileSync(join(dir, CALLER), 'utf8').replace(/^ {6}CLAUDE_CODE_OAUTH_TOKEN: .*\n/m, '') });
     const missing = await run(dir, fakeGitHub(), ['--json']);
-    expect(ids(missing)).toEqual([`caller.secret-missing ${CALLER}`, `qa-store.unmapped ${CALLER}`]);
+    // The token is one of the lane's pair of Claude credentials (plan 0009 §11): a caller that maps neither is caller.claude-none.
+    expect(ids(missing)).toEqual([`caller.claude-none ${CALLER}`, `qa-store.unmapped ${CALLER}`]);
   });
 
   it('lists its items, so a waiver names the ones it keeps and the rest stay a finding (#406, #464)', async () => {

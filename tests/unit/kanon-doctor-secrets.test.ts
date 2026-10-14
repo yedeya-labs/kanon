@@ -5,6 +5,7 @@ import { backlogFeedNote, doctor, EXIT, WAIVER_LABEL } from '../../cli/doctor.mj
 import { checkout, clone, fakeGitHub, healthyFiles, identitiesOf, ids, LANES, NEXT, PINNED, put, registerText, releaseBy, releaserFiles, releaserOn, REPO, REQ, run, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 import { KEYS_HELP } from '../../cli/apps.mjs';
+import { renderNotice } from '../../actions/agent-classify/classify-agent-result.mjs';
 
 /**
  * `kanon doctor` on the secrets a workflow maps (#414) and a caller maps at the checked release (#415),
@@ -404,5 +405,232 @@ describe("kanon doctor and the backlog feeder's valve (#609)", () => {
     const out: string[] = [];
     await doctor(['--dir', checkout(withSweep()), '--json'], { gh: fakeGitHub().gh, env: {}, out: (l: string) => out.push(l), err: () => {}, requirements: () => old, release: () => PINNED });
     expect(JSON.parse(out.join('\n')).notes.filter((n: string) => n.includes('backlog feeder'))).toEqual([]);
+  });
+});
+
+// Plan 0009 §11 (step A4): the Claude credential a lane runs on. Each model lane takes one of a
+// pair, requirements.json's `claude`; doctor reads the secrets' names and dates, never a value.
+describe('kanon doctor and the Claude credential (plan 0009 §11)', () => {
+  const TOKEN = 'CLAUDE_CODE_OAUTH_TOKEN';
+  const KEY = 'ANTHROPIC_API_KEY';
+  const DAY = 86_400_000;
+  const NOW = Date.parse('2026-10-13T12:00:00Z');
+  const REVIEW = '.github/workflows/agent-review.yml';
+  const AUDIT = '.github/workflows/agent-code-audit.yml';
+  const line = (n: string) => `      ${n}: \${{ secrets.${n} }}\n`;
+  /** The healthy installation with each named caller's token line swapped, removed, or doubled. */
+  const files = (change: Record<string, 'key' | 'none' | 'both'> = {}) => {
+    const f = healthyFiles();
+    for (const [file, how] of Object.entries(change)) {
+      f[file] = f[file]!.replace(line(TOKEN), how === 'key' ? line(KEY) : how === 'none' ? '' : line(TOKEN) + line(KEY));
+    }
+    return f;
+  };
+  const held = (...extra: string[]) => new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...extra]);
+  const claudeIds = (r: Result) => ids(r).filter((x: string) => /^(caller\.claude|claude\.|secret\.)/.test(x));
+  const find = (r: Result, id: string) => r.json.findings.find((f: { id: string }) => f.id === id);
+  const at = (days: number) => new Date(NOW - days * DAY).toISOString();
+
+  it('reads the pair from requirements.json for every lane that runs a model', () => {
+    expect(REQ.lanes['agent-review']).toMatchObject({ claude: [TOKEN, KEY] });
+    expect((REQ.lanes['agent-merge'] as { claude?: string[] }).claude).toBeUndefined();
+  });
+
+  it('finds nothing on a healthy installation on the token (the baseline)', async () => {
+    const r = await run(checkout(files()), fakeGitHub(), ['--json'], NOW);
+    expect(r.status, r.out).toBe(EXIT.healthy);
+    expect(claudeIds(r)).toEqual([]);
+  });
+
+  it('reports a caller that maps both credentials as caller.claude-both, and only there', async () => {
+    const r = await run(checkout(files({ [REVIEW]: 'both' })), fakeGitHub({ secrets: held(KEY) }), ['--json'], NOW);
+    expect(r.status, r.out).toBe(EXIT.findings);
+    expect(claudeIds(r)).toEqual([`caller.claude-both ${REVIEW}`]);
+    expect(find(r, 'caller.claude-both')).toMatchObject({ category: 'caller', blocking: true });
+    expect(find(r, 'caller.claude-both').fix.commands).toEqual([line(TOKEN).trimEnd(), line(KEY).trimEnd()]);
+  });
+
+  it('reports a caller that maps neither as caller.claude-none, and only there, never as a missing secret of the caller', async () => {
+    const r = await run(checkout(files({ [REVIEW]: 'none' })), fakeGitHub(), ['--json'], NOW);
+    expect(r.status, r.out).toBe(EXIT.findings);
+    expect(claudeIds(r)).toEqual([`caller.claude-none ${REVIEW}`]);
+    expect(ids(r)).not.toContain(`caller.secret-missing ${REVIEW}`);
+    expect(find(r, 'caller.claude-none').message).toContain(`maps neither ${TOKEN} nor ${KEY}`);
+  });
+
+  it('notes callers on different credentials as claude.mixed, naming the lanes, without blocking', async () => {
+    const r = await run(checkout(files({ [REVIEW]: 'key' })), fakeGitHub({ secrets: held(KEY) }), ['--json'], NOW);
+    expect(r.status, r.out).toBe(EXIT.healthy);
+    expect(claudeIds(r)).toEqual(['claude.mixed .github/workflows']);
+    expect(find(r, 'claude.mixed').message).toContain(`agent-review on ${KEY}; agent-code-audit on ${TOKEN}`);
+    // A caller on the key is not a stale secret of the caller's.
+    expect(ids(r)).not.toContain(`caller.secret-stale ${REVIEW}`);
+  });
+
+  it('asks for the key alone when every caller maps it, with the Console, and says organisation secrets are not counted', async () => {
+    const secrets = new Set([...held()].filter((n) => n !== TOKEN));
+    const r = await run(checkout(files({ [REVIEW]: 'key', [AUDIT]: 'key' })), fakeGitHub({ secrets }), ['--json'], NOW);
+    expect(r.status, r.out).toBe(EXIT.findings);
+    expect(claudeIds(r)).toEqual([`secret.missing ${REPO}`]);
+    const f = find(r, 'secret.missing');
+    expect(f.message).toMatch(new RegExp(`^lacks ${KEY}, which agent-code-audit, agent-review take`));
+    expect(f.message).toContain("an organisation secret shared with acme/widgets isn't counted");
+    expect(f.fix.text).toContain('Claude Console');
+    expect(f.fix.url).toMatch(/^https:\/\/console\.anthropic\.com\//);
+    expect(f.fix.commands).toEqual([`gh secret set ${KEY} -R ${REPO}`]);
+  });
+
+  it("names claude setup-token, and the switch to a key, in the token's secret.missing", async () => {
+    const secrets = new Set([...held()].filter((n) => n !== TOKEN));
+    const r = await run(checkout(files()), fakeGitHub({ secrets }), ['--json'], NOW);
+    expect(claudeIds(r)).toEqual([`secret.missing ${REPO}`]);
+    expect(find(r, 'secret.missing').fix.text).toContain('`claude setup-token`');
+    expect(find(r, 'secret.missing').fix.text).toContain('kanon init --claude-auth api-key');
+  });
+
+  it('lists the token as stale once every caller maps the key, after a week of green runs', async () => {
+    const r = await run(checkout(files({ [REVIEW]: 'key', [AUDIT]: 'key' })), fakeGitHub({ secrets: held(KEY) }), ['--json'], NOW);
+    expect(r.status, r.out).toBe(EXIT.healthy);
+    expect(claudeIds(r)).toEqual([`secret.stale ${REPO}`]);
+    const f = find(r, 'secret.stale');
+    expect(f.fix.commands).toEqual([`gh secret delete ${TOKEN} -R ${REPO}`]);
+    expect(f.fix.text).toContain('a week');
+  });
+
+  describe('claude.token-age', () => {
+    const aged = async (days: number, change: Record<string, 'key'> = {}) => {
+      const github = fakeGitHub({ secrets: Object.keys(change).length ? held(KEY) : held() });
+      github.st.secretDates[TOKEN] = at(days);
+      return run(checkout(files(change)), github, ['--json'], NOW);
+    };
+
+    it('says nothing at 335 days', async () => {
+      const r = await aged(335);
+      expect(r.status, r.out).toBe(EXIT.healthy);
+      expect(claudeIds(r)).toEqual([]);
+    });
+
+    it('is a note from day 336 to day 365, saying when the secret was updated, never created', async () => {
+      for (const days of [336, 365]) {
+        const r = await aged(days);
+        expect(r.status, r.out).toBe(EXIT.healthy);
+        expect(claudeIds(r)).toEqual([`claude.token-age ${REPO}`]);
+        const f = find(r, 'claude.token-age');
+        expect(f).toMatchObject({ category: 'secret', blocking: false });
+        expect(f.message).toContain(`${TOKEN} was last updated ${days} days ago`);
+        expect(f.message).not.toMatch(/created/i);
+        expect(f.message).toContain('renew it before day 365');
+        expect(f.fix.commands).toEqual(['claude setup-token', `gh secret set ${TOKEN} -R ${REPO}`]);
+      }
+    });
+
+    it('blocks from day 366: a subscription token lasts a year', async () => {
+      const r = await aged(366);
+      expect(r.status, r.out).toBe(EXIT.findings);
+      expect(claudeIds(r)).toEqual([`claude.token-age ${REPO}`]);
+      const f = find(r, 'claude.token-age');
+      expect(f.blocking).toBe(true);
+      expect(f.message).toContain('last updated 366 days ago');
+      expect(f.message).not.toMatch(/created/i);
+      expect(f.message).toContain('A subscription token lasts a year; this one is at least that old');
+    });
+
+    it('asks nothing of a token no caller maps any more', async () => {
+      const r = await aged(400, { [REVIEW]: 'key', [AUDIT]: 'key' });
+      expect(claudeIds(r)).toEqual([`secret.stale ${REPO}`]);
+    });
+  });
+
+  describe('claude.unreachable-runs', () => {
+    /**
+     * The annotation title GitHub stores for agent-classify's notice, built from the line it emits
+     * (`::error title=<title>::<body>`) by the runner's rule: the properties split on every `,`,
+     * and only `key=value` segments kept. Never doctor's own constant, so the two can disagree.
+     */
+    const notice = renderNotice('unavailable', 'no model');
+    const emitted = `::${notice.level} title=${notice.title}::${notice.body}`;
+    const properties = emitted.slice(emitted.indexOf(' ') + 1, emitted.indexOf('::', 2));
+    const STORED = properties.split(',').filter((p) => p.includes('=')).map((p) => p.slice(p.indexOf('=') + 1))[0]!;
+
+    it("looks for the notice's title as GitHub stores it, cut at its comma", () => {
+      expect(notice.title).toContain(',');
+      expect(STORED).toBe('the model was unreachable');
+    });
+    let next = 7000;
+    /** A run of the caller, whose `notices` failed jobs (one at least) each carry the given notice. */
+    const addRun = (github: ReturnType<typeof fakeGitHub>, file: string, o: { days?: number; notices?: number; conclusion?: string; title?: string } = {}) => {
+      const id = next++;
+      const notices = o.notices ?? 1;
+      (github.st.runs[file] ??= []).push({ databaseId: id, conclusion: o.conclusion ?? 'failure', createdAt: at(o.days ?? 1) });
+      github.st.runJobs[id] = Array.from({ length: Math.max(notices, 1) }, (_, i) => ({ id: id * 10 + i, name: `job ${i}`, conclusion: 'failure' }));
+      for (let i = 0; i < notices; i++) github.st.annotations[id * 10 + i] = [{ title: o.title ?? STORED, annotation_level: 'failure', message: '…' }];
+      return id;
+    };
+
+    it('notes two runs in 14 days that never reached the model, naming them and the three causes, without blocking', async () => {
+      const github = fakeGitHub();
+      const a = addRun(github, 'agent-review.yml', { days: 1 });
+      const b = addRun(github, 'agent-code-audit.yml', { days: 13 });
+      const r = await run(checkout(files()), github, ['--json'], NOW);
+      expect(r.status, r.out).toBe(EXIT.healthy);
+      expect(claudeIds(r)).toEqual([`claude.unreachable-runs ${REPO}`]);
+      const f = find(r, 'claude.unreachable-runs');
+      expect(f).toMatchObject({ category: 'secret', blocking: false });
+      expect(f.message).toContain(`${AUDIT} run ${b}`);
+      expect(f.message).toContain(`${REVIEW} run ${a}`);
+      expect(f.message).toContain("the Claude subscription's usage limit, an Anthropic outage, or a configuration fault");
+      expect(f.message).not.toMatch(/\bcap\b/i);
+      expect(f.fix.text).toContain(KEY);
+    });
+
+    it('needs two runs: one run, a second outside 14 days, another notice, or a green run is not enough', async () => {
+      for (const extra of [null, { days: 15 }, { title: 'something else' }, { conclusion: 'success' }]) {
+        const github = fakeGitHub();
+        addRun(github, 'agent-review.yml', { days: 2 });
+        if (extra) addRun(github, 'agent-review.yml', extra);
+        const r = await run(checkout(files()), github, ['--json'], NOW);
+        expect(claudeIds(r), JSON.stringify(extra)).toEqual([]);
+      }
+    });
+
+    it('counts one run once, however many of its jobs carry the notice', async () => {
+      const github = fakeGitHub();
+      addRun(github, 'agent-review.yml', { notices: 2 });
+      const r = await run(checkout(files()), github, ['--json'], NOW);
+      expect(claudeIds(r)).toEqual([]);
+    });
+
+    it('reads no runs of a caller on the key', async () => {
+      const github = fakeGitHub({ secrets: held(KEY) });
+      addRun(github, 'agent-review.yml');
+      addRun(github, 'agent-review.yml');
+      const r = await run(checkout(files({ [REVIEW]: 'key' })), github, ['--json'], NOW);
+      expect(claudeIds(r)).toEqual(['claude.mixed .github/workflows']);
+      expect(github.calls.filter((c) => c[0] === 'run').map((c) => c[c.indexOf('--workflow') + 1])).toEqual(['agent-code-audit.yml']);
+    });
+
+    it("is unchecked when the token can't list the runs", async () => {
+      const github = fakeGitHub();
+      github.st.runsRefused = 'HTTP 403: Resource not accessible by personal access token';
+      const r = await run(checkout(files()), github, ['--json'], NOW);
+      expect(r.status, r.out).toBe(EXIT.incomplete);
+      expect(r.json.unchecked.map((u: { check: string; subject: string }) => `${u.check} ${u.subject}`)).toEqual([`unreachable-runs ${AUDIT}`, `unreachable-runs ${REVIEW}`]);
+    });
+  });
+
+  it('prints no value: a token-shaped secret name in the listing never reaches the output', async () => {
+    const shaped = `sk-ant-oat01-${'Q'.repeat(60)}`;
+    const github = fakeGitHub({ secrets: held(shaped) });
+    github.st.secretDates[TOKEN] = at(366);
+    github.st.secretDates[shaped] = at(400);
+    const dir = checkout(files());
+    const json = await run(dir, github, ['--json'], NOW);
+    const prose = await run(dir, github, [], NOW);
+    expect(claudeIds(json)).toEqual([`claude.token-age ${REPO}`]);
+    for (const text of [json.out, prose.out, prose.err]) {
+      expect(text).not.toContain('sk-ant');
+      expect(text).not.toContain('Q'.repeat(20));
+    }
+    expect(github.calls).toContainEqual(['secret', 'list', '-R', REPO, '--json', 'name,updatedAt']);
   });
 });
