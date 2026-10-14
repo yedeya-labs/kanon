@@ -136,7 +136,7 @@ describe('the agent\'s job: no cloud credentials, a token that reads, and someth
 
   it('runs only when the aggregate holds something, and only on the attempt that read it', () => {
     expect(wf.jobs.explore!.if).toBe("needs.aggregate.outputs.empty == 'false' && needs.aggregate.outputs.attempt == github.run_attempt");
-    expect(handedIn(LANE_FILE, 'explore', 'artifact-name')).toBe('kanon-telemetry-aggregate-${{ github.run_id }}-${{ github.run_attempt }}');
+    expect(handedIn(LANE_FILE, 'explore', 'artifact-name')).toBe('kanon-explore-aggregate-${{ github.run_id }}-${{ github.run_attempt }}');
     expect(byId('agent') ? steps.find((s) => s.uses?.startsWith('actions/download-artifact@'))!.with : null).toEqual({ name: '${{ inputs.artifact-name }}', path: 'qa-telemetry' });
   });
 
@@ -204,7 +204,7 @@ describe('the file job: no agent, and the only token that writes', () => {
   it('judges the findings against the aggregate the read job uploaded, downloaded outside a workspace', () => {
     const downloads = fsteps.filter((s) => s.uses?.startsWith('actions/download-artifact@')).map((s) => s.with);
     expect(downloads).toEqual([
-      { name: 'kanon-telemetry-aggregate-${{ github.run_id }}-${{ github.run_attempt }}', path: '${{ runner.temp }}/aggregate' },
+      { name: 'kanon-explore-aggregate-${{ github.run_id }}-${{ github.run_attempt }}', path: '${{ runner.temp }}/aggregate' },
       { name: 'qa-telemetry-findings-${{ github.run_id }}-${{ github.run_attempt }}', path: '${{ runner.temp }}/report' },
     ]);
     const last = fsteps.find((x) => x.id === 'file')!;

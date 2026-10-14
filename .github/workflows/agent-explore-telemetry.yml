@@ -236,12 +236,13 @@ jobs:
           KANON_AGGREGATE_URL: ${{ vars.KANON_AGGREGATE_URL }}
           OUT: ${{ runner.temp }}/aggregate
         run: node "$KANON/scripts/aggregate-read.mjs"
-      # One day: the agent's job and the filing job read it within the run.
+      # One day: the agent's job and the filing job read it within the run. Its name stays outside
+      # the collector's `kanon-telemetry-` prefix, which marks a lane's run row (kanon#826).
       - name: Upload the aggregate for the agent and the filing step
         id: upload
         uses: actions/upload-artifact@v7
         with:
-          name: kanon-telemetry-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          name: kanon-explore-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/aggregate/aggregate.json
           retention-days: 1
           if-no-files-found: error
@@ -261,7 +262,7 @@ jobs:
       actions: read
     uses: $/.github/workflows/explore-telemetry-run.yml
     with:
-      artifact-name: kanon-telemetry-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+      artifact-name: kanon-explore-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
     secrets:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
@@ -300,7 +301,7 @@ jobs:
       - name: Download the aggregate
         uses: actions/download-artifact@v8
         with:
-          name: kanon-telemetry-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          name: kanon-explore-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/aggregate
 
       - name: Download the agent's findings
