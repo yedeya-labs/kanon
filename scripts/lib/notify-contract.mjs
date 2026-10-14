@@ -416,12 +416,14 @@ function spanEnd(s, i, mark) {
 
 /**
  * Parse one line of Kanon text into nodes. A span never crosses a line, and anything that doesn't
- * form a construct is literal text.
+ * form a construct is literal text. Exported for a hook that renders Kanon text into its own
+ * system's markup (the Slack hook, `actions/notify/slack/slack.mjs`), so the subset is parsed in
+ * one place: a `text` node holds its characters with every escape resolved.
  * @param {string} s
  * @param {{ strong?: boolean, em?: boolean, link?: boolean, code?: boolean }} [allow]
  * @returns {Node[]}
  */
-function parseInline(s, allow = { strong: true, em: true, link: true, code: true }) {
+export function parseInline(s, allow = { strong: true, em: true, link: true, code: true }) {
   /** @type {Node[]} */
   const out = [];
   let text = '';
@@ -468,7 +470,7 @@ function parseInline(s, allow = { strong: true, em: true, link: true, code: true
 }
 
 /** The lines of a text, with `\r\n` and a lone `\r` read as a line break. */
-const linesOf = (/** @type {string} */ s) => s.split(/\r\n|\r|\n/);
+export const linesOf = (/** @type {string} */ s) => s.split(/\r\n|\r|\n/);
 
 /**
  * Nodes back to Kanon text, canonically: every markup character outside a construct is escaped.

@@ -39,6 +39,12 @@ const END = /x-release-please-end/;
 const markdown = execFileSync('git', ['ls-files', '*.md'], { cwd: root, encoding: 'utf8' })
   .split('\n')
   .filter((f) => f && !HISTORY.test(f));
+// The hook files `kanon init` writes into an adopter's repository (plan 0011 §7.1): YAML, not
+// Markdown, but each pins Kanon's prebuilt hook action by release, and `init` copies the line as
+// it is, so a release rewrites it like any reference an adopter copies (its inline marker).
+const hookFiles = execFileSync('git', ['ls-files', 'actions/notify/hooks/*.yml'], { cwd: root, encoding: 'utf8' })
+  .split('\n')
+  .filter(Boolean);
 
 type Line = { at: string; text: string; refs: string[]; covered: boolean };
 
@@ -56,13 +62,14 @@ const scan = (file: string, text: string): Line[] => {
   });
 };
 
-const docs = markdown.filter((f) => !FORM_ONLY.test(f)).map((file) => ({ file, lines: scan(file, read(file)) }));
+const docs = [...markdown.filter((f) => !FORM_ONLY.test(f)), ...hookFiles].map((file) => ({ file, lines: scan(file, read(file)) }));
 const withRefs = docs.filter((d) => d.lines.some((l) => l.refs.length > 0));
 
 describe('K-ADOPT-11 the version references an adopter copies stay current', () => {
   it('finds the references, so the checks below are not vacuous', () => {
     expect(withRefs.map((d) => d.file)).toContain('README.md');
     expect(withRefs.filter((d) => d.file.startsWith('actions/')).length).toBeGreaterThanOrEqual(8);
+    expect(withRefs.map((d) => d.file)).toContain('actions/notify/hooks/slack.yml');
   });
 
   it("every reference names package.json's version", () => {
