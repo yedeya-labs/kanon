@@ -62,7 +62,7 @@ import {
 } from './project-closure.mjs';
 import { appLogin, appPersona } from './app-register.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
-import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/reference-deploy.mjs';
+import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/deploy-declaration.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { laneCallerFile } from './lib/lane-caller.mjs';
 import { beforeApply, taxonomyLabel } from './lib/labels.mjs';
@@ -1590,16 +1590,17 @@ export const DEPLOY_RUN_WINDOW = 200;
  * this takes an `io` seam.
  *
  * WHICH WORKFLOW, AND WHICH JOB, THE ADOPTION RECORD SAYS (plan 0004 P6, `K-PROJ-11`).
- * `declared` reads the reference environment's deploy from the record on the default
- * branch, and throws `DeclarationError` by name when it is missing or malformed: the
- * tick reports that project as failed, and no project can close without one. It is read
+ * `declared` reads the reference environment's deploy from the record's `## Deploy` section
+ * on the default branch (plan 0010 D2, `scripts/lib/deploy-declaration.mjs`), and throws
+ * `DeclarationError` by name when it is missing or malformed, or still under `## Choices`:
+ * the tick reports that project as failed, and no project can close without one. It is read
  * only when some merge closed an issue, because `nothing-to-deploy` looks for no run.
  * Every verdict after the read carries the declaration's `environment`, `workflow` and
  * `job`, so the messages name what was looked for.
  *
  * @param {object[]} issues
  * @param {{json?: (args: string[]) => any, text?: (args: string[]) => string,
- *   declared?: () => import('./lib/reference-deploy.mjs').ReferenceDeploy}} [io]
+ *   declared?: () => import('./lib/deploy-declaration.mjs').ReferenceDeploy}} [io]
  */
 export function readDeploy(issues, { json = ghJson, text = gh, declared = () => readReferenceDeployFrom(REPO) } = {}) {
   const byIssue = closingMergesByIssue(issues, { json });

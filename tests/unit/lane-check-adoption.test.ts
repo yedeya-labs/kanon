@@ -12,7 +12,9 @@ import { adopter, check, red, laneCheck } from './helpers/lane-check.js';
 laneCheck(() => {
   describe("the adoption record's reference-deploy declaration, read by the library's reader (K-LAYOUT-10, plan 0004 P6)", () => {
     const REC = 'docs/qa/adoption.md';
-    const DECLARED = '## Choices\n\n- **Overseer:** `not installed`\n- **Reference environment:** `preview`\n- **Reference deploy workflow:** `deploy-preview.yml`\n- **Reference deploy job:** `ship`\n';
+    const BULLETS = '- **Reference environment:** `preview`\n- **Reference deploy workflow:** `deploy-preview.yml`\n- **Reference deploy job:** `ship`\n';
+    // In `## Deploy` since plan 0010's D2, read by `scripts/lib/deploy-declaration.mjs`.
+    const DECLARED = `## Choices\n\n- **Overseer:** \`not installed\`\n\n## Deploy\n\n${BULLETS}`;
     const passes = (body: string | null) => {
       const t = adopter();
       if (body !== null) t.write(REC, body);
@@ -31,7 +33,13 @@ laneCheck(() => {
         /adoption\.md,title=lane-check::docs\/qa\/adoption\.md declares the reference environment's deploy without `Reference deploy job`: declare all three, or none \(K-LAYOUT-10\)/));
     it('refuses a workflow written as a path', () =>
       red((t) => t.write(REC, `# Adoption record\n\n${DECLARED.replace('`deploy-preview.yml`', '`.github/workflows/deploy-preview.yml`')}`),
-        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:7: `\.github\/workflows\/deploy-preview\.yml` isn't a workflow file name/));
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:10: `\.github\/workflows\/deploy-preview\.yml` isn't a workflow file name/));
+    it('refuses the bullets left under `## Choices`, naming the line and the move (plan 0010, follow-up decision 1)', () =>
+      red((t) => t.write(REC, `# Adoption record\n\n## Choices\n\n- **Overseer:** \`not installed\`\n${BULLETS}`),
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:6 declares `Reference environment` under `## Choices`, but the reference deploy is read from `## Deploy` only \(plan 0010\): move its three bullets/));
+    it('refuses an environment list that names one twice, with the parser\'s message (plan 0010 D2)', () =>
+      red((t) => t.write(REC, `# Adoption record\n\n${DECLARED}- **Environments:** \`preview\`, \`preview\`\n`),
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:12: `Environments` names `preview` twice/));
   });
 
   describe("the adoption record's weekly digest audience (K-LAYOUT-10, kanon#218)", () => {
@@ -39,7 +47,7 @@ laneCheck(() => {
     const AUDIENCE = '- **Weekly digest audience:** a co-founder tracking runway\n';
     it('passes a declared audience beside the reference deploy', () => {
       const t = adopter();
-      t.write(REC, `# Adoption record\n\n## Choices\n\n${AUDIENCE}- **Overseer:** \`not installed\`\n- **Reference environment:** \`preview\`\n- **Reference deploy workflow:** \`deploy-preview.yml\`\n- **Reference deploy job:** \`ship\`\n`);
+      t.write(REC, `# Adoption record\n\n## Choices\n\n${AUDIENCE}- **Overseer:** \`not installed\`\n\n## Deploy\n\n- **Reference environment:** \`preview\`\n- **Reference deploy workflow:** \`deploy-preview.yml\`\n- **Reference deploy job:** \`ship\`\n`);
       const r = check(t);
       expect(r.status, r.out).toBe(0);
     });

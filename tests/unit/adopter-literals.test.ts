@@ -59,7 +59,7 @@ const LITERALS: ReadonlyArray<readonly [string, RegExp]> = [
 const ALLOWED: ReadonlyArray<readonly [string, string, string]> = [
   ['scripts/lib/protocol-spellings.mjs', 'its persona names',
     "the legacy spellings of Kanon's protocol markers, read so a marker written before the rename still parses"],
-  ['scripts/lib/reference-deploy.mjs', 'its environment name',
+  ['scripts/lib/deploy-declaration.mjs', 'its environment name',
     "the example the declaration's error message shows (`K-LAYOUT-10`)"],
   ['scripts/weekly-digest.mjs', 'its environment name',
     'the generic environment words the digest must not use ("staging", "production"): vocabulary, not a declaration'],
