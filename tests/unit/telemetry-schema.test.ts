@@ -6,6 +6,11 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 import {
+  DEPLOY_OUTCOMES,
+  DEPLOY_PARTITION,
+  DEPLOY_REFUSALS,
+  DEPLOY_ROLES,
+  DEPLOY_STAGES,
   ESCALATION_CATEGORIES,
   ESCALATION_REASONS,
   FINDING_PARTITION,
@@ -132,11 +137,14 @@ describe('the field lists (plan 0002 §2.1, plan 0003 §3.3)', () => {
     }
   });
 
-  it('reserves `work` and `finding`: no lane may take the work-item or the finding partition\'s name (plan 0002 §4, plan 0006 §2.3)', () => {
+  it('reserves `work`, `finding` and `deploy`: no lane may take the work-item, finding or deploy partition\'s name (plan 0002 §4, plan 0006 §2.3, plan 0010 §10)', () => {
     expect(RESERVED_PARTITION).toBe('work');
     expect(FINDING_PARTITION).toBe('finding');
+    expect(DEPLOY_PARTITION).toBe('deploy');
     expect(LANES).not.toContain(RESERVED_PARTITION);
     expect(LANES).not.toContain(FINDING_PARTITION);
+    expect(LANES).not.toContain(DEPLOY_PARTITION);
+    expect(Object.keys(LANE_ROLES)).not.toContain(DEPLOY_PARTITION);
     expect(LANES.length).toBeGreaterThan(0);
   });
 
@@ -817,3 +825,99 @@ describe('run row version 3: the TTL the run was pinned at (#546)', () => {
   });
 });
 
+
+describe('the deploy row (plan 0010 §10, step D3)', () => {
+  const DEPLOY = SCHEMAS.deploy![1]!;
+  /** A production deploy that succeeded: the last of a two-environment chain. */
+  const deployed = (): Row => ({
+    schema_version: 1, row_kind: 'deploy', tag: 'run', recorded_at: '2026-10-14T10:00:00Z',
+    run_id: 33679229731, run_attempt: 1, trigger: 'release', kanon_version: '0.31.0',
+    role: 'production', position: 2, outcome: 'ok',
+    prerelease: false, redeploy: false, rollback: false,
+    wait_ms: 600_000, build_ms: 120_000, deploy_ms: 240_000, smoke_ms: 30_000, duration_ms: 300_000,
+    since_release_ms: 1_500_000,
+  });
+  const fails = (row: Row, field: string) => {
+    const v = validate(row);
+    expect(v.ok, field).toBe(false);
+    if (!v.ok) expect(v.errors.map((e) => e.field)).toContain(field);
+  };
+
+  it('has the twenty-two fields §10 lists, and requires the row, the run, the environment\'s place and the outcome', () => {
+    expect(Object.keys(DEPLOY).sort()).toEqual([
+      'build_ms', 'deploy_ms', 'duration_ms', 'failed_stage', 'kanon_version', 'outcome', 'position',
+      'prerelease', 'recorded_at', 'redeploy', 'refusal', 'role', 'rollback', 'row_kind', 'run_attempt',
+      'run_id', 'schema_version', 'since_release_ms', 'smoke_ms', 'tag', 'trigger', 'wait_ms',
+    ]);
+    const required = Object.entries(DEPLOY).filter(([, f]) => f.required).map(([k]) => k).sort();
+    expect(required).toEqual([
+      'kanon_version', 'outcome', 'position', 'recorded_at', 'role', 'row_kind', 'run_attempt', 'run_id', 'schema_version', 'tag',
+    ]);
+  });
+
+  it('holds the closed lists to §10', () => {
+    expect([...DEPLOY_ROLES]).toEqual(['production', 'pre-production']);
+    expect([...DEPLOY_OUTCOMES]).toEqual(['ok', 'failed', 'smoke_failed', 'refused', 'rejected', 'cancelled']);
+    expect([...DEPLOY_STAGES]).toEqual(['gate', 'probe', 'build', 'approval', 'deploy', 'smoke']);
+    expect([...DEPLOY_REFUSALS]).toEqual([
+      'draft', 'no-release', 'not-default-branch', 'declaration-mismatch', 'ci-red', 'ci-timeout',
+      'superseded', 'trust-unbound', 'probe-unconfigured',
+    ]);
+  });
+
+  it('a valid row validates, and so do a refusal, a failure and a dispatched rollback', () => {
+    expect(validate(deployed())).toEqual({ ok: true });
+    expect(validate({ ...deployed(), role: 'pre-production', position: 1 })).toEqual({ ok: true });
+    expect(validate({ ...deployed(), outcome: 'refused', failed_stage: 'gate', refusal: 'ci-red' })).toEqual({ ok: true });
+    expect(validate({ ...deployed(), outcome: 'smoke_failed', failed_stage: 'smoke' })).toEqual({ ok: true });
+    expect(validate({ ...deployed(), trigger: 'workflow_dispatch', rollback: true })).toEqual({ ok: true });
+    for (const tag of ['smoke', 'test']) expect(validate({ ...deployed(), tag })).toEqual({ ok: true });
+  });
+
+  it('a row without `tag`, or with a tag outside run, smoke and test, is rejected', () => {
+    const row = deployed();
+    delete row.tag;
+    fails(row, 'tag');
+    fails({ ...deployed(), tag: 'production' }, 'tag');
+  });
+
+  it('a row carrying the commit, the release, the adopter\'s version, the environment\'s name or a URL is rejected, naming the field', () => {
+    for (const field of ['sha', 'release', 'release_tag', 'version', 'environment', 'url']) {
+      const v = validate({ ...deployed(), [field]: 'staging' });
+      expect(v, field).toEqual({ ok: false, errors: [{ field, problem: 'unknown' }] });
+    }
+  });
+
+  it('a role outside the two words, or a position below 1, is rejected', () => {
+    for (const role of ['staging', 'prod', 'reviewer', '']) fails({ ...deployed(), role }, 'role');
+    fails({ ...deployed(), position: 0 }, 'position');
+    fails({ ...deployed(), position: -1 }, 'position');
+    fails({ ...deployed(), position: 1.5 }, 'position');
+  });
+
+  it('`refusal` only with `refused`, and a refusal names its code', () => {
+    fails({ ...deployed(), refusal: 'superseded' }, 'refusal');
+    fails({ ...deployed(), outcome: 'failed', failed_stage: 'deploy', refusal: 'ci-red' }, 'refusal');
+    fails({ ...deployed(), outcome: 'refused', failed_stage: 'gate' }, 'refusal');
+    fails({ ...deployed(), outcome: 'refused', failed_stage: 'gate', refusal: 'looked-wrong' }, 'refusal');
+  });
+
+  it('`failed_stage` never with `ok`, and always with any other outcome', () => {
+    fails({ ...deployed(), failed_stage: 'smoke' }, 'failed_stage');
+    for (const outcome of ['failed', 'smoke_failed', 'rejected', 'cancelled']) fails({ ...deployed(), outcome }, 'failed_stage');
+    fails({ ...deployed(), outcome: 'failed', failed_stage: 'agent' }, 'failed_stage');
+  });
+
+  it('a rollback only on a dispatch', () => {
+    fails({ ...deployed(), rollback: true }, 'rollback');
+    const row = deployed();
+    delete row.trigger;
+    fails({ ...row, rollback: true }, 'rollback');
+    fails({ ...deployed(), trigger: 'push' }, 'trigger');
+  });
+
+  it('no lane may be named `deploy`: a run row with that lane is rejected', () => {
+    expect(LANES).not.toContain('deploy');
+    fails({ ...finished(), lane: 'deploy' }, 'lane');
+  });
+});
