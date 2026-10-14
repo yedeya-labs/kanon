@@ -178,7 +178,7 @@ export function releaseRow(env, { now = new Date() } = {}) {
  *     Maintainer's dispatch. It is neither a deploy nor a failure, so a row would only distort
  *     the production metrics; the dispatch writes production's one row.
  *   • A production dispatch by anyone but the Maintainer under a marker, refused by `declare`:
- *     its refusal code is not in the schema's `DEPLOY_REFUSALS` yet, so no row until it is. The
+ *     its refusal code, `not-maintainer`, reaches `DEPLOY_REFUSALS` only with PR #901 (kanon#899), so no row until that merges. The
  *     report still announces it.
  * @param {JobResult | undefined} declare
  */

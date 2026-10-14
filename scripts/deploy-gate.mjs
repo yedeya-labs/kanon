@@ -30,7 +30,7 @@
 // under the `no-environments` marker the job is told to set no environment (§13). Under either
 // fallback marker the last environment is HELD on a `release` run (`held=true`, kanon#894): only
 // the Maintainer named in the record's `## People` deploys it, by dispatch, and a dispatch by
-// anyone else is refused (its row's code awaits the schema; `unauthorized=maintainer-only`).
+// anyone else is refused (`unauthorized=not-maintainer`; its row waits for PR #901 to add the code to `DEPLOY_REFUSALS`, kanon#899).
 // `supersede`, in `deploy.yml`'s `deploy` job, once it holds its concurrency slot and its
 // approval: for a `release` trigger, a commit older than the environment's last successful
 // deploy is refused `superseded`; a dispatch may go back, and says so (`rollback`).
@@ -386,9 +386,9 @@ export function environmentCheck(env, { api = ghApi } = {}) {
       const maintainers = maintainersOf(record);
       const actor = String(env.GITHUB_ACTOR ?? '');
       if (!maintainers.some((m) => m.toLowerCase() === actor.toLowerCase())) {
-        // The row's refusal code for this is not in `DEPLOY_REFUSALS` yet (a separate issue): the
+        // The row's refusal code for this is `not-maintainer`, added to `DEPLOY_REFUSALS` by PR #901 (kanon#899), not merged yet: the
         // job refuses, the report announces it, and no row is written until the code exists.
-        outputs.unauthorized = 'maintainer-only';
+        outputs.unauthorized = 'not-maintainer';
         return { ok: false, refusal: '', message: `under the \`${declared.fallback}\` fallback only the Maintainer (${maintainers.length ? maintainers.map((m) => `@${m}`).join(', ') : 'none named in the adoption record\'s `## People`'}) may deploy production, by dispatch; this run's actor is @${actor || 'unknown'}`, outputs };
       }
     }
@@ -477,7 +477,7 @@ if (isCliEntry(import.meta.url)) {
     writeOutputs(r.outputs);
     if (r.ok) summary(r.line);
     else if (r.refusal) refuse('Deploy declaration', r.refusal, r.message);
-    else refuse('Deploy production', 'maintainer-only', r.message);
+    else refuse('Deploy production', 'not-maintainer', r.message);
   } else if (command === 'supersede') {
     const r = supersede({ repo: String(env.GITHUB_REPOSITORY), environment: env.ENVIRONMENT ?? '', sha: env.SHA ?? '', trigger: env.GITHUB_EVENT_NAME ?? '' });
     writeOutputs({ redeploy: String(r.redeploy), rollback: String(r.rollback), ...(r.refusal ? { refusal: r.refusal } : {}) });

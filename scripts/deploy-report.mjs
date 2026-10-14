@@ -13,7 +13,7 @@
 //
 // A HELD PRODUCTION (kanon#894: under a fallback marker, on a `release` run) is neither a deploy
 // nor a failure: nothing is filed, commented on or closed. A production dispatch refused because
-// its actor isn't the Maintainer files as a refusal, `maintainer-only`.
+// its actor isn't the Maintainer files as a refusal, `not-maintainer`.
 //
 // A RUN THAT STOPPED BEFORE ANY ENVIRONMENT (the gate or the probe) files on the FIRST
 // environment's issue (open-question decision 4), `sev:medium`, or `sev:high` when the first is

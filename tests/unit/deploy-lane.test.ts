@@ -256,7 +256,7 @@ describe("deploy-row.mjs: one environment's row (plan 0010 §8, §10)", () => {
   it('writes no row for a held production, nor for a production dispatch refused to a non-Maintainer (kanon#894)', () => {
     const held = { result: 'success', outputs: { ...declared().outputs, held: 'true' } };
     expect(environmentRow({ ...RUN, NEEDS: JSON.stringify({ declare: held, deploy: { result: 'skipped' } }), ENVIRONMENT: 'production', POSITION: '2' }, { api: () => [] })).toBeNull();
-    const refused = { result: 'failure', outputs: { role: 'production', unauthorized: 'maintainer-only' } };
+    const refused = { result: 'failure', outputs: { role: 'production', unauthorized: 'not-maintainer' } };
     expect(environmentRow({ ...RUN, NEEDS: JSON.stringify({ declare: refused, deploy: { result: 'skipped' } }), ENVIRONMENT: 'production', POSITION: '2' }, { api: () => [] })).toBeNull();
     // MUTATION: a record that ignores the hold writes a cancelled production row here.
     expect(classifyEnvironment({ declare: held, deploy: { result: 'skipped' }, environment: 'production' })).toEqual({ outcome: 'cancelled', failed_stage: 'approval' });
@@ -426,9 +426,9 @@ describe("deploy-report.mjs: one issue per environment (plan 0010 §8, decision 
   it('a held production neither files, comments nor closes; a refused non-Maintainer dispatch files as a refusal (kanon#894)', () => {
     const held = { declare: { result: 'success', outputs: { role: 'production', held: 'true' } }, deploy: { result: 'skipped' }, record: { result: 'success', outputs: { written: 'false' } } };
     expect(reportFrom({ NEEDS: JSON.stringify(held), ENVIRONMENT: 'production', POSITION: '2' }, 'environment')).toBeNull();
-    const refused = { declare: { result: 'failure', outputs: { role: 'production', unauthorized: 'maintainer-only' } }, deploy: { result: 'skipped' }, record: { result: 'success', outputs: { written: 'false' } } };
+    const refused = { declare: { result: 'failure', outputs: { role: 'production', unauthorized: 'not-maintainer' } }, deploy: { result: 'skipped' }, record: { result: 'success', outputs: { written: 'false' } } };
     expect(reportFrom({ NEEDS: JSON.stringify(refused), ENVIRONMENT: 'production', POSITION: '2' }, 'environment'))
-      .toMatchObject({ outcome: 'refused', refusal: 'maintainer-only', role: 'production' });
+      .toMatchObject({ outcome: 'refused', refusal: 'not-maintainer', role: 'production' });
   });
 
   it("an environment's report reads the record's outcome, which saw the approvals, and the declaration's role", () => {

@@ -243,7 +243,7 @@ describe('the hold under a fallback marker (plan 0010 §13, kanon#894)', () => {
     expect(check({ ...DISPATCH, ENVIRONMENT: 'production', POSITION: '2', GITHUB_ACTOR: 'maint' }, 'no-environments').ok).toBe(true);
     const r = check({ ...DISPATCH, ENVIRONMENT: 'production', POSITION: '2', GITHUB_ACTOR: 'owner' }, 'no-environments');
     expect(r.ok).toBe(false);
-    expect(r.outputs.unauthorized).toBe('maintainer-only');
+    expect(r.outputs.unauthorized).toBe('not-maintainer');
     expect(r.ok ? '' : r.message).toMatch(/only the Maintainer \(@maint\)/);
     // Without a marker the platform's reviewers gate production: no Maintainer check.
     expect(check({ ...DISPATCH, ENVIRONMENT: 'production', POSITION: '2', GITHUB_ACTOR: 'owner' }, null).ok).toBe(true);
