@@ -145,10 +145,19 @@ kanon metrics report --rows runs-and-items.json --windows 12           # a trend
 
 | View | What it is | Minimum |
 |---|---|---|
-| Deployment frequency | Forward deploys a week: production rows `ok` and not `rollback`, counted per week, the median over the 13 weeks (a week without one counts as 0). The weekly counts are printed beside it. | the 13 weeks |
-| Change-failure rate | Of the forward production rows that reached the deploy stage (`ok`, `failed` at `deploy`, `smoke_failed`), the share that are `failed` or `smoke_failed`, or `ok` and followed by a rollback row before the next forward `ok`. A rollback row is a restore, not a change, so it is not in the share. Wilson interval. | 20 |
-| Time to restore | From each production row `failed` at `deploy` or `smoke_failed` to the next `ok` production row, a rollback's included, the median. A failure with no `ok` after it is counted as not restored. | 10 |
+| Deployment frequency | Forward deploys a week: production rows `ok` and neither `rollback` nor `redeploy`, counted per week, the median over the 13 weeks (a week without one counts as 0). The weekly counts are printed beside it. | the 13 weeks |
+| Change-failure rate | Of the forward production rows (neither `rollback` nor `redeploy`) that reached the deploy stage (`ok`, `failed` at `deploy`, `smoke_failed`), the share that are `failed` or `smoke_failed`, or `ok` and followed by a rollback row before the next forward `ok`. Wilson interval. | 20 |
+| Time to restore | From each production row `failed` at `deploy` or `smoke_failed`, a rollback's or redeploy's included, to the next `ok` production row, a rollback's or redeploy's included, the median. A failure with no `ok` after it is counted as not restored. | 10 |
 | Release lead time | `since_release_ms` of the forward `ok` production rows, the median: from the release's publication to its deploy to production, including the time in the pre-production environments and waiting for production's reviewer. | 10 |
+
+**A change counts once, at its first production deploy** (the Owner's decision on [#895](https://github.com/yedeya-labs/kanon/issues/895)). A `rollback` row restores an older commit, and a `redeploy` row puts a commit that already succeeded in production there again: a two-release flow's promotion, a stable release on the commit its pre-release deployed ([plan 0010 §4](plans/0010-deployment-lane.md#4-environments-a-declared-chain-on-one-commit)), or a dispatch after an infrastructure fix. Neither is a change, so a redeploy row counts:
+
+- in the **deployment frequency**, not at all;
+- in the **change-failure rate**, not at all, as a change or as a failure. Its `ok` isn't forward, so it doesn't end the look ahead: a change followed by its promotion and then a rollback counts as rolled back;
+- in **time to restore**, both ways: its `ok` restores a failure, and its failure is one to restore;
+- in **release lead time**, not at all. Under a two-release flow a change's lead time is its pre-release's, from the pre-release's publication.
+
+A rollback row counts the same way in all four.
 
 **What they can't see:** a production fault found days later and fixed forward, with no rollback and no failed smoke check. A deploy row carries no commit, so it can't be joined to the reverts and linked fixes the escape rate counts; the view says so under its table. The hosted aggregate stores deploy rows and publishes no deploy figure across adopters, so the public metrics page shows none.
 

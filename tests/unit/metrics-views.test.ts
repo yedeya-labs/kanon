@@ -437,7 +437,7 @@ describe('the difference intervals (§6.1)', () => {
 const HOUR_MS = 3_600_000;
 let deployRunId = 5_000;
 /** A deploy row, version 1, recorded `hour` hours after the time `days` before UNTIL. */
-function deployRow(o: { days: number; hour?: number; chain: number; position: number; outcome?: string; failedStage?: string; rollback?: boolean; sinceReleaseMs?: number }) {
+function deployRow(o: { days: number; hour?: number; chain: number; position: number; outcome?: string; failedStage?: string; prerelease?: boolean; redeploy?: boolean; dispatch?: boolean; rollback?: boolean; sinceReleaseMs?: number }) {
   deployRunId += 1;
   const outcome = o.outcome ?? 'ok';
   return {
@@ -447,14 +447,14 @@ function deployRow(o: { days: number; hour?: number; chain: number; position: nu
     recorded_at: new Date(UNTIL.getTime() - o.days * DAY + (o.hour ?? 0) * HOUR_MS).toISOString().replace(/\.\d{3}Z$/, 'Z'),
     run_id: deployRunId,
     run_attempt: 1,
-    trigger: o.rollback ? 'workflow_dispatch' : 'release',
+    trigger: o.rollback || o.dispatch ? 'workflow_dispatch' : 'release',
     kanon_version: '0.50.0',
     role: o.position === o.chain ? 'production' : 'pre-production',
     position: o.position,
     outcome,
     ...(outcome === 'ok' ? {} : { failed_stage: o.failedStage ?? 'deploy' }),
-    prerelease: false,
-    redeploy: false,
+    prerelease: o.prerelease ?? false,
+    redeploy: o.redeploy ?? false,
     rollback: o.rollback ?? false,
     since_release_ms: o.sinceReleaseMs ?? o.position * HOUR_MS,
   };
@@ -485,9 +485,86 @@ function history(chain: number) {
 }
 const deployOf = (rows: unknown[]) => views(rows).deploy!;
 
+type Run = Omit<Parameters<typeof deployRow>[0], 'days' | 'hour' | 'chain' | 'position' | 'sinceReleaseMs'> & { sinceReleaseMs?: (position: number) => number };
+/** One run through a chain of `chain`, its environments an hour apart from `hour`: every pre-production environment `ok`, then production's `outcome`. */
+const run = (chain: number, days: number, hour: number, o: Run = {}) =>
+  Array.from({ length: chain }, (_, k) => {
+    const last = k + 1 === chain;
+    return deployRow({ ...o, days, hour: hour + k, chain, position: k + 1, outcome: last ? o.outcome : 'ok', failedStage: last ? o.failedStage : undefined, sinceReleaseMs: o.sinceReleaseMs?.(k + 1) });
+  });
+/** The promotion's lead time, from the stable release's publication on the same commit: twenty minutes per environment. */
+const promotedLead = (position: number) => position * 20 * 60_000;
+
+/**
+ * Thirteen weeks of a two-release flow (plan 0010 §4) through a chain of `chain`: two changes a
+ * week, each a pre-release through the whole chain, production `ok`, then its promotion a day
+ * later, a stable release on the same commit that runs the chain again, every row `redeploy`. In
+ * week 3 a third change's pre-release fails at production's deploy stage and is restored by a
+ * dispatch that redeploys the last good commit, not a promotion. In week 10 a rollback is
+ * dispatched after the first change's promotion, before the next change. On every chain: 26
+ * changes reach production `ok`, 27 reached the deploy stage, 2 failed (one at the stage, one
+ * rolled back), and 28 redeploys: 26 promotions and the dispatch.
+ */
+function twoRelease(chain: number) {
+  const rows: Record<string, unknown>[] = [];
+  for (let w = 0; w < 13; w += 1) {
+    const first = 91 - w * 7 - 1;
+    for (const days of [first, first - 3]) {
+      rows.push(...run(chain, days, 0, { prerelease: true }), ...run(chain, days - 1, 0, { redeploy: true, sinceReleaseMs: promotedLead }));
+    }
+    if (w === 3) rows.push(...run(chain, first - 2, 0, { prerelease: true, outcome: 'failed', failedStage: 'deploy' }), ...run(chain, first - 2, chain + 1, { redeploy: true, dispatch: true, sinceReleaseMs: () => 300 * HOUR_MS }));
+    if (w === 10) rows.push(...run(chain, first - 1, chain + 4, { rollback: true, sinceReleaseMs: () => 200 * HOUR_MS }));
+  }
+  return rows;
+}
+
 describe('the deploy metrics (plan 0010 §11)', () => {
   it('reads fixture rows the telemetry schema accepts', () => {
-    for (const row of [...history(1), ...history(3)]) expect(validate(row), JSON.stringify(row)).toEqual({ ok: true });
+    for (const row of [...history(1), ...history(3), ...twoRelease(3)]) expect(validate(row), JSON.stringify(row)).toEqual({ ok: true });
+  });
+
+  for (const chain of [1, 2, 3]) {
+    describe(`on a two-release flow, a chain of ${chain}`, () => {
+      const d = deployOf(twoRelease(chain));
+
+      it('counts a change once, at its pre-release, and no redeploy in the frequency', () => {
+        expect(d.rows).toEqual({ production: 55, preProduction: 55 * (chain - 1), notRun: 0, unreadable: 0 });
+        expect(d.frequency.perWeek).toEqual(Array(13).fill(2));
+        expect(d.frequency.median).toMatchObject({ status: 'ok', value: 2 });
+      });
+
+      it('leaves redeploys out of the change-failure share, and a promotion doesn\'t end the look ahead for a rollback', () => {
+        expect(d.changeFailure).toMatchObject({ reached: 27, failed: 2, rolledBack: 1 });
+        expect(d.changeFailure.rate).toMatchObject({ status: 'ok', n: 27, value: Number((2 / 27).toFixed(4)) });
+      });
+
+      it('takes the lead time from the pre-release\'s production row, not the promotion\'s', () => {
+        expect(d.leadTime.withoutLeadTime).toBe(0);
+        expect(d.leadTime.median).toMatchObject({ status: 'ok', n: 26, value: chain * HOUR_MS });
+      });
+
+      it('counts the dispatched redeploy as the `ok` that restores the failed change', () => {
+        expect(d.restore).toMatchObject({ median: { status: 'not-enough-data', n: 1 }, unrestored: 0 });
+      });
+    });
+  }
+
+  it('measures time to restore to a redeploy\'s `ok`, and from a redeploy that failed, which isn\'t a change', () => {
+    const rows = [
+      // Ten failed changes, each restored after 1 to 10 hours by a dispatch that redeploys the last good commit.
+      ...Array.from({ length: 10 }, (_, k) => [
+        deployRow({ days: 80 - k * 7, chain: 1, position: 1, outcome: 'failed', failedStage: 'deploy' }),
+        deployRow({ days: 80 - k * 7, hour: k + 1, chain: 1, position: 1, redeploy: true, dispatch: true }),
+      ]).flat(),
+      // A redeploy that failed at the deploy stage: production is down, but no change failed.
+      deployRow({ days: 1, chain: 1, position: 1, outcome: 'smoke_failed', failedStage: 'smoke', redeploy: true, dispatch: true }),
+    ];
+    const d = deployOf(rows);
+    expect(d.restore.median).toMatchObject({ status: 'ok', n: 10, value: 5.5 * HOUR_MS });
+    expect(d.restore.unrestored).toBe(1);
+    expect(d.changeFailure).toMatchObject({ reached: 10, failed: 10, rolledBack: 0 });
+    expect(d.frequency.perWeek).toEqual(Array(13).fill(0));
+    expect(d.leadTime.median).toMatchObject({ n: 0 });
   });
 
   for (const chain of [1, 2, 3]) {
@@ -563,6 +640,9 @@ describe('the deploy metrics (plan 0010 §11)', () => {
     expect(text).toMatch(/\| Release lead time \| 3\.0 h /);
     expect(text).toMatch(/Pre-production rows count in none of these: 58 in the span/);
     expect(text).toMatch(/What they can't see: a production fault found days later and fixed forward/);
+    const twoReleases = renderViews(views(twoRelease(2))).join('\n');
+    expect(twoReleases).toMatch(/\| Deployment frequency \| 2 a week [^|]*\| Forward `ok` deploys \(not rollbacks or redeploys\)/);
+    expect(twoReleases).toMatch(/2 of 27 forward deploys \(not rollbacks or redeploys\)/);
   });
 });
 

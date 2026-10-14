@@ -131,7 +131,7 @@ Each job carries the called workflow's permissions, and the caller maps no secre
 
 **What the artifact must outlive.** A production job may wait up to 30 days for its reviewer ([§14.1](#141-confirmed)). The upload sets a retention of 35 days, the run's own limit; a repository whose artifact retention setting is shorter caps it, and doctor reports that as a note (`deploy.artifact-retention`). A deploy whose artifact has expired fails at the `build` stage, by name.
 
-**A two-release flow fits without a special case.** Under channels like plan 0009's, a candidate is a pre-release and runs the whole chain (decision 4), production included, behind production's reviewer. Its promotion publishes a stable release **on the same commit**, which runs the chain again: a no-op for an unchanged stack (`aws cloudformation deploy` exits 0 on an empty change set by default, measured from CLI 2.36.8's help), recorded as a `redeploy`. **No environment is skipped** (open-question decision 5): the second run deploys every environment again, and production's reviewer is asked again. An approval is cheap next to a lane that decides on its own that a production deploy isn't needed.
+**A two-release flow fits without a special case.** Under channels like plan 0009's, a candidate is a pre-release and runs the whole chain (decision 4), production included, behind production's reviewer. Its promotion publishes a stable release **on the same commit**, which runs the chain again: a no-op for an unchanged stack (`aws cloudformation deploy` exits 0 on an empty change set by default, measured from CLI 2.36.8's help), recorded as a `redeploy`, which the metrics don't count as a change ([§11](#11-metrics)). **No environment is skipped** (open-question decision 5): the second run deploys every environment again, and production's reviewer is asked again. An approval is cheap next to a lane that decides on its own that a production deploy isn't needed.
 
 **What GitHub gives the environments, as documented:**
 - "All deployment protection rules must pass before a job referencing the environment is sent to a runner", and "a job cannot access environment secrets until one of the required reviewers approves it."
@@ -239,10 +239,19 @@ Plan 0003 measures cost, efficiency and escapes; it defines **no deploy metric**
 
 | Metric | Formula |
 |---|---|
-| **Deployment frequency** | production rows with `outcome: ok` and `rollback: false`, per week, as the median over the last 13 weeks |
-| **Change-failure rate** | of production rows that reached the deploy stage (`ok`, `failed` at `deploy`, `smoke_failed`), the share that are `failed` or `smoke_failed`, or `ok` and followed by a `rollback` row before the next forward `ok` |
+| **Deployment frequency** | production rows with `outcome: ok`, `rollback: false` and `redeploy: false`, per week, as the median over the last 13 weeks |
+| **Change-failure rate** | of production rows that reached the deploy stage (`ok`, `failed` at `deploy`, `smoke_failed`) and are neither a rollback nor a redeploy, the share that are `failed` or `smoke_failed`, or `ok` and followed by a `rollback` row before the next forward `ok` |
 | **Time to restore** | from a production row that is `failed` at `deploy` or `smoke_failed` to the next `ok` production row, median |
-| **Release lead time** | `since_release_ms` of `ok` production rows, median. It includes the time the release spent in the pre-production environments and waiting for production's reviewer |
+| **Release lead time** | `since_release_ms` of forward `ok` production rows, median. It includes the time the release spent in the pre-production environments and waiting for production's reviewer |
+
+**A change counts once, at its first production deploy** (the Owner's decision on [#895](https://github.com/yedeya-labs/kanon/issues/895)). A `rollback` row and a `redeploy` row are not changes: a rollback restores an older commit, and a redeploy puts a commit that already succeeded in production there again, whether a two-release flow's promotion ([§4](#4-environments-a-declared-chain-on-one-commit)) or a dispatch after an infrastructure fix. So, in each of the four views:
+
+- **Deployment frequency:** neither counts.
+- **Change-failure rate:** neither is in the share, as a change or as a failure. A redeploy's `ok` isn't a forward `ok`, so it doesn't end the look ahead: a change followed by its promotion and then a rollback counts as rolled back.
+- **Time to restore:** both count. Their `ok` restores a failure, and their failure is one to restore.
+- **Release lead time:** neither counts. Under a two-release flow the change's lead time is its pre-release's, from the pre-release's publication; the promotion's, from the stable release's, is left out.
+
+Counted as changes, a two-release flow's promotions would double the frequency, halve the change-failure rate, and pool two lead times measured from two publications.
 
 **What they can't see:** a production fault found days later and fixed forward, with no rollback and no failed smoke. Plan 0003's explicit reverts and linked fixes see some of those on the work-item side; joining the two would need a commit on the row, which [§10](#10-the-deploy-row) refuses. The views say so in their notes. Pre-production rows count in none of the four; a view of how often pre-production stops a release before production is a later choice, not this plan's. The hosted aggregate stores deploy rows from D9 and **publishes no cross-adopter deploy figure** until the Owner decides one (decision 11), under plan 0002's three-adopter rule.
 
@@ -511,6 +520,12 @@ Raised by the Reviewer on the follow-up answers, answered by the Owner on 2026-1
 Raised by D0's finding ([#890](https://github.com/yedeya-labs/kanon/issues/890)), answered by the Owner on 2026-10-14.
 
 1. **The hosted store's production deploy declares the `no-reviewers` fallback.** Required reviewers aren't offered for private repositories on the organisation's GitHub plan: D0 saw the option only once the sandbox was made public. The operator's repository is private, so its `production` environment can't have a reviewer; it declares `no-reviewers` ([§13](#13-the-fallback-where-the-plan-has-no-environments)), and the Owner deploys production by dispatching the lane at the release's tag, which the production job admits only from the Maintainer the record names. Doctor's `deploy.reviewers-missing` is a note there, naming the fallback. Decision 14 stands: one environment, production. [§15](#15-dogfood-the-hosted-store-deployed-from-the-operators-repository), [§15.1](#151-the-register-and-the-first-lane-driven-deploy), D13, D14.
+
+### The redeploy row in the metrics
+
+Raised by the Reviewer on D10's deploy views ([#895](https://github.com/yedeya-labs/kanon/issues/895)), answered by the Owner on 2026-10-14.
+
+1. **A `redeploy` row is left out, as a rollback is,** of the deployment frequency, the change-failure share and the release lead time, and still counts in time to restore. A change counts once, at its first production deploy, which under a two-release flow is the pre-release's. [§11](#11-metrics).
 
 ## Open questions
 
