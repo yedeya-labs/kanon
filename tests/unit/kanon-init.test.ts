@@ -2811,12 +2811,48 @@ describe('kanon init and the deploy lane (plan 0010 D6)', () => {
     expect(d.findings.map((x) => x.id)).not.toContain('id-token.unaccepted');
   });
 
-  it("leaves a deploy workflow of the project's own at that path alone, as any workflow that differs", async () => {
+  it("leaves a deploy workflow of the project's own at that path alone, writes nothing of the lane, and says why (#956)", async () => {
     const own = 'name: Deploy\non: push\njobs:\n  ship:\n    runs-on: ubuntu-latest\n    environment: production\n    steps:\n      - run: ./deploy.sh\n';
     const dir = checkout({ [CALLER]: own });
     const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--deploy-environments', 'production']));
     expect(read(dir, CALLER)).toBe(own);
-    expect(d.files.find((f) => f.path === CALLER)).toMatchObject({ status: 'differs' });
+    // No caller, no stub, and no reference deploy naming a job nobody writes.
+    expect(d.files.map((f) => f.path)).not.toContain(CALLER);
+    for (const p of HOOKS) expect(existsSync(join(dir, p)), p).toBe(false);
+    expect(read(dir, RECORD)).not.toContain('\n## Deploy\n');
+    expect(read(dir, RECORD)).not.toContain('Reference deploy');
+    const f = d.findings.find((x) => x.id === 'deploy.caller-taken')!;
+    expect(f).toMatchObject({ category: 'deploy', blocking: false, subject: CALLER });
+    expect(f.message).toMatch(/is a deploy workflow of your own, which calls no Kanon deploy lane, so init wrote nothing for the deploy lane/);
+    expect(d.findings.map((x) => x.id)).not.toContain('deploy.hooks');
+    const line = d.summary.find((l) => l.answer === 'Deploy')!.value;
+    expect(line).toBe(`production: nothing written, ${CALLER} is a deploy workflow of your own`);
+    expect(line).not.toMatch(/caller and three hook stubs/);
+  });
+
+  it("stops, naming the line, on a record that declares an environment name it couldn't write into the caller (#956)", async () => {
+    for (const name of ['prod eu', "it's"]) {
+      const record = `# Adoption record\n\n## Deploy\n\n- **Environments:** \`staging\`, \`${name}\`\n`;
+      const dir = checkout({ [RECORD]: record });
+      const github = fakeGitHub();
+      const r = await run(dir, github, ['--yes', '--json', '--no-apps']);
+      expect(r.status, name).toBe(1);
+      expect(JSON.parse(r.out).error, name).toContain(`${RECORD}:5 declares the environment \`${name}\`, which init can't write`);
+      expect(github.calls).toEqual([]);
+      expect(existsSync(join(dir, CALLER))).toBe(false);
+    }
+  });
+
+  it('takes none in any case, as the adopt skill labels it None (#956)', async () => {
+    const { parseDeployEnvironments } = await import('../../cli/init.mjs');
+    for (const v of ['none', 'None', 'NONE', ' none ']) expect(parseDeployEnvironments(v), v).toEqual([]);
+  });
+
+  it("names the repository's environments in the inspection's banner, not 'not needed by any lane' (#956)", async () => {
+    const r = await run(checkout(), fakeGitHub({ environments: ['staging', 'production'] }), ['--yes', '--dry-run']);
+    expect(r.out).toContain('Environments: staging, production (only the deploy lane uses them).');
+    expect(r.out).not.toContain('not needed by any lane');
+    expect((await run(checkout(), fakeGitHub(), ['--yes', '--dry-run'])).out).toContain('Environments: not readable with this token');
   });
 
   it("writes hook stubs that declare the lane's inputs and exit non-zero naming their file, and never overwrites a hook", async () => {

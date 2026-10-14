@@ -1722,7 +1722,7 @@ const ENVIRONMENT_NAME = /^[A-Za-z0-9._-]+$/;
  * @param {string} v @returns {string[]}
  */
 export const parseDeployEnvironments = (v) => {
-  if (v.trim() === DEPLOY_NONE) return [];
+  if (v.trim().toLowerCase() === DEPLOY_NONE) return [];
   const names = v.split(',').map((x) => x.trim());
   for (const n of names) {
     if (!n) throw new Error(`--deploy-environments takes the environments, comma-separated, in deploy order, such as preview,production, or none, not "${v}"`);
@@ -1790,6 +1790,24 @@ export const deployCallerFile = (environments, req, release) => {
   });
   return `${out.join('\n')}\n`;
 };
+
+/**
+ * Whether the caller's path holds a deploy workflow of the project's own, one that calls no
+ * deploy lane (#956): `init` can't write the caller there, so it writes nothing for the lane, no
+ * `## Deploy` reference naming a job nobody writes and no stub, and says why (`deploy.caller-taken`).
+ * @param {(rel: string) => string | null} read @param {Requirements} req
+ */
+export const deployPathTaken = (read, req) => {
+  const have = read(DEPLOY_CALLER_PATH);
+  return have !== null && !callsDeployLane(have, req);
+};
+
+/**
+ * The first environment name of a list `init` wouldn't write (#956): the record's spans accept
+ * any text, and a name with a space or a quote breaks the caller or the gate's list.
+ * @param {string[]} names @returns {string | undefined}
+ */
+export const unwritableEnvironment = (names) => names.find((n) => !ENVIRONMENT_NAME.test(n));
 
 /** Whether a workflow's text is a caller of the deploy lane, which `init` rewrites from the list. @param {string | null} text @param {Requirements} req */
 export const callsDeployLane = (text, req) => {
@@ -1887,7 +1905,9 @@ export const environmentJobs = (workflows) => {
 export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows, callers = new Map() }) => {
   /** @type {Map<string, string>} */
   const files = new Map();
-  files.set('docs/qa/adoption.md', adoptionFile(s, a, repo, today));
+  // With the caller's path taken by the project's own workflow, nothing of the lane is written (#956).
+  const taken = a.deployEnvironments.length > 0 && deployPathTaken(read, req);
+  files.set('docs/qa/adoption.md', adoptionFile(s, taken ? { ...a, deployEnvironments: [] } : a, repo, today));
   files.set('docs/qa/stack.md', stackFile(a.gates));
   if (a.delegation) files.set('docs/qa/sign-off-delegation.md', delegationFile(a.delegation, today));
   if (a.database === 'hook') files.set('docs/qa/test-database.md', TEST_DATABASE_HOOK);
@@ -1918,7 +1938,7 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   if (a.telemetry === true) files.set(TELEMETRY_CALLER_PATH, telemetryCallerFile(release));
   // The deploy lane's caller and its hooks' stubs, only for a declared list (plan 0010 D6).
   const deploy = deployOf(req);
-  if (deploy && a.deployEnvironments.length) {
+  if (deploy && a.deployEnvironments.length && !taken) {
     files.set(DEPLOY_CALLER_PATH, deployCallerFile(a.deployEnvironments, req, release));
     for (const h of deploy.hooks) files.set(h.path, deployHookStub(h));
   }
@@ -2056,9 +2076,11 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
   line('Apps', ['reuseApps'], apps.length ? apps.join('; ') : 'none: the lanes run as no App', why('reuseApps'));
   line('Releases', ['releaser'], a.releaser ? 'on: the Releaser App opens the release PRs' : 'off', why('releaser'));
   // The deploy lane (plan 0010 D6): not a feature, and nothing at all without a declared list.
-  line('Deploy', ['deployEnvironments'], a.deployEnvironments.length
-    ? `${a.deployEnvironments.join(' then ')} (${a.deployEnvironments.at(-1)} is production): the deploy caller and three hook stubs`
-    : 'none: no deploy lane', why('deployEnvironments'));
+  line('Deploy', ['deployEnvironments'], !a.deployEnvironments.length
+    ? 'none: no deploy lane'
+    : deployPathTaken(read, req)
+      ? `${a.deployEnvironments.join(' then ')}: nothing written, ${DEPLOY_CALLER_PATH} is a deploy workflow of your own`
+      : `${a.deployEnvironments.join(' then ')} (${a.deployEnvironments.at(-1)} is production): the deploy caller and three hook stubs`, why('deployEnvironments'));
   const people = a.owner === a.maintainer && a.owner === a.stakeholder ? `Owner, Maintainer, Stakeholder: ${a.owner}` : `Owner ${a.owner}; Maintainer ${a.maintainer}; Stakeholder ${a.stakeholder}`;
   line('People', ['projectOwner', 'maintainer', 'stakeholder'], people, why('projectOwner'));
   line('Gates', ['gates'], a.gates.length ? a.gates.join('; ') : 'none yet', why('gates'));
@@ -2088,7 +2110,7 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
     ...apps.filter((x) => /: reuse /.test(x)).map((x) => `1 key for the ${x.split(':')[0]}`),
     ...mappedSecrets(a, req).filter((n) => n === CLAUDE_SECRETS.subscription || n === CLAUDE_SECRETS['api-key'] || n === 'DIGEST_WEBHOOK').filter((n) => !s.secrets?.has(n))
       .map((n) => (n === 'DIGEST_WEBHOOK' ? 'the chat webhook' : n === CLAUDE_SECRETS['api-key'] ? 'the Claude API key' : 'the Claude token')),
-    ...(a.deployEnvironments.length && deployOf(req) ? ['fill the deploy hooks', `${a.deployEnvironments.length} GitHub environment(s)`] : []),
+    ...(a.deployEnvironments.length && deployOf(req) && !deployPathTaken(read, req) ? ['fill the deploy hooks', `${a.deployEnvironments.length} GitHub environment(s)`] : []),
     'merge the PR',
     ...(a.lanes.includes(REVIEW_LANE) ? ['1 test PR'] : []),
   ];
@@ -2292,6 +2314,11 @@ const run = async (deps, opts, req, rep) => {
     return stop(1, [`${e.message}. Fix the record's ${DEPLOY_HEADING} section first (docs/lanes.md, "The deploy lane"). Nothing was changed.`]);
   }
   const declaredEnvironments = declaration.environments;
+  const odd = unwritableEnvironment(declaredEnvironments);
+  if (odd !== undefined) {
+    const line = (read(DEPLOY_RECORD) ?? '').split('\n').findIndex((l) => l.startsWith(`- **${CHAIN_LABELS.environments}:**`)) + 1;
+    return stop(1, [`${DEPLOY_RECORD}:${line} declares the environment \`${odd}\`, which init can't write into the deploy caller: use letters, digits, ".", "_" and "-". Nothing was changed.`]);
+  }
   if (opts.given.deployEnvironments?.length && !deployOf(req)) {
     return stop(2, ["--deploy-environments needs a release of Kanon that ships the deploy lane, and this one's requirements have no deploy entry. Nothing was changed."]);
   }
@@ -2351,7 +2378,7 @@ const run = async (deps, opts, req, rep) => {
   out('');
   out(`== ${repo}, at Kanon ${release}${dry ? ' (dry run: nothing will change)' : ''} ==`);
   out(`- ${s.kind === 'User' ? 'A personal account' : 'An organisation'}'s ${s.isPrivate ? 'private' : 'public'} repository; default branch ${s.defaultBranch}${s.hasCommits ? '' : ', with no commit yet'}.`);
-  out(`- Rulesets: ${s.rulesets}. Merge queue: ${s.mergeQueue}. Environments: not needed by any lane.`);
+  out(`- Rulesets: ${s.rulesets}. Merge queue: ${s.mergeQueue}. Environments: ${s.environments === null ? "not readable with this token" : s.environments.length ? s.environments.join(', ') : 'none'} (only the deploy lane uses them).`);
   out(`- Your token ${s.admin ? 'can' : "can't"} administer the repository.`);
   out(`- ${s.labels.size} label(s); ${s.covering.length} ruleset(s) on the default branch; secrets ${s.secrets ? `readable (${s.secrets.size})` : 'not readable with this token'}.`);
 
@@ -2589,7 +2616,13 @@ const run = async (deps, opts, req, rep) => {
   // that differs from the one it declares is a step: the bullets to write, beside the caller init
   // wrote from the answer, so the two land in one pull request and the gate's check 3 holds.
   const listed = (/** @type {string[]} */ l) => l.join(', ') || 'none';
-  if (record === 'kept' && listed(declaredEnvironments) !== listed(a.deployEnvironments)) {
+  const pathTaken = a.deployEnvironments.length > 0 && deployPathTaken(read, req);
+  if (pathTaken) {
+    const message = `${DEPLOY_CALLER_PATH} is a deploy workflow of your own, which calls no Kanon deploy lane, so init wrote nothing for the deploy lane: no caller, no hook and no ${DEPLOY_HEADING} section. The deploy environments ${listed(a.deployEnvironments)} are not installed.`;
+    const text = `Move your workflow to another file name, and any reference deploy bullet that names it, with git mv, then run kanon init again with the same flags: it writes the caller at ${DEPLOY_CALLER_PATH}, the file name its reference deploy names. Or keep your workflow, and answer none.`;
+    step({ id: 'deploy.caller-taken', category: 'deploy', subject: DEPLOY_CALLER_PATH, prose: `${message} ${text}`, message, text, commands: [] });
+  }
+  if (!pathTaken && record === 'kept' && listed(declaredEnvironments) !== listed(a.deployEnvironments)) {
     const message = `${DEPLOY_RECORD} is the project's, and its ${DEPLOY_HEADING} section declares ${declaredEnvironments.length ? `the deploy environments ${listed(declaredEnvironments)}` : 'no deploy environment'}, not ${listed(a.deployEnvironments)}.`;
     const text = a.deployEnvironments.length
       ? `Write these bullets in the ${DEPLOY_HEADING} section of ${DEPLOY_RECORD} (after ## Data, where the record has no such section), in place of any environment list and reference deploy bullets it has, keeping its CI wait and fallback bullets.`
