@@ -344,12 +344,12 @@ describe('the dispatch sweep runs the feeder', () => {
   const steps = Object.values(wf.jobs).flatMap((j) => j.steps ?? []);
   const feed = steps.filter((s) => /scripts\/backlog-feed\.mjs/.test(s.run ?? ''));
 
-  it('on the Lead\'s App token, behind the variable, applying on the schedule only', () => {
+  it('on the Lead\'s App token, behind the variable, applying on the schedule and a re-ask only', () => {
     expect(feed).toHaveLength(1);
     const s = feed[0]!;
     expect(s.run?.trim()).toBe('node "$KANON/scripts/backlog-feed.mjs"');
     expect(s.env?.GH_TOKEN).toBe('${{ steps.app-token.outputs.token }}');
-    expect(s.env?.APPLY).toBe("${{ (github.event_name == 'schedule' || inputs.apply == 'true') && '1' || '' }}");
+    expect(s.env?.APPLY).toBe("${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}");
     expect(s.env?.QA_BACKLOG_FEED).toBe('${{ vars.QA_BACKLOG_FEED }}');
     expect(s.env?.QA_BACKLOG_MILESTONES).toBe('${{ vars.QA_BACKLOG_MILESTONES }}');
     expect(s.if).toContain('!cancelled()');

@@ -628,10 +628,87 @@ describe("kanon doctor and the Lead's brief template (#749)", () => {
     ]);
   });
 
-  it("is absent where the template exists, whatever it holds, or nothing calls the Lead", async () => {
+  it("is absent where the template exists, or nothing calls the Lead", async () => {
+    expect(lead(await run(checkout(withLead(KANONS)), fakeGitHub(), ['--json']))).toEqual([]);
     expect(lead(await run(checkout(withLead('# Our brief template\n')), fakeGitHub(), ['--json']))).toEqual([]);
     const r = await run(checkout(healthyFiles()), fakeGitHub(), ['--json']);
     expect(r.json.findings).toEqual([]);
+  });
+
+  // #755: K-LAYOUT-11's adopter replaces the copy when Kanon's template changes, so doctor names
+  // one that differs from the checked release's, with lead.template-missing's copy command.
+  const KANONS = readFileSync(new URL('../../rulebook/templates/brief.md', import.meta.url), 'utf8');
+  const stale = (r: Result) => r.json.findings.filter((f: { id: string }) => f.id === 'lead.template-stale');
+  const copyFix = (release: string) => ({
+    text: `Replace it with Kanon's brief template, unchanged, as kanon init writes it, from the release you check (${release}):`,
+    commands: [
+      'mkdir -p docs/projects',
+      `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/yedeya-labs/kanon/contents/rulebook/templates/brief.md?ref=${release}' > ${TEMPLATE}`,
+    ],
+    url: `https://github.com/yedeya-labs/kanon/blob/${release}/rulebook/templates/brief.md`,
+  });
+
+  it('lead.template-stale: names a template that differs from the checked release\'s, without blocking, with the copy command', async () => {
+    const r = await run(checkout(withLead(KANONS.replace('## ', '## Our '))), fakeGitHub(), ['--json']);
+    expect(stale(r)).toEqual([{
+      id: 'lead.template-stale',
+      category: 'declaration',
+      blocking: false,
+      subject: TEMPLATE,
+      message: `differs from Kanon's brief template at ${PINNED}; the Lead, which .github/workflows/agent-lead.yml calls, writes each brief from it, and the brief guard holds those briefs to ${PINNED}'s rules (K-LAYOUT-11).`,
+      fix: copyFix(PINNED),
+    }]);
+    expect(stale(r)[0].fix.commands).toEqual((lead(await run(checkout(withLead(null)), fakeGitHub(), ['--json']))[0] as { fix: { commands: string[] } }).fix.commands);
+    expect([r.status, r.json.status]).toEqual([EXIT.healthy, 'healthy']);
+    expect(lead(r)).toEqual([]);
+  });
+
+  it('is absent for an exact copy, and for one a checkout wrote with CRLF line endings', async () => {
+    for (const copy of [KANONS, KANONS.replace(/\n/g, '\r\n')]) {
+      const r = await run(checkout(withLead(copy)), fakeGitHub(), ['--json']);
+      expect(stale(r)).toEqual([]);
+      expect(r.json.findings).toEqual([]);
+      expect(r.json.unchecked).toEqual([]);
+    }
+    // A copy with one byte more is not exact.
+    expect(stale(await run(checkout(withLead(`${KANONS}\n`)), fakeGitHub(), ['--json']))).toHaveLength(1);
+  });
+
+  it("compares with the --to release's template, read from Kanon's repository at its tag", async () => {
+    const TO = 'v1.1.0';
+    const github = () => fakeGitHub({ releases: { [TO]: REQ }, templates: { [TO]: `${KANONS}\n## A new section\n` } });
+    const drifted = await run(checkout(withLead(KANONS)), github(), ['--json', '--to', TO]);
+    expect(stale(drifted)).toEqual([expect.objectContaining({ subject: TEMPLATE, message: expect.stringContaining(`differs from Kanon's brief template at ${TO}`), fix: copyFix(TO) })]);
+    const gh = github();
+    const exact = await run(checkout(withLead(`${KANONS}\n## A new section\n`)), gh, ['--json', '--to', TO]);
+    expect(stale(exact)).toEqual([]);
+    expect(gh.calls).toContainEqual(['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/yedeya-labs/kanon/contents/rulebook/templates/brief.md?ref=${TO}`]);
+  });
+
+  it("lists the check as unchecked, and reports nothing, when the release's template can't be read", async () => {
+    const TO = 'v1.1.0';
+    const r = await run(checkout(withLead('# Our brief template\n')), fakeGitHub({ releases: { [TO]: REQ } }), ['--json', '--to', TO]);
+    expect(stale(r)).toEqual([]);
+    expect(r.json.unchecked).toEqual([{ check: 'brief-template', subject: TEMPLATE, reason: expect.stringContaining(`could not read Kanon ${TO}'s brief template (gh: Not Found (HTTP 404))`) }]);
+    expect([r.status, r.json.status]).toEqual([EXIT.incomplete, 'incomplete']);
+  });
+
+  it('reads no release template where nothing calls the Lead, or the template is missing', async () => {
+    const TO = 'v1.1.0';
+    for (const files of [healthyFiles(), withLead(null)]) {
+      const gh = fakeGitHub({ releases: { [TO]: REQ } });
+      const r = await run(checkout(files), gh, ['--json', '--to', TO]);
+      expect(r.json.unchecked).toEqual([]);
+      expect(gh.calls.some((c) => c.some((x) => x.includes('rulebook/templates/brief.md')))).toBe(false);
+    }
+  });
+
+  it('can be waived, with its reason, as any finding that does not block', async () => {
+    const files = withLead('# Our brief template\n');
+    files['docs/qa/adoption.md'] += `- **${WAIVER_LABEL}:** \`lead.template-stale\` on \`${TEMPLATE}\` (we keep our own sections)\n`;
+    const r = await run(checkout(files), fakeGitHub(), ['--json']);
+    expect(stale(r)).toEqual([]);
+    expect(r.json.waived).toEqual([expect.objectContaining({ id: 'lead.template-stale', subject: TEMPLATE, reason: 'we keep our own sections' })]);
   });
 });
 

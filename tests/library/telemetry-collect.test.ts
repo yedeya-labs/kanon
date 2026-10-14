@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { MAX_ROWS as FUNCTION_MAX_ROWS } from '../../infra/telemetry/function/index.mjs';
 import {
@@ -8,13 +10,20 @@ import {
   WINDOW_MINUTES,
   codesOnly,
   collect,
+  checkStep,
+  ensureRegistered,
+  eraseSelf,
+  inputsOf,
+  LEGACY_REFUSAL,
   lastSuccessfulSweep,
-  regionOf,
+  refusalOf,
   sweepSince,
+  tokenPost,
   underLevel,
   workflowFileOf,
 } from '../../scripts/telemetry-collect.mjs';
 import { ARTIFACT_FILE, FINDING_ARTIFACT_FILE, findingArtifactName } from '../../scripts/lib/telemetry-artifacts.mjs';
+import { HOSTED_AUDIENCE, HOSTED_INGEST_URL, mintToken, storeOf, storeRequest } from '../../scripts/lib/telemetry-token.mjs';
 import { zipOf } from './helpers/zip.js';
 
 /**
@@ -176,14 +185,6 @@ describe('the run listing finds the caller by GITHUB_WORKFLOW_REF, and judges th
   });
 });
 
-describe('the function URL names its region', () => {
-  it('reads it from the host', () => {
-    expect(regionOf('https://abc123.lambda-url.eu-central-1.on.aws/')).toBe('eu-central-1');
-    expect(regionOf('https://example.com/')).toBeNull();
-    expect(regionOf('not a url')).toBeNull();
-  });
-});
-
 describe('every row in the span is sent, 25 to a request', () => {
   it('sends the function maximum per request', async () => {
     expect(MAX_ROWS).toBe(FUNCTION_MAX_ROWS);
@@ -277,10 +278,13 @@ describe('a row that cannot be sent turns the run red, by name and never by valu
   });
 
   it('a request the store refuses whole, or a write it failed', async () => {
-    const refused = await run(github([artifact(row(5 * MIN))]), store(() => ({ status: 403, json: { error: 'caller' } })));
-    expect(refused.failures).toEqual(['rows 1-1: the store answered 403 (caller)']);
-    const notJson = await run(github([artifact(row(5 * MIN))]), store(() => ({ status: 403, json: null })));
-    expect(notJson.failures).toEqual(['rows 1-1: the store answered 403']);
+    const refused = await run(github([artifact(row(5 * MIN))]), store(() => ({ status: 401, json: { error: 'aud' } })));
+    expect(refused.failures).toEqual(['rows 1-1: the store answered 401 (aud)']);
+    const notJson = await run(github([artifact(row(5 * MIN))]), store(() => ({ status: 500, json: null })));
+    expect(notJson.failures).toEqual(['rows 1-1: the store answered 500']);
+    // A code outside the store's closed list is never echoed.
+    const odd = await run(github([artifact(row(5 * MIN))]), store(() => ({ status: 400, json: { error: 'Some <value> from a row' } })));
+    expect(odd.failures).toEqual(['rows 1-1: the store answered 400']);
     const failed = await run(github([artifact(row(5 * MIN))]), store((rows) => ({ status: 502, json: { results: rows.map(() => ({ status: 'failed' })) } })));
     expect(failed.failures).toEqual([expect.stringMatching(/: the store failed to write it$/)]);
     const thrown = await run(github([artifact(row(5 * MIN))]), { posts: [], post: async () => { throw new Error('ECONNRESET'); } });
@@ -474,5 +478,233 @@ describe('finding rows (plan 0006 §5 step 3, F4): sent under the level the reco
     expect(underLevel(coded, 'drafted')).toBeNull();
     expect(underLevel(coded, 'filed here')).toBeNull();
     expect(codesOnly(texted)).toEqual(coded);
+  });
+});
+
+// ── The token path (plan 0008 §2.1, §3.2, §7, §8; step J5) ─────────────────────────────────────
+
+const SELF_URL = 'https://abc123def.lambda-url.eu-central-1.on.aws/';
+const SELF_AUDIENCE = 'acme-telemetry';
+/** A JWS-shaped token, minted by the fake runner: never a real one. */
+const TOKEN = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl';
+
+/** The runner's OIDC endpoint and a store, as one fake `fetch`, recording every call. */
+function fakeNet(answer: (method: string, path: string, body: unknown) => { status: number; json?: unknown; headers?: Record<string, string> }) {
+  const calls: Array<{ url: string; method: string; path: string; auth?: string; body?: unknown }> = [];
+  let minted = 0;
+  const fetchImpl = (async (url: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}) => {
+    const u = new URL(url);
+    if (u.host === 'runner.example') {
+      minted += 1;
+      calls.push({ url, method: 'GET', path: 'oidc', auth: init.headers?.authorization });
+      return new Response(JSON.stringify({ value: `${TOKEN}${minted}` }), { status: 200 });
+    }
+    const body = init.body === undefined ? undefined : JSON.parse(init.body);
+    calls.push({ url, method: init.method ?? 'GET', path: u.pathname, auth: init.headers?.authorization, body });
+    const a = answer(init.method ?? 'GET', u.pathname, body);
+    return new Response(a.json === undefined ? '' : JSON.stringify(a.json), { status: a.status, headers: a.headers });
+  }) as unknown as typeof fetch;
+  return { calls, fetchImpl, minted: () => minted };
+}
+const RUNNER_ENV = { ACTIONS_ID_TOKEN_REQUEST_URL: 'https://runner.example/token?api-version=2.0', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'runner-request-token' };
+const SELF = { ok: true as const, url: SELF_URL, audience: SELF_AUDIENCE, hosted: false };
+
+describe('which store: the hosted URL is fixed with its audience, and a self-hosted one takes url and audience together (§2.1)', () => {
+  it('the hosted store when neither is given; unpublished until the operator publishes the URL (Owner decision 10)', () => {
+    const s = storeOf({ hostedUrl: HOSTED_INGEST_URL });
+    if (HOSTED_INGEST_URL) expect(s).toEqual({ ok: true, url: HOSTED_INGEST_URL, audience: HOSTED_AUDIENCE, hosted: true });
+    else expect(s).toMatchObject({ ok: false, unpublished: true });
+    expect(storeOf({ hostedUrl: SELF_URL })).toEqual({ ok: true, url: SELF_URL, audience: 'kanon-telemetry', hosted: true });
+  });
+
+  it('a self-hosted store by both together', () => {
+    expect(storeOf({ url: SELF_URL, audience: SELF_AUDIENCE, hostedUrl: '' })).toEqual(SELF);
+  });
+
+  it('refuses one without the other', () => {
+    expect(storeOf({ url: SELF_URL, hostedUrl: '' })).toMatchObject({ ok: false, why: expect.stringContaining('only `url` is given') });
+    expect(storeOf({ audience: SELF_AUDIENCE, hostedUrl: '' })).toMatchObject({ ok: false, why: expect.stringContaining('only `audience` is given') });
+  });
+
+  it('refuses the hosted audience sent to a URL of its own (the mutation J5 names)', () => {
+    expect(storeOf({ url: SELF_URL, audience: HOSTED_AUDIENCE, hostedUrl: 'https://hosted1.lambda-url.eu-central-1.on.aws/' })).toMatchObject({ ok: false, why: expect.stringContaining('only ever sent to the hosted store') });
+    expect(storeOf({ url: SELF_URL, audience: HOSTED_AUDIENCE, hostedUrl: '' })).toMatchObject({ ok: false });
+  });
+
+  it('refuses a URL that is not a function URL, and an audience of the wrong shape', () => {
+    for (const url of ['http://abc.lambda-url.eu-central-1.on.aws/', 'https://evil.example/', 'https://abc.lambda-url.eu-central-1.on.aws/x', 'https://abc.lambda-url.eu-central-1.on.aws.evil.example/']) {
+      expect(storeOf({ url, audience: SELF_AUDIENCE, hostedUrl: '' })).toMatchObject({ ok: false });
+    }
+    expect(storeOf({ url: SELF_URL, audience: 'https://x', hostedUrl: '' })).toMatchObject({ ok: false });
+  });
+});
+
+describe("the collect job's inputs, checked before any token is minted", () => {
+  it('url without audience refuses, and the check step exits 1 naming it', () => {
+    const lines: string[] = [];
+    expect(checkStep({ KANON_TELEMETRY_URL: SELF_URL }, (l) => lines.push(l))).toBe(1);
+    expect(lines.join('\n')).toMatch(/::error title=telemetry-collect::the caller passes `url` or `writer-role` without `audience`.*no token was minted/);
+    // audience alone is refused by the store check, naming what is missing.
+    const alone: string[] = [];
+    expect(checkStep({ KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE }, (l) => alone.push(l))).toBe(1);
+    expect(alone.join('\n')).toMatch(/only `audience` is given.*no token was minted/);
+  });
+
+  // Owner decision of 2026-10-14 (#842): the SigV4 path's inputs are refused, never redirected.
+  it('a caller that still passes url and writer-role without audience is refused, and its url is never swapped for the hosted store', () => {
+    const r = inputsOf({ KANON_TELEMETRY_URL: 'https://old123.lambda-url.eu-central-1.on.aws/', LEGACY: 'true' });
+    expect(r.problems).toEqual([LEGACY_REFUSAL]);
+    expect(r.store).toMatchObject({ ok: false });
+    expect(LEGACY_REFUSAL).toMatch(/nothing is sent and nothing is registered/);
+    expect(LEGACY_REFUSAL).toMatch(/Run `kanon init` again/);
+    expect(LEGACY_REFUSAL).toMatch(/add `audience:` beside `url:`/);
+    // writer-role alone, with no url, is refused the same.
+    expect(inputsOf({ LEGACY: 'true' }).problems).toEqual([LEGACY_REFUSAL]);
+    // Beside a self-hosted url and audience, writer-role is ignored, with a warning.
+    const self = inputsOf({ KANON_TELEMETRY_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE, LEGACY: 'true' });
+    expect(self).toMatchObject({ problems: [], store: SELF });
+    expect(self.warnings).toEqual([expect.stringContaining('`writer-role`, which this release of the collector ignores')]);
+  });
+
+  it('a legacy self-hosted caller sends nothing, registers nothing, and stays red: the run stops before any token (#842)', () => {
+    // The whole script, as the job runs it, against a runner endpoint that would answer: a mint, a
+    // registration or a row would each have to reach it, and the run must stop before all three.
+    const script = fileURLToPath(new URL('../../scripts/telemetry-collect.mjs', import.meta.url));
+    const r = spawnSync(process.execPath, [script], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH, GITHUB_REPOSITORY: REPO, GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/telemetry.yml@refs/heads/main`,
+        KANON_TELEMETRY_URL: 'https://old123.lambda-url.eu-central-1.on.aws/', LEGACY: 'true', ERASE: '', REGISTER: '',
+        ACTIONS_ID_TOKEN_REQUEST_URL: 'http://127.0.0.1:9/token?api-version=2.0', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'runner-request-token',
+      },
+    });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('nothing is sent and nothing is registered');
+    for (const s of ['add-mask', 'OIDC endpoint', 'could not be reached', 'Telemetry registration', 'Telemetry collector:']) expect(r.stdout + r.stderr).not.toContain(s);
+    const lines: string[] = [];
+    expect(checkStep({ KANON_TELEMETRY_URL: 'https://old123.lambda-url.eu-central-1.on.aws/', LEGACY: 'true' }, (l) => lines.push(l))).toBe(1);
+    expect(lines).toEqual([expect.stringMatching(/^::error title=telemetry-collect::the caller passes `url` or `writer-role` without `audience`/)]);
+  });
+
+  it('erase and register are yes or no, empty on a schedule, never both', () => {
+    expect(inputsOf({ ERASE: '', REGISTER: '' })).toMatchObject({ erase: false, register: false, problems: [] });
+    expect(inputsOf({ ERASE: 'yes', REGISTER: 'no' })).toMatchObject({ erase: true, register: false });
+    expect(inputsOf({ ERASE: 'maybe' }).problems).toEqual(['`erase` is neither yes nor no']);
+    expect(inputsOf({ ERASE: 'yes', REGISTER: 'yes' }).problems).toEqual(['`erase` and `register` are both yes: dispatch one at a time']);
+  });
+});
+
+describe('a fresh token per request, masked before anything prints, never written', () => {
+  it('asks the runner for the store\'s audience, masks it first, and sends it as a bearer token', async () => {
+    const net = fakeNet(() => ({ status: 200, json: { status: 'active' } }));
+    const masked: string[] = [];
+    const a = await storeRequest(SELF, { method: 'GET', path: 'v1/registrations/self' }, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: (t) => masked.push(t) });
+    expect(a.status).toBe(200);
+    expect(net.calls[0]).toMatchObject({ url: `${RUNNER_ENV.ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${SELF_AUDIENCE}`, auth: 'Bearer runner-request-token' });
+    expect(masked).toEqual([`${TOKEN}1`]);
+    expect(net.calls[1]).toMatchObject({ url: `${SELF_URL}v1/registrations/self`, auth: `Bearer ${TOKEN}1` });
+  });
+
+  it('mints a new token for each request', async () => {
+    const net = fakeNet((_m, _p, body) => ({ status: 200, json: { results: (body as unknown[]).map(() => ({ status: 'stored' })) } }));
+    const post = tokenPost(SELF, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: () => {} });
+    await post([{ a: 1 }]);
+    await post([{ a: 2 }]);
+    const sent = net.calls.filter((c) => c.path === '/v1/rows').map((c) => c.auth);
+    expect(sent).toEqual([`Bearer ${TOKEN}1`, `Bearer ${TOKEN}2`]);
+  });
+
+  it('never prints or writes the token: the only line holding it is the runner\'s own mask command', async () => {
+    const out: string[] = [];
+    const write = process.stdout.write.bind(process.stdout);
+    const log = console.log;
+    process.stdout.write = ((chunk: string) => { out.push(String(chunk)); return true; }) as typeof process.stdout.write;
+    console.log = (...a: unknown[]) => { out.push(a.join(' ')); };
+    try {
+      const net = fakeNet(() => ({ status: 404, json: { error: 'not-registered' } }));
+      await ensureRegistered(SELF, { env: RUNNER_ENV, fetchImpl: net.fetchImpl });
+      await eraseSelf(SELF, { env: RUNNER_ENV, fetchImpl: net.fetchImpl });
+    } finally {
+      process.stdout.write = write;
+      console.log = log;
+    }
+    const holding = out.join('').split('\n').filter((l) => l.includes(TOKEN));
+    expect(holding.length).toBeGreaterThan(0);
+    for (const l of holding) expect(l).toMatch(new RegExp(`^::add-mask::${TOKEN}\\d+$`));
+  });
+
+  it('a job without id-token: write says so, and sends nothing', async () => {
+    const net = fakeNet(() => ({ status: 200, json: {} }));
+    await expect(mintToken(SELF_AUDIENCE, { env: {}, fetchImpl: net.fetchImpl, mask: () => {} })).rejects.toThrow(/needs `id-token: write`/);
+    expect(net.calls).toEqual([]);
+  });
+});
+
+describe('registration is the first run (§3.2, §8)', () => {
+  it('a 404 not-registered on the rows registers once, with an empty body, and sends the rows again', async () => {
+    let registered = false;
+    const net = fakeNet((m, p, body) => {
+      if (p === '/v1/registrations') {
+        registered = true;
+        return { status: 201, json: { status: 'active', registered_at: '2026-10-14T00:00:00Z' } };
+      }
+      if (!registered) return { status: 404, json: { error: 'not-registered' } };
+      return { status: 200, json: { results: (body as unknown[]).map(() => ({ status: 'stored' })) } };
+    });
+    const post = tokenPost(SELF, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: () => {} });
+    const res = await run(github([artifact(row(5 * MIN))]), { posts: [], post });
+    expect(res).toMatchObject({ stored: 1, failures: [], refusal: null });
+    expect(net.calls.filter((c) => c.path !== 'oidc').map((c) => `${c.method} ${c.path}`)).toEqual(['POST /v1/rows', 'POST /v1/registrations', 'POST /v1/rows']);
+    expect(net.calls.find((c) => c.path === '/v1/registrations')?.body).toEqual({});
+  });
+
+  it('a run with no row asks the registration\'s status, and registers on a 404', async () => {
+    const net = fakeNet((m) => (m === 'GET' ? { status: 404, json: { error: 'not-registered' } } : { status: 201, json: { status: 'active' } }));
+    expect(await ensureRegistered(SELF, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: () => {} })).toEqual({ status: 'active' });
+    expect(net.calls.filter((c) => c.path !== 'oidc').map((c) => `${c.method} ${c.path}`)).toEqual(['GET /v1/registrations/self', 'POST /v1/registrations']);
+  });
+});
+
+describe('a refusal stops the sweep, said in the store\'s codes (§3.2, §6, §7)', () => {
+  it('403 suspended is red, and nothing more is sent', async () => {
+    const s = store(() => ({ status: 403, json: { error: 'suspended' } }));
+    const res = await run(github(Array.from({ length: 30 }, (_, i) => artifact(row(i * MIN)))), s);
+    expect(s.posts.length).toBe(1);
+    expect(res.refusal).toMatchObject({ status: 403, code: 'suspended', red: true });
+    expect(res.failures).toEqual([]);
+  });
+
+  it('410 erased is green, with words saying how to come back', () => {
+    expect(refusalOf(410, { error: 'erased' })).toMatchObject({ red: false, words: expect.stringContaining('register: yes') });
+    expect(refusalOf(409, { error: 'erasing' })).toMatchObject({ red: false });
+  });
+
+  it('429 names the limit and when it resets, never another value', () => {
+    expect(refusalOf(429, { error: 'quota', limit: 'rows_per_day', resets_at: '2026-10-15T00:00:00Z' })).toMatchObject({ red: true, words: expect.stringContaining('past rows_per_day, which resets at 2026-10-15T00:00:00Z') });
+    expect(refusalOf(429, { error: 'quota', limit: '<script>', resets_at: 'soon' }, '120')?.words).toContain('past a limit, which resets at in 120 s');
+  });
+
+  it('another 403, a token check, is red too; a 401 or a 5xx is an ordinary failure', () => {
+    expect(refusalOf(403, { error: 'workflow' })).toMatchObject({ red: true, code: 'workflow' });
+    expect(refusalOf(401, { error: 'aud' })).toBeNull();
+    expect(refusalOf(503, { error: 'jwks-unavailable' })).toBeNull();
+  });
+});
+
+describe('erasure is one dispatch (§7)', () => {
+  it('DELETE, then says whether the rows are gone yet', async () => {
+    const net = fakeNet(() => ({ status: 202, json: { status: 'erased', erased_at: '2026-10-14T10:00:00Z', rows_erased: false } }));
+    const r = await eraseSelf(SELF, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: () => {} });
+    expect(net.calls.filter((c) => c.path !== 'oidc').map((c) => `${c.method} ${c.path}`)).toEqual(['DELETE /v1/registrations/self']);
+    expect(r.lines.join(' ')).toMatch(/erased as of 2026-10-14T10:00:00Z.*being deleted/);
+    const done = fakeNet(() => ({ status: 200, json: { status: 'erased', erased_at: '2026-10-14T10:00:00Z', rows_erased: true } }));
+    expect((await eraseSelf(SELF, { env: RUNNER_ENV, fetchImpl: done.fetchImpl, mask: () => {} })).lines.join(' ')).toMatch(/rows are deleted/);
+  });
+
+  it('a repository never registered has nothing to erase; a suspended one is refused, red', async () => {
+    const none = fakeNet(() => ({ status: 404, json: { error: 'not-registered' } }));
+    expect((await eraseSelf(SELF, { env: RUNNER_ENV, fetchImpl: none.fetchImpl, mask: () => {} })).lines[0]).toMatch(/not registered/);
+    const suspended = fakeNet(() => ({ status: 403, json: { error: 'suspended' } }));
+    expect((await eraseSelf(SELF, { env: RUNNER_ENV, fetchImpl: suspended.fetchImpl, mask: () => {} })).refusal).toMatchObject({ red: true, code: 'suspended' });
   });
 });

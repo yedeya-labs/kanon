@@ -288,10 +288,12 @@ for (const f of WORKFLOWS) {
   const laneDoc = /** @type {any} */ (laneParsed);
 
   // Every caller lives at its lane's own file name (K-LAYOUT-18, kanon#207). Kanon's scripts
-  // find a lane's runs, and dispatch it, by the caller's file name: the review lane's
-  // (`merge-gate.mjs`, the review-run evidence), the revise lanes' (the reconciler), and every
-  // caller's (the health check, which watches `agent-*.yml`). Under another name those reads
-  // come back empty, which the recoveries read as "nothing is parked".
+  // find a lane's runs, and dispatch it, through its caller: the review lane's (`merge-gate.mjs`,
+  // the review-run evidence), the revise lanes' (the reconciler), and every caller's (the health
+  // check). Since kanon#726 they look the caller up on the default branch
+  // (`scripts/lib/lane-caller.mjs`), and fall back to the lane's file name when they can't read
+  // that branch or find no caller. In that fallback a caller under another name has no runs to
+  // find, which the recoveries read as "nothing is parked", so the name stays the rule.
   //
   // GitHub files a run under the TOP-LEVEL workflow's file name, so a caller that is itself a
   // reusable workflow, a wrapper some other workflow calls, has its runs filed under that other
@@ -307,7 +309,7 @@ for (const f of WORKFLOWS) {
   if (f !== `.github/workflows/${lane}.yml`) {
     const taken = json(`.github/workflows/${lane}.yml`) ?? {};
     if (!(KANON_TREE && isReusable(taken))) {
-      fail(f, `calls the Kanon lane ${lane}, so it lives at .github/workflows/${lane}.yml: Kanon's scripts find this lane's runs, and dispatch it, by that file name (K-LAYOUT-18)`);
+      fail(f, `calls the Kanon lane ${lane}, so it lives at .github/workflows/${lane}.yml: that is the name Kanon's scripts fall back to when they can't find this lane's caller on the default branch (K-LAYOUT-18)`);
     }
   }
   // The workflows of the adopter's own that the lane reads by file name, on `# READS WORKFLOW:

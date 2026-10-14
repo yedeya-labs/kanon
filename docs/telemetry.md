@@ -8,6 +8,7 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 | `render.mjs` | Adds each registered repository's writer and reader roles to the template, from the private register and GitHub's API. |
 | `function/` | The ingest function (`index.mjs`) and the aggregate function (`aggregate.mjs`), one package with two handlers. `schema.mjs` there is a link to [`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), so the function validates with the same file the lanes use; `scrub.mjs` and `public-words.mjs` are links too, the scrub that schema runs on a finding's text (plan 0006 §4.2). `oidc.mjs` is plan 0008's token verifier, which nothing calls yet ([The token verifier](#the-token-verifier-plan-0008-j1)). |
 | `verify.mjs` | Step S3's checks, run against the deployed store. |
+| `intake-first.mjs` | Whether a release's lanes can write a row the deployed ingest function refuses, so intake must be deployed from it first ([`docs/release.md`](release.md#intake-first)). |
 | `erase.mjs` | Deletes one adopter's rows (§10). |
 | `aggregate.mjs` | The aggregate (§6, §6.1), run by you: what the aggregate function answers, plus the totals only you see. |
 | `import.mjs` | The reference adopter's history import (§7, S5): its transform, dry run and send. |
@@ -15,9 +16,9 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 | `register.example.json` | The register's shape, naming only Kanon. |
 | `register.mjs` | Your CLI for the register table of [plan 0008](plans/0008-self-service-registration.md) §5: `list`, `suspend`, `resume`, `set`, `erase` and `import` ([The register table](#the-register-table)). Nothing else uses the table yet. |
 
-The collector that writes to it is [`telemetry-collect.yml`](../.github/workflows/telemetry-collect.yml) ([Collect the rows](#collect-the-rows)).
+The collector that writes to it is [`telemetry-collect.yml`](../.github/workflows/telemetry-collect.yml) ([Collect the rows](#collect-the-rows)). From vM it sends with GitHub's OIDC token to the token path's endpoints ([The token path's endpoints](#the-token-paths-endpoints-plan-0008-j3)); the SigV4 path, the writer roles and `render.mjs` stay beside it for one release, for callers still pinned below vM and the Owner's importer and backfill role, and go at vM+1 (plan 0008 §9, J9).
 
-**What an adopter gets by opting in** ([#41](https://github.com/yedeya-labs/kanon/issues/41), ADR 0007). Kanon notices failures that Kanon caused in your runs, from the same stage and error at several adopters or a failure that starts at a release, and often fixes them before you would have had to report anything ([Kanon's own bugs](#kanons-own-bugs)). You also get cross-adopter cost and reliability baselines, each combining at least three adopters ([The aggregate function](#the-aggregate-function)). What leaves your project is exactly the schema's fixed fields ([`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), plan 0002 §2.1): never code, prompts, text, file paths or usernames, except that upstream findings, which you opt into on their own below, add Kanon's own file paths and, at `sent with evidence`, each finding's evidence and suggested fix, as scrubbed text. To opt in, answer yes to `kanon init`'s telemetry question, or write the caller in [Collect the rows](#collect-the-rows); to leave, delete it and ask for erasure, which completes within 35 days ([Erase an adopter](#erase-an-adopter)). With telemetry on, you may also opt in to sending the Overseer's and the telemetry Explorer's upstream findings, the ones only Kanon can act on, by your adoption record's `Upstream findings:` choice, `sent` or `sent with evidence`, which `kanon init` asks after telemetry ([plan 0006](plans/0006-upstream-findings.md) §3, [`docs/init.md`](init.md#upstream-findings)): Kanon then hears of its own bugs from your findings without your filing anything. The collector sends them and the ingest function stores them ([Collect the rows](#collect-the-rows), plan 0006 F4); the lanes write them and upload them as `kanon-finding-*` artifacts (plan 0006's F3).
+**What an adopter gets by opting in** ([#41](https://github.com/yedeya-labs/kanon/issues/41), ADR 0007). Kanon notices failures that Kanon caused in your runs, from the same stage and error at several adopters or a failure that starts at a release, and often fixes them before you would have had to report anything ([Kanon's own bugs](#kanons-own-bugs)). You also get cross-adopter cost and reliability baselines, each combining at least three adopters ([The aggregate function](#the-aggregate-function)). What leaves your project is exactly the schema's fixed fields ([`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), plan 0002 §2.1): never code, prompts, text, file paths or usernames, except that upstream findings, which you opt into on their own below, add Kanon's own file paths and, at `sent with evidence`, each finding's evidence and suggested fix, as scrubbed text. To opt in, answer yes to `kanon init`'s telemetry question, or write the caller in [Collect the rows](#collect-the-rows): from the release that ships [plan 0008](plans/0008-self-service-registration.md)'s token path (its vM), the caller's first run registers the repository, with no issue, no variable and nothing for the operator to do. To leave, delete the caller; to erase what was sent, first dispatch it with `erase: yes`, an erasure, which completes within 35 days ([Erase an adopter](#erase-an-adopter), [`docs/sharing.md`](sharing.md#stop-and-erase)). With telemetry on, you may also opt in to sending the Overseer's and the telemetry Explorer's upstream findings, the ones only Kanon can act on, by your adoption record's `Upstream findings:` choice, `sent` or `sent with evidence`, which `kanon init` asks after telemetry ([plan 0006](plans/0006-upstream-findings.md) §3, [`docs/init.md`](init.md#upstream-findings)): Kanon then hears of its own bugs from your findings without your filing anything. The collector sends them and the ingest function stores them ([Collect the rows](#collect-the-rows), plan 0006 F4); the lanes write them and upload them as `kanon-finding-*` artifacts (plan 0006's F3).
 
 Every AWS command here is the Owner's to run. Agents run none (§5).
 
@@ -34,7 +35,7 @@ Every AWS command here is the Owner's to run. Agents run none (§5).
 
   It takes up to 25 rows a request and 256 KB, and answers per row: 200 when every row is stored, 422 when any is rejected, and 502 when a write fails.
 
-  **A finding's `scrub_version`** is the version of the scrub's rules that redacted its text (plan 0006 §4.2). Version 2 ([#724](https://github.com/yedeya-labs/kanon/issues/724)) changed one rule: `name` no longer removes a word wholly inside a Kanon path the `path` rule kept ([#603](https://github.com/yedeya-labs/kanon/issues/603)), so `scripts/merge-gate.mjs` stays whole. The function accepts every version from 1 to its own release's, and refuses any other with 422 `scrub_version` `range`. A version-1 row still passes, because version 2's `verify` only leaves more alone. **So deploy intake first, then the lanes' release:** render, package and deploy from the release that writes version 2 before any repository's pin reaches it. An intake from an earlier release refuses each version-2 row, and the collector turns red. The #41 job validates each finding again at the release it pins ([Kanon's own bugs](#kanons-own-bugs)), so move its pin with the deploy.
+  **A finding's `scrub_version`** is the version of the scrub's rules that redacted its text (plan 0006 §4.2). Version 2 ([#724](https://github.com/yedeya-labs/kanon/issues/724)) changed one rule: `name` no longer removes a word wholly inside a Kanon path the `path` rule kept ([#603](https://github.com/yedeya-labs/kanon/issues/603)), so `scripts/merge-gate.mjs` stays whole. The function accepts every version from 1 to its own release's, and refuses any other with 422 `scrub_version` `range`. A version-1 row still passes, because version 2's `verify` only leaves more alone. **So deploy intake first, then the lanes' release:** render, package and deploy from the release that writes version 2 before any repository's pin reaches it. An intake from an earlier release refuses each version-2 row, and the collector turns red. The #41 job validates each finding again at the release it pins ([Kanon's own bugs](#kanons-own-bugs)), so move its pin with the deploy. The release procedure's [intake-first step](release.md#intake-first) checks every such widening, `scrub_version`'s among them, against the release intake was deployed from.
 - **Its log group:** 30-day retention. It holds keys and field names, never a value.
 - **Its environment** (from `render.mjs`): `WRITER_KEYS`, every registered key, and `NAME_HASHES`, for each key the SHA-256 of each word of its repository's owner and name but Kanon's own vocabulary (the scrub's `KANON_WORDS`), never the words (plan 0006 §4.2). **Since plan 0008 J3 the function reads neither:** the keys and the name hashes come from the register table instead, and both variables go with `render.mjs` at J9. Lambda holds a function's environment to 4 KB, so `render.mjs` refuses a register too large for it before any deploy. Beside them, the token path's settings: `REGISTER_TABLE`, `AUDIENCE` (the `Audience` parameter, default `kanon-telemetry`), `MIN_TOKEN_VERSION` (`MinTokenVersion`, empty by default, which admits no token), `SELF_READ_ROLE` and `CURSOR_KEY` (`CursorKey`, empty by default, which refuses `GET /v1/rows/self`).
 - **The token path's resources** (plan 0008 J3): the `live` and `erase` aliases, on `$LATEST`; the `live` alias's URL, with `AuthType: NONE` and the two public permissions a URL needs, bounded by the reserved concurrency; and `kanon-telemetry-self-read`, which only the ingest function's role may assume, and which may only `Query` and `BatchWriteItem` the rows table, under a session policy the function narrows to one key. The rows table's resource policy admits it beside the function's role and yours, for the erasure walk's deletes.
@@ -101,6 +102,8 @@ Run these once, from a Kanon checkout at the release tag being deployed, after `
 
 ## Deploy
 
+Before each of Kanon's releases, [`intake-first.mjs`](release.md#intake-first) says whether it needs this deploy first.
+
 `$REG` is the register, and `$OUT` is a directory beside it. The rendered files, `template.json` and `parameters.json`, hold the register's contents, so they stay out of every repository where Kanon's lanes run too ([Where the register lives](#where-the-register-lives)).
 
 ```sh
@@ -161,7 +164,27 @@ It exits 1 on any FAIL, and never prints a credential, a row or a response body.
 
 ## Add a repository
 
-An adopter opts in when it installs Kanon: `kanon init --telemetry`, or a yes to its question, writes the caller below and asks for registration with an issue from Kanon's [telemetry registration template](https://github.com/yedeya-labs/kanon/issues/new?template=telemetry-registration.yml), which names the repository, its default branch and its reader refs ([`docs/init.md`](init.md#telemetry), #428). Telemetry is off without that yes. Until the two variables are set, `kanon init` reports `telemetry.register` and `kanon doctor` reports `telemetry.unconfigured`, neither blocking. Then:
+**From vM, an adopter adds itself** ([plan 0008](plans/0008-self-service-registration.md) §8). `kanon init --telemetry`, or a yes to its consent question, writes the collector's caller ([Collect the rows](#collect-the-rows), [`docs/init.md`](init.md#telemetry), #428), and that is the whole registration: the caller's first run on the default branch, the first hourly schedule after the install's pull request merges or a dispatch, registers the repository, active at once, under the default quotas. Nothing names the repository in public, no variable is set, and you do nothing. Telemetry is off without that yes. `kanon doctor` reports `telemetry.not-run` until the caller has a finished run on the default branch, and `telemetry.refused` when its last run ended on the store's refusal, neither blocking ([`docs/doctor.md`](doctor.md)). What stays yours is in [The register table](#the-register-table): suspending a key, the operator fields (`aggregate_invoker`, `publish_own_figures_as`, `page_reader`, a quota), and an erasure asked for another way.
+
+### Publish the hosted URLs
+
+The Owner's step, once, before the release that is vM is tagged ([plan 0008](plans/0008-self-service-registration.md) §9, §12). [`scripts/lib/telemetry-token.mjs`](../scripts/lib/telemetry-token.mjs)'s `HOSTED_INGEST_URL` and `HOSTED_AGGREGATE_URL` are empty in the tree until then. A release with them empty sends nothing: its collector says in its summary that the hosted store's URL is not published, and stays green.
+
+1. **Reserved concurrency 2 on both functions first** (Owner decision 10 of 2026-10-12). The token URLs are public (`AuthType: NONE`), and the reservation bounds what a flood of refused requests can cost. The account's concurrency quota must have been raised first ([Before the first deploy](#before-the-first-deploy), step 4).
+2. **Deploy vM's template** with `MinTokenVersion` and a fresh `CursorKey`, and run `verify.mjs` ([Verify](#verify)).
+3. **Read the two outputs,** `IngestTokenUrl` and `AggregateTokenUrl`:
+
+   ```sh
+   aws cloudformation describe-stacks --stack-name kanon-telemetry --profile kanon --region eu-central-1 \
+     --query "Stacks[0].Outputs[?OutputKey=='IngestTokenUrl' || OutputKey=='AggregateTokenUrl']"
+   ```
+
+4. **Set the two constants** to them in a Kanon pull request. The URLs are not credentials: the token is the gate. The first release after that pull request, and after J5's second half, is the one adopters' pins move to.
+
+
+### The SigV4 path's register entry (below vM; removed at J9)
+
+A repository pinned below vM sends through its writer role, which the operator renders from the register file. These steps hold for it until J9 removes that path; no new adopter needs them.
 
 1. Add an entry to the register, where [it lives](#where-the-register-lives):
 
@@ -199,20 +222,22 @@ Plan 0002 S7. The lanes hold no store credentials. Each run uploads its row, run
 - **reaches back to the start of the last run whose collect job succeeded,** and overlaps by at least 90 minutes. However many scheduled runs GitHub drops, the next one covers them. A re-sent row overwrites itself, because the function builds its key from the row.
 - **stops at 7 days, or at the repository's artifact retention when that is shorter** (S1a, [#212](https://github.com/yedeya-labs/kanon/issues/212)). The function refuses a row older than 8 days, and an expired artifact is gone. When the last successful run is older than that, the run warns that the rows before it are lost.
 - **sends only this repository's own runs' rows.** A fork's run can upload any row under any name, so its artifacts are counted and ignored.
-- **checks each row with `validate`, and against its artifact's lane, run and attempt,** then sends the rows 25 to a signed `POST`.
+- **checks each row with `validate`, and against its artifact's lane, run and attempt,** then sends the rows 25 to a `POST`, each with a fresh GitHub OIDC token for the store's audience ([The caller](#collect-the-rows), plan 0008 §2.1).
 - **sends upstream findings at the level your adoption record declares** ([plan 0006](plans/0006-upstream-findings.md) §3.1 and §5, step 3). The Overseer's and the telemetry Explorer's filing jobs upload them as `kanon-finding-<reporter>-<run id>-<attempt>`, holding `kanon-finding.json`, a list of at most 20 finding rows. Before it sends any, the run reads `docs/qa/adoption.md` from the default branch: `drafted` or `filed here` sends none, `sent` sends each row as codes only, without its evidence or suggested fix, and `sent with evidence` sends each row as the lane built it. So turning the level down stops the text at the next sweep, even for artifacts written before. A record it can't read, or a malformed one, sends no finding and turns the run red. Each row must name its artifact's reporter, run and attempt. A text the scrub still finds something in, with this repository's name as its context, is sent as codes only, with a warning naming the field and the rule.
 - **writes one work-item row per pull request closed in the span** ([plan 0003](plans/0003-metrics.md) §3, M4), merged or not, derived as `kanon metrics dry-run` derives it, and sends it with the run rows to the `<key>#work` partition, where the PR's number alone is its key. A PR closed, reopened and closed again is one item: its last derivation overwrites the first. It also writes again the row of an earlier item whose story the span changed: a PR merged in the span that reverts it or is a linked fix of it (§3.5), or a Reviewer follow-up of it that closed in the span, for any reason. Each such row is derived whole again, so it keeps the revert or fix an earlier sweep found. A PR still open gets no row; the one it gets when it closes reads its follow-ups' fates then. An item closed 13 months ago or more is not written again: its row has expired. The row holds counts, durations, times, enums and PR numbers only, no login, title, path or text, and `validate` refuses any other field (ADR 0007, `K-OBS-16`).
+- **registers the repository on its first run** (plan 0008 §3.2): the store answers the rows of a repository it doesn't know 404 `not-registered`, and the run registers it once, with `POST /v1/registrations`, and sends the rows again; a run with no row to send reads `GET /v1/registrations/self` and registers on a 404, so a quiet repository registers too. Its summary says the registration's status.
+- **stops on the store's refusal, and says it in the store's words,** under the annotation title `telemetry-refused`, which `kanon doctor` reads (`telemetry.refused`): 403 `suspended` (the operator suspended the key) and 429 `quota` (a limit, named, with when it resets; the next sweep after the reset sends the span again) turn the run red, as does any other 403, a check on the token; 410 `erased` keeps it green with a warning, since the adopter asked for it, and sends nothing.
 - **turns red on anything it couldn't send:** an unreadable artifact, a row that fails the schema, a row the store rejects, or a listing that fails; and, in the work-item step, a GitHub read that fails (the declarations, the pull requests closed in the span, the reverts, fixes and follow-ups, an earlier item or its later pull requests), a pull request one of whose lists can't be read, a merged pull request missing a list the detectors read, or a work-item row that fails the schema. A number or commit that GitHub says doesn't exist, mentioned in a body or a comment, is no candidate and turns nothing red. The errors name the artifact and the field, never a value. That red run is the page (§9). The next run re-covers the same span, so nothing is lost by failing.
 
 **Cadence and cost.** The caller schedules it hourly, at minute 40 (§1.2), so 24 runs a day. It touches no database, and nothing it calls scales to zero. On a public repository its Actions minutes are free. On a private one it is about a minute a run. Each run calls the function only when it has rows, once per 25 rows. For Kanon that is at most 720 calls a month, inside Lambda's free tier, plus 2 DynamoDB write units per row. That is inside §9's estimate of about $0.05 a month.
 
-**The caller.** It grants `actions: read` for the runs and artifacts, `contents: read` for the adoption record's upstream-findings level (plan 0006 F4) and the declarations the work-item rows are derived with, `id-token: write` for the writer role, and `issues: read` and `pull-requests: read` for the pull requests and issues the work-item rows are derived from (plan 0003 M4). A caller written before F4 lacks `contents: read`, and one written before M4 lacks `issues: read` and `pull-requests: read`. GitHub refuses to start a called workflow that asks for more than its caller grants, so add them before moving the pin to a release with F4 or M4: `kanon doctor` reports each as `caller.grant-missing`. `kanon init --telemetry` writes it as `.github/workflows/telemetry.yml`, byte for byte as below; `tests/unit/kanon-init.test.ts` holds the two to each other. Written by hand, it is a trigger-only workflow. Pin it to the Kanon version every other Kanon reference uses, and pass the two values as repository variables. Neither is a credential: the role can be assumed only by the repository's own default-branch token. The role's ARN still names the account, so the collect job masks the ARN, and the account id on its own, before its first AWS call, and has `configure-aws-credentials` mask the account it assumed: only the masking step's own header prints the ARN, once per run ([#514](https://github.com/yedeya-labs/kanon/issues/514)). Name the caller as you like; the collector finds its own runs from `GITHUB_WORKFLOW_REF`.
+**The caller.** It grants `actions: read` for the runs and artifacts, `contents: read` for the adoption record's upstream-findings level (plan 0006 F4) and the declarations the work-item rows are derived with, `id-token: write` for the OIDC token each request carries, and `issues: read` and `pull-requests: read` for the pull requests and issues the work-item rows are derived from (plan 0003 M4). A caller written before F4 lacks `contents: read`, and one written before M4 lacks `issues: read` and `pull-requests: read`. GitHub refuses to start a called workflow that asks for more than its caller grants, so add them before moving the pin to a release with F4 or M4: `kanon doctor` reports each as `caller.grant-missing`. `kanon init --telemetry` writes it as `.github/workflows/telemetry.yml`, byte for byte as below; `tests/unit/kanon-init.test.ts` holds the two to each other. Written by hand, it is a trigger-only workflow. Pin it to the Kanon version every other Kanon reference uses. **It reads no variable and maps no secret** (plan 0008 §8): the hosted store's URL is the collector's own constant, and the token GitHub mints for the collect job, which the store checks claim by claim, is the only credential. Two dispatch inputs, both `no` by default, are the adopter's: `erase: yes` erases the repository's rows and registration and sends nothing, and `register: yes` comes back after an erasure, under a new key (§7, §3.3; [`docs/sharing.md`](sharing.md#stop-and-erase)). Name the caller as you like; the collector finds its own runs from `GITHUB_WORKFLOW_REF`.
 
 <!-- x-release-please-start-version -->
 
 ```yaml
 # Sends this repository's agent-run rows, and a work-item row per closed pull request, to Kanon's hosted telemetry store (docs/telemetry.md).
-# Delete this file to stop; the operator erases what was sent on request.
+# Its first run registers the repository. Delete this file to stop; dispatch it with erase: yes first to erase what was sent.
 name: Telemetry
 on:
   schedule:
@@ -223,6 +248,16 @@ on:
         description: Force an exact sweep span, in minutes. Leave empty to sweep back to the last successful sweep.
         required: false
         default: ""
+      erase:
+        description: Erase this repository's rows and registration from the store, and send nothing.
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
+      register:
+        description: Register this repository again after an erasure.
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
 permissions:
   actions: read
   contents: read
@@ -233,33 +268,28 @@ jobs:
   collect:
     uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.39.0
     with:
-      url: ${{ vars.KANON_TELEMETRY_URL }}
-      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}
       window_minutes: ${{ inputs.window_minutes }}
+      erase: ${{ inputs.erase }}
+      register: ${{ inputs.register }}
 ```
 
 <!-- x-release-please-end -->
 
 Give `window_minutes` no default. Empty means "no operator instruction", and a default would make every scheduled run an override and switch the watermark off. A run with an override never becomes the watermark either: its collect job is named `Collect telemetry rows (window override)`, and the next scheduled sweep still reaches back to the last full one, so a short override can't hide the rows before its span.
 
-**The variables.** The Owner reads them from the stack's outputs. `IngestUrl` is the URL. `WriterRole<key>` is the repository's writer role, with the register key's non-alphanumeric characters dropped (`render.mjs`):
+**A self-hosted store** (`K-OBS-18`), the same template in your own account with an `Audience` of its own, is named by two inputs together, `url:` (its `IngestTokenUrl` output) and `audience:`, never one without the other, and never with the hosted audience, `kanon-telemetry`: a token minted for Kanon's store is only ever sent to Kanon's store's URL (plan 0008 §2.1). The collect job's first step after Kanon's path checks them before any token is minted, and stops the run, red, naming the input, on either alone.
 
-```sh
-aws cloudformation describe-stacks --stack-name kanon-telemetry --profile kanon --region eu-central-1 \
-  --query 'Stacks[0].Outputs'
-gh variable set KANON_TELEMETRY_URL -R <owner>/<repo> --body '<the IngestUrl output>'
-gh variable set KANON_TELEMETRY_WRITER_ROLE -R <owner>/<repo> --body '<the WriterRole<key> output>'
-```
+**Moving a caller from the SigV4 path** (plan 0008 §9 step 4): a caller written before vM passes `url: ${{ vars.KANON_TELEMETRY_URL }}` and `writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}`. **At vM both are refused** without `audience:` (Owner decision of 2026-10-14, [#842](https://github.com/yedeya-labs/kanon/issues/842)): the collect job's check step turns the run red before any token is minted, so it sends nothing and registers nothing, and the URL is never swapped for the hosted store's, since a caller that named a store of its own must not start sending to Kanon's. `kanon doctor` reports it as `telemetry.legacy-inputs`, blocking. So **move the pin and the caller in one pull request**: run `kanon init --telemetry` again, which lists the caller as differing with the new caller's content, and write that in its place (both lines gone, the `erase` and `register` inputs added); once a week of runs is green, delete the two variables (§9 step 5). For a store of your own, add `audience:` beside `url:` and remove `writer-role:` instead; `writer-role:` beside both is ignored, with a warning.
 
-Until both are set, the collector skips with a warning and stays green.
+**The check.** Dispatch the caller on the default branch. The run is green, and its summary says how many rows the store accepted and that the registration is `active`. The run rows are under `<key>#<lane>`, the work-item rows under `<key>#work`.
 
-**The check.** Dispatch the caller on the default branch. The run is green, and its summary says how many rows the store accepted. The run rows are under `<key>#<lane>`, the work-item rows under `<key>#work`, and the reader role can query them.
-
-**Kanon's own caller** is [`telemetry.yml`](../.github/workflows/telemetry.yml). It is pinned like Kanon's other callers ([ADR 0011](decisions/0011-kanon-runs-its-own-lanes.md)). It runs hourly at minute 40, from the change after its pin reached v0.27.0, the first release that ships the collector it calls ([#304](https://github.com/yedeya-labs/kanon/issues/304)).
+**Kanon's own caller** is [`telemetry.yml`](../.github/workflows/telemetry.yml). It is pinned like Kanon's other callers ([ADR 0011](decisions/0011-kanon-runs-its-own-lanes.md)). It runs hourly at minute 40, from the change after its pin reached v0.27.0, the first release that ships the collector it calls ([#304](https://github.com/yedeya-labs/kanon/issues/304)). Its pin is still below vM, so it still passes the two variables, `KANON_TELEMETRY_URL` and `KANON_TELEMETRY_WRITER_ROLE`, which the SigV4 path reads; it drops them when its pin moves to vM (J7).
 
 ## Who can write
 
-The writer trusts the default branch's ref. What a token's subject is decides whether it is admitted:
+**From vM, on the token path,** only Kanon's collector can write: the ingest function admits a row only with a GitHub OIDC token whose `job_workflow_ref` is `yedeya-labs/kanon/.github/workflows/telemetry-collect.yml` at a release tag at or above `MinTokenVersion`, from the caller's schedule or a dispatch of its default branch, with the store's audience (plan 0008 §2.2, `K-OBS-13`). Which job of that workflow may mint such a token is the id-token guard's: `collect` alone, in its exact shape (Kanon's path, the inputs' check and the one script). This is enforced by Kanon's code, not by IAM: the function is the gate ([The token verifier](#the-token-verifier-plan-0008-j1)). The rows the collector sends are still what the repository's own runs uploaded, so a repository can send rows of its own invention under its own key, and never under another's.
+
+**Until J9, the SigV4 path stays beside it,** and on that path the writer trusts the default branch's ref. What a token's subject is decides whether it is admitted:
 
 | A token from | Subject | Writer |
 |---|---|---|
@@ -277,7 +307,7 @@ The last row is what the environment used to narrow, and nothing narrows it now:
 - **The metrics page's `aggregate` job**, in Kanon's own repository only ([The public metrics page](metrics.md#the-public-metrics-page)). It holds the grant to assume the aggregate invoker role, on the weekly schedule or a dispatch, so on the default branch.
 - **The adopter's own jobs** that hold it for another cloud, such as a deploy on push to the default branch.
 
-Each can write rows under its own adopter's key that pass the function's validation. None can read, name a partition, or reach another adopter's key. A job without `id-token: write` gets no token to ask with, so the set is exactly the jobs that hold it. What is guarded is that set's size in Kanon's own workflows, not that the collector is its only member: the id-token guard #291 added fails any Kanon job holding `id-token: write` that doesn't run the `qa-store` block or the AWS store's maintenance block alone, or isn't the collector's `collect` job, the telemetry Explorer's `aggregate` job, the Overseer's `telemetry` job or the metrics page's `aggregate` job in `metrics-page.yml` in its exact shape (Kanon's path, the masking step, the credentials and the one script, with the upload too for the last three, and nothing beside them). The adopter's own holders are the adopter's to check.
+Each can write rows under its own adopter's key that pass the function's validation. None can read, name a partition, or reach another adopter's key. A job without `id-token: write` gets no token to ask with, so the set is exactly the jobs that hold it. What is guarded is that set's size in Kanon's own workflows, not that the collector is its only member: the id-token guard #291 added fails any Kanon job holding `id-token: write` that doesn't run the `qa-store` block or the AWS store's maintenance block alone, or isn't the collector's `collect` job, the telemetry Explorer's `aggregate` job, the Overseer's `telemetry` job or the metrics page's `aggregate` job in `metrics-page.yml` in its exact shape (for the collector, Kanon's path, the inputs' check and the one script, with no credentials step since vM; for the other three, Kanon's path, the masking step, the credentials, the one script and the upload; and nothing beside them). The adopter's own holders are the adopter's to check.
 
 ### The token verifier (plan 0008 J1)
 
@@ -285,7 +315,7 @@ Each can write rows under its own adopter's key that pass the function's validat
 
 ## The token path's endpoints (plan 0008 J3)
 
-**Built, and not yet used by any lane.** The collector, the Overseer's `telemetry` job and the Explorer's `aggregate` job move to these endpoints at J5 (vM); until then they keep the roles above, and the token path admits no token while `MinTokenVersion` is empty, its default. [Plan 0008](plans/0008-self-service-registration.md) §3 is the design; [`function/token.mjs`](../infra/telemetry/function/token.mjs) is the code.
+**The collector calls them from vM** (J5): the rows, registration, the status read and erasure. The Overseer's `telemetry` job and the Explorer's `aggregate` job still assume their roles. The token path admits no token while `MinTokenVersion` is empty, its default. [Plan 0008](plans/0008-self-service-registration.md) §3 is the design; [`function/token.mjs`](../infra/telemetry/function/token.mjs) is the code.
 
 The endpoints sit on the `live` alias's URL (the `IngestTokenUrl` output). The handler tells its three ways in apart by the alias Lambda says it was invoked through, never by the request: the unqualified function serves the SigV4 path above, `live` the token path, and `erase` the erasure walk. An IAM-signed request on the `live` URL, a bearer token on the IAM URL, and any other qualifier are refused, 403 `path`.
 
@@ -309,9 +339,28 @@ Shared by all: 401 for checks 1 to 5 with `WWW-Authenticate: Bearer error="inval
 
 **Before the deploy that admits tokens** (plan 0008 §9 step 3a, J6), `render.mjs` doesn't yet write `MinTokenVersion` or `CursorKey` into `parameters.json`, so the template's defaults keep the token path closed. Admitting it takes both, given with the parameters file; J5 or J6 adds them to `render.mjs`.
 
+## Quotas
+
+Each repository's registration has limits ([plan 0008](plans/0008-self-service-registration.md) §6, Owner decision 6 of 2026-10-12), counted per key on the token path:
+
+| Limit | Default | What it means for an adopter |
+|---|---|---|
+| Rows stored per UTC day | 5,000 | about 100 times the busiest adopter's day; a 7-day recovery sweep is a few hundred rows |
+| Requests per hour, every endpoint | 120 | an hourly collector makes 1 to 13 |
+| Erasures per UTC day | 5 | an erasure is idempotent; more is a loop |
+| Rows per `GET /v1/rows/self` page | 1,000 | the Overseer's reads take a few pages |
+| New registrations per owner per UTC day | 20 | an organisation installing Kanon across its repositories in a day |
+| New registrations, store-wide, per UTC day | 100 | bounds a mass registration |
+
+**Past a limit,** the store answers 429 with `Retry-After` and `{ "error": "quota", "limit", "resets_at" }`, and **nothing from that request is stored**: a batch is admitted whole or not at all. The collector stops its sweep and turns red, naming the limit and when it resets, under the annotation title `telemetry-refused`, which `kanon doctor` reports as `telemetry.refused`. Its watermark doesn't move, so the next sweep after the reset sends the same span again, and nothing is lost while the artifacts live (the 7-day cap). The refused rows are counted (`refused#<key>#<day>`), so the operator sees a key that keeps hitting a limit. The operator can raise one repository's limits with `register.mjs set --rows-per-day` or `--requests-per-hour` ([The register table](#the-register-table)). The Owner's importer and backfill role are not counted.
+
 ## Erase an adopter
 
 Plan 0002 §10. Deletion is immediate in the table, and complete in backups within 35 days, which is how long point-in-time recovery keeps them.
+
+**From vM the adopter erases itself** (plan 0008 §7): a dispatch of its caller with `erase: yes` calls `DELETE /v1/registrations/self`, which refuses every later write and read for the key at once and walks its rows away within minutes; the run's summary says whether they are gone yet. `register: yes` comes back later, under a new key. **An erasure asked another way** (an issue, an email), or a key you remove, is `register.mjs erase --repository <owner/name> --apply` ([The register table](#the-register-table)), the same walk.
+
+**On the SigV4 path** (a repository pinned below vM, until J9):
 
 1. Remove the adopter's entry from the register, and in the same edit its time from install to first review, which sits beside the key (plan 0003). Record the date and the key there, not the repository. Then render, package and deploy. That deletes both roles, so its writes and reads stop at once.
 2. Count the rows, then delete them. The script walks `<key>#<lane>` for every lane in the schema's enum, `<key>#work` and `<key>#finding`, so it needs no scan. It runs as your role. The table lets only three principals delete: the function's role, yours, and the self-read role, which only the function assumes.
@@ -514,7 +563,7 @@ A signal is **new** when its signature is not in the `--known` list. The signatu
 
 ```sh
 node scripts/telemetry/kanon-findings.mjs --rows <run and finding rows> [--known <signatures.json>] [--tag test] \
-  --trees <trees.json> --register <register.json> --json
+  --trees <trees.json> --register <register.json> [--issues <open-issues.json>] --json
 ```
 
 - **One issue per signature.** It runs `detect` over the run rows, unchanged, and groups the findings by the signals' own `signature()` (§2.4). A finding with a signal's signature goes on that signal's issue, below its counts, so the job updates the one issue and files no second. Every later finding with the signature is one more entry on it. A finding with no signal gets an issue of its own, with a title built from its codes. Each issue is labelled `kanon-bug` and `finding`, plus the signal's class label (`platform` or `adopter`) when it has one.
@@ -525,6 +574,12 @@ node scripts/telemetry/kanon-findings.mjs --rows <run and finding rows> [--known
   - each `kanon_paths` entry against the file list of its `kanon_version`.
 
   A finding that fails is still filed privately, marked `gate: failed` with the field and rule, and labelled `gate-failed`. Its text, and any path outside the tree, are left out of the issue.
+- **What the open issues already say** ([#611](https://github.com/yedeya-labs/kanon/issues/611)). `--issues` is the open issues, as `gh issue list --label kanon-bug --state open --limit 1000 --json title,body` prints them, each found by its `kanon:bug-signature` marker. `gh` returns 30 issues without `--limit`, and stops at the limit without saying so, so the job fails when it gets exactly 1000: an issue left out of `--issues` loses its earlier counts and its expired-findings note. The job replaces a body it updates, so a body is built to keep what this run's rows can't give again:
+  - a finding whose signal isn't in this run's rows, because its run rows have expired or this run read none, keeps the counts its issue last had, under a line saying they are from an earlier run, and keeps the issue's title and class label;
+  - an issue that held findings, none of which is in the store any more (expired after 13 months, 30 days at `test` or `smoke`, or erased), says so in place of the entries, on that run and every later one. Their evidence is no longer shown.
+
+  Without `--issues`, a finding with no signal in the run rows gets a finding-only body, and an issue whose findings expired is left to the signal's own body.
+- **Errors.** A refusal for a key prints `refused: the output would hold an adopter key, so nothing is printed`, exit 2. Any other error while planning prints `could not plan the issues (<its name>)`, exit 1: its name only, since its message could quote a row.
 - **The tree.** `--trees` maps each release to its file list, as `git ls-tree -r --name-only v<version>` prints it from a Kanon clone. A release with no list, `dev` included, fails any finding of it that carries a path or a text.
 - **What leaves.** Signals and rises come out exactly as `kanon-bugs.mjs` returns them, so a public issue never holds a finding. The evidence and suggested fix appear only in the private issue, and only for a finding that passed the gate. The whole output is checked for every key in the rows and the register, as a value and as a word, and refused whole if one appears. `tests/unit/kanon-findings.test.ts` proves each check.
 

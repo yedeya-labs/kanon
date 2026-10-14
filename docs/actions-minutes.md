@@ -16,6 +16,8 @@ The report below counts a run as short when no job in it ran for more than a min
 
 ## What starts each lane
 
+The "What starts it" column is each lane's caller triggers, `TRIGGERS` in [`cli/callers.mjs`](../cli/callers.mjs), in words. [`tests/unit/actions-minutes-triggers.test.ts`](../tests/unit/actions-minutes-triggers.test.ts) builds each row's phrases from that entry and fails when a lane gains or loses a trigger and its row doesn't follow ([#808](https://github.com/yedeya-labs/kanon/issues/808)). The other columns are read from the lanes' jobs by hand.
+
 | Lane | What starts it | Its short and skipped runs | What its minutes grow with |
 |---|---|---|---|
 | `agent-review` | CI finishing on a pull request's head; a pull request opened or labelled; a dispatch | A head with no review label, a head already reviewed, a label that isn't a review label ([#627](https://github.com/yedeya-labs/kanon/issues/627)) | Pushes to pull requests that carry a review label |

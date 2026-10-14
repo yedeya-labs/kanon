@@ -116,11 +116,11 @@ describe('the cost rows reach the sweep from the store job', () => {
     expect(Object.keys(run.env ?? {}).filter((k) => /^QA_(DYNAMO|AWS)/.test(k))).toEqual([]);
   });
 
-  it('sweeps after a store job that FAILED, charging every dispatch, but never past the gate or the soft skip', () => {
+  it('sweeps after a store job that FAILED, charging every dispatch, but never past the gate, the soft skip or a re-ask that is not due', () => {
     expect(sweep.needs).toEqual(['gate', 'store']);
-    expect(sweep.if).toBe("${{ !cancelled() && needs.gate.outputs.member == 'true' && needs.gate.outputs.ready == 'true' }}");
+    expect(sweep.if).toBe("${{ !cancelled() && needs.gate.outputs.member == 'true' && needs.gate.outputs.ready == 'true' && needs.gate.outputs.due == 'true' }}");
     expect(wf.jobs.store!.needs).toBe('gate');
-    expect(wf.jobs.store!.if).toBe("needs.gate.outputs.member == 'true' && needs.gate.outputs.ready == 'true'");
+    expect(wf.jobs.store!.if).toBe("needs.gate.outputs.member == 'true' && needs.gate.outputs.ready == 'true' && needs.gate.outputs.due == 'true'");
   });
 
   it('names no cloud anywhere in the lane', () => {
@@ -179,8 +179,8 @@ describe('the workflow that runs it (moved from the reference adopter)', () => {
     for (const s of Object.values(wf.on.workflow_call.secrets)) expect(s.required).toBe(false);
   });
 
-  it('applies on the schedule and dry-runs a dispatch without apply', () => {
-    expect(run.env?.APPLY).toBe("${{ (github.event_name == 'schedule' || inputs.apply == 'true') && '1' || '' }}");
+  it('applies on the schedule and a re-ask, and dry-runs a dispatch without apply', () => {
+    expect(run.env?.APPLY).toBe("${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}");
     expect(wf.on.workflow_call.inputs.apply).toMatchObject({ type: 'string', default: '' });
     expect(caller.on.workflow_dispatch.inputs.apply.default).toBe(false);
   });
@@ -195,8 +195,9 @@ describe('the workflow that runs it (moved from the reference adopter)', () => {
     expect(wf.concurrency['cancel-in-progress']).toBe(false);
   });
 
-  it('admits only its caller\'s two triggers', () => {
-    expect(wf.jobs.gate!.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'");
+  // The re-ask's admission is evaluated case by case in reask.test.ts (kanon#813).
+  it('admits only its caller\'s triggers: the schedule, a dispatch and a re-ask', () => {
+    expect(wf.jobs.gate!.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'skipped' && !contains(github.workflow_ref, format('/{0}@', github.event.workflow_run.path)))");
   });
 
   it('bounds a hang (RA-1336)', () => {

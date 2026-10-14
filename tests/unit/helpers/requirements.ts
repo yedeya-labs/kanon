@@ -124,7 +124,8 @@ export const buildRequirements = (root: string) => {
     ]),
   );
   // The telemetry collector (plan 0002 S7, #428): a caller `kanon init --telemetry` writes, and
-  // `kanon doctor` recognises as Kanon's, with the repository variables it passes. Read from the
+  // `kanon doctor` recognises as Kanon's, with the repository variables it passes (none, from the
+  // token path of plan 0008 J5). Read from the
   // collector's own workflow and from the caller docs/telemetry.md gives, which init writes byte
   // for byte, so the file can't name a variable the caller doesn't pass. Its grant is what its jobs
   // ask for, which the caller's permissions: must cover (plan 0006 F4 added `contents: read`).
@@ -140,6 +141,10 @@ export const buildRequirements = (root: string) => {
       collector,
       variables: [...new Set([...callerBlock.matchAll(/\$\{\{ vars\.([A-Z0-9_]+) \}\}/g)].map((m) => m[1]!))].sort(),
       grant: Object.fromEntries(Object.entries(collectorGrant).sort(([a], [b]) => a.localeCompare(b))),
+      // The token path (plan 0008 J5): the collector takes a self-hosted store's `audience`, and
+      // sends with GitHub's OIDC token. `kanon doctor` reads the caller's last run against such a
+      // release (`telemetry.refused`, `telemetry.not-run`), where it used to ask for the variables.
+      ...('audience' in (((collectorDoc.on as Doc).workflow_call as Doc)?.inputs ?? {}) ? { token: true } : {}),
     }
     : undefined;
   // The QA store (kanon#433): the adopter's hook, which the `qa-store` block calls, and the

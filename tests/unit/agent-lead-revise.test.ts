@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -67,6 +67,13 @@ ${GH_REGISTER_ARM}
 
 ${GH_COMPARE_ARM}
 
+# The cap's comment on the PR, kept where the suite can read it (kanon#738).
+if [ "$1 $2" = "pr comment" ]; then
+  prev=""
+  for a in "$@"; do [ "$prev" = "--body" ] && printf '%s' "$a" > "$STUB_POSTED"; prev="$a"; done
+  exit 0
+fi
+
 json=""; jqexpr=""; prev=""
 for a in "$@"; do
   case "$prev" in
@@ -127,6 +134,7 @@ const runFilter = ({
   reset = false,
   resetEnv,
   register = REGISTER_FIXTURE,
+  workflowRef = 'example-org/example-repo/.github/workflows/agent-lead-revise.yml@refs/heads/main',
 }: {
   author: string;
   rounds?: number;
@@ -148,6 +156,8 @@ const runFilter = ({
   resetEnv?: string;
   /** The App register the filter reads its login from; empty is a missing register. */
   register?: string;
+  /** The run's top-level workflow, as the runner sets `GITHUB_WORKFLOW_REF`: the lane's caller; `null`, none set. */
+  workflowRef?: string | null;
 }) => {
   // ONE HEAD PER CHANGES-REQUEST, because a review is filed against a commit and a
   // healthy loop reviews a new one each round (RA-1841). The old fixture put every review
@@ -168,10 +178,13 @@ const runFilter = ({
 
   const dir = mkdtempSync(join(tmpdir(), 'lead-revise-filter-'));
   writeStub(join(dir, 'gh'), GH_STUB);
+  const posted = join(dir, 'posted');
   const r = runWorkflowStep(filter, {
     dir,
     env: {
       PATH: `${dir}:${process.env.PATH}`,
+      STUB_POSTED: posted,
+      GITHUB_WORKFLOW_REF: workflowRef ?? undefined,
       // What GitHub interpolates into `env:` at run time.
       REPO: 'example-org/example-repo',
       PR: '964',
@@ -234,7 +247,8 @@ const runFilter = ({
   // branch with the suite green (RA-1012).
   const { outputs } = r;
 
-  return { act: outputs.act === 'true', outputs, stdout: r.stdout, summary: r.summary, status: r.status };
+  const comment = existsSync(posted) ? readFileSync(posted, 'utf8') : null;
+  return { act: outputs.act === 'true', outputs, stdout: r.stdout, summary: r.summary, status: r.status, comment };
 };
 
 describe('what it refuses to act on', () => {
@@ -873,6 +887,21 @@ describe('the cap escalation can actually post (RA-969, RA-1205 review)', () => 
 
   it('says how to resume, since a cap nobody can clear is a deadlock', () => {
     expect(step).toMatch(/reset=true/);
+  });
+
+  // kanon#738: the lane is a reusable workflow, so the command dispatches the caller that ran it,
+  // which `GITHUB_WORKFLOW_REF` names. Kanon's own is `lead-revise.yml`, beside the lane itself.
+  it('says to dispatch the caller that ran the lane, which need not have the lane\'s name', () => {
+    const elsewhere = runFilter({ author: CAP_AUTHOR, rounds: 2, workflowRef: 'example-org/example-repo/.github/workflows/lead-revise.yml@refs/heads/main' });
+    expect(elsewhere.act).toBe(false);
+    expect(elsewhere.comment).toContain('`gh workflow run lead-revise.yml -f pr_number=964 -f reset=true`');
+    expect(elsewhere.comment, 'never the lane itself').not.toContain('agent-lead-revise.yml');
+    const own = runFilter({ author: CAP_AUTHOR, rounds: 2 });
+    expect(own.comment).toContain('`gh workflow run agent-lead-revise.yml -f pr_number=964 -f reset=true`');
+    for (const workflowRef of ['', null]) {
+      const unnamed = runFilter({ author: CAP_AUTHOR, rounds: 2, workflowRef });
+      expect(unnamed.comment, `${workflowRef}: no workflow named, the lane's own file name`).toContain('`gh workflow run agent-lead-revise.yml -f pr_number=964 -f reset=true`');
+    }
   });
 });
 

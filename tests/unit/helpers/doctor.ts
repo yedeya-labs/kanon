@@ -116,7 +116,7 @@ export const ok = (v: unknown): Gh => ({ status: 0, stdout: typeof v === 'string
 export const no = (stderr: string): Gh => ({ status: 1, stdout: '', stderr });
 
 /** A fake GitHub: the repository, its Apps, and Kanon's requirements file at each release. */
-export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<string, Req | null>; variables?: Set<string> | Map<string, string> | null; latest?: string | null } = {}) => {
+export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<string, Req | null>; templates?: Record<string, string>; variables?: Set<string> | Map<string, string> | null; latest?: string | null } = {}) => {
   const ids = identitiesOf(LANES);
   const st = {
     labels: new Set(TAXONOMY),
@@ -124,6 +124,8 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     apps: Object.fromEntries(ids.map((id) => [`widgets-${id}`, { owner: { login: 'acme', type: 'User' }, permissions: permissionsOf(REQ, id) }])) as Record<string, { id?: number; owner: object; permissions: Record<string, string> }>,
     rulesets: [{ id: 7, ...rulesetBody(false) }] as Array<ReturnType<typeof rulesetBody> & { id: number; bypass_actors?: unknown[]; source_type?: string }>,
     releases: over.releases ?? {},
+    /** Kanon's brief template at each release (`rulebook/templates/brief.md`, #755); a release not here answers 404. */
+    templates: over.templates ?? {},
     /** Kanon's latest release's tag, as GET releases/latest names it (plan 0009 S2); null answers 404. */
     latest: over.latest ?? null,
     installations: null as Array<{ id: number; app_slug: string; app_id?: number; account: { login: string } }> | null,
@@ -198,6 +200,11 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     if (rel) {
       const r = st.releases[decodeURIComponent(rel[1]!)];
       return r ? ok(r) : no('gh: Not Found (HTTP 404)');
+    }
+    const template = /^repos\/yedeya-labs\/kanon\/contents\/rulebook\/templates\/brief\.md\?ref=(.+)$/.exec(path);
+    if (template) {
+      const t = st.templates[decodeURIComponent(template[1]!)];
+      return t !== undefined ? ok(t) : no('gh: Not Found (HTTP 404)');
     }
     return no(`unexpected gh ${args.join(' ')}`);
   };

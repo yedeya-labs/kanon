@@ -168,6 +168,20 @@ Kanon releases itself weekly, and in two steps, so every release runs on Kanon b
 - **What an adopter pins.** An exact version, as today (`K-ADOPT-11`): a stable `vX.Y.Z`, which its Dependabot entry proposes, or, to run ahead on purpose, a candidate. Nothing in an adopter's repository changes for the stable channel.
 - **Your own releases** are untouched: candidates and promotion are Kanon's own operation, and this workflow keeps tagging `vX.Y.Z` for you.
 
+## Intake first
+
+Kanon's own step, for the hosted telemetry store it runs ([`docs/telemetry.md`](telemetry.md)), and none of this workflow's ([#794](https://github.com/yedeya-labs/kanon/issues/794)). A lane writes what its release's schema allows, and the ingest function refuses what the release it was deployed from doesn't: a raised `SCRUB_VERSION` is a 422 `scrub_version` `range`, a new row version or lane a 422 `enum`, and the collector of every repository on that release turns red until intake is redeployed (plan 0006 §4.2). Nothing in the release workflow knows which release intake runs, so the Owner checks it, before the release reaches anyone:
+
+1. **Check the release against the deployed intake.** From a checkout of the release PR's head (`gh pr checkout <n>`), run [`infra/telemetry/intake-first.mjs`](../infra/telemetry/intake-first.mjs) with the release intake was last deployed from:
+
+   ```sh
+   node infra/telemetry/intake-first.mjs --deployed vX.Y.Z
+   ```
+
+   It compares the two releases' schemas, read from git, and exits 0 when the deployed intake accepts every row the release can write. Otherwise it exits 1 and names each widening, such as `finding v1 scrub_version: accepts up to 2, the deployed intake up to 1`. It reads the schema's field lists alone, so a change to `validate`'s cross-field rules is not seen; the scrub's rules are, through `scrub_version`, which a change to them raises.
+2. **On exit 1, deploy intake from that checkout, then merge.** Render, package and deploy as [Deploy](telemetry.md#deploy) says, and run [Verify](telemetry.md#verify), whose finding check sends the release's `SCRUB_VERSION`. The release PR changes only version strings and the changelog, so the function deployed is the release tag's. Intake accepts every earlier version too, so a repository on an older pin is unaffected, unless the release narrows the schema: drops a row version, a field, or an enum or list value (a Merger stop rule or a Kanon error code, say), or tightens a bound. The check doesn't name a narrowing ([#828](https://github.com/yedeya-labs/kanon/issues/828)), and intake deployed from such a release answers an older pin's row with a 422 (`enum`, `unknown` or `range`), which turns its collector red. Once the tag exists, move the #41 job's pin to it ([Kanon's own bugs](telemetry.md#kanons-own-bugs)). Note the release you deployed from, beside the register: the next check starts from it.
+3. **With candidates** ([above](#channels-candidates-and-stable)), run the check on the candidate's tag and deploy before Kanon's own callers move to it. Kanon's collector writes from them, so the order holds for Kanon first, and for adopters at promotion.
+
 ## Known limits
 
 All are accepted on the workflow's own token, the default. Mapping the Releaser removes the first and the last, and with its bypass moved, the merge queue one (see [With the Releaser](#with-the-releaser)). The stale-release-PR guard's limits hold either way.

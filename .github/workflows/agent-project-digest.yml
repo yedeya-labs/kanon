@@ -19,7 +19,7 @@
 # THE WEBHOOK (plan 0004, decision 7). The post goes to the URL in the caller's
 # `DIGEST_WEBHOOK` secret, as a `{"text": …}` body. Without it, the digest posts nothing and
 # says so, and the run stays green: a repository with no chat channel still gets the health
-# check.
+# check, and runs no model: the narrative is written only for a post or a dry run (kanon#836).
 #
 # INERT until: the caller is on the default branch + these secrets (plan 0001 §8):
 #   CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, and DIGEST_WEBHOOK to post
@@ -125,6 +125,25 @@ jobs:
       - uses: actions/checkout@v7
         id: checkout
 
+      # NO WEBHOOK, NO NARRATIVE (kanon#836). Without `DIGEST_WEBHOOK` the post step below posts
+      # nothing and discards the narrative, so a model run here would be paid for and thrown
+      # away. A repository may call this lane for its health job alone (Kanon does, kanon#813).
+      # So the three agent blocks run only when the digest will be posted, or printed by a dry
+      # run. Secrets can't be read in an `if:`, so the secret is mapped to this step's env and
+      # its answer is a step output, as the dispatch sweep's soft skip does.
+      - name: Will the digest be posted?
+        id: post
+        env:
+          DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}
+          DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
+        run: |
+          if [ -n "$DIGEST_WEBHOOK" ] || [ -n "$DRY_RUN" ]; then
+            echo "narrate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "narrate=false" >> "$GITHUB_OUTPUT"
+            echo "No \`DIGEST_WEBHOOK\`: the digest posts nothing, so its narrative is not written and no model runs. The health job still runs." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       # THE AGENT-LANE BLOCKS, CALLED DIRECTLY (P8, RA-2743). This arm mints no App token, so
       # `agent-setup` gets no slug and probes nothing, as the reviewer's does; `agent-run` is
       # the narrative step; `agent-finish` records the cost row. No project setup: the agent
@@ -132,6 +151,7 @@ jobs:
       # only Node's built-in modules.
       - uses: $/actions/agent-setup
         id: setup
+        if: steps.post.outputs.narrate == 'true'
         with:
           arm: project-digest agent
           app-slug: ""
@@ -147,6 +167,7 @@ jobs:
       # or writes nothing, the digest still posts, just without the prose.
       - name: Write today's narrative (non-fatal)
         id: agent
+        if: steps.post.outputs.narrate == 'true'
         continue-on-error: true
         uses: $/actions/agent-run
         env:
@@ -219,7 +240,7 @@ jobs:
       # classifier would key on the job's status instead, which is the wrong signal here.
       - uses: $/actions/agent-finish
         id: finish
-        if: always()
+        if: always() && steps.post.outputs.narrate == 'true'
         continue-on-error: true
         with:
           arm: project-digest agent

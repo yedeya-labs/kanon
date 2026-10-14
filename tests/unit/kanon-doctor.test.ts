@@ -335,6 +335,15 @@ describe('kanon doctor and the waivers under ## Choices (#390)', () => {
     expect(prose.out).toContain('Healthy. doctor wrote nothing. 2 finding(s) waived in docs/qa/adoption.md.');
   });
 
+  // kanon#738: since kanon#726 the scripts look a lane's caller up on the default branch, so a
+  // caller elsewhere is found; the lane's file name is what they fall back to without one.
+  it('says why the name is required: the fallback, not that the scripts reach runs only by it', async () => {
+    const r = await run(checkout(laneHost()), fakeGitHub(), ['--json']);
+    const review = r.json.findings.find((f: { id: string; subject: string }) => f.id === 'caller.misplaced' && f.subject === '.github/workflows/review.yml');
+    expect(review.message).toBe("calls the lane agent-review, so it must live at .github/workflows/agent-review.yml (K-LAYOUT-18): that is the name Kanon's scripts fall back to when they can't find the lane's caller on the default branch.");
+    expect(review.message).not.toMatch(/finds and dispatches the lane's runs by that file name/);
+  });
+
   it('waives only the finding id and the subject it names (mutations: another path, another id)', async () => {
     const dir = checkout({ ...laneHost(), 'docs/qa/adoption.md': record(waive('caller.misplaced', '.github/workflows/implement.yml') + waive('caller.name', '.github/workflows/review.yml') + waive('caller.misplaced', '.github/workflows/code-audit.yml')) });
     const r = await run(dir, fakeGitHub(), ['--json']);

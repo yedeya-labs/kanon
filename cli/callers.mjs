@@ -26,7 +26,7 @@ import { URL } from 'node:url';
  *   identities: { roles: Record<string, RoleIdentity>, apps: Record<string, AppIdentity> }, labels: string[],
  *   declarations?: Record<string, { baseline: boolean, requiredSections: string[] }>,
  *   release?: { dcoExemptsReleaser?: boolean }, catalogue?: Catalogue, features?: Feature[],
- *   telemetry?: { collector: string, variables: string[], grant?: Record<string, string> }, qaStore?: { hook: string, secrets: string[], secretsOnly?: boolean } }} Requirements
+ *   telemetry?: { collector: string, variables: string[], grant?: Record<string, string>, token?: boolean }, qaStore?: { hook: string, secrets: string[], secretsOnly?: boolean } }} Requirements
  * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, minutes: string, recommend: 'always' | string[], when: string, mergeQueue?: string, requires?: string[] }} CatalogueEntry
  * @typedef {{ groups: Array<{ id: string, title: string, header: string }>, lanes: Record<string, CatalogueEntry> }} Catalogue
  * @typedef {{ feature: string, title: string, does: string, lanes: string[],
@@ -178,13 +178,15 @@ export const TELEMETRY_CALLER_PATH = '.github/workflows/telemetry.yml';
  * The caller of Kanon's telemetry collector, exactly as docs/telemetry.md's "The caller" gives it
  * (tests/unit/kanon-init.test.ts holds the two byte for byte), pinned to `release`. `kanon init`
  * writes it only on an explicit yes (`--telemetry`, #428): it sends this repository's run rows to
- * Kanon's hosted store.
+ * Kanon's hosted store. It reads no variable and maps no secret: the collector carries the hosted
+ * store's URL, and its first run registers the repository (plan 0008 §8, step J5). Two dispatch
+ * inputs erase what was sent and come back after an erasure.
  * @param {string} release
  */
 export const telemetryCallerFile = (release) =>
   [
     "# Sends this repository's agent-run rows, and a work-item row per closed pull request, to Kanon's hosted telemetry store (docs/telemetry.md).",
-    '# Delete this file to stop; the operator erases what was sent on request.',
+    '# Its first run registers the repository. Delete this file to stop; dispatch it with erase: yes first to erase what was sent.',
     'name: Telemetry',
     'on:',
     '  schedule:',
@@ -195,6 +197,16 @@ export const telemetryCallerFile = (release) =>
     '        description: Force an exact sweep span, in minutes. Leave empty to sweep back to the last successful sweep.',
     '        required: false',
     '        default: ""',
+    '      erase:',
+    "        description: Erase this repository's rows and registration from the store, and send nothing.",
+    '        type: choice',
+    '        options: ["no", "yes"]',
+    '        default: "no"',
+    '      register:',
+    '        description: Register this repository again after an erasure.',
+    '        type: choice',
+    '        options: ["no", "yes"]',
+    '        default: "no"',
     'permissions:',
     '  actions: read',
     '  contents: read',
@@ -205,9 +217,9 @@ export const telemetryCallerFile = (release) =>
     '  collect:',
     `    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@${release}`,
     '    with:',
-    '      url: ${{ vars.KANON_TELEMETRY_URL }}',
-    '      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}',
     '      window_minutes: ${{ inputs.window_minutes }}',
+    '      erase: ${{ inputs.erase }}',
+    '      register: ${{ inputs.register }}',
     '',
   ].join('\n');
 

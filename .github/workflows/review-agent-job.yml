@@ -1183,6 +1183,15 @@ jobs:
           AGENT: ${{ steps.agent.outcome }}
         run: |
           set -euo pipefail
+          # THE RECOVERY COMMAND DISPATCHES THIS RUN'S CALLER (kanon#738). The lane is a
+          # reusable workflow, and in a called workflow `GITHUB_WORKFLOW_REF` names the
+          # top-level one (`owner/repo/.github/workflows/<file>@<ref>`): the caller, which is
+          # what a dispatch starts. A fixed `agent-review.yml` is the caller only where it sits
+          # at the lane's file name; beside the lane itself (Kanon's own `review.yml`) it
+          # dispatches the lane, which runs only on `workflow_call`. No workflow named: the
+          # lane's file name, as before.
+          CALLER="${GITHUB_WORKFLOW_REF:-}"; CALLER="${CALLER%%@*}"; CALLER="${CALLER##*/}"
+          RECOVER="gh workflow run ${CALLER:-agent-review.yml} -f pr_number=$PR_NUMBER"
           # `?per_page=100`, NOT `--paginate` (RA-1400 review). With `--paginate` the
           # `--jq` filter runs ONCE PER PAGE, so the count arrives as "0\n0\n1" — the
           # newline trips the numeric guard and reds a PR that DOES carry a verdict.
@@ -1223,7 +1232,7 @@ jobs:
           echo "Verdicts by the Reviewer on ${HEAD_SHA:0:7}: $POSTED, $MARKED with its role marker (agent step: $AGENT)"
 
           if [ "$POSTED" -gt 0 ] && [ "$MARKED" -eq 0 ]; then
-            echo "::error title=verdict carries no Reviewer marker::A verdict for ${HEAD_SHA:0:7} was posted by the Judge App, but none carries the Reviewer's role marker (\`<!-- kanon:role=reviewer -->\`), and the stamp step above could not add it (its warning says why). The Merger and the review filter count only a marked verdict, so PR #$PR_NUMBER would wait with no review. Re-run with: gh workflow run agent-review.yml -f pr_number=$PR_NUMBER (kanon#336)."
+            echo "::error title=verdict carries no Reviewer marker::A verdict for ${HEAD_SHA:0:7} was posted by the Judge App, but none carries the Reviewer's role marker (\`<!-- kanon:role=reviewer -->\`), and the stamp step above could not add it (its warning says why). The Merger and the review filter count only a marked verdict, so PR #$PR_NUMBER would wait with no review. Re-run with: $RECOVER (kanon#336)."
             echo "**The verdict for \`${HEAD_SHA:0:7}\` carries no Reviewer role marker**, so no reader counts it: this job is red so that is visible now (kanon#336)." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
@@ -1254,6 +1263,8 @@ jobs:
           # Only on THIS path: a posted verdict, or reviews that could not be read, write
           # nothing, so the classifier explains exactly the runs it explained before.
           echo "verdict=none" >> "$GITHUB_OUTPUT"
+          # And the command the classifier's annotation prints, the same as this step's.
+          echo "recover=$RECOVER" >> "$GITHUB_OUTPUT"
           # AND WHAT THE RESULT FILE HOLDS NOW, for the classify step to check (RA-2691 review).
           # Inline, the classifier read the file here, before anything else ran. In its own
           # step it runs after the quality step, which executes the PR's own script — and a
@@ -1275,9 +1286,9 @@ jobs:
           # nothing, with no command anywhere in the log. Both now: the annotation says
           # WHETHER to re-run, this line says HOW.
           if [ "$AGENT" = "failure" ]; then
-            echo "::error title=no verdict posted::No verdict was posted for ${HEAD_SHA:0:7} and the review agent did not finish. PR #$PR_NUMBER has no review and nothing retries. Read the classifier's annotation, from a later step of this job, for whether to re-run NOW or wait for a cap or outage to clear — then: gh workflow run agent-review.yml -f pr_number=$PR_NUMBER (RA-1351/RA-1408)."
+            echo "::error title=no verdict posted::No verdict was posted for ${HEAD_SHA:0:7} and the review agent did not finish. PR #$PR_NUMBER has no review and nothing retries. Read the classifier's annotation, from a later step of this job, for whether to re-run NOW or wait for a cap or outage to clear — then: $RECOVER (RA-1351/RA-1408)."
           else
-            echo "::error title=no verdict posted::The review agent exited ZERO but posted no verdict for ${HEAD_SHA:0:7} — the RA-356 shape, which used to leave a GREEN check on an unreviewed PR. PR #$PR_NUMBER has no review. The reconciler's review recovery, where it runs, retries this head once after its cool-down (kanon#622). To review it now: gh workflow run agent-review.yml -f pr_number=$PR_NUMBER (RA-1351)."
+            echo "::error title=no verdict posted::The review agent exited ZERO but posted no verdict for ${HEAD_SHA:0:7} — the RA-356 shape, which used to leave a GREEN check on an unreviewed PR. PR #$PR_NUMBER has no review. The reconciler's review recovery, where it runs, retries this head once after its cool-down (kanon#622). To review it now: $RECOVER (RA-1351)."
           fi
           echo "**No verdict was posted for \`${HEAD_SHA:0:7}\`** — this job is red so that is visible now, rather than as silence on the PR." >> "$GITHUB_STEP_SUMMARY"
           exit 1
@@ -1363,7 +1374,7 @@ jobs:
       # and writes an annotation. `continue-on-error`, as the inline call's `|| true` was, so
       # a classifier that fails to load costs the explanation and never the run's outcome;
       # the reconcile step's recovery command prints either way. `recover` is the command
-      # that step prints.
+      # that step prints, which dispatches the run's caller (kanon#738).
       - name: Say whether the model was unreachable or the run genuinely failed
         id: classify
         if: failure() && steps.claim.outputs.proceed == 'true' && steps.reconcile.outputs.verdict == 'none' && steps.result_pin.outputs.intact == 'true'
@@ -1371,7 +1382,7 @@ jobs:
         uses: $/actions/agent-classify
         with:
           arm: review agent
-          recover: gh workflow run agent-review.yml -f pr_number=${{ env.PR_NUMBER }}
+          recover: ${{ steps.reconcile.outputs.recover }}
 
       # BREADCRUMBS FOR THE RETRY (RA-2519). A review that died of its CAUSE (the model
       # was unreachable, or its API failed mid-run) is retried once, after a cool-down,

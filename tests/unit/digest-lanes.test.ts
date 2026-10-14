@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { type WorkflowStep } from './helpers/workflow-step.js';
+import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
+import { laneBlockOf } from './helpers/agent-lanes.mjs';
 import { callerInputs, realGroup } from './helpers/smoke-group.js';
 
 /**
@@ -234,5 +235,44 @@ describe('the health job (RA-1036)', () => {
     const run = steps.find((s) => /workflow-health\.mjs/.test(s.run ?? ''))!;
     expect(run.run).toBe('node "$KANON/scripts/workflow-health.mjs"');
     expect(run.env).toMatchObject({ GH_TOKEN: '${{ github.token }}', GITHUB_REPOSITORY: '${{ github.repository }}' });
+  });
+});
+
+// kanon#836: without `DIGEST_WEBHOOK` the post step discards the narrative, so the model run that
+// writes it was paid for and thrown away (Kanon calls the lane for its health job alone, #813).
+describe('the project digest runs its model only when the digest will be posted', () => {
+  const GATE = "steps.post.outputs.narrate == 'true'";
+  const steps = lane(PROJECT).jobs.digest!.steps!;
+  const decide = step(PROJECT, 'digest', (s) => s.id === 'post');
+  /** The agent blocks that are not held to the gate. */
+  const ungated = (ss: Step[]) => ['agent-setup', 'agent-run', 'agent-finish']
+    .filter((b) => !String(ss.find((s) => laneBlockOf(s) === b)?.if ?? '').includes(GATE));
+
+  it('reads the secret into the step that decides, which comes before every agent block', () => {
+    expect(decide.env).toEqual({ DIGEST_WEBHOOK: '${{ secrets.DIGEST_WEBHOOK }}', DRY_RUN: "${{ inputs.dry_run == 'true' && '1' || '' }}" });
+    const first = steps.findIndex((s) => ['agent-setup', 'agent-run'].includes(String(laneBlockOf(s))));
+    expect(steps.indexOf(decide)).toBeLessThan(first);
+  });
+
+  it.each([
+    ['a webhook', { DIGEST_WEBHOOK: 'https://hooks.example/x', DRY_RUN: '' }, 'true'],
+    ['a dry run, with no webhook', { DIGEST_WEBHOOK: '', DRY_RUN: '1' }, 'true'],
+    ['neither', { DIGEST_WEBHOOK: '', DRY_RUN: '' }, 'false'],
+  ] as const)('with %s, narrate=%s', (_name, env, want) => {
+    const r = runWorkflowStep(decide, { env });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.narrate).toBe(want);
+    if (want === 'false') expect(r.summary).toContain('no model runs');
+  });
+
+  it('holds agent-setup, agent-run and agent-finish to it; the post and the health job are not', () => {
+    expect(ungated(steps)).toEqual([]);
+    expect(steps.find((s) => s.name === 'Post the digest')!.if).toBeUndefined();
+    expect(lane(PROJECT).jobs.health!.if).toBe("needs.gate.outputs.member == 'true'");
+  });
+
+  it('goes red when the gate is taken off the model run (mutation)', () => {
+    const mutated = steps.map((s) => (laneBlockOf(s) === 'agent-run' ? { ...s, if: undefined } : s));
+    expect(ungated(mutated)).toEqual(['agent-run']);
   });
 });

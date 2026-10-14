@@ -7,6 +7,7 @@ import { ownRegister, runRegisterStep, withSlug, withoutRole } from './helpers/r
 import { writeStub } from './helpers/stub-bin.js';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { SPAWNS } from './helpers/spawns.js';
+import { evaluate } from './helpers/expression.js';
 
 /**
  * The Lead's reconciler, `agent-lead-reconcile.yml` (plan 0004 step 8), moved from the reference
@@ -35,16 +36,11 @@ const step = (pred: (s: WorkflowStep) => boolean): WorkflowStep => {
   return s;
 };
 
-/** `github.event_name == '…'` and `github.event.action == '…'`, joined by `||` and `&&`. */
-const admits = (event_name: string, action?: string): boolean => {
-  const js = String(wf.jobs.tick.if)
-    .replace(/github\.event_name/g, JSON.stringify(event_name))
-    .replace(/github\.event\.action/g, JSON.stringify(action ?? ''))
-    .replace(/'([^']*)'/g, (_m, s: string) => JSON.stringify(s))
-    .replace(/==/g, '===');
-  if (/github\.|\w+\s*\(/.test(js)) throw new Error(`unmodelled expression: ${js}`);
-  return Boolean(new Function(`return (${js});`)());
-};
+/** The tick's `if:`, evaluated for an event and action. The re-ask's `workflow_run` cases are reask.test.ts's (kanon#813). */
+const admits = (event_name: string, action?: string): boolean =>
+  Boolean(evaluate(String(wf.jobs.tick.if), {
+    github: { event_name, event: { action: action ?? '' }, workflow_ref: 'owner/repo/.github/workflows/agent-lead-reconcile.yml@refs/heads/main' },
+  }));
 
 describe('the reconciler is a called lane, with the caller’s four triggers', () => {
   it('the fixture caller holds the triggers the lane documents', () => {
@@ -129,7 +125,7 @@ describe('the Lead’s login comes from the App register on the default branch (
     expect(absent.output).toContain('could not read docs/qa/agent-identities.md from the default branch');
   });
   it('is read only once the gate admitted, like every step after it', () => {
-    expect(lead.if).toBe("steps.gate.outputs.member == 'true'");
+    expect(lead.if).toBe("steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'");
   });
 });
 

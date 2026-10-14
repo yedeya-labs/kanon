@@ -339,6 +339,40 @@ describe('the actionlint wrapper rewrites `$/` in a copy only, and maps the outp
     expect(copy).toContain('      queue: maximum'); // and so is a value GitHub doesn't know
   }, TIMEOUT);
 
+  // kanon#552: every lane that keeps its pending runs carries the key, so the rewrite must reach
+  // each of them, wherever its block is. Runs the wrapper's own perl over every real workflow.
+  describe('the `queue` rewrite covers every workflow in the tree (kanon#552)', () => {
+    const program = /perl -pi -e '(if \(\/\^\(\\s\*\)concurrency:[^']*)' \{\} \+/.exec(SOURCE)?.[1];
+    const rewrite = (text: string) => {
+      const r = spawnSync('perl', ['-p', '-e', program!], { input: text, encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      return r.stdout;
+    };
+    type Doc = { concurrency?: Record<string, unknown>; jobs?: Record<string, { concurrency?: Record<string, unknown> }> };
+    const blocks = (d: Doc) => [d.concurrency, ...Object.values(d.jobs ?? {}).map((j) => j?.concurrency)]
+      .filter((c): c is Record<string, unknown> => c !== null && typeof c === 'object');
+    const files = readdirSync(join(REPO, '.github/workflows')).filter((f) => /\.ya?ml$/.test(f));
+    const carrying = files.filter((f) => blocks(parse(readFileSync(join(REPO, '.github/workflows', f), 'utf8')) as Doc).some((c) => 'queue' in c));
+
+    it('finds the program in the wrapper, and the lanes that carry the key', () => {
+      expect(program).toBeTruthy();
+      expect(carrying.length).toBeGreaterThanOrEqual(8);
+    });
+
+    it.each(files)('%s keeps its line count and has no `queue:` left in a concurrency block', (f) => {
+      const real = readFileSync(join(REPO, '.github/workflows', f), 'utf8');
+      const copy = rewrite(real);
+      expect(copy.split('\n')).toHaveLength(real.split('\n').length);
+      expect(blocks(parse(copy) as Doc).filter((c) => 'queue' in c)).toEqual([]);
+      if (!carrying.includes(f)) expect(copy).toBe(real);
+    });
+
+    it('hides a value followed by a comment, and nothing outside a concurrency block', () => {
+      const src = 'concurrency:\n  group: g\n  queue: max  # why\nenv:\n  queue: max\n';
+      expect(rewrite(src)).toBe('concurrency:\n  group: g\n  # queue (kanon#537)\nenv:\n  queue: max\n');
+    });
+  });
+
   it("maps the copy's path to the real one, quotes the real `$/` line, and passes the exit code through", () => {
     const root = fixture(['arm: x']);
     const r = fetchRun({ root, serves: GOOD.tarball, rc: 1 });

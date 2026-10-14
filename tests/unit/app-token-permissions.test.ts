@@ -77,6 +77,9 @@ const MORE: Record<string, Perms> = {
   // the collaborators, whose logins the scrub removes from the evidence it sends (plan 0006
   // §4.2; the Owner's decision on kanon#606). Read-only: it writes nothing.
   'agent-explore-telemetry.yml#names-token': { issues: 'read', 'pull-requests': 'read' },
+  // On a re-ask only, lists the caller's own runs and their jobs, to tell whether a sweep ran
+  // in the last 20 hours (kanon#813, `scripts/reask-due.mjs`). Read-only.
+  'agent-dispatch-sweep.yml#reask-token': { actions: 'read' },
 };
 /**
  * The implementer status (plan 0005 §3.3, question 6; step L3), keyed `<file>#<step id>`: a

@@ -552,6 +552,26 @@ describe('the register (§5)', () => {
     expect(one({ aggregate_invoker: 'yes' })).toEqual(['repositories[0].aggregate_invoker is not true or false']);
     expect(() => render({ ...register, repositories: [] }, { gh })).toThrow(/register/);
   });
+  it("the template's OwnerPrincipalArn pattern refuses what the render refuses: more than one role (#798)", () => {
+    // A deploy that sets the parameter by hand is checked by this pattern alone. CloudFormation's
+    // dialect is Java's, which reads `\w` and `(?:…)` as JavaScript does.
+    const source = parse(readFileSync(TEMPLATE_PATH, 'utf8'));
+    const pattern = source.Parameters.OwnerPrincipalArn.AllowedPattern as string;
+    expect(template.Parameters.OwnerPrincipalArn.AllowedPattern).toBe(pattern);
+    const re = new RegExp(pattern);
+    const acct = `arn:aws:iam::${'1'.repeat(12)}`;
+    const cases = [
+      `${acct}:role/*`, `${acct}:role/a?`, `${acct}:role/a,b`, `${acct}:role/a,${acct}:role/b`, `${acct}:role/aws-reserved/*/x`,
+      `${acct}:role/`, `${acct}:role/x/`, `arn:aws:iam::*:role/x`, `${acct}:user/x`,
+      `${acct}:role/a+b=c.d@e_f-g`, register.owner_principal_arn as string, `${acct}:role/x`,
+    ];
+    for (const arn of cases) {
+      const renderOk = registerProblems({ ...register, owner_principal_arn: arn }).length === 0;
+      expect(re.test(arn), arn).toBe(renderOk);
+    }
+    for (const bad of [`${acct}:role/*`, `${acct}:role/a?`, `${acct}:role/a,b`]) expect(re.test(bad), bad).toBe(false);
+    expect(re.test(register.owner_principal_arn)).toBe(true);
+  });
 
   it('holds the time to first review for 13 months after its review row, and no longer (decision 18)', () => {
     const now = Date.parse('2027-11-02T12:00:00Z');

@@ -157,7 +157,7 @@ describe('the taxonomy and the lane carry it', () => {
     expect(declined?.createdBy).toBeUndefined();
   });
 
-  it('the dispatch sweep runs the exit on the Lead\'s App token, applying on the schedule only', () => {
+  it('the dispatch sweep runs the exit on the Lead\'s App token, applying on the schedule and a re-ask only', () => {
     const wf = parse(read('.github/workflows/agent-dispatch-sweep.yml')) as { jobs: Record<string, { steps?: { name?: string; run?: string; if?: string; env?: Record<string, string> }[] }> };
     const steps = Object.values(wf.jobs).flatMap((j) => j.steps ?? []);
     const exit = steps.filter((s) => /scripts\/gate-candidate-exit\.mjs/.test(s.run ?? ''));
@@ -165,7 +165,7 @@ describe('the taxonomy and the lane carry it', () => {
     // No `--apply` on the line: whether it acts is APPLY's, so a dispatch stays a dry run.
     expect(exit[0]?.run?.trim()).toBe('node "$KANON/scripts/gate-candidate-exit.mjs"');
     expect(exit[0]?.env?.GH_TOKEN).toBe('${{ steps.app-token.outputs.token }}');
-    expect(exit[0]?.env?.APPLY).toBe("${{ (github.event_name == 'schedule' || inputs.apply == 'true') && '1' || '' }}");
+    expect(exit[0]?.env?.APPLY).toBe("${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}");
     expect(exit[0]?.if).toContain('!cancelled()');
   });
 
