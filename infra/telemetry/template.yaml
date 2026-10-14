@@ -23,7 +23,11 @@ Parameters:
   OwnerPrincipalArn:
     Type: String
     Description: The Owner's role (the SSO role's ARN, with its path). It alone may assume the importer, backfill and verify paths, and erase rows.
-    AllowedPattern: '^arn:aws:iam::\d{12}:role/.+$'
+    # One role, as render.mjs's OWNER holds it (#798): a path and name of IAM's role characters only,
+    # so no `*` or `?`, which ArnEquals and ArnNotEquals read as wildcards, and no `,`, which the
+    # register table's Fn::Split reads as a second principal. The pattern is also the backstop for a
+    # deploy that sets this parameter by hand rather than through the render.
+    AllowedPattern: '^arn:aws:iam::\d{12}:role/(?:[\w+=.@-]+/)*[\w+=.@-]+$'
   CreateOidcProvider:
     Type: String
     Description: Create GitHub's OIDC provider. Set false when the account already has one.
