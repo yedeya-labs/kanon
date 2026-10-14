@@ -401,9 +401,18 @@ describe('the roles (§3, §6, §7)', () => {
 });
 
 describe('the permissions boundary (plan 0010 decision 15, D11)', () => {
-  // The static template's own roles: render.mjs adds the per-repository ones, which go at plan 0008 J9.
   const own = parse(readFileSync(TEMPLATE_PATH, 'utf8'));
-  const roles = Object.entries(own.Resources as Record<string, Res>).filter(([, r]) => r.Type === 'AWS::IAM::Role');
+  const rolesOf = (t: J) => Object.entries(t.Resources as Record<string, Res>).filter(([, r]) => r.Type === 'AWS::IAM::Role');
+  const roles = rolesOf(own);
+  // Rendered with several repositories, one with an invoker, so every per-repository role kind is there.
+  const many = render({
+    ...register,
+    repositories: [
+      { key: 'k1', repository: 'o/r', readers: ['ref:refs/heads/main'], aggregate_invoker: true },
+      { key: 'k2', repository: 'o/s', readers: ['ref:refs/heads/main', 'ref:refs/heads/release'] },
+    ],
+  }, { gh }).template;
+  const rendered = rolesOf(many);
   const boundaryRef = { Ref: 'PermissionsBoundaryArn' };
   /** The role's PermissionsBoundary as CloudFormation resolves it, with HasPermissionsBoundary given. */
   const resolved = (r: Res, has: boolean): J => {
@@ -415,6 +424,22 @@ describe('the permissions boundary (plan 0010 decision 15, D11)', () => {
     }
     return v;
   };
+  /** Every place a template names the parameter or its condition, in its resources and outputs. */
+  const uses = (t: J): string[] => {
+    const at: string[] = [];
+    const walk = (v: J, path: string): void => {
+      if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
+      else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`);
+      else if (v === 'PermissionsBoundaryArn' || v === 'HasPermissionsBoundary') at.push(path);
+    };
+    walk(t.Resources, 'Resources');
+    walk(t.Outputs, 'Outputs');
+    return at.sort();
+  };
+  const onBoundariesOnly = (rs: [string, Res][]) => rs.flatMap(([name]) => [
+    `Resources.${name}.Properties.PermissionsBoundary.Fn::If[0]`,
+    `Resources.${name}.Properties.PermissionsBoundary.Fn::If[1].Ref`,
+  ]).sort();
 
   it('is an optional parameter, empty by default, which only an IAM policy ARN fills', () => {
     const p = own.Parameters.PermissionsBoundaryArn;
@@ -425,30 +450,22 @@ describe('the permissions boundary (plan 0010 decision 15, D11)', () => {
     expect(re.test(`arn:aws:iam::${'1'.repeat(12)}:role/kanon-deploy-boundary`)).toBe(false);
     expect(own.Conditions.HasPermissionsBoundary).toEqual({ 'Fn::Not': [{ 'Fn::Equals': [boundaryRef, ''] }] });
   });
-  it('with the parameter, every role the template creates carries it', () => {
-    expect(roles.length).toBeGreaterThanOrEqual(6);
-    for (const [name, r] of roles) expect(resolved(r, true), name).toEqual(boundaryRef);
+  it('the rendered template holds the static template\'s six roles and each repository\'s writer, reader and invoker', () => {
+    expect(roles.length).toBe(6);
+    const names = rendered.map(([n]) => n);
+    for (const [n] of roles) expect(names).toContain(n);
+    for (const n of ['WriterRolek1', 'ReaderRolek1', 'AggregateInvokerRolek1', 'WriterRolek2', 'ReaderRolek2']) expect(names).toContain(n);
+    expect(rendered.length).toBe(11);
+  });
+  it('with the parameter, every role carries it, the per-repository ones included', () => {
+    for (const [name, r] of rendered) expect(resolved(r, true), name).toEqual(boundaryRef);
   });
   it('without it, no role carries a boundary', () => {
-    for (const [name, r] of roles) expect(resolved(r, false), name).toBeUndefined();
+    for (const [name, r] of rendered) expect(resolved(r, false), name).toBeUndefined();
   });
   it('the parameter and its condition are used on the roles\' boundaries alone, so the template is otherwise unchanged', () => {
-    const uses: string[] = [];
-    const walk = (v: J, at: string): void => {
-      if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${at}[${i}]`));
-      else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, `${at}.${k}`);
-      else if (v === 'PermissionsBoundaryArn' || v === 'HasPermissionsBoundary') uses.push(at);
-    };
-    walk(own.Resources, 'Resources');
-    walk(own.Outputs, 'Outputs');
-    const expected = roles.flatMap(([name]) => [
-      `Resources.${name}.Properties.PermissionsBoundary.Fn::If[0]`,
-      `Resources.${name}.Properties.PermissionsBoundary.Fn::If[1].Ref`,
-    ]);
-    expect(uses.sort()).toEqual(expected.sort());
-  });
-  it('the rendered template keeps every one of the static template\'s role boundaries', () => {
-    for (const [name] of roles) expect(R[name]!.Properties.PermissionsBoundary, name).toEqual(own.Resources[name].Properties.PermissionsBoundary);
+    expect(uses(own)).toEqual(onBoundariesOnly(roles));
+    expect(uses(many)).toEqual(onBoundariesOnly(rendered));
   });
 });
 
