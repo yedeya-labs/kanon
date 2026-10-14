@@ -103,7 +103,7 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | The ship command, its advisory-review path check and its allowlist test | `K-WS-1`, `K-SHIP-1`, `K-SHIP-2`, `K-MERGE-15` | not yet installed |
 | The guard on tracked environment files and test artifacts | `K-WS-4` | not yet installed |
 | The closing-references check | `K-SHIP-5` | not yet installed |
-| Deploy, production approval and announcement workflows (Kanon deploys nothing) | `K-SHIP-8`, `K-SHIP-9`, `K-SHIP-10` | not yet installed |
+| Deploy, production approval and announcement workflows, and the deploy lane's guards (Kanon deploys nothing, and calls no deploy lane) | `K-SHIP-8`, `K-SHIP-9`, `K-SHIP-10`, `K-SHIP-12` | not yet installed |
 | The digest job | `K-PROJ-13`, `K-SHIP-11` | not yet installed |
 | The observability document's guards: paging parity, signal disposition, hand-created resources | `K-PRIN-2`, `K-OBS-2`, `K-OBS-3`, `K-OBS-8`, `K-LAYOUT-5` | not yet installed |
 | The workflow-health check | `K-OBS-6` | not yet installed |
