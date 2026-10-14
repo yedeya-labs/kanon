@@ -770,6 +770,23 @@ describe('kanon doctor on the fixed caller names and job ids (#743)', () => {
     expect(named(from).map((f) => f.blocking)).toEqual([true, true, true]);
   });
 
+  it("holds them to the checked release's `# CALLER NAME:` and `# CALLER JOB:` lines, as its requirements file records them (#728)", async () => {
+    const [major, minor] = FAILS_FROM.split('.').map(Number) as [number, number];
+    const before = `v${major}.${minor - 1}.9`;
+    const marked = structuredClone(REQ);
+    marked.lanes['agent-merge-reconcile']!.callerName = 'Marked Name';
+    marked.lanes['agent-merge-reconcile']!.callerJob = 'marked';
+    const r = await run(checkout(withRacers()), fakeGitHub({ releases: { [before]: marked } }), ['--json', '--to', before]);
+    const found = named(r);
+    expect(found.map((f) => [f.id, f.subject, f.blocking])).toEqual([
+      ['caller.name', at('agent-merge-reconcile'), false],
+      ['caller.job-id', at('agent-merge-reconcile'), false],
+    ]);
+    expect(found[0]!.message).toContain(`its name must be \`Marked Name\`, not \`${FIXED_CALLERS['agent-merge-reconcile']!.name}\``);
+    expect(found[0]!.fix.commands).toEqual(['name: Marked Name']);
+    expect(found[1]!.fix.commands).toEqual(['  marked:']);
+  });
+
   it('reads no job id from a caller with more than one job, as lane-check reads none', async () => {
     const files = withRacers();
     const path = at('agent-implement-revise');

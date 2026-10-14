@@ -1097,20 +1097,22 @@ export const diagnose = async (deps, opts) => {
       }];
       });
     }
-    if (spec.callerName && c.wf.name !== spec.callerName) {
-      find('caller.name', c.file, `is named "${String(c.wf.name ?? '')}"; the lane ${c.lane} tells its own checks apart by its caller's name, which must be "${spec.callerName}".`, { text: `Set the workflow's name:`, commands: [`name: ${spec.callerName}`] });
-    }
     // The review, implement-revise and merge-reconcile callers' names, and the two racers' job
     // ids, which the Merger tells their checks apart by (kanon#728, #743): lane-check's own table
     // and wording, and its switch, a warning before `FAILS_FROM` and a failure from it, read here
     // at the checked release, which is the one the callers' lane-check runs at once they pin it.
+    // What they must be is the checked release's `# CALLER NAME:` and `# CALLER JOB:` lines, as
+    // its requirements file records them, or the table for a release from before the lines.
     const fixed = FIXED_CALLERS[c.lane];
-    if (fixed && !spec.callerName) {
+    if (fixed) {
+      const want = spec.callerName ? { name: spec.callerName, ...(spec.callerJob ? { job: spec.callerJob } : {}) } : fixed;
       const jobs = Object.keys(isMap(c.wf.jobs) ? c.wf.jobs : {});
-      const [named] = callerNameFindings(c.lane, String(c.wf.name ?? ''), null, checked);
-      const [jobbed] = callerNameFindings(c.lane, fixed.name, jobs.length === 1 ? c.jobName : null, checked);
-      if (named) find('caller.name', c.file, `${named.message}.`, { text: `Set the workflow's name:`, commands: [`name: ${fixed.name}`] }, named.level === 'warning');
-      if (jobbed && fixed.job) find('caller.job-id', c.file, `${jobbed.message}.`, { text: `Rename the calling job from \`${c.jobName}:\` to:`, commands: [`  ${fixed.job}:`] }, jobbed.level === 'warning');
+      const [named] = callerNameFindings(c.lane, String(c.wf.name ?? ''), null, checked, want);
+      const [jobbed] = callerNameFindings(c.lane, want.name, jobs.length === 1 ? c.jobName : null, checked, want);
+      if (named) find('caller.name', c.file, `${named.message}.`, { text: `Set the workflow's name:`, commands: [`name: ${want.name}`] }, named.level === 'warning');
+      if (jobbed && want.job) find('caller.job-id', c.file, `${jobbed.message}.`, { text: `Rename the calling job from \`${c.jobName}:\` to:`, commands: [`  ${want.job}:`] }, jobbed.level === 'warning');
+    } else if (spec.callerName && c.wf.name !== spec.callerName) {
+      find('caller.name', c.file, `is named "${String(c.wf.name ?? '')}"; the lane ${c.lane} tells its own checks apart by its caller's name, which must be "${spec.callerName}".`, { text: `Set the workflow's name:`, commands: [`name: ${spec.callerName}`] });
     }
     if (spec.callerRunNameEndsWith && !String(c.wf['run-name'] ?? '').endsWith(` ${spec.callerRunNameEndsWith}`)) {
       find('caller.run-name', c.file, `has a run-name that does not end with \` ${spec.callerRunNameEndsWith}\`; the lane ${c.lane}'s runs are found by it.`, { text: `End the workflow's run-name: with that text, as its last token.` });

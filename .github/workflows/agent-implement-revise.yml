@@ -39,6 +39,14 @@
 # The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
 # credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
 # `agent-run` refuses both or neither, by name, before the agent starts.
+# CALLER NAME: Implement (Implementer) — revise
+# CALLER JOB: revise
+# The # lines above are read by `lane-check`, `kanon init` and doctor (kanon#728). GitHub reports a
+# called lane's checks under its caller's name, and its calling job's id (`<job id> / <job>`),
+# and `merge-gate.mjs` tells this lane's checks from the rest by them (`REVIEW_EVENT_CHECKS` in
+# `scripts/lib/protocol-spellings.mjs`, which a test holds these lines to): under another name or job id
+# the Merger waits on them. A caller that differs is a `::warning` until the Kanon release
+# `FAILS_FROM` names in `actions/lane-check/caller-names.mjs`, and a failure from it.
 name: Implement (Implementer) — revise
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:

@@ -171,7 +171,9 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "callerName": "Implement (Implementer) — revise",
+      "callerJob": "revise"
     },
     "agent-implement": {
       "identities": [
@@ -391,7 +393,9 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "callerName": "Merge Reconcile (Reviewer)",
+      "callerJob": "reconcile"
     },
     "agent-merge": {
       "identities": [
@@ -551,6 +555,7 @@
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
       ],
+      "callerName": "Review (Reviewer)",
       "callerRunNameEndsWith": "${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}"
     },
     "agent-triage": {

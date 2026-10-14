@@ -18,7 +18,7 @@ import { URL } from 'node:url';
 /**
  * @typedef {{ type: string, description: string }} LaneInput
  * @typedef {{ identities: string[], secrets: string[], inputs: Record<string, LaneInput>, grant: Record<string, string>,
- *   reads: string[], readsWorkflows: string[], hooks: string[], qaStore?: boolean, callerName?: string, callerRunNameEndsWith?: string,
+ *   reads: string[], readsWorkflows: string[], hooks: string[], qaStore?: boolean, callerName?: string, callerJob?: string, callerRunNameEndsWith?: string,
  *   optionalSecrets?: string[], optionalVariables?: string[], claude?: string[] }} Lane
  * @typedef {{ name: string, permissions: Record<string, string> }} RoleIdentity
  * @typedef {{ name: string, roles: string[], permissions: Record<string, string> }} AppIdentity
@@ -158,7 +158,7 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   }
   out.push('', 'permissions:');
   for (const [k, v] of Object.entries(spec.grant)) out.push(`  ${k}: ${v}`);
-  out.push('', 'jobs:', `  ${t.job}:`, `    uses: yedeya-labs/kanon/.github/workflows/${lane}.yml@${release}`);
+  out.push('', 'jobs:', `  ${spec.callerJob ?? t.job}:`, `    uses: yedeya-labs/kanon/.github/workflows/${lane}.yml@${release}`);
   if (dispatch.length) {
     out.push('    with:');
     for (const [k] of dispatch) out.push(`      ${k}: \${{ inputs.${k} }}`);
