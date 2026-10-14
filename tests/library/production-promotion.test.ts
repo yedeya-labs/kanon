@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { DeclarationError } from '../../scripts/lib/declarations.mjs';
 import { ESCALATION_FILE, PIPELINE_ESCALATIONS, escalatingPaths, escalationCategories, parseEscalationFile, readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import { parseProductionPromotion, readProductionPromotion, readProductionPromotionAt } from '../../scripts/lib/production-promotion.mjs';
-import { ADOPTION_RECORD } from '../../scripts/lib/reference-deploy.mjs';
+import { ADOPTION_RECORD } from '../../scripts/lib/deploy-declaration.mjs';
 import { IMPLEMENTER_LOGIN, REVIEWER_LOGIN, mergeVerdict, readEscalations } from '../../scripts/merge-gate.mjs';
 import { IMPLEMENTER_STATUS, headerLine } from '../../scripts/lib/role-marker.mjs';
 

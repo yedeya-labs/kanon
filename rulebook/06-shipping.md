@@ -78,11 +78,11 @@ A `!` after the type, or a `BREAKING CHANGE` footer, marks a breaking change. `c
 
 ### `K-SHIP-7` Release on every merge, or on the cadence the project declares
 
-**Rule.** Every merge to the main branch produces a version and a release, and release tags drive the deploy to the pre-production stage. A project whose releases other repositories pin may instead declare a **release cadence** under `## Choices` in its adoption record (`K-LAYOUT-10`), such as `` - **Release cadence:** `weekly, Monday` ``. Its merges then pool into the release pull request, which merges on the declared day, so a week's changes, breaking ones included, ship as one release. A fix that can't wait may release on another day, and the release pull request says why. A project that declares no cadence releases on every merge ([plan 0009](../docs/plans/0009-release-channels-and-api-key.md)).
+**Rule.** Every merge to the main branch produces a version and a release, and release tags drive the deploy, through the stages the project declares. A project whose releases other repositories pin may instead declare a **release cadence** under `## Choices` in its adoption record (`K-LAYOUT-10`), such as `` - **Release cadence:** `weekly, Monday` ``. Its merges then pool into the release pull request, which merges on the declared day, so a week's changes, breaking ones included, ship as one release. A fix that can't wait may release on another day, and the release pull request says why. A project that declares no cadence releases on every merge ([plan 0009](../docs/plans/0009-release-channels-and-api-key.md)).
 
 **Why.** One merge, one version keeps every deployed build traceable to exactly one change, and removes "cutting a release" as a separate human task. A release that other repositories pin is different: each one is an upgrade every pinning repository has to review, and releasing on every merge sends them upgrades faster than they can. A framework that released on every merge once cut fifteen releases in a day, one in five of its releases asked its adopters to change something, and the upgrades reached them the day they were tagged. A declared day pools them into one, and is written where any reader looks, rather than kept by a maintainer's habit.
 
-**Enforced by.** Kanon's reusable release workflow ([`release.yml`](../docs/release.md)), called on every push to the main branch, which first runs its merge-settings guard (`K-SHIP-3`) and then release-please; and a deploy workflow triggered by release tags. A declared cadence is prose only: whoever merges the release pull request merges it on the declared day, and on Kanon's own record [`tests/unit/adoption-record.test.ts`](../tests/unit/adoption-record.test.ts) reads the bullet's shape.
+**Enforced by.** Kanon's reusable release workflow ([`release.yml`](../docs/release.md)), called on every push to the main branch, which first runs its merge-settings guard (`K-SHIP-3`) and then release-please; and Kanon's deploy lane ([plan 0010](../docs/plans/0010-deployment-lane.md), steps D4 and D5), which a published release triggers through the deploy caller `kanon init` writes: `deploy-release.yml` gates the release and builds it once, then `deploy.yml` deploys it to each environment the adoption record declares under `## Deploy` (`K-LAYOUT-10`), in order. A declared cadence is prose only: whoever merges the release pull request merges it on the declared day, and on Kanon's own record [`tests/unit/adoption-record.test.ts`](../tests/unit/adoption-record.test.ts) reads the bullet's shape.
 
 **Class.** split. Releasing on every merge, and the release tool (release-please, with the changelog sections matching `K-SHIP-4`'s types), are framework. **The project supplies:** its stages, and its release cadence, if it declares one.
 
@@ -92,7 +92,7 @@ A `!` after the type, or a `BREAKING CHANGE` footer, marks a breaking change. `c
 
 **Why.** A cancelled run reads as "not red" to anything that checks only for failure, and the reference adopter shipped a red main branch next to a deploy that way. The platform's failure notification goes to the actor who triggered the run, which stopped being a person once agents merge, so a red main branch otherwise notifies nobody.
 
-**Enforced by.** The pre-production deploy workflow's gate on the release commit's CI run, and a workflow that files or updates a single issue when the main branch goes red.
+**Enforced by.** The gate job of Kanon's deploy lane, `deploy-release.yml` with `scripts/deploy-gate.mjs` ([plan 0010](../docs/plans/0010-deployment-lane.md) §3, step D4), which deploys a release only when `ci.yml`'s `push` run on the default branch at the release's commit completed with every job `success`, waits for it while it runs, and refuses by name otherwise (`ci-red`, `ci-timeout`); each refusal files or updates the first environment's deploy issue, and `deploy.yml`'s `report` job files one per environment that fails. A workflow files or updates a single issue when the main branch goes red.
 
 **Class.** split. Gating the deploy on the release commit's CI, and routing a red main to a human, are framework. **The project supplies:** its stages and its announcement channel.
 
@@ -102,9 +102,19 @@ A `!` after the type, or a `BREAKING CHANGE` footer, marks a breaking change. `c
 
 **Why.** It is the one human gate that keeps bad code out of production however the merge was made, which is what makes an agent merger inside a green zone (`K-MERGE-1`) safe to run. Private repositories on the Team plan have no environment reviewers, so the gate needs a form that works there too.
 
-**Enforced by.** A required reviewer on the production deployment environment, or, as the fallback, the promotion workflow's check that the actor who started it is the Maintainer.
+**Enforced by.** A required reviewer on the production environment, the last of the chain the adoption record declares, which `deploy.yml`'s `deploy` job references, so the job waits for that reviewer before it runs ([plan 0010](../docs/plans/0010-deployment-lane.md) §4, step D4); `kanon doctor` blocks when production has no required-reviewers rule (`deploy.reviewers-missing`). Under the fallback, `deploy.yml`'s job deploys production only in a dispatch at the release's tag that the Maintainer named in the adoption record started (plan 0010 §13).
 
 **Class.** framework
+
+### `K-SHIP-12` A deploy runs no model, and holds its cloud credential only in an environment's job
+
+**Rule.** No job of the deploy path runs an agent: no model, no agent action, no Claude credential and no App key. The cloud credential a deploy needs is obtained only in the job that deploys to one environment, which references that environment, by the project's deploy hook, through trust bound to that environment's identity: on GitHub, a role that trusts the OIDC subject naming the environment, so only a job that references it, after its protection rules pass, can assume it. The job that builds what every environment deploys holds no credential, no OIDC grant and no secret, and nothing is rebuilt per environment. The one secret the lane passes, `KANON_DEPLOY_SECRET`, reaches the deploy hook's step alone. Before anything builds, a probe outside every environment tries each declared environment's credential and must be refused for every one. Where the plan provides no environments, the fixed fallback of `K-ADOPT-3` applies, recorded as weaker, and the probe is skipped.
+
+**Why.** The deploy path is where an instruction hidden in a release note, a commit message or a log would meet a cloud credential, and a model that reads text there can be steered by it; code that runs no model can only do what the reviewed commit says. A credential bound to an environment can't be reached by a pull request, by another workflow or by a job outside it, and only after the environment's reviewers approve, so the binding is a property of the platform rather than of every workflow being written carefully. Building in a job of its own keeps the build's tools and dependencies, which run code the project didn't write, away from the credential. The probe exists because no tool can read a project's cloud trust policy from outside: only a job that is refused proves the binding ([plan 0010](../docs/plans/0010-deployment-lane.md) §5, §9).
+
+**Enforced by.** Kanon's deploy lane's guard test, `tests/unit/deploy-lane.test.ts` ([plan 0010](../docs/plans/0010-deployment-lane.md), steps D4 and D5): it fails when a job of either deploy workflow references an agent run, an agent action, a `CLAUDE_*`, `ANTHROPIC_*` or `*_PRIVATE_KEY` secret, any secret but `KANON_DEPLOY_SECRET` outside the deploy hook step's `env:` in `deploy.yml`'s `deploy` job, or `id-token: write` on any job but `probe` and `deploy`; when the build job holds an environment, an OIDC grant or a secret; and when the probe passes on an answer other than `refused` for every environment. `K-AGENT-50`'s guard holds the probe, the build and the deploy job to no App token, `contents: read` and `persist-credentials: false`. For an adopter, `kanon doctor` reads the probe's line from the lane's latest counting run (`deploy.trust-unproven`) and blocks a custom OIDC subject template that leaves the environment out (`deploy.subject-custom`).
+
+**Class.** split. The lane, its guards and the probe are framework. **The project supplies:** its build, deploy and smoke hooks, its environments, and each environment's cloud role, trusting that environment's subject.
 
 ## Reporting outward
 
@@ -114,7 +124,7 @@ A `!` after the type, or a `BREAKING CHANGE` footer, marks a breaking change. `c
 
 **Why.** In the reference adopter a timeout from the chat service raised a deploy-failure alert for a deploy that had succeeded, which is the kind of false alarm that teaches people to ignore real ones.
 
-**Enforced by.** An announcement step that runs separately from the deploy and reports its own failures.
+**Enforced by.** Prose only. Kanon's deploy lane, `deploy-release.yml` and `deploy.yml`, announces nothing ([plan 0010](../docs/plans/0010-deployment-lane.md) leaves announcement out of scope), so a failure it reports is always a deploy's; the announcement is the project's own step, run separately from the deploy, reporting its own failures.
 
 **Class.** split. The mechanism is framework. **The project supplies:** its announcement channel (which service, and how it is wired, is the project's decision, recorded in the adoption record) and its stages.
 

@@ -24,7 +24,7 @@ A repository that maintains Kanon or a fork of it may file Kanon bugs as issues 
 
 **What you get:** Kanon notices failures it caused in your runs, often fixing them before you would report one, and you get cross-adopter cost and reliability baselines ([what an adopter gets](telemetry.md)).
 
-**After a yes:** nothing more. The collector's caller is the whole registration: its first run on the default branch registers this repository with the store, using the token GitHub gives the run, which proves it is Kanon's collector at a Kanon release on this repository's default branch ([plan 0008](plans/0008-self-service-registration.md) §8). No issue, no variable, no wait for Kanon's operator, and nothing names this repository in public. On a private repository each hourly run costs about an Actions minute.
+**After a yes:** nothing more. The collector's caller is the whole registration: its first run on the default branch registers this repository with the store, using the token GitHub gives the run, which proves it is Kanon's collector at a Kanon release on this repository's default branch ([plan 0008](plans/0008-self-service-registration.md) §8). No issue, no variable, no wait for Kanon's operator, and nothing names this repository in public. On a private repository each hourly run costs about an Actions minute. A Kanon release that doesn't publish the hosted store's URL yet sends nothing and registers nothing, and `kanon init` says so; the first run after your pin moves to one that does registers this repository ([#843](https://github.com/yedeya-labs/kanon/issues/843)).
 
 ## Kanon's bugs: upstream findings
 

@@ -45,6 +45,11 @@ Written as rules `K-OBS-16`, `K-OBS-17` and `K-OBS-18` in [chapter 08](../../rul
 - **The register leaves git** for a KMS-encrypted table in the store's account, so no pull request carries a key.
 - **Erasure is self-service.** Rule 4's "deleted on request" holds, and the request no longer needs a person: the adopter dispatches its collector's caller with `erase: yes`, or asks the operator.
 
+**Amended 2026-10-14, by [plan 0010](../plans/0010-deployment-lane.md)'s decision 11: the deploy row.** A fourth row kind, the deploy row, describes one release's deploy to one environment of the chain an adopter declares, and is written by the deploy lane, which runs no model. Rule 1's allowed list grows for it in `K-OBS-16`, as it did for the work-item and finding rows; the "never" list is unchanged.
+- **Allowed:** the environment's **role**, `production` for the last environment of the chain and `pre-production` for every other, and its **position** in the chain; the trigger, and whether the release is a pre-release, the deploy a redeploy or a rollback; the outcome, the stage that failed and the refusal, from Kanon's closed lists; and durations. Each is a number, a time, a boolean or a value from a closed list.
+- **Never:** the release's commit or tag, the adopter's version, an environment's name, a URL, the reviewer, or any name from the cloud. Any of them would let whoever can read the adopter's public repository say whose row it is, which the opaque key exists to prevent.
+- **Rule 5 for deploy rows:** they are stored, and not published across adopters (plan 0010 §10).
+
 ## Why
 
 - **Telemetry must be safe to leave a project by construction, not by review.** Free text is how content leaks: a bail reason or an error message can quote code, and a file path reveals a project's structure. A fixed schema with reason codes closes that route.

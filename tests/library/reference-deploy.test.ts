@@ -10,14 +10,16 @@ import {
   declaredEnvironmentFrom,
   readReferenceDeployFrom,
   requireReferenceDeploy,
-} from '../../scripts/lib/reference-deploy.mjs';
+} from '../../scripts/lib/deploy-declaration.mjs';
+import * as reExport from '../../scripts/lib/reference-deploy.mjs';
 import { readDeploy } from '../../scripts/lead-reconcile.mjs';
 import { referenceDeployCli } from '../../scripts/reference-deploy.mjs';
 import { ROOT } from './helpers/adopter.js';
 
 /**
  * Plan 0004 P6 (kanon#197, kanon#54): the reference environment's deploy is the adopter's, declared
- * in its adoption record (`K-LAYOUT-10`, `K-PROJ-11`). These run in the fixture adopter, whose
+ * in its adoption record (`K-LAYOUT-10`, `K-PROJ-11`), in the `## Deploy` section since plan 0010's
+ * D2, read by `scripts/lib/deploy-declaration.mjs`. These run in the fixture adopter, whose
  * record declares `preview`, deployed by `deploy-preview.yml`'s `ship` job, so nothing here passes
  * because a library default happens to match the reference adopter's names.
  */
@@ -27,9 +29,9 @@ const DECLARED = [
   '- **Reference deploy workflow:** `deploy-staging.yml`',
   '- **Reference deploy job:** `deploy`',
 ];
-const RECORD = (choices: string, rest = '') =>
-  `# Adoption record\n\n## People\n\nThe Owner.\n\n## Choices\n\n${choices}\n${rest}`;
-const WITH = (lines: string[]) => RECORD(`- **Chat channel:** none yet.\n${lines.join('\n')}\n`);
+const RECORD = (deploy: string, rest = '') =>
+  `# Adoption record\n\n## People\n\nThe Owner.\n\n## Deploy\n\n${deploy}\n${rest}`;
+const WITH = (lines: string[]) => RECORD(`It deploys with its own workflow.\n${lines.join('\n')}\n`);
 
 const fails = (text: string, message: RegExp) => {
   expect(() => parseReferenceDeploy(text)).toThrow(DeclarationError);
@@ -37,7 +39,7 @@ const fails = (text: string, message: RegExp) => {
 };
 
 describe('the reference-deploy declaration parser (K-LAYOUT-10)', () => {
-  it('reads the three bullets under `## Choices`', () => {
+  it('reads the three bullets under `## Deploy`', () => {
     expect(parseReferenceDeploy(WITH(DECLARED))).toEqual({ environment: 'staging', workflow: 'deploy-staging.yml', job: 'deploy' });
   });
 
@@ -73,13 +75,18 @@ describe('the reference-deploy declaration parser (K-LAYOUT-10)', () => {
     fails(WITH([...DECLARED, DECLARED[1] as string]), /docs\/qa\/adoption\.md:13 repeats `Reference deploy workflow`, already declared on line 11/);
   });
 
-  it('fails by name on a declaration outside `## Choices`, or with no `## Choices` at all', () => {
-    fails(RECORD('None.', `\n## Notes\n\n${DECLARED.join('\n')}\n`), /adoption\.md:13 declares the reference environment's deploy outside `## Choices`/);
-    fails(`# Adoption record\n\n${DECLARED.join('\n')}\n`, /adoption\.md:3 declares the reference environment's deploy outside `## Choices`/);
+  it('fails by name on a declaration outside `## Deploy`, or with no `## Deploy` at all', () => {
+    fails(RECORD('None.', `\n## Notes\n\n${DECLARED.join('\n')}\n`), /adoption\.md:13 declares the reference environment's deploy outside `## Deploy`/);
+    fails(`# Adoption record\n\n${DECLARED.join('\n')}\n`, /adoption\.md:3 declares the reference environment's deploy outside `## Deploy`/);
   });
 
-  it('fails by name on `## Choices` written twice', () => {
-    fails(`${WITH(DECLARED)}\n## Choices\n\nMore.\n`, /has the `## Choices` heading 2 times, on lines 7, 15/);
+  it('fails by name on bullets left under `## Choices`, naming the line and the move (plan 0010, follow-up decision 1)', () => {
+    const choices = `# Adoption record\n\n## Choices\n\n- **Chat channel:** none yet.\n${DECLARED.join('\n')}\n`;
+    fails(choices, /adoption\.md:6 declares `Reference environment` under `## Choices`, but the reference deploy is read from `## Deploy` only \(plan 0010\): move its three bullets into a `## Deploy` section, as the upgrade skill does; `kanon doctor` reports them as `deploy\.declaration-moved` \(K-LAYOUT-10\)/);
+  });
+
+  it('fails by name on `## Deploy` written twice', () => {
+    fails(`${WITH(DECLARED)}\n## Deploy\n\nMore.\n`, /has the `## Deploy` heading 2 times, on lines 7, 15/);
   });
 
   it.each([
@@ -92,7 +99,7 @@ describe('the reference-deploy declaration parser (K-LAYOUT-10)', () => {
     ['text after the value', `${DECLARED[0]}, the last stage before production`],
     ['two code spans', '- **Reference environment:** `staging` `qa`'],
   ])('fails by name on a field written %s', (_shape, line) => {
-    fails(WITH([line as string, ...DECLARED.slice(1)]), /docs\/qa\/adoption\.md:10, under `## Choices`, isn't a declaration: write a `- ` bullet/);
+    fails(WITH([line as string, ...DECLARED.slice(1)]), /docs\/qa\/adoption\.md:10, under `## Deploy`, isn't a declaration: write a `- ` bullet/);
   });
 
   it.each([
@@ -109,6 +116,14 @@ describe('the reference-deploy declaration parser (K-LAYOUT-10)', () => {
 
   it('fails by name on a code fence that never closes', () => {
     fails(WITH([...DECLARED, '```']), /adoption\.md:13 opens a code fence that never closes/);
+  });
+});
+
+describe('`reference-deploy.mjs` is the parser re-exported (plan 0010 D2)', () => {
+  it('exports the very functions `deploy-declaration.mjs` does', () => {
+    expect(reExport.parseReferenceDeploy).toBe(parseReferenceDeploy);
+    expect(reExport.readReferenceDeployFrom).toBe(readReferenceDeployFrom);
+    expect(reExport.ADOPTION_RECORD).toBe(ADOPTION_RECORD);
   });
 });
 

@@ -227,6 +227,30 @@ describe('the recorded_at window (§4): 8 days back, 10 minutes ahead', () => {
   });
 });
 
+describe('a deploy row is refused until its intake is built (plan 0010 D3, D9)', () => {
+  const deployRow = (over: Row = {}): Row => ({
+    schema_version: 1, row_kind: 'deploy', tag: 'run', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 1,
+    kanon_version: '0.12.0', role: 'production', position: 2, outcome: 'ok', ...over,
+  });
+
+  it('a valid deploy row gets 422 naming row_kind, from the writer and the importer, and nothing is stored', async () => {
+    const writer = await call(event([deployRow()]));
+    expect(writer.status).toBe(422);
+    expect(writer.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
+    expect(writer.puts).toEqual([]);
+    const importer = await call(event([deployRow()], { role: 'kanon-telemetry-importer', key: 'k2' }), { IMPORTER_ROLE: 'kanon-telemetry-importer' });
+    expect(importer.status).toBe(422);
+    expect(importer.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
+    expect(importer.puts).toEqual([]);
+  });
+
+  it('the rows beside it are still stored', async () => {
+    const r = await call(event([runRow(), deployRow()]));
+    expect(r.body.results.map((x: { status: string }) => x.status)).toEqual(['stored', 'rejected']);
+    expect(r.puts.map((p) => p.pk)).toEqual(['k1#review']);
+  });
+});
+
 describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
   // Invented repositories: k1's words are `acme`, `corp`, `widget` and `shop`; k2's are not. Since
   // plan 0008 J3 the SigV4 path reads them from each key's registration, as the import writes them.

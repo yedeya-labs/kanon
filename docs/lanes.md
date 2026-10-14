@@ -324,15 +324,21 @@ Every post a lane writes as one of your Apps opens with a persona header and a h
 
 ## The reference environment's deploy
 
-A project closes only once its merges are deployed to your reference environment (`K-PROJ-11`), and the reconciler confirms that by the deploy job itself, not the workflow's conclusion. Declare which workflow deploys there, and which job's success is the deploy, under `## Choices` in your adoption record, `docs/qa/adoption.md` (`K-LAYOUT-10`):
+A project closes only once its merges are deployed to your reference environment (`K-PROJ-11`), and the reconciler confirms that by the deploy job itself, not the workflow's conclusion. Declare which workflow deploys there, and which job's success is the deploy, in a `## Deploy` section of your adoption record, `docs/qa/adoption.md` (`K-LAYOUT-10`, [plan 0010](plans/0010-deployment-lane.md) §4):
 
 ```markdown
+## Deploy
+
 - **Reference environment:** `staging`
 - **Reference deploy workflow:** `deploy-staging.yml`
 - **Reference deploy job:** `deploy`
 ```
 
-The reconciler reads it from your default branch, through [`scripts/lib/reference-deploy.mjs`](../scripts/lib/reference-deploy.mjs). Without it, the reconciler names the missing declaration when a project reaches its deploy phase, and that project can't close. A step of your own that needs the same names, such as a probe that your Author App (the Lead's) can read Actions, prints one with `node "$KANON/scripts/reference-deploy.mjs" workflow` (or `job`, or `environment`), with `GITHUB_REPOSITORY` and a `gh` token in its environment. Add the declaration before, or with, the upgrade that brings it.
+Each is a `- ` bullet at the start of its line, its bold label, and its value as one code span; all three or none. The workflow is a file name in `.github/workflows/`, and the job is its name exactly as a run lists it. A section holding only these three suits a deploy workflow of your own: it names any environment, workflow and job. The same section later holds the deploy lane's environment list, its CI wait and the fallback's marker ([plan 0010](plans/0010-deployment-lane.md) §4); with an environment list, the reference environment must be one of it.
+
+**The bullets moved from `## Choices`.** Before plan 0010 they sat under `## Choices`. They are read from `## Deploy` alone, with no period of reading both places: a bullet left under `## Choices` fails `lane-check` and the reconciler by its line, and `kanon doctor` reports it as `deploy.declaration-moved`, whose fix is the move. The upgrade skill moves them for you.
+
+The reconciler reads it from your default branch, through [`scripts/lib/deploy-declaration.mjs`](../scripts/lib/deploy-declaration.mjs), the one parser of the section. Without it, the reconciler names the missing declaration when a project reaches its deploy phase, and that project can't close. A step of your own that needs the same names, such as a probe that your Author App (the Lead's) can read Actions, prints one with `node "$KANON/scripts/reference-deploy.mjs" workflow` (or `job`, or `environment`), with `GITHUB_REPOSITORY` and a `gh` token in its environment. Add the declaration before, or with, the upgrade that brings it.
 
 ## The red-test check
 
@@ -579,4 +585,4 @@ It needs the Author App (the Overseer's), with `Contents: Read`, `Issues: Read &
 
 ## Checking it
 
-Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a caller that isn't at its lane's file name, a review or reconciler caller without `.github/workflows/ci.yml`, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook, or a missing sweep hook for an explore caller; on a missing stack document, or a missing capability ledger where the adoption record turns the capability watch on, or a stack document without `## Gates` or with a section twice; on a malformed test-database declaration, escalation file, exemptions file, reference-deploy declaration or production-promotion declaration; on an adoption record whose Overseer bullet, or its default `not installed`, the callers contradict; on a role missing from the App register, a register whose Apps' roles name two slugs or share one, or a caller that maps a role-named App secret; and on a missing Dependabot entry.
+Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a caller that isn't at its lane's file name, a review or reconciler caller without `.github/workflows/ci.yml`, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook, or a missing sweep hook for an explore caller; on a missing stack document, or a missing capability ledger where the adoption record turns the capability watch on, or a stack document without `## Gates` or with a section twice; on a malformed test-database declaration, escalation file, exemptions file, deploy declaration (a reference-deploy bullet left under `## Choices` included) or production-promotion declaration; on an adoption record whose Overseer bullet, or its default `not installed`, the callers contradict; on a role missing from the App register, a register whose Apps' roles name two slugs or share one, or a caller that maps a role-named App secret; and on a missing Dependabot entry.

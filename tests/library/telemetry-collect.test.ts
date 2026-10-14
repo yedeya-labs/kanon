@@ -7,6 +7,7 @@ import {
   COLLECT_JOB_OVERRIDE,
   MAX_ROWS,
   SWEEP_CAP_DAYS,
+  UNPUBLISHED_JOB,
   WINDOW_MINUTES,
   codesOnly,
   collect,
@@ -177,6 +178,17 @@ describe('the run listing finds the caller by GITHUB_WORKFLOW_REF, and judges th
       { id: 7, created_at: '2026-10-05T10:40:00Z', jobs: [{ name: `collect / ${COLLECT_JOB}`, conclusion: 'success' }] },
     ]);
     expect(lastSuccessfulSweep({ api: gh.api, repo: REPO, file: 'telemetry.yml', branch: 'main', selfRunId: '9' })).toBe('2026-10-05T10:40:00Z');
+  });
+
+  it('passes over a run that skipped because the hosted store is unpublished, so the first real sweep reaches back past it (#843)', () => {
+    // A release with the hosted URL empty skipped, green, every hour; the next release sends. Its
+    // first sweep must reach back to the last real sweep, up to the cap, not to the last skip.
+    const gh = runs([
+      { id: 8, created_at: '2026-10-05T14:00:00Z', jobs: [{ name: `collect / ${UNPUBLISHED_JOB}`, conclusion: 'success' }] },
+      { id: 7, created_at: '2026-10-05T10:40:00Z', jobs: [{ name: `collect / ${COLLECT_JOB}`, conclusion: 'success' }] },
+    ]);
+    expect(lastSuccessfulSweep({ api: gh.api, repo: REPO, file: 'telemetry.yml', branch: 'main', selfRunId: '9' })).toBe('2026-10-05T10:40:00Z');
+    expect(lastSuccessfulSweep({ api: runs([{ id: 8, created_at: 'x', jobs: [{ name: UNPUBLISHED_JOB, conclusion: 'success' }] }]).api, repo: REPO, file: 'telemetry.yml', branch: 'main', selfRunId: '9' })).toBeNull();
   });
 
   it('returns null when no sweep collected', () => {

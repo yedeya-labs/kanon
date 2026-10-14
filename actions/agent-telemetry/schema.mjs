@@ -15,12 +15,14 @@
 // offending FIELDS only. It never echoes a value: a rejected row may hold the content this
 // schema exists to keep out, and the rejection is what reaches a log.
 //
-// THREE ROW KINDS, each with its own version (plan 0002 §2.2). A `run` row (version 2) describes
+// FOUR ROW KINDS, each with its own version (plan 0002 §2.2). A `run` row (version 2) describes
 // one agent run. A `work_item` row (version 1, plan 0003 §3.3) describes one pull request; S1
 // ships its field list only, and nothing writes one until plan 0003's M4. A `finding` row
 // (version 1, plan 0006 §2) carries one upstream finding, a finding only Kanon can act on; F1
 // ships its field list and checks; the Overseer's and the telemetry Explorer's filing steps write
-// them (F3, `scripts/lib/finding-rows.mjs`), and the collector sends them (F4).
+// them (F3, `scripts/lib/finding-rows.mjs`), and the collector sends them (F4). A `deploy` row
+// (version 1, plan 0010 §10) describes one environment's deploy of one release; D3 ships its field
+// list and checks, the deploy lane writes it (D4), and the store takes it (D9).
 
 import { KANON_PATH, SCRUB_VERSION, verify } from './scrub.mjs';
 
@@ -35,9 +37,9 @@ function range(/** @type {string} */ prefix, /** @type {number} */ n) {
 
 /**
  * Kanon's lanes, and the role each runs as (plan 0002 §7's table). The lane is the run row's
- * partition (`<key>#<lane>`), so `work`, the work-item partition, and `finding`, the finding
- * partition, are reserved: no lane may be named either, and the schema test fails if this list
- * ever holds one.
+ * partition (`<key>#<lane>`), so `work`, the work-item partition, `finding`, the finding
+ * partition, and `deploy`, the deploy partition, are reserved: no lane may be named any of them,
+ * and the schema test fails if this list ever holds one.
  * @type {Readonly<Record<string, string>>}
  */
 export const LANE_ROLES = Object.freeze({
@@ -63,6 +65,8 @@ export const LANES = Object.freeze(Object.keys(LANE_ROLES));
 export const RESERVED_PARTITION = 'work';
 /** The finding partition's name, which no lane may take either (plan 0006 §2.3). */
 export const FINDING_PARTITION = 'finding';
+/** The deploy partition's name, which no lane may take either (plan 0010 §10, decision 11). */
+export const DEPLOY_PARTITION = 'deploy';
 
 export const ROLES = Object.freeze(['explorer', 'implementer', 'reviewer', 'merger', 'lead', 'overseer']);
 /** An actor's class on a work-item row (plan 0003 §3.2): a role, or `human`, or `other_bot`. */
@@ -181,7 +185,7 @@ export const GUARDS = Object.freeze([
  */
 export const RULE_IDS = Object.freeze([
   ...range('PRIN', 20), ...range('WORK', 23), ...range('SPEC', 11), ...range('AGENT', 50),
-  ...range('MERGE', 17), ...range('WS', 8), ...range('SHIP', 11), ...range('PROJ', 18),
+  ...range('MERGE', 17), ...range('WS', 8), ...range('SHIP', 12), ...range('PROJ', 18),
   ...range('OBS', 18), ...range('SELF', 18), ...range('ADOPT', 12), ...range('LAYOUT', 18),
 ]);
 
@@ -197,6 +201,27 @@ export const FIX_CATEGORIES = Object.freeze([
 export const EVIDENCE_LEVELS = Object.freeze(['codes', 'evidence']);
 /** The most findings one run sends (decision 10): `finding_index` 0 to 19. */
 export const MAX_FINDINGS = 20;
+
+/**
+ * A deploy row's `role` (plan 0010 §10, decision 11): the last environment of the declared chain
+ * is `production`, every other one `pre-production`. Kanon's closed word for the environment's
+ * place, never its name, and not a cloud role.
+ */
+export const DEPLOY_ROLES = Object.freeze(['production', 'pre-production']);
+/** How one environment's deploy ended (plan 0010 §10). `rejected`: a reviewer rejected, or the approval timed out. */
+export const DEPLOY_OUTCOMES = Object.freeze(['ok', 'failed', 'smoke_failed', 'refused', 'rejected', 'cancelled']);
+/** The deploy lane's stages, in the order a release runs them (plan 0010 §10). */
+export const DEPLOY_STAGES = Object.freeze(['gate', 'probe', 'build', 'approval', 'deploy', 'smoke']);
+/**
+ * Why the lane refused (plan 0010 §3, §5, §10): the gate's codes, then the environment job's
+ * supersede check and the trust probe's two. A refusal row carries one, and only a refusal row.
+ */
+export const DEPLOY_REFUSALS = Object.freeze([
+  'draft', 'no-release', 'not-default-branch', 'declaration-mismatch', 'ci-red', 'ci-timeout',
+  'superseded', 'trust-unbound', 'probe-unconfigured',
+]);
+/** The deploy caller's two triggers (plan 0010 §3). */
+export const DEPLOY_TRIGGERS = Object.freeze(['release', 'workflow_dispatch']);
 
 // ------------------------------------------------------------------ field types
 
@@ -448,6 +473,45 @@ const FINDING_V1 = Object.freeze({
 });
 
 /**
+ * The deploy row, version 1: twenty-two fields (plan 0010 §10). One environment's deploy of one
+ * release, stored under `<key>#deploy`. It names the environment by its role and position, never
+ * by its name, and carries no commit, release tag, adopter version, URL, reviewer or cloud name:
+ * any of them would let a reader of the adopter's public repository say whose row it is
+ * (decision 11). `tag` is the row's own `run`, `smoke` or `test`, and `kanon_version` is Kanon's
+ * release, as on the run row.
+ */
+const DEPLOY_V1 = Object.freeze({
+  // Row
+  schema_version: req(oneOf([1])),
+  row_kind: req(oneOf(['deploy'])),
+  tag: req(oneOf(TAGS)),
+  recorded_at: req(time),
+  // Run
+  run_id: req(int(RUN_ID_MAX)),
+  run_attempt: req(count),
+  trigger: oneOf(DEPLOY_TRIGGERS),
+  kanon_version: RUN_V2.kanon_version,
+  // The environment, by its place in the chain
+  role: req(oneOf(DEPLOY_ROLES)),
+  position: req(/** @type {Field} */ ({ type: 'int', min: 1, max: INT_MAX })),
+  // Outcome
+  outcome: req(oneOf(DEPLOY_OUTCOMES)),
+  failed_stage: oneOf(DEPLOY_STAGES),
+  refusal: oneOf(DEPLOY_REFUSALS),
+  // The release, as booleans only
+  prerelease: bool,
+  redeploy: bool,
+  rollback: bool,
+  // Time, in milliseconds
+  wait_ms: count,
+  build_ms: count,
+  deploy_ms: count,
+  smoke_ms: count,
+  duration_ms: count,
+  since_release_ms: count,
+});
+
+/**
  * Every field list, by row kind and then version (plan 0002 §2.2). A new version is a Kanon
  * release that adds a list; the old one stays until no supported release writes it.
  * @type {Readonly<Record<string, Readonly<Record<number, Readonly<Record<string, Field>>>>>>}
@@ -456,6 +520,7 @@ export const SCHEMAS = Object.freeze({
   run: Object.freeze({ 2: RUN_V2, 3: RUN_V3 }),
   work_item: Object.freeze({ 1: WORK_ITEM_V1 }),
   finding: Object.freeze({ 1: FINDING_V1 }),
+  deploy: Object.freeze({ 1: DEPLOY_V1 }),
 });
 
 /** Set by the store, never by a row: a row that sends one is rejected (plan 0002 §2.1). */
@@ -586,6 +651,29 @@ function runPairings(row, importedRun) {
   return out;
 }
 
+/**
+ * The cross-field rules of a deploy row (plan 0010 §10): `refusal` only with `refused`, and a
+ * refusal names its code; `failed_stage` absent when the outcome is `ok`, and present for every
+ * other outcome, so a stopped deploy says where; `rollback` only on a dispatch (§3), since a
+ * release-triggered run that would go back is refused `superseded` instead.
+ * @param {Record<string, unknown>} row
+ * @returns {{ field: string, problem: string }[]}
+ */
+function deployPairings(row) {
+  /** @type {{ field: string, problem: string }[]} */
+  const out = [];
+  const outcome = typeof row.outcome === 'string' && DEPLOY_OUTCOMES.includes(row.outcome) ? row.outcome : null;
+  if (!outcome) return out;
+  const refusal = Object.hasOwn(row, 'refusal');
+  if (outcome === 'refused' && !refusal) out.push({ field: 'refusal', problem: 'required' });
+  if (outcome !== 'refused' && refusal) out.push({ field: 'refusal', problem: 'outcome-mismatch' });
+  const stage = Object.hasOwn(row, 'failed_stage');
+  if (outcome === 'ok' && stage) out.push({ field: 'failed_stage', problem: 'outcome-mismatch' });
+  if (outcome !== 'ok' && !stage) out.push({ field: 'failed_stage', problem: 'required' });
+  if (row.rollback === true && row.trigger !== 'workflow_dispatch') out.push({ field: 'rollback', problem: 'trigger-mismatch' });
+  return out;
+}
+
 /** The run field an imported row leaves absent (decision 17): no Kanon version ran it. */
 export const IMPORT_ABSENT = 'kanon_version';
 
@@ -636,6 +724,7 @@ export function validate(row, { imported = false } = {}) {
   if (importedRun && Object.hasOwn(r, IMPORT_ABSENT)) errors.push({ field: IMPORT_ABSENT, problem: 'not-allowed' });
   if (kind === 'run') errors.push(...runPairings(r, importedRun));
   if (kind === 'finding') errors.push(...findingPairings(r));
+  if (kind === 'deploy') errors.push(...deployPairings(r));
   return errors.length ? { ok: false, errors } : { ok: true };
 }
 

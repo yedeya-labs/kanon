@@ -27,7 +27,12 @@ A public repository in an organisation; no fallback is in use.
 ## Choices
 
 - **Chat channel:** none yet.
+- **Overseer:** `not installed`
+
+## Deploy
+
+It deploys with its own workflow and declares no Kanon deploy chain: only the reference deploy.
+
 - **Reference environment:** `preview`
 - **Reference deploy workflow:** `deploy-preview.yml`
 - **Reference deploy job:** `ship`
-- **Overseer:** `not installed`

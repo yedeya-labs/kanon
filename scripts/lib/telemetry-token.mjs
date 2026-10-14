@@ -20,6 +20,13 @@
 
 /** The title of the collector's annotation for a store's refusal, which `kanon doctor` reads (`telemetry.refused`). */
 export const REFUSED_TITLE = 'telemetry-refused';
+/**
+ * The collect job's name while the hosted URL below is unpublished and the caller names no store
+ * of its own (#843): the run skips, green, so `telemetry-collect.mjs` never takes it as a
+ * watermark, and `kanon doctor` reads it (`telemetry.unpublished`). Here rather than there, as
+ * `REFUSED_TITLE` is, so the CLI imports no more of the collector than these names.
+ */
+export const UNPUBLISHED_JOB = 'Collect telemetry rows (hosted store unpublished)';
 
 /** The hosted store's audience (plan 0008 §5.1, Owner decision 3 of 2026-10-10). */
 export const HOSTED_AUDIENCE = 'kanon-telemetry';

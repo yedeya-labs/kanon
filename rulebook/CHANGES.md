@@ -23,6 +23,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-AGENT-47`
 
 - **2026-10-07.** `lane-check` holds every job that calls a Kanon workflow, the spine `agent-lane.yml` included, to mapping each secret by name or passing none, and fails `secrets: inherit`. Releases before this one let it through on a call to the spine. [#500](https://github.com/yedeya-labs/kanon/issues/500)
+- **2026-10-14.** The Owner's plan for the deploy lane amended the rule: a Kanon workflow may read an environment secret only by a fixed name, in a job that sets `environment:`, and only where its own guard test names it, since GitHub can't pass an environment secret from a caller to a called workflow; today that is `KANON_DEPLOY_SECRET` in `deploy.yml`'s `deploy` job. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 
 ## `K-AGENT-50`
 
@@ -52,6 +53,19 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-SHIP-7`
 
 - **2026-10-12.** The Owner decided that a project whose releases other repositories pin may declare a release cadence, and that a project which declares none releases on every merge. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
+- **2026-10-14.** Release tags drive the deploy through the stages the project declares, not to a pre-production stage alone, and that deploy is Kanon's deploy lane: a published release runs `deploy-release.yml`, then `deploy.yml` for each environment the adoption record declares, in order. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+
+## `K-SHIP-8`
+
+- **2026-10-14.** The deploy lane's gate is what holds a red main back: it deploys a release only once the release commit's `ci.yml` push run is green, and files the refusal as a deploy issue. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+
+## `K-SHIP-9`
+
+- **2026-10-14.** Production is the last environment of the declared chain, its required reviewer gates `deploy.yml`'s job, and `kanon doctor` blocks without one; the fallback is a dispatch the Maintainer starts. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+
+## `K-SHIP-10`
+
+- **2026-10-14.** The rule is prose only: Kanon's deploy lane announces nothing, so the announcement stays the project's own step. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 
 ## `K-PROJ-16`
 
@@ -60,11 +74,20 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-OBS-16`
 
 - **2026-10-07.** [ADR 0007](../docs/decisions/0007-data-boundary.md) was amended so that an upstream-finding row sent with evidence may carry the finding's evidence and suggested fix as scrubbed text. [#573](https://github.com/yedeya-labs/kanon/pull/573)
+- **2026-10-14.** The Owner decided a fourth row kind, the deploy row, which records an environment's role and position in the declared chain, never its name, and no release tag or commit; [ADR 0007](../docs/decisions/0007-data-boundary.md) was amended to match. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+
+## `K-ADOPT-3`
+
+- **2026-10-14.** The deploy lane's fallback: where the plan provides no environments or no required reviewers, the adoption record marks it in `## Deploy`, production deploys only in the Maintainer's dispatch, and under `no-environments` the trust probe is skipped. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 
 ## `K-ADOPT-11`
 
 - **2026-10-06.** The Skill's pin, declared in the repository's `.claude/settings.json`, moves with the other pins, and `kanon doctor` reports one that differs from the release the callers pin. [#376](https://github.com/yedeya-labs/kanon/issues/376)
 - **2026-10-12.** The Owner decided that a reference may pin a candidate, `candidate-vX.Y.Z`, as well as a stable release, and that a candidate beside its own stable release counts as two versions. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
+
+## `K-LAYOUT-1`
+
+- **2026-10-14.** The deploy lane's three hooks, `.github/actions/build`, `.github/actions/deploy` and `.github/actions/smoke`, and the adoption record's `## Deploy` section, joined the fixed paths. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 
 ## `K-LAYOUT-8`
 
@@ -74,6 +97,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-07.** The Owner decided that, under `drafted`, the telemetry Explorer writes each upstream finding into its run's step summary, rendered as it would be filed. [#471](https://github.com/yedeya-labs/kanon/pull/471)
 - **2026-10-12.** The Owner decided the release cadence choice: `every merge`, or `weekly, ` and a weekday. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
+- **2026-10-14.** The Owner decided that the adoption record has a `## Deploy` section of its own, holding the deploy lane's environments, its CI wait and the fallback's marker, and that the reference deploy's three bullets move there from `## Choices` at once, with no period of reading both places. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 
 ## `K-LAYOUT-16`
 

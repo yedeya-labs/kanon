@@ -132,8 +132,10 @@ describe('the Lead’s login comes from the App register on the default branch (
 // Its cases run the probe in `bash` against a stub `gh`, so the block takes the spawn budget (#436).
 describe('the Actions probe names the declared deploy workflow (plan 0004 P6)', SPAWNS, () => {
   const probe = step((s) => String(s.name).startsWith('Probe that the App can read Actions'));
-  const RECORD = (decl: string) => `# Adoption record\n\n## Choices\n\n${decl}`;
-  const DECLARED = RECORD('- **Reference environment:** `preview`\n- **Reference deploy workflow:** `deploy-preview.yml`\n- **Reference deploy job:** `ship`\n');
+  const RECORD = (decl: string, heading = '## Deploy') => `# Adoption record\n\n${heading}\n\n${decl}`;
+  const BULLETS = '- **Reference environment:** `preview`\n- **Reference deploy workflow:** `deploy-preview.yml`\n- **Reference deploy job:** `ship`\n';
+  // Read from `## Deploy` alone since plan 0010's D2 (`scripts/lib/deploy-declaration.mjs`).
+  const DECLARED = RECORD(BULLETS);
 
   /** The step, executed with a `gh` that serves the adoption record (or none) and the run list. */
   const runProbe = ({ record, runList = 'ok' }: { record: string | null; runList?: 'ok' | 'denied' }) => {
@@ -167,7 +169,7 @@ esac
   it('probes any workflow’s runs when the record declares no deploy, and says so — never red on that alone', () => {
     // `readDeploy` names a missing declaration itself when a project reaches its deploy phase
     // (K-PROJ-11); a tick with no project there must not fail on it.
-    for (const record of [RECORD('- **Chat channel:** none yet.\n'), null]) {
+    for (const record of [RECORD('- **Chat channel:** none yet.\n', '## Choices'), null]) {
       const r = runProbe({ record });
       expect(r.status, r.output).toBe(0);
       expect(r.output).toContain('::notice title=agent-lead-reconcile::No reference deploy workflow to probe');
@@ -187,5 +189,12 @@ esac
     const r = runProbe({ record: RECORD('- **Reference environment:** `preview`\n') });
     expect(r.status, r.output).toBe(0);
     expect(r.output).toContain('No reference deploy workflow to probe');
+  });
+
+  it('reads bullets left under `## Choices` as no declaration: they moved to `## Deploy` (plan 0010, follow-up decision 1)', () => {
+    const r = runProbe({ record: RECORD(BULLETS, '## Choices') });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain('No reference deploy workflow to probe');
+    expect(r.calls.filter((c) => c.startsWith('run list'))).toEqual(['run list --repo owner/repo --limit 1']);
   });
 });
