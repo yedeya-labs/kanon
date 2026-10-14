@@ -2473,6 +2473,52 @@ describe('kanon init and the Claude credential (plan 0009 A5)', () => {
     }
   });
 
+  it('keeps the key for an installation whose callers map it, though the repository holds both (#809)', async () => {
+    const dir = checkout();
+    const github = fakeGitHub({ secrets: new Set([TOKEN, KEY]) });
+    await run(dir, github, ['--json', '--no-apps', '--lanes', 'review', '--claude-auth', 'api-key']);
+    expect(mapped(read(dir, '.github/workflows/agent-review.yml'))).toEqual([KEY]);
+    // A re-run that adds a lane, with no flag: the callers say the key, so the key it stays.
+    const d = parse(await run(dir, github, ['--json', '--no-apps', '--lanes', 'review,explore', '--dry-run']));
+    expect(d.answers.claudeAuth).toBe('api-key');
+    expect(claudeLine(d)).toMatchObject({ source: 'inferred', reason: "from the lanes' callers" });
+    expect(claudeLine(d)!.value).toMatch(/^API key \(ANTHROPIC_API_KEY\)/);
+    expect(d.files.find((f) => f.path === '.github/workflows/agent-review.yml')).toMatchObject({ status: 'same' });
+    const added = d.files.find((f) => f.path === '.github/workflows/agent-explore.yml')!;
+    expect(added).toMatchObject({ status: 'new' });
+    expect(mapped(added.content as string)).toEqual([KEY]);
+  });
+
+  it('keeps the token for an installation whose callers map it, whatever the secrets say', async () => {
+    const dir = checkout();
+    await run(dir, fakeGitHub({ secrets: new Set([TOKEN]) }), ['--json', '--no-apps', '--lanes', 'review']);
+    const d = parse(await run(dir, fakeGitHub({ secrets: new Set([KEY]) }), ['--json', '--no-apps', '--lanes', 'review', '--dry-run']));
+    expect(d.answers.claudeAuth).toBe('subscription');
+    expect(claudeLine(d)).toMatchObject({ source: 'inferred', reason: "from the lanes' callers" });
+    expect(d.files.find((f) => f.path === '.github/workflows/agent-review.yml')).toMatchObject({ status: 'same' });
+  });
+
+  it("reads the secrets' names when the callers map a mix, or none of the pair", async () => {
+    const dir = checkout();
+    const both = fakeGitHub({ secrets: new Set([TOKEN, KEY]) });
+    await run(dir, both, ['--json', '--no-apps', '--lanes', 'review', '--claude-auth', 'api-key']);
+    await run(dir, both, ['--json', '--no-apps', '--lanes', 'review,explore', '--claude-auth', 'subscription']);
+    expect(mapped(read(dir, '.github/workflows/agent-review.yml'))).toEqual([KEY]);
+    expect(mapped(read(dir, '.github/workflows/agent-explore.yml'))).toEqual([TOKEN]);
+    const mix = parse(await run(dir, fakeGitHub({ secrets: new Set([KEY]) }), ['--json', '--no-apps', '--lanes', 'review,explore', '--dry-run']));
+    expect(mix.answers.claudeAuth).toBe('api-key');
+    expect(claudeLine(mix)).toMatchObject({ source: 'inferred', reason: "from the repository's secrets" });
+    // A caller that maps neither of its pair says nothing of which one the installation runs on.
+    const none = checkout();
+    await run(none, both, ['--json', '--no-apps', '--lanes', 'review', '--claude-auth', 'api-key']);
+    const path = join(none, '.github/workflows/agent-review.yml');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(/^ +ANTHROPIC_API_KEY: .*\n/m, ''));
+    expect(mapped(read(none, '.github/workflows/agent-review.yml'))).toEqual([]);
+    const blank = parse(await run(none, both, ['--json', '--no-apps', '--lanes', 'review', '--dry-run']));
+    expect(blank.answers.claudeAuth).toBe('subscription');
+    expect(claudeLine(blank)).toMatchObject({ source: 'inferred', reason: "from the repository's secrets" });
+  });
+
   it('--claude-auth overrides the inference, and the summary line says it came from the flag', async () => {
     const dir = checkout();
     const r = await run(dir, fakeGitHub({ secrets: new Set([TOKEN]) }), ['--json', '--no-apps', '--claude-auth', 'api-key']);
