@@ -1,0 +1,39 @@
+# Kanon's generic webhook hook (plan 0011 §7.1, §7.3). `kanon init --chat webhook` writes this file,
+# as it is, to `.github/actions/notify/action.yml`, the one thing a notifying lane's `notify` job
+# calls (§6.1).
+#
+# Each kind's message reaches it with that kind's secret and no other (`KANON_CHAT_PROJECT_DIGEST`,
+# `KANON_CHAT_WEEKLY_DIGEST`, `KANON_CHAT_DEPLOY`): store one https URL in each, the same URL in all
+# three if one receiver takes everything. A kind whose secret is unset is not posted. The receiver
+# gets the message itself, as JSON, and may validate it against docs/notify/message-v1.schema.json
+# in Kanon. See docs/notifications.md in Kanon.
+#
+# Its one step is Kanon's generic webhook action at the release `init` ran from. `kanon upgrade`
+# moves this pin with your callers' (decision 18). Edit the step and it is your own hook: Kanon
+# then counts it as `custom`.
+name: notify
+description: Posts Kanon's notifications as JSON to a URL, through Kanon's generic webhook hook.
+
+inputs:
+  message-v1:
+    description: Path to the validated message, version 1, as JSON.
+    required: true
+  text:
+    description: Path to the message's plain-text rendering.
+    required: true
+  kind:
+    description: The message's kind.
+    required: true
+  secret:
+    description: This kind's https URL.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: yedeya-labs/kanon/actions/notify/webhook@v0.39.0 # x-release-please-version
+      with:
+        message-v1: ${{ inputs.message-v1 }}
+        text: ${{ inputs.text }}
+        kind: ${{ inputs.kind }}
+        secret: ${{ inputs.secret }}
