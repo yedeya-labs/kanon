@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { narrowings, schemasAt, widenings } from '../../infra/telemetry/intake-first.mjs';
+import { kindNarrowings, kindWidenings, narrowings, schemasAt, storedKindsAt, widenings } from '../../infra/telemetry/intake-first.mjs';
 import { SCHEMAS } from '../../actions/agent-telemetry/schema.mjs';
+import { STORED_KINDS } from '../../infra/telemetry/function/rows.mjs';
 import { SCRUB_VERSION } from '../../actions/agent-telemetry/scrub.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -12,7 +13,9 @@ import { SPAWNS } from './helpers/spawns.js';
  * Intake first (kanon#794): a release whose lanes can write a row the deployed ingest function
  * refuses needs intake deployed from it before it reaches adopters. `intake-first.mjs` compares
  * the schema at the release intake was deployed from with the release's own, and names every
- * row the release's schema accepts that the deployed one doesn't.
+ * row the release's schema accepts that the deployed one doesn't. Beside the schema, it compares
+ * the row kinds each release's ingest function stores (`STORED_KINDS`, kanon#918): a kind the
+ * schema knows but the function doesn't store is refused with `row_kind (not-allowed)`.
  */
 
 const ROOT = process.cwd();
@@ -168,8 +171,63 @@ describe('narrowings: what the deployed intake accepts, and so an older pin can 
   });
 });
 
-/** A scratch repository holding the telemetry action's modules, committed twice. */
-function scratch(): { dir: string, git: (...args: string[]) => string } {
+describe('kindWidenings and kindNarrowings: the row kinds each intake stores (kanon#918)', () => {
+  const kinds = ['run', 'work_item', 'finding'];
+
+  it('names a kind both schemas know that the release stores and the deployed intake does not, as D9 adds deploy', () => {
+    const deployed = { schemas: copy(), stored: kinds };
+    const release = { schemas: copy(), stored: [...kinds, 'deploy'] };
+    expect(kindWidenings(deployed, release)).toEqual([
+      'deploy: a row kind the deployed intake knows but does not store, which it refuses as row_kind not-allowed',
+    ]);
+    expect(kindNarrowings(deployed, release)).toEqual([]);
+  });
+
+  it('names a kind the deployed intake stores and the release no longer does, as a narrowing', () => {
+    const deployed = { schemas: copy(), stored: [...kinds, 'deploy'] };
+    const release = { schemas: copy(), stored: kinds };
+    expect(kindNarrowings(deployed, release)).toEqual([
+      'deploy: a row kind the release knows but does not store, which it refuses as row_kind not-allowed',
+    ]);
+    expect(kindWidenings(deployed, release)).toEqual([]);
+  });
+
+  it('names nothing for a kind one schema lacks, which widenings and narrowings already name', () => {
+    const before = copy();
+    delete before.deploy;
+    expect(kindWidenings({ schemas: before, stored: kinds }, { schemas: copy(), stored: [...kinds, 'deploy'] })).toEqual([]);
+    expect(kindNarrowings({ schemas: copy(), stored: [...kinds, 'deploy'] }, { schemas: before, stored: kinds })).toEqual([]);
+  });
+
+  it('names nothing for a kind the release stores that its own schema lacks, which its validate refuses anyway', () => {
+    const after = copy();
+    delete after.deploy;
+    expect(kindWidenings({ schemas: copy(), stored: kinds }, { schemas: after, stored: [...kinds, 'deploy'] })).toEqual([]);
+  });
+});
+
+/**
+ * The ingest function's `rows.mjs`, reduced to the list of kinds it stores, beside the links to
+ * the schema's modules the real directory holds, so reading it follows symlinks out of it.
+ */
+function writeRows(dir: string, stored: string[]): void {
+  const fn = join(dir, 'infra/telemetry/function');
+  mkdirSync(fn, { recursive: true });
+  for (const m of ['schema.mjs', 'scrub.mjs', 'public-words.mjs']) {
+    try { symlinkSync(`../../../actions/agent-telemetry/${m}`, join(fn, m)); } catch { /* already linked */ }
+  }
+  writeFileSync(join(fn, 'rows.mjs'), [
+    "import { SCHEMAS } from './schema.mjs';",
+    `export const STORED_KINDS = Object.freeze(${JSON.stringify(stored)}.filter((k) => Object.hasOwn(SCHEMAS, k)));`,
+    '',
+  ].join('\n'));
+}
+
+/**
+ * A scratch repository holding the telemetry action's modules, committed twice, and, given
+ * `stored`, an ingest function storing those kinds.
+ */
+function scratch(stored?: string[]): { dir: string, git: (...args: string[]) => string } {
   const dir = mkdtempSync(join(tmpdir(), 'intake-first-'));
   const git = (...args: string[]) => {
     const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: dir, encoding: 'utf8', timeout: 20_000 });
@@ -180,6 +238,7 @@ function scratch(): { dir: string, git: (...args: string[]) => string } {
   const src = join(ROOT, 'actions/agent-telemetry');
   mkdirSync(join(dir, 'actions/agent-telemetry'), { recursive: true });
   for (const f of readdirSync(src).filter((n) => n.endsWith('.mjs'))) copyFileSync(join(src, f), join(dir, 'actions/agent-telemetry', f));
+  if (stored) writeRows(dir, stored);
   git('add', '-A');
   git('commit', '-q', '-m', 'deployed');
   git('tag', 'v1.0.0');
@@ -247,6 +306,49 @@ describe('intake-first.mjs, against a repository', SPAWNS, () => {
     expect(r.stdout).toContain(`finding v1 scrub_version: accepts up to ${SCRUB_VERSION + 1}, the deployed intake up to ${SCRUB_VERSION}`);
     expect(r.stdout).toContain('run v2 trigger: accepts gollum, which the release does not');
     expect(r.stdout).toMatch(/either way, a repository's collector turns red/i);
+  });
+
+  it('reads the real ingest function\'s STORED_KINDS from a git-extracted copy, its symlinks followed (kanon#918)', async () => {
+    expect(await storedKindsAt('HEAD', { cwd: ROOT })).toEqual([...STORED_KINDS]);
+  });
+
+  it('exits 1 naming a kind the release stores that the deployed intake does not, though the schema is the same (kanon#918)', () => {
+    const { dir, git } = scratch(['run', 'work_item', 'finding']);
+    writeRows(dir, ['run', 'work_item', 'finding', 'deploy']);
+    git('commit', '-q', '-am', 'store deploy');
+    const r = run(dir, '--deployed', 'v1.0.0');
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stdout).toContain('deploy: a row kind the deployed intake knows but does not store, which it refuses as row_kind not-allowed');
+    expect(r.stdout).toMatch(/deploy intake from this release.*before/i);
+  });
+
+  it('exits 3 naming a kind the deployed intake stores that the release does not (kanon#918)', () => {
+    const { dir, git } = scratch(['run', 'work_item', 'finding', 'deploy']);
+    writeRows(dir, ['run', 'work_item', 'finding']);
+    git('commit', '-q', '-am', 'stop storing deploy');
+    const r = run(dir, '--deployed', 'v1.0.0');
+    expect(r.status, r.stderr).toBe(3);
+    expect(r.stdout).toContain('deploy: a row kind the release knows but does not store, which it refuses as row_kind not-allowed');
+  });
+
+  it('takes a ref with no rows.mjs, as every release before kanon#753, as storing every kind its schema knows', async () => {
+    const { dir, git } = scratch();
+    writeRows(dir, Object.keys(SCHEMAS).slice(1));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'add the function');
+    expect(await storedKindsAt('v1.0.0', { cwd: dir })).toBeNull();
+    const r = run(dir, '--deployed', 'v1.0.0');
+    expect(r.status, r.stderr).toBe(3);
+    expect(r.stdout).toContain(`${Object.keys(SCHEMAS)[0]}: a row kind the release knows but does not store`);
+  });
+
+  it('exits 2 when a ref\'s rows.mjs exports no STORED_KINDS, rather than guessing what it stores', () => {
+    const { dir, git } = scratch(['run', 'work_item', 'finding']);
+    writeFileSync(join(dir, 'infra/telemetry/function/rows.mjs'), "import { SCHEMAS } from './schema.mjs';\nexport const KINDS = Object.keys(SCHEMAS);\n");
+    git('commit', '-q', '-am', 'move the list');
+    const r = run(dir, '--deployed', 'v1.0.0');
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/HEAD's infra\/telemetry\/function\/rows\.mjs exports no STORED_KINDS/);
   });
 
   it('exits 2 on an unknown ref or a missing --deployed, rather than passing', () => {
