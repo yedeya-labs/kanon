@@ -109,7 +109,26 @@ Run these once, from a Kanon checkout at the release tag being deployed, after `
 
 ## Deploy
 
+**The store is deployed by the operator's repository, through Kanon's deploy lane** ([The deploy lane](lanes.md#the-deploy-lane), [plan 0010](plans/0010-deployment-lane.md) §15). Kanon's own repository has no deploy caller, no deploy hooks and no declared environment. The operator's repository adopts the lane as any adopter does: it pins a released Kanon, declares one environment, `production`, in its adoption record's `## Deploy` section, and holds the account's private inputs as that environment's secrets and variables. Its three hooks do what the commands below do by hand:
+- **build,** with no credential: copies the template, the function directory with its links resolved and the scripts the deploy needs from `infra/telemetry/` at the pinned tag;
+- **deploy:** assumes the environment's role, renders from the register held as the environment secret `KANON_DEPLOY_SECRET` (until plan 0008's J9, when rendering goes), packages into the artifacts bucket and deploys `kanon-telemetry` through a CloudFormation service role, with a fresh `CursorKey` each time. It prints no stack output and no key;
+- **smoke:** the stack is `UPDATE_COMPLETE` or `CREATE_COMPLETE`, a request with no `Authorization` gets 401 `token`, and the token path refuses a wrong audience and a job that isn't the collector.
+
+**Production is the Owner's dispatch.** Required reviewers aren't offered for the operator's private repository on the organisation's GitHub plan, so its record declares the `no-reviewers` fallback ([plan 0010](plans/0010-deployment-lane.md) §13). A release of the operator's repository runs the gate, the trust probe and the build, then stops before production. The Owner, the Maintainer the record names, deploys it by dispatching the lane at that release's tag, in the operator's repository:
+
+```sh
+gh workflow run deploy.yml --ref <tag> -f release=<tag>
+```
+
+The production job refuses a dispatch from anyone else, and the operator's release-tag ruleset lets only the Releaser and the Maintainer create, move or delete a release tag. A failed deploy or smoke files `Deploy to production failed` there, and the next success closes it.
+
+The first lane-driven deploy is plan 0008's token-path rollout ([plan 0010](plans/0010-deployment-lane.md) §15.1, D14), with `register.mjs import`, then `set --page-reader true` on Kanon's registration, right after it ([The register table](#the-register-table)). From then on, no deploy of the store is made by hand but break-glass. What stays the Owner's: the one-time bootstrap stack that holds the deploy role, the service role, the artifacts bucket and the permissions boundary, and any change to it; the `production` environment, its variables and `KANON_DEPLOY_SECRET`, kept in step with the register until J9, then deleted with the file; the dispatch of each production deploy; [Verify](#verify); and the data and account scripts (`register.mjs`, `erase.mjs`, `import.mjs`, `backfill.mjs`).
+
 Before each of Kanon's releases, [`intake-first.mjs`](release.md#intake-first) says whether it needs this deploy first.
+
+### By hand: break-glass, and Verify
+
+Deploy by hand only when GitHub Actions is down, and for [Verify](#verify)'s two deploys, which need `EnableVerify` and your own principal. Run these from a Kanon checkout at the release tag being deployed, with your profile.
 
 `$REG` is the register, and `$OUT` is a directory beside it. The rendered files, `template.json` and `parameters.json`, hold the register's contents, so they stay out of every repository where Kanon's lanes run too ([Where the register lives](#where-the-register-lives)).
 
