@@ -10,7 +10,7 @@ import {
 } from '../../scripts/deploy-row.mjs';
 import { issueTitle, report, reportFrom } from '../../scripts/deploy-report.mjs';
 import * as collected from '../../scripts/lib/telemetry-artifacts.mjs';
-import { CI_POLL_MS, CI_WAIT_CEILING, GATE_MARGIN_MINUTES } from '../../scripts/deploy-gate.mjs';
+import { CI_POLL_MS, CI_WAIT_CEILING, deployCheck, GATE_MARGIN_MINUTES } from '../../scripts/deploy-gate.mjs';
 import { BUILD_DIR, buildArtifactName, checkBuild, listFiles, readBuild, treeDigest } from '../../scripts/deploy-build.mjs';
 
 /**
@@ -114,7 +114,13 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
     if (check?.env?.FALLBACK !== '${{ needs.declare.outputs.fallback }}' || check?.env?.ROLE !== '${{ needs.declare.outputs.role }}') {
       out.push(`${ENV}:deploy: the deploy job's own check isn't handed the fallback and the role, so a re-run skips the Maintainer check`);
     }
-    if (!dep.outputs || !('unauthorized' in (dep.outputs as object))) out.push(`${ENV}:deploy: doesn't output its Maintainer refusal for record and report`);
+    if (dep.outputs?.unauthorized !== '${{ steps.supersede.outputs.unauthorized }}') out.push(`${ENV}:deploy: doesn't output its Maintainer refusal for record and report`);
+    // #904: the step runs the check, judges the runner's own actors (never ones the workflow sets),
+    // and stands before the build is read and the deploy hook runs.
+    if (!/deploy-gate\.mjs" supersede$/.test(String(check?.run ?? '').trim())) out.push(`${ENV}:deploy: the deploy job's own check doesn't run \`deploy-gate.mjs supersede\``);
+    if (Object.keys(check?.env ?? {}).some((k) => /^GITHUB_(TRIGGERING_)?ACTOR$/.test(k))) out.push(`${ENV}:deploy: the deploy job's own check is handed an actor instead of the runner's`);
+    const at = (id: string) => (dep.steps ?? []).findIndex((s) => s.id === id);
+    if (at('supersede') < 0 || at('supersede') > at('build-input') || at('supersede') > at('deploy')) out.push(`${ENV}:deploy: the Maintainer check runs after the build is read or the deploy hook runs`);
   }
   const declare = w[ENV]?.jobs.declare;
   if (declare && JSON.stringify(declare.permissions) !== '{"contents":"read"}') out.push(`${ENV}:declare: holds more than contents: read`);
@@ -367,6 +373,19 @@ describe('the deploy lane holds its shape', () => {
       red((w) => { delete step(job(w, ENV, 'deploy'), 'supersede').env!.FALLBACK; }, /a re-run skips the Maintainer check/);
       red((w) => { delete step(job(w, ENV, 'deploy'), 'supersede').env!.ROLE; }, /a re-run skips the Maintainer check/);
       red((w) => { delete (job(w, ENV, 'deploy') as { outputs: Record<string, string> }).outputs.unauthorized; }, /doesn't output its Maintainer refusal/);
+      red((w) => { (job(w, ENV, 'deploy') as { outputs: Record<string, string> }).outputs.unauthorized = '${{ steps.supersede.outputs.refusal }}'; }, /doesn't output its Maintainer refusal/);
+      red((w) => { step(job(w, ENV, 'deploy'), 'supersede').env!.FALLBACK = "${{ needs.declare.outputs.fallback == 'no-environments' && 'no-environments' || '' }}"; }, /a re-run skips the Maintainer check/);
+    });
+    it("the deploy job's own Maintainer check skipped, handed an actor, or moved after the hook (#904)", () => {
+      red((w) => { step(job(w, ENV, 'deploy'), 'supersede').run = 'node "$KANON/scripts/deploy-gate.mjs" declare'; }, /doesn't run `deploy-gate\.mjs supersede`/);
+      red((w) => { step(job(w, ENV, 'deploy'), 'supersede').env!.GITHUB_TRIGGERING_ACTOR = '${{ github.actor }}'; }, /handed an actor instead of the runner's/);
+      red((w) => { step(job(w, ENV, 'deploy'), 'supersede').env!.GITHUB_ACTOR = '${{ github.event.inputs.release }}'; }, /handed an actor instead of the runner's/);
+      red((w) => {
+        const steps = job(w, ENV, 'deploy').steps!;
+        const [check] = steps.splice(steps.findIndex((s) => s.id === 'supersede'), 1);
+        steps.push(check!);
+      }, /Maintainer check runs after the build is read or the deploy hook runs/);
+      red((w) => { const steps = job(w, ENV, 'deploy').steps!; steps.splice(steps.findIndex((s) => s.id === 'supersede'), 1); }, /Maintainer check runs after|a re-run skips the Maintainer check/);
     });
     it('the probe run after a refused gate', () => {
       red((w) => { job(w, RELEASE, 'probe').if = "always() && needs.gate.outputs.fallback != 'no-environments'"; }, /can run after a refused gate|runs under the no-environments marker/);
@@ -532,6 +551,28 @@ describe("deploy-row.mjs: one environment's row (plan 0010 §8, §10)", () => {
     // MUTATION: `stopped` reading the stage from the code instead of the job that refused
     // (`not-maintainer` defaulting to `gate`) files both at `gate`; `refusalOf` reading only
     // `refusal` files both as plain `failed`.
+  });
+
+  it("from the deploy job's own check to the row: a non-Maintainer's attempt under `no-reviewers` is `refused` at `deploy`, `not-maintainer` (#904)", () => {
+    // The check's real outputs, not a fixture of them, so a change on either side turns this red.
+    const record = '# Adoption record\n\n## People\n\n| Role | Who |\n|---|---|\n| Maintainer | M Person (`@maint`) |\n\n## Deploy\n\n- **Environments:** `staging`, `production`\n- **Fallback:** `no-reviewers`\n';
+    const api = (p: string) => (p.includes('/contents/') ? record : []);
+    const attempt = (actors: Record<string, string>) => {
+      const checked = deployCheck({ GITHUB_REPOSITORY: 'acme/app', GITHUB_EVENT_NAME: 'workflow_dispatch', ENVIRONMENT: 'production', SHA: 'a'.repeat(40), FALLBACK: 'no-reviewers', ROLE: 'production', ...actors }, { api });
+      const deploy = checked.ok
+        ? { result: 'success', outputs: { 'started-at': T(1), ...checked.outputs, 'deploy-started-at': T(2), 'deploy-ended-at': T(3), 'ended-at': T(4) } }
+        : { result: 'failure', outputs: { 'started-at': T(1), ...checked.outputs, 'ended-at': T(2) } };
+      const needs = { declare: { result: 'success', outputs: { ...declared().outputs, held: 'false', fallback: 'no-reviewers' } }, deploy };
+      return environmentRow({ ...RUN, GITHUB_EVENT_NAME: 'workflow_dispatch', NEEDS: JSON.stringify(needs), ENVIRONMENT: 'production', POSITION: '2' }, { api: () => ({}) });
+    };
+    const want = { outcome: 'refused', failed_stage: 'deploy', refusal: 'not-maintainer', role: 'production', position: 2 };
+    for (const actors of [{ GITHUB_ACTOR: 'owner' }, { GITHUB_ACTOR: 'maint', GITHUB_TRIGGERING_ACTOR: 'owner' }] as Array<Record<string, string>>) {
+      const r = attempt(actors);
+      expect(r, JSON.stringify(actors)).toMatchObject(want);
+      expect(validate(r)).toEqual({ ok: true });
+    }
+    expect(attempt({ GITHUB_ACTOR: 'maint' })).toMatchObject({ outcome: 'ok', role: 'production' });
+    // MUTATION: the row's stage read from the code, or its refusal from `refusal` alone, turns this red.
   });
 
   it('a failed `declare` is never a hold: a non-ok row, and the report files (the #892 review)', () => {
