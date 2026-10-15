@@ -23,7 +23,9 @@ describe('the webhook the digests post to', () => {
     expect(digestWebhook({})).toBe('');
   });
 
-  it.each(['project-digest', 'weekly-digest'])('%s posts to it, and to nothing else', (name) => {
+  // The weekly digest's alone: the project digest posts through the notify job since plan 0011
+  // N7, and N8 moves the weekly digest and deletes this file and the library.
+  it.each(['weekly-digest'])('%s posts to it, and to nothing else', (name) => {
     const code = readFileSync(join(ROOT, 'scripts', `${name}.mjs`), 'utf8');
     expect(code).toMatch(/const webhook = digestWebhook\(process\.env\);/);
     // No second read of either variable, destructured or direct.

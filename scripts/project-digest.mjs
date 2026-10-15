@@ -1,6 +1,6 @@
 // @ts-nocheck -- moved from the reference adopter's pipeline library, which doesn't type-check its scripts (plan 0001 §3; ADR 0009)
 /**
- * Daily project-brief digest for the developer's Slack channel (RA-1438).
+ * Daily project-brief digest for the developer's chat channel (RA-1438).
  *
  * AUDIENCE: the developer, not a stakeholder. That inverts the weekly digest's
  * editorial rules rather than reusing them — `weekly-digest.mjs` is written for
@@ -57,19 +57,34 @@
  * What survives unchanged is the reason there is no `actions: read`: everything
  * here is still derived from issues and PRs, and nothing is scraped.
  *
+ * ── A MESSAGE, NOT A POST (plan 0011 §4, step N7; `K-OBS-19`) ──────────────────
+ * This script formats for no chat system and posts nothing. It builds one Kanon
+ * notification of kind `project-digest` with `scripts/lib/notify-contract.mjs` (Kanon
+ * text: `**strong**`, `[label](https://…)`, `- ` bullets), cuts it to the contract's
+ * limits with `fit`, and writes it to `MESSAGE_DIR/message.json`. The lane uploads it,
+ * and its `notify` job hands it to the adopter's hook with `KANON_CHAT_PROJECT_DIGEST`,
+ * a secret this script never sees. Text nobody controls (an issue's title, a hold
+ * comment, the Implementer's stop) goes through `literal`, and the model's narrative
+ * through `prose`, so nothing interpolated can make the message invalid. Each hook
+ * escapes for its own system; Slack's syntax lives in Kanon's Slack hook alone.
+ *
  * Dependency-free (Node 20+: global fetch), and exercised locally exactly as CI
  * runs it:
  *   GITHUB_TOKEN=$(gh auth token) GITHUB_REPOSITORY=<owner>/<repo> \
  *   DRY_RUN=1 node scripts/project-digest.mjs
  *
- * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, DIGEST_WEBHOOK (lib/digest-webhook.mjs), NARRATIVE
- * (optional prose from the model step — the post degrades to numbers-only when
- * absent), TODAY (optional ISO date, for reproducible runs), DRY_RUN.
+ * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, NARRATIVE (optional prose from the model
+ * step — the message degrades to numbers-only when absent), TODAY (optional ISO date,
+ * for reproducible runs), MESSAGE_DIR (where `message.json` is written), DRY_RUN
+ * (print the message, its plain text and the Slack hook's payload instead, and write
+ * nothing).
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { closingRefs } from './closing-refs.mjs';
-import { digestWebhook } from './lib/digest-webhook.mjs';
+import { describeErrors, fit, literal, prose, renderText, validate } from './lib/notify-contract.mjs';
+import { payload as slackPayload } from '../actions/notify/slack/slack.mjs';
 import { CONFLICT_SHORT, ConflictFieldsUnread, conflictState } from './conflict-state.mjs';
 // THE RECONCILER'S OWN CLOSURE RULE AND BRIEF GRAMMAR, imported rather than restated
 // (RA-2414). Since RA-1783 a project closes when its GATING members are done — the brief's
@@ -165,7 +180,7 @@ export function readBrief(markdown) {
   return { proposed: briefItems.length, briefItems };
 }
 
-/** A brief's short name, for the Slack heading — its H1 with the boilerplate trimmed. */
+/** A brief's short name, for the project's heading — its H1 with the boilerplate trimmed. */
 /** @param {string} markdown @param {string} fallback @returns {string} */
 export function briefTitle(markdown, fallback) {
   const h1 = markdown.match(/^#\s+(.+)$/m)?.[1] ?? fallback;
@@ -178,8 +193,9 @@ export function briefTitle(markdown, fallback) {
 
 /**
  * What the reader is told the Implementer stopped on: `scope-first bail` when the comment
- * says so, else its first heading (or first line), Slack-escaped and bounded. A LABEL
- * only — `BAIL_RE` never decides between "awaiting you" and "stalled" (kanon#179).
+ * says so, else its first heading (or first line), bounded, then made Kanon text with
+ * `literal` (plan 0011 §3.1): cut first, so no escape is split. A LABEL only — `BAIL_RE`
+ * never decides between "awaiting you" and "stalled" (kanon#179).
  *
  * @param {string|null|undefined} body
  * @param {number} [max]
@@ -194,8 +210,7 @@ export function stopReason(body, max = 80) {
   const first = (lines.find((l) => /^#{1,6}\s/.test(l)) ?? lines[0] ?? '')
     .replace(/^#{1,6}\s+/, '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
   if (!first) return 'stopped';
-  const safe = first.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return `stopped: “${safe.length > max ? `${safe.slice(0, max - 1)}…` : safe}”`;
+  return `stopped: “${literal(first.length > max ? `${first.slice(0, max - 1)}…` : first)}”`;
 }
 
 /**
@@ -409,8 +424,8 @@ const marked = (comments) => (comments ?? []).filter((c) => (c.body ?? '').inclu
  * project held for one cause and later stopped for another carries both — and the
  * newest is the one still true.
  *
- * Slack-escaped and truncated here rather than at the call site: this string is
- * assembled from an issue comment, so it is the only untrusted text in the message.
+ * Truncated, then made Kanon text with `literal` (plan 0011 §3.1), here rather than at the
+ * call site: this string is assembled from an issue comment, so it is text nobody controls.
  *
  * @param {{body?: string}[]} comments  newest last, as the REST API returns them
  * @param {number} [max]
@@ -423,9 +438,8 @@ export function holdReason(comments, max = 160) {
   if (!bullet) return null;
   const text = bullet.slice(2).replace(/\s+/g, ' ').trim();
   if (!text) return null;
-  // Slack's `text` field treats these three as markup; nothing else needs escaping.
-  const safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return safe.length > max ? `${safe.slice(0, max - 1)}…` : safe;
+  // Cut first, so no escape is split; each hook escapes `&`, `<` and `>` for its own system.
+  return literal(text.length > max ? `${text.slice(0, max - 1)}…` : text);
 }
 
 /**
@@ -517,51 +531,77 @@ export async function dispatchCommentsOf(api, repo, issue, commentCount) {
   return run;
 }
 
-const ICON = {
-  complete: ':white_check_mark:',
-  active: ':large_yellow_circle:',
-  unfiled: ':red_circle:',
-  held: ':octagonal_sign:',
+/**
+ * Each project status, as the word its section opens with. They were emoji before plan 0011:
+ * the message holds Kanon text only, and a hook decides how to show it.
+ */
+const STATUS = {
+  complete: 'Ready to close',
+  active: 'Active',
+  unfiled: 'Never reconciled',
+  held: 'Held',
 };
 
 /**
- * One line per member issue that needs a human's attention, or nothing.
+ * The member dispositions that are a stop: a person owes a decision or an answer, or nothing can
+ * move the member. One of them, or a held or unfiled project, makes the message a `warning`
+ * (plan 0011 §3.2). `needs-split` is not: the Lead's split pull request is the next move.
+ */
+export const STOPPED = new Set(['bail', 'human-held', 'stall', 'conflicting', 'needs-info']);
+
+/**
+ * Is this project stopped, for the message's severity?
+ * @param {{status: string, members?: {disposition: string|null}[]}} p
+ */
+export const isStopped = (p) =>
+  p.status === 'held' || p.status === 'unfiled' || (p.members ?? []).some((m) => STOPPED.has(String(m.disposition)));
+
+/**
+ * An issue's number as a Kanon-text link, or as plain `#N` when its URL is not `https://`
+ * (a link the contract would not read as one).
+ * @param {string} url @param {number} number
+ */
+const issueLink = (url, number) => (/^https:\/\/\S+$/.test(url ?? '') && !/[()]/.test(url) ? `[#${number}](${url})` : `#${number}`);
+
+/**
+ * One line per member issue that needs a human's attention, or nothing: a Kanon-text bullet,
+ * its title through `literal`.
  *
  * @param {{number: number, title: string, url: string, ageDays: number,
- *          disposition: string|null, unmarked?: number}} m
+ *          disposition: string|null, unmarked?: number, waitedDays?: number, reason?: string}} m
  * @returns {string|null} null when the issue needs nothing said about it
  */
 export function renderMember(m) {
-  const t = m.title.length > 68 ? `${m.title.slice(0, 65)}…` : m.title;
-  const link = `<${m.url}|#${m.number}>`;
+  const t = literal(m.title.length > 68 ? `${m.title.slice(0, 65)}…` : m.title);
+  const link = issueLink(m.url, m.number);
   const line = memberLine(m, t, link);
   // NAMED WHATEVER THE DISPOSITION (kanon#380): an unmarked Implementer comment is read as
   // silence, so the line above may call a stop a stall, or say nothing at all.
   if (!m.unmarked) return line;
-  const named = `            ${m.unmarked} Implementer comment(s) carry no role marker, so they are read as silence (plan 0005 §3.3)`;
-  return `${line ?? `        :grey_question: ${link} ${t}`}\n${named}`;
+  const named = `${m.unmarked} Implementer comment(s) carry no role marker, so they are read as silence (plan 0005 §3.3)`;
+  return line ? `${line}; ${named}` : `- ${link} ${t} — ${named}`;
 }
 
 /** `renderMember`'s line for the disposition alone. */
 function memberLine(m, t, link) {
   switch (m.disposition) {
     case 'bail':
-      return `        :hand: ${link} ${t}\n            *awaiting your decision* — ${m.reason ?? 'scope-first bail'}, ${m.waitedDays}d`;
+      return `- ${link} ${t} — **awaiting your decision** — ${m.reason ?? 'scope-first bail'}, ${m.waitedDays}d`;
     // A human answered the SWEEP rather than the Implementer ("stop, this needs design"),
     // and the sweep holds it rather than dispatching again.
     case 'human-held':
-      return `        :raised_hand: ${link} ${t}\n            *held* — a human replied to the dispatch sweep and nothing has run since`;
+      return `- ${link} ${t} — **held** — a human replied to the dispatch sweep and nothing has run since`;
     case 'authorised':
       // NOT "needs a re-dispatch". Without `actions: read` this cannot see a run
       // already in flight, and asserting an action the reader may have taken an
       // hour ago is the same error class as calling a bail a stall. Say what is
       // known — the decision is made and no PR exists yet — and let the reader
       // draw the conclusion.
-      return `        :arrows_counterclockwise: ${link} ${t}\n            authorised ${m.waitedDays}d ago — no PR yet`;
+      return `- ${link} ${t} — authorised ${m.waitedDays}d ago, no PR yet`;
     case 'stall':
-      return `        :warning: ${link} ${t}\n            *no PR after ${m.ageDays}d* — likely a stalled dispatch`;
+      return `- ${link} ${t} — **no PR after ${m.ageDays}d** — likely a stalled dispatch`;
     case 'building':
-      return `        :hammer: ${link} ${t} — building`;
+      return `- ${link} ${t} — building`;
     // LOUD, and phrased as a state rather than an instruction, because since RA-2150 this
     // is no longer the developer's to clear by default: `agent-rebase.yml` resolves a
     // conflicting pipeline PR, and the Merger WAITS rather than escalating while it owns one
@@ -574,25 +614,29 @@ function memberLine(m, t, link) {
     // digest exists to surface. What changed is that the reader is being told the work
     // has stopped, not told to go and fix it.
     case 'conflicting':
-      return `        :rotating_light: ${link} ${t}\n            *PR conflicts — ${CONFLICT_SHORT}* — no CI, no review, no churn can move it`;
+      return `- ${link} ${t} — **PR conflicts, ${CONFLICT_SHORT}** — no CI, no review, no churn can move it`;
     // Not a dispatch state at all, but the same shape as the defect this digest
     // exists to prevent: a member parked on a human and nobody told (RA-1443
     // review, finding 3). `qa:needs-info` is the implementer asking a question.
     case 'needs-info':
-      return `        :grey_question: ${link} ${t}\n            *awaiting your answer* — the implementer asked a question`;
+      return `- ${link} ${t} — **awaiting your answer** — the implementer asked a question`;
     // Too big for one implementer run (RA-1781): its run hit the turn or budget cap, and
     // the Lead's split lane proposes smaller children as a PR against the brief. Not a
     // question for the reader — the split PR is — but a stall if that PR never appears.
     case 'needs-split':
-      return `        :scissors: ${link} ${t}\n            *awaiting a split* — its implementer run hit the cap; the Lead's split PR against the brief replaces it`;
+      return `- ${link} ${t} — **awaiting a split** — its implementer run hit the cap; the Lead's split PR against the brief replaces it`;
     case 'verify':
-      return `        :mag: ${link} ${t} — verification`;
+      return `- ${link} ${t} — verification`;
     default:
       return null;
   }
 }
 
 /**
+ * A project's section body, in Kanon text: its status, counts, tracking issue and brief on the
+ * first line, then what its status needs said, its carried-out members, and a bullet per member
+ * that needs a human. The project's title is the section's `heading` (`projectSection`).
+ *
  * @param {{number: number, url: string, title: string, status: string, proposed: number,
  *          filed: number, closed: number, total?: number, heldReason?: string|null,
  *          briefItems?: any[] & {reason?: string|null, residue?: string[]},
@@ -607,25 +651,25 @@ export function renderProject(p) {
   // neither, and an unfiled brief item is in the denominator. Falls back to the proposal
   // count while nothing is counted (an unfiled project, or a caller without `total`).
   const carried = p.carriedOut ?? [];
-  const head = `${ICON[p.status] ?? ':grey_question:'}  *<${p.url}|#${p.number}> — ${p.title}*  ·  ${p.closed}/${p.total || p.filed || p.proposed} done`;
   // The brief path is in amended AC 4, and it is the first thing a reader opens
   // when they want the decomposition behind these numbers.
-  const lines = [head, `        \`${BRIEF_DIR}/${p.number}.md\``];
+  const head = `**${STATUS[p.status] ?? 'Unknown status'}** · ${p.closed}/${p.total || p.filed || p.proposed} done · ${issueLink(p.url, p.number)} · \`${BRIEF_DIR}/${p.number}.md\``;
+  const lines = [head];
   switch (p.status) {
     case 'complete':
       lines.push(carried.length
-        ? "        the project's own work is closed — ready to verify and close"
-        : '        every filed issue closed — ready to verify and close');
+        ? "the project's own work is closed — ready to verify and close"
+        : 'every filed issue closed — ready to verify and close');
       break;
     case 'unfiled':
       // A brief the parser only PARTLY read (residue) is stopped on exactly like one it
       // could not read at all, so both name the parse failure rather than a count.
       if (p.proposed && p.briefItems?.residue?.length) {
-        lines.push(`        *never reconciled* — the brief's decomposition only partly parses (${p.proposed} read, ${p.briefItems.residue.length} not recognised), so nothing is filed until it is fixed`);
+        lines.push(`**never reconciled** — the brief's decomposition only partly parses (${p.proposed} read, ${p.briefItems.residue.length} not recognised), so nothing is filed until it is fixed`);
       } else {
         lines.push(p.proposed
-          ? `        *never reconciled* — the brief proposes ${p.proposed} issues and none are filed`
-          : `        *never reconciled* — the brief's decomposition does not parse (${p.briefItems?.reason ?? 'no `### Issue X — …` items'}), so nothing can be filed`);
+          ? `**never reconciled** — the brief proposes ${p.proposed} issues and none are filed`
+          : `**never reconciled** — the brief's decomposition does not parse (${p.briefItems?.reason ?? 'no `### Issue X — …` items'}), so nothing can be filed`);
       }
       break;
     case 'held':
@@ -643,8 +687,8 @@ export function renderProject(p) {
       // SCRAPED" note draws. When the marker is absent the line degrades to what it
       // said before, rather than guessing.
       lines.push(p.heldReason
-        ? `        *held* — the tracking issue carries \`needs:human\`: ${p.heldReason}`
-        : '        *held* — the tracking issue carries `needs:human`');
+        ? `**held** — the tracking issue carries \`needs:human\`: ${p.heldReason}`
+        : '**held** — the tracking issue carries `needs:human`');
       break;
     default:
       break;
@@ -653,16 +697,22 @@ export function renderProject(p) {
   // fraction above cannot also make it disappear. Every member is reported; these are the
   // ones the tick closes the project around, as the retro's "Left open at close" will say.
   if (carried.length) {
-    const shown = carried.slice(0, 12).map((c) => `<${c.url}|#${c.number}>`).join(', ');
+    const shown = carried.slice(0, 12).map((c) => issueLink(c.url, c.number)).join(', ');
     const more = carried.length > 12 ? ` +${carried.length - 12} more` : '';
-    lines.push(`        carried out: ${carried.length} — open, not waited on: ${shown}${more}`);
+    lines.push(`carried out: ${carried.length} — open, not waited on: ${shown}${more}`);
   }
-  for (const m of p.members ?? []) {
-    const line = renderMember(m);
-    if (line) lines.push(line);
-  }
-  return `${lines.join('\n')}\n`;
+  const members = (p.members ?? []).map(renderMember).filter(Boolean);
+  if (members.length) lines.push('', ...members);
+  return lines.join('\n');
 }
+
+/**
+ * A project's section of the message: its number and title as the plain-text heading, and
+ * `renderProject`'s body.
+ * @param {Parameters<typeof renderProject>[0]} p
+ * @returns {{heading: string, body: string}}
+ */
+export const projectSection = (p) => ({ heading: `#${p.number} — ${p.title}`, body: renderProject(p) });
 
 /** @param {Date} d @returns {string} */
 export const formatDay = (d) =>
@@ -695,38 +745,59 @@ export const narrativeMissing = ({ narrative, projects }) =>
   projects.length > 0 && !(narrative ?? '').trim();
 
 /**
- * Assemble the post. Pure, so the shape is testable without the network.
+ * Assemble the message: one Kanon notification of kind `project-digest` (plan 0011 §3), cut to
+ * the contract's limits by `fit`, so it always validates. Pure, so the shape is testable without
+ * the network.
  *
  * NO NARRATIVE SANITISER, unlike the weekly digest, and that is a decision not
  * an omission: its rules forbid naming an environment or anything pending,
  * which are exactly the things this post exists to say. The audience is the
- * developer, and there is no stakeholder-facing claim to fail closed on.
+ * developer, and there is no stakeholder-facing claim to fail closed on. The
+ * narrative goes through `prose`, which keeps Kanon text's markup and nothing else.
  *
- * @param {{today: Date, narrative?: string|null,
+ * THE SUMMARY LEADS WITH THE COUNTS, then the narrative: the summary is what a
+ * notification's preview shows, and a narrative `fit` has to cut must not take
+ * the counts with it. Severity is `warning` when any project is stopped (`isStopped`).
+ *
+ * @param {{today: Date, narrative?: string|null, repository: string,
  *          projects: Parameters<typeof renderProject>[0][], runUrl?: string|null}} input
+ * @returns {Record<string, any>} the message, `message-v1`
+ */
+export function buildMessage({ today, narrative, projects, repository, runUrl = null }) {
+  const run = /^https:\/\/\S+$/.test(runUrl ?? '') ? runUrl : `https://github.com/${repository}/actions`;
+  const n = projects.length;
+  const stopped = projects.filter(isStopped).length;
+  const done = projects.filter((p) => p.status === 'complete').length;
+  const counts = n === 0
+    ? 'No open projects — every brief in `docs/projects/` has a closed tracking issue.'
+    : `${n} open project${n === 1 ? '' : 's'}${stopped ? `, ${stopped} stopped` : ''}${done ? `, ${done} ready to close` : ''}.`;
+  const summary = [counts];
+  const said = (narrative ?? '').trim();
+  if (said) summary.push(prose(said));
+  if (narrativeMissing({ narrative, projects })) {
+    summary.push(`No narrative today: the model step wrote nothing. The numbers below are complete; [the run](${run}) says why.`);
+  }
+  return fit({
+    kind: 'project-digest',
+    severity: stopped ? 'warning' : 'info',
+    title: `Projects, ${formatDay(today)}`,
+    summary: summary.join('\n\n'),
+    sections: projects.map(projectSection),
+    source: { repository, lane: 'project-digest', run_url: run },
+  });
+}
+
+/**
+ * What a dry run prints (plan 0011 §4): the message, `renderText`'s plain text (exactly what a
+ * hook's `text` input gets) and Kanon's Slack hook's payload, as Markdown for the step summary.
+ * @param {Record<string, any>} message
  * @returns {string}
  */
-export function buildMessage({ today, narrative, projects, runUrl = null }) {
-  let text = `:clipboard: *Projects, ${formatDay(today)}*\n`;
-  const prose = (narrative ?? '').trim();
-  if (prose) text += `\n${prose}\n`;
-  if (narrativeMissing({ narrative, projects })) {
-    const where = runUrl ? `<${runUrl}|the run>` : 'the run';
-    text += `\n_No narrative today: the model step wrote nothing. The numbers below are complete; ${where} says why._\n`;
-  }
-  if (projects.length === 0) {
-    text += '\nNo open projects — every brief in `docs/projects/` has a closed tracking issue.\n';
-    return text;
-  }
-  text += '\n';
-  for (const p of projects) text += `${renderProject(p)}\n`;
-  const done = projects.filter((p) => p.status === 'complete').length;
-  text += `_${projects.length} open project${projects.length === 1 ? '' : 's'}`;
-  if (done) text += ` · ${done} ready to close`;
-  text += '_';
-  if (text.length > 12000) text = `${text.slice(0, 11800)}\n… _truncated_`;
-  return text;
-}
+export const dryRunReport = (message) => [
+  '### The message (`message-v1`)', '', '```json', JSON.stringify(message, null, 2), '```', '',
+  "### Its plain text (a hook's `text` input)", '', '```text', renderText(message), '```', '',
+  "### Kanon's Slack hook's payload", '', '```json', JSON.stringify(slackPayload(message), null, 2), '```', '',
+].join('\n');
 
 // ---------------------------------------------------------------------------
 // I/O below this line. Everything above is pure and unit-tested, with one named
@@ -744,18 +815,16 @@ if (isCliEntry(import.meta.url)) {
     NARRATIVE,
     TODAY,
     DRY_RUN,
+    MESSAGE_DIR,
+    GITHUB_STEP_SUMMARY,
   } = process.env;
-  const webhook = digestWebhook(process.env);
-
   if (!GITHUB_TOKEN || !repo) {
     console.error('Missing required env: GITHUB_TOKEN, GITHUB_REPOSITORY');
     process.exit(1);
   }
-  if (!webhook && !DRY_RUN) {
-    // Graceful no-op, matching weekly-digest: a missing webhook must not
-    // fail a scheduled job whose output is a nice-to-have.
-    console.warn('DIGEST_WEBHOOK not set — skipping digest.');
-    process.exit(0);
+  if (!DRY_RUN && !MESSAGE_DIR) {
+    console.error('Missing required env: MESSAGE_DIR, where the message is written (or DRY_RUN=1 to print it)');
+    process.exit(1);
   }
 
   const HEADERS = {
@@ -884,27 +953,31 @@ if (isCliEntry(import.meta.url)) {
   const { GITHUB_SERVER_URL, GITHUB_RUN_ID } = process.env;
   const runUrl = GITHUB_SERVER_URL && GITHUB_RUN_ID ? `${GITHUB_SERVER_URL}/${repo}/actions/runs/${GITHUB_RUN_ID}` : null;
   if (narrativeMissing({ narrative: NARRATIVE, projects })) {
-    // The searchable half of the trace (RA-1476); the post carries the visible half.
+    // The searchable half of the trace (RA-1476); the message carries the visible half.
     console.warn(
       '::warning title=project digest narrative missing::narrative.txt was absent or empty, so the digest ' +
-      'posted numbers-only. Causes that look identical here: a denied tool (RA-1473), a model-id typo, ' +
+      'wrote its message numbers-only. Causes that look identical here: a denied tool (RA-1473), a model-id typo, ' +
       '--max-turns exhaustion, a quota cap, an action outage. See the narrative step and the ' +
       '"Say whether the model was unreachable" step.',
     );
   }
-  const text = buildMessage({ today, narrative: NARRATIVE, projects, runUrl });
+  const message = buildMessage({ today, narrative: NARRATIVE, projects, repository: repo, runUrl });
+  // `fit`'s output always validates; a failure here is this script's bug, and a red run is its page.
+  const verdict = validate(message);
+  if (!verdict.ok) {
+    console.error(`The project digest's message is invalid: ${describeErrors(verdict.errors)}`);
+    process.exit(1);
+  }
 
   if (DRY_RUN) {
-    console.log(`DRY RUN\n--- Slack message ---\n${text}`);
+    const report = dryRunReport(message);
+    console.log(`DRY RUN: nothing is written or posted.\n${report}`);
+    if (GITHUB_STEP_SUMMARY) appendFileSync(GITHUB_STEP_SUMMARY, `## The project digest, a dry run\n\n${report}\n`);
     process.exit(0);
   }
 
-  const slack = await fetch(webhook, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
-  });
-  if (!slack.ok) throw new Error(`Slack webhook → ${slack.status}: ${await slack.text()}`);
-  console.log(`Posted the ${formatDay(today)} project digest to Slack.`);
+  mkdirSync(MESSAGE_DIR, { recursive: true });
+  writeFileSync(join(MESSAGE_DIR, 'message.json'), `${JSON.stringify(message)}\n`);
+  console.log(`Wrote the ${formatDay(today)} project digest's message, for the notify job to post.`);
 }
 /* c8 ignore stop */

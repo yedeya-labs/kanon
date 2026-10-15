@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -24,7 +25,25 @@ laneCheck(() => {
     // nine are the rest of the full pipeline, since ADR 0011's amendment of 2026-10-12: triage,
     // the dispatch sweep, merge reconcile, the Lead's four lanes, verify-acs and the Merger. The
     // seventeenth is the daily project digest, since kanon#813, for its health job.
-    const r = spawnSync('bash', [SCRIPT], { cwd: ROOT, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '' } });
+    //
+    // ONE CALLER IS CHECKED AS ITS PIN MOVE WILL WRITE IT. Plan 0011's N7 moved the project digest
+    // behind the notify job and dropped `DIGEST_WEBHOOK` from the lane (decision 17), but Kanon's
+    // `project-digest.yml` pins a release before N7, whose lane still declares it: mapping the new
+    // secret now would stop that caller at its pinned release. It changes its mapping in the pull
+    // request that moves its pin to N7's release (plan 0011 §5.2), so until then this run reads a
+    // copy of Kanon's tree with that one line as that pull request writes it, and the line is
+    // held to a pinned release, never `$/`, which would call the moved lane.
+    const legacy = '      DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}\n';
+    const caller = readFileSync(join(ROOT, '.github/workflows/project-digest.yml'), 'utf8');
+    let cwd = ROOT;
+    if (caller.includes(legacy)) {
+      expect(caller).toMatch(/uses: yedeya-labs\/kanon\/\.github\/workflows\/agent-project-digest\.yml@v\d+\.\d+\.\d+\n/);
+      cwd = mkdtempSync(join(tmpdir(), 'kanon-self-'));
+      // The lane-check script too: it is how lane-check knows the tree is Kanon's (`KANON_TREE`).
+      for (const d of ['.github', 'docs', 'actions/lane-check']) cpSync(join(ROOT, d), join(cwd, d), { recursive: true });
+      writeFileSync(join(cwd, '.github/workflows/project-digest.yml'), caller.replace(legacy, '      KANON_CHAT_PROJECT_DIGEST: ${{ secrets.KANON_CHAT_PROJECT_DIGEST }}\n'));
+    }
+    const r = spawnSync('bash', [SCRIPT], { cwd, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '' } });
     expect(r.status, r.stdout).toBe(0);
     expect(r.stdout).toContain('17 lane caller(s) pass');
     // One lane-check run over Kanon's whole tree: under a loaded full run it outlasted the 5s

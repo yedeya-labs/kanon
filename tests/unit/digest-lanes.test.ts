@@ -1,10 +1,12 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { laneBlockOf } from './helpers/agent-lanes.mjs';
 import { callerInputs, realGroup } from './helpers/smoke-group.js';
+import { secretsRead, startsNotify } from './helpers/notify-jobs.js';
 
 /**
  * The two digests (plan 0004 step 10), moved from the reference adopter: the daily project
@@ -34,6 +36,8 @@ const caller = (file: string) => parse(text(`tests/fixtures/lane-check/extra/${f
 const PROJECT = 'agent-project-digest.yml';
 const WEEKLY = 'agent-weekly-digest.yml';
 const DIGESTS = [PROJECT, WEEKLY] as const;
+/** The project digest's producer starts only when the digest will be posted, or on a dry run (plan 0011 N7). */
+const PROJECT_DIGEST_IF = "needs.gate.outputs.member == 'true' && (needs.gate.outputs.post == 'true' || inputs.dry_run == 'true')";
 
 const step = (file: string, job: string, pred: (s: Step) => boolean): Step => {
   const s = (lane(file).jobs[job]?.steps ?? []).find(pred);
@@ -41,7 +45,8 @@ const step = (file: string, job: string, pred: (s: Step) => boolean): Step => {
   return s;
 };
 const narrative = (file: string) => step(file, 'digest', (s) => s.id === 'agent');
-const post = (file: string) => step(file, 'digest', (s) => s.name === 'Post the digest');
+/** The step that runs the digest's script: it posts the weekly digest, and writes the project digest's message (plan 0011 N7). */
+const post = (file: string) => step(file, 'digest', (s) => s.name === 'Post the digest' || s.id === 'message');
 const finish = (file: string) => step(file, 'digest', (s) => s.id === 'finish');
 const flag = (args: unknown, name: string) => new RegExp(`(?:^|\\s)${name}[\\s=]+(\\S+)`).exec(String(args ?? ''))?.[1];
 
@@ -66,20 +71,25 @@ describe('each digest is a called lane, with its caller’s two triggers', () =>
   it.each(DIGESTS)('%s: every other job waits for the gate and its verdict', (file) => {
     for (const [id, job] of Object.entries(lane(file).jobs)) {
       if (id === 'gate') continue;
+      // The project digest's `notify` job (plan 0011 N7) needs the producer too, and its `if:` is
+      // `notify-jobs.ts`'s, held by notify-guard.test.ts and lane-gate.test.ts.
+      if (file === PROJECT && id === 'notify') { expect([job.needs].flat()).toEqual(['gate', 'digest']); continue; }
       expect([job.needs].flat(), `${file}:${id}`).toEqual(['gate']);
-      expect(job.if, `${file}:${id}`).toBe("needs.gate.outputs.member == 'true'");
+      expect(job.if, `${file}:${id}`).toBe(file === PROJECT && id === 'digest' ? PROJECT_DIGEST_IF : "needs.gate.outputs.member == 'true'");
     }
     expect(lane(file).jobs.gate?.outputs?.member).toBe('${{ steps.gate.outputs.member }}');
   });
 
-  it.each(DIGESTS)('%s: takes one Claude credential, and the webhook optionally, and no App', (file) => {
+  it.each(DIGESTS)('%s: takes one Claude credential, and its chat secret optionally, and no App', (file) => {
     const secrets = lane(file).on.workflow_call.secrets;
-    expect(Object.keys(secrets).sort()).toEqual(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'DIGEST_WEBHOOK']);
+    // The project digest's kind's secret replaces DIGEST_WEBHOOK (plan 0011 N7, decision 17).
+    const chat = file === PROJECT ? 'KANON_CHAT_PROJECT_DIGEST' : 'DIGEST_WEBHOOK';
+    expect(Object.keys(secrets).sort()).toEqual(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', chat]);
     // The token or an API key, its caller maps one (plan 0009 §10): `agent-run` refuses both or neither.
     expect(secrets.CLAUDE_CODE_OAUTH_TOKEN?.required).toBe(false);
     expect(secrets.ANTHROPIC_API_KEY?.required).toBe(false);
-    // Without the webhook the digest posts nothing and stays green (plan 0004 §6).
-    expect(secrets.DIGEST_WEBHOOK?.required).toBe(false);
+    // Without it the digest posts nothing and stays green (plan 0004 §6, plan 0011 §8).
+    expect(secrets[chat]?.required).toBe(false);
     expect(text(`.github/workflows/${file}`)).not.toMatch(/create-github-app-token|_APP_ID/);
   });
 
@@ -123,7 +133,8 @@ describe('a dry run is a dry run, and the schedule is not one', () => {
 });
 
 describe('the webhook is the caller’s DIGEST_WEBHOOK (plan 0004, decision 7)', () => {
-  it.each(DIGESTS)('%s: the post step passes it under its own name, and nothing else of the kind', (file) => {
+  // The weekly digest's until N8; the project digest moved behind the notify job in N7.
+  it.each([WEEKLY])('%s: the post step passes it under its own name, and nothing else of the kind', (file) => {
     expect(post(file).env?.DIGEST_WEBHOOK).toBe('${{ secrets.DIGEST_WEBHOOK }}');
     expect(text(`.github/workflows/${file}`)).not.toMatch(/SLACK_[A-Z_]*WEBHOOK/);
   });
@@ -238,41 +249,156 @@ describe('the health job (RA-1036)', () => {
   });
 });
 
-// kanon#836: without `DIGEST_WEBHOOK` the post step discards the narrative, so the model run that
-// writes it was paid for and thrown away (Kanon calls the lane for its health job alone, #813).
-describe('the project digest runs its model only when the digest will be posted', () => {
-  const GATE = "steps.post.outputs.narrate == 'true'";
-  const steps = lane(PROJECT).jobs.digest!.steps!;
-  const decide = step(PROJECT, 'digest', (s) => s.id === 'post');
-  /** The agent blocks that are not held to the gate. */
-  const ungated = (ss: Step[]) => ['agent-setup', 'agent-run', 'agent-finish']
-    .filter((b) => !String(ss.find((s) => laneBlockOf(s) === b)?.if ?? '').includes(GATE));
+// Plan 0011 step N7: the project digest posts through the notify job. The gate decides whether
+// anything will post (kanon#836's step "Will the digest be posted?", moved out of the `digest` job,
+// which holds the Claude credential, and widened from DIGEST_WEBHOOK to the hook and the kind's
+// secret); the `digest` job writes the message and holds no chat secret; the `notify` job posts.
+describe('the project digest posts through the notify job (plan 0011 N7)', () => {
+  const wf = lane(PROJECT);
+  const gate = wf.jobs.gate!;
+  const decide = step(PROJECT, 'gate', (s) => s.id === 'post');
+  const CHAT = 'KANON_CHAT_PROJECT_DIGEST';
+  const CLAUDE = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'];
 
-  it('reads the secret into the step that decides, which comes before every agent block', () => {
-    expect(decide.env).toEqual({ DIGEST_WEBHOOK: '${{ secrets.DIGEST_WEBHOOK }}', DRY_RUN: "${{ inputs.dry_run == 'true' && '1' || '' }}" });
-    const first = steps.findIndex((s) => ['agent-setup', 'agent-run'].includes(String(laneBlockOf(s))));
-    expect(steps.indexOf(decide)).toBeLessThan(first);
+  /** Run the gate's decision in a checkout with or without the hook, with or without the secret. */
+  const decideIn = (hook: boolean, secret: boolean) => {
+    const dir = mkdtempSync(join(tmpdir(), 'digest-gate-'));
+    if (hook) {
+      mkdirSync(join(dir, '.github/actions/notify'), { recursive: true });
+      writeFileSync(join(dir, '.github/actions/notify/action.yml'), 'runs:\n  using: composite\n  steps: []\n');
+    }
+    return runWorkflowStep(decide, { cwd: dir, env: { HAS_SECRET: secret ? 'true' : 'false' } });
+  };
+
+  /** Does the `digest` job start, for its `if:` in this world? */
+  const digestStarts = (cond: string | undefined, world: { member: string; post: string; dryRun: string }) => {
+    const js = String(cond)
+      .replace(/needs\.gate\.outputs\.member/g, JSON.stringify(world.member))
+      .replace(/needs\.gate\.outputs\.post/g, JSON.stringify(world.post))
+      .replace(/inputs\.dry_run/g, JSON.stringify(world.dryRun))
+      .replace(/'([^']*)'/g, (_m, x: string) => JSON.stringify(x))
+      .replace(/==/g, '===');
+    if (/needs\.|inputs\.|github\.|\w+\s*\(/.test(js)) throw new Error(`unmodelled expression: ${js}`);
+    return Boolean(new Function(`return (${js});`)());
+  };
+  const worlds = (cond: string | undefined) => ({
+    posting: digestStarts(cond, { member: 'true', post: 'true', dryRun: '' }),
+    noPost: digestStarts(cond, { member: 'true', post: 'false', dryRun: '' }),
+    dryRun: digestStarts(cond, { member: 'true', post: 'false', dryRun: 'true' }),
+    refused: digestStarts(cond, { member: 'false', post: '', dryRun: 'true' }),
+  });
+
+  it('the lane declares no DIGEST_WEBHOOK at all, so a caller still mapping it is refused (decision 17)', () => {
+    expect(Object.keys(wf.on.workflow_call.secrets)).not.toContain('DIGEST_WEBHOOK');
+    expect(JSON.stringify(wf)).not.toContain('DIGEST_WEBHOOK');
+    // The fixture caller maps the kind's secret in its place.
+    const secrets = Object.values(caller(PROJECT).jobs)[0]!.secrets;
+    expect(secrets).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}', [CHAT]: `\${{ secrets.${CHAT} }}` });
+  });
+
+  it("the gate decides, reading the hook from a sparse checkout that keeps no credential and the secret as one presence boolean", () => {
+    expect(gate.outputs).toEqual({ member: '${{ steps.gate.outputs.member }}', hook: '${{ steps.post.outputs.hook }}', post: '${{ steps.post.outputs.post }}' });
+    expect(decide.if).toBe("steps.gate.outputs.member == 'true'");
+    expect(decide.env).toEqual({ HAS_SECRET: `\${{ secrets.${CHAT} != '' }}` });
+    const checkout = gate.steps!.find((s) => String(s.uses).startsWith('actions/checkout@'))!;
+    expect(checkout.if).toBe("steps.gate.outputs.member == 'true'");
+    expect(checkout.with).toEqual({ 'persist-credentials': false, 'sparse-checkout': '.github/actions/notify', 'sparse-checkout-cone-mode': false });
+    expect(gate.steps!.indexOf(checkout)).toBeLessThan(gate.steps!.findIndex((s) => s.id === 'post'));
+    expect(secretsRead(gate)).toEqual([CHAT]);
   });
 
   it.each([
-    ['a webhook', { DIGEST_WEBHOOK: 'https://hooks.example/x', DRY_RUN: '' }, 'true'],
-    ['a dry run, with no webhook', { DIGEST_WEBHOOK: '', DRY_RUN: '1' }, 'true'],
-    ['neither', { DIGEST_WEBHOOK: '', DRY_RUN: '' }, 'false'],
-  ] as const)('with %s, narrate=%s', (_name, env, want) => {
-    const r = runWorkflowStep(decide, { env });
+    ['a hook and the secret', true, true, 'present', 'true', null],
+    ['the secret and no hook (decision 2: nothing posts)', false, true, 'none', 'false', 'No notify hook: nothing was posted'],
+    ['a hook and no secret', true, false, 'present', 'false', 'No chat secret for the project digest: this kind was not posted'],
+    ['neither', false, false, 'none', 'false', 'No notify hook: nothing was posted'],
+  ] as const)('with %s: hook=%s, post=%s', (_name, hook, secret, wantHook, wantPost, said) => {
+    const r = decideIn(hook, secret);
     expect(r.status, r.output).toBe(0);
-    expect(r.outputs.narrate).toBe(want);
-    if (want === 'false') expect(r.summary).toContain('no model runs');
+    expect(r.outputs).toMatchObject({ hook: wantHook, post: wantPost });
+    if (said) expect(r.summary).toContain(said);
+    else expect(r.summary).toBe('');
+    if (said) expect(r.summary).toContain('no model runs. The health job still runs');
   });
 
-  it('holds agent-setup, agent-run and agent-finish to it; the post and the health job are not', () => {
-    expect(ungated(steps)).toEqual([]);
-    expect(steps.find((s) => s.name === 'Post the digest')!.if).toBeUndefined();
-    expect(lane(PROJECT).jobs.health!.if).toBe("needs.gate.outputs.member == 'true'");
+  it('with the secret and no hook nothing posts: the digest is skipped and the notify job does not start (decision 2)', () => {
+    const r = decideIn(false, true);
+    expect(worlds(wf.jobs.digest!.if).noPost).toBe(false);
+    const notify = wf.jobs.notify!;
+    const world = { member: 'true', hook: r.outputs.hook!, dryRun: '', cancelled: false, gate: 'success', producer: 'skipped' } as const;
+    expect(startsNotify(notify.if, [notify.needs ?? []].flat(), world)).toBe(false);
+    // …and with the hook, it starts, and records the skip or the post.
+    expect(startsNotify(notify.if, [notify.needs ?? []].flat(), { ...world, hook: decideIn(true, true).outputs.hook! })).toBe(true);
   });
 
-  it('goes red when the gate is taken off the model run (mutation)', () => {
-    const mutated = steps.map((s) => (laneBlockOf(s) === 'agent-run' ? { ...s, if: undefined } : s));
-    expect(ungated(mutated)).toEqual(['agent-run']);
+  it('the digest job runs, and so its model, only when the digest will be posted or printed by a dry run', () => {
+    expect(worlds(wf.jobs.digest!.if)).toEqual({ posting: true, noPost: false, dryRun: true, refused: false });
+  });
+
+  it("goes red when the digest job's if: loses the hook condition (mutation)", () => {
+    expect(worlds("needs.gate.outputs.member == 'true'").noPost).toBe(true);
+    expect(wf.jobs.digest!.if).not.toBe("needs.gate.outputs.member == 'true'");
+  });
+
+  it('no step of the digest job decides, or reads a chat secret: only the Claude credential', () => {
+    const steps = wf.jobs.digest!.steps!;
+    const problems = (ss: Step[]) => ss.flatMap((s) => [
+      ...(s.id === 'post' || /steps\.post\./.test(JSON.stringify(s)) ? [`${s.name ?? s.id ?? s.uses}: kanon#836's decision`] : []),
+      ...secretsRead(s).filter((x) => !CLAUDE.includes(x)).map((x) => `${s.name ?? s.id ?? s.uses}: ${x}`),
+    ]);
+    expect(problems(steps)).toEqual([]);
+    // N0's step left in the digest job, as it was before N7, is caught (mutation).
+    const n0 = { name: 'Will the digest be posted?', id: 'post', env: { DIGEST_WEBHOOK: '${{ secrets.DIGEST_WEBHOOK }}' }, run: 'true' };
+    expect(problems([n0, ...steps])).toEqual(["Will the digest be posted?: kanon#836's decision", 'Will the digest be posted?: DIGEST_WEBHOOK']);
+    expect(problems([...steps, { name: 'Post', env: { URL: `\${{ secrets.${CHAT} }}` }, run: 'curl "$URL"' }])).toEqual([`Post: ${CHAT}`]);
+  });
+
+  it('the agent blocks run whenever the job does: the job itself is the decision', () => {
+    const steps = wf.jobs.digest!.steps!;
+    for (const b of ['agent-setup', 'agent-run']) expect(steps.find((s) => laneBlockOf(s) === b)?.if, b).toBeUndefined();
+    expect(steps.find((s) => laneBlockOf(s) === 'agent-finish')?.if).toBe('always()');
+  });
+
+  /** A stub `$KANON/scripts/project-digest.mjs` that records what it was run with. */
+  const runMessageStep = (dryRun: string) => {
+    const kanon = mkdtempSync(join(tmpdir(), 'digest-kanon-'));
+    mkdirSync(join(kanon, 'scripts'));
+    writeFileSync(join(kanon, 'scripts/project-digest.mjs'), "console.log(`ran dry=${process.env.DRY_RUN ?? ''} dir=${process.env.MESSAGE_DIR ?? ''}`);\n");
+    const message = post(PROJECT);
+    return runWorkflowStep(message, {
+      cwd: mkdtempSync(join(tmpdir(), 'digest-ws-')),
+      env: { KANON: kanon, DRY_RUN: dryRun, MESSAGE_DIR: '/tmp/m', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '3' },
+    });
+  };
+
+  it('names the artifact with its own run and attempt, and a dry run names none, so nothing is uploaded (§4)', () => {
+    const real = runMessageStep('');
+    expect(real.status, real.output).toBe(0);
+    expect(real.stdout).toContain('ran dry= dir=/tmp/m');
+    expect(real.outputs.artifact).toBe('kanon-notify-project-digest-digest-42-3');
+    const dry = runMessageStep('1');
+    expect(dry.status, dry.output).toBe(0);
+    expect(dry.stdout).toContain('ran dry=1');
+    expect(dry.outputs.artifact).toBeUndefined();
+    const upload = step(PROJECT, 'digest', (s) => s.id === 'upload');
+    expect(upload.uses).toMatch(/^actions\/upload-artifact@/);
+    expect(upload.if).toBe("steps.message.outputs.artifact != ''");
+    expect(upload.with).toMatchObject({ name: '${{ steps.message.outputs.artifact }}', path: '${{ runner.temp }}/kanon-notify-message/message.json', 'if-no-files-found': 'error' });
+    expect(post(PROJECT).env?.MESSAGE_DIR).toBe('${{ runner.temp }}/kanon-notify-message');
+    // Published as the job's output only once uploaded: the notify job reads it, never computes it.
+    expect(wf.jobs.digest!.outputs).toEqual({ 'message-artifact': "${{ steps.upload.outcome == 'success' && steps.message.outputs.artifact || '' }}" });
+  });
+
+  it('with a hook, the notify job hands it KANON_CHAT_PROJECT_DIGEST and the digest job\'s message, and no other secret', () => {
+    const notify = wf.jobs.notify!;
+    expect(notify.steps).toEqual([{ uses: '$/actions/notify', id: 'notify', with: { kind: 'project-digest', artifact: '${{ needs.digest.outputs.message-artifact }}', secret: `\${{ secrets.${CHAT} }}` } }]);
+    expect(secretsRead(notify)).toEqual([CHAT]);
+  });
+
+  it('the health job runs whatever the gate decides on posting, and writes no message (decision 13)', () => {
+    const health = wf.jobs.health!;
+    expect(health.if).toBe("needs.gate.outputs.member == 'true'");
+    expect(health.outputs).toBeUndefined();
+    expect(JSON.stringify(health)).not.toMatch(/upload-artifact|message|KANON_CHAT_|needs\.gate\.outputs\.(?:post|hook)/);
   });
 });

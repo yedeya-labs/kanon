@@ -213,8 +213,8 @@ jobs:
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
 
   project-digest:
-    # The digests run as no App: the Claude token, and the webhook they post to (plan 0004
-    # step 10).
+    # The digests run as no App: the Claude token, and the chat secret of their kind, which only
+    # the lane's `notify` job hands the hook (plan 0004 step 10, plan 0011 N7).
     permissions:
       contents: read
       issues: write
@@ -225,7 +225,7 @@ jobs:
       smoke: agent-lanes-smoke
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
-      DIGEST_WEBHOOK: ${{ secrets.KANON_SMOKE_UNSET }}
+      KANON_CHAT_PROJECT_DIGEST: ${{ secrets.KANON_SMOKE_UNSET }}
 
   weekly-digest:
     permissions:

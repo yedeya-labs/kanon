@@ -11,9 +11,10 @@ import { SPAWNS } from './helpers/spawns.js';
  * `.github/actions/notify/action.yml`, each message kind's secret, the secret they replace, and
  * the last post, for the callers of the lanes that notify at the checked release.
  *
- * No lane has a `notify` job before plan 0011's N7, so the checked release here is NEXT, a copy
- * of this tree's requirements in which the project digest notifies, as N7 makes it: its lane takes
- * `KANON_CHAT_PROJECT_DIGEST` and no longer `DIGEST_WEBHOOK`. The fixtures are helpers/doctor.ts's.
+ * The checked release here is NEXT, a copy of this tree's requirements in which the project digest
+ * notifies, as N7 made it: its lane takes `KANON_CHAT_PROJECT_DIGEST` and no longer
+ * `DIGEST_WEBHOOK`. This tree is past N7 too, so NEXT is this tree's requirements as they are; a
+ * release before N7 is `beforeN7`. The fixtures are helpers/doctor.ts's.
  */
 vi.setConfig({ testTimeout: SPAWNS.timeout });
 
@@ -28,10 +29,19 @@ const notifyOf = (r: Req) => (r as unknown as { notify: Notify }).notify;
 const nextReq = (tweak: (n: Notify) => void = () => {}) => {
   const next = clone(REQ);
   const lane = next.lanes[LANE]!;
-  lane.secrets = [...lane.secrets.filter((n) => n !== LEGACY), SECRET].sort();
+  lane.secrets = [...new Set([...lane.secrets.filter((n) => n !== LEGACY), SECRET])].sort();
   notifyOf(next).kinds['project-digest']!.lanes = [LANE];
   tweak(notifyOf(next));
   return next;
+};
+
+/** A release before plan 0011's N7: the notify entry, and no lane in it; the project digest takes `DIGEST_WEBHOOK`. */
+const beforeN7 = () => {
+  const old = clone(REQ);
+  const lane = old.lanes[LANE]!;
+  lane.secrets = [...new Set([...lane.secrets.filter((n) => n !== SECRET), LEGACY])].sort();
+  for (const k of Object.values(notifyOf(old).kinds)) k.lanes = [];
+  return old;
 };
 
 /** Kanon's prebuilt hook, as `kanon init` writes it, at `ref`. */
@@ -105,11 +115,11 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
     expect(r.status).toBe(EXIT.healthy);
   });
 
-  it('asks nothing where the checked release has no lane that notifies, as this tree has none before N7', async () => {
-    // This tree's own requirements, against the pinned release: the entry is there, no lane in it.
-    expect(Object.values(notifyOf(REQ).kinds).flatMap((k) => k.lanes)).toEqual([]);
+  it('asks nothing where the checked release has no lane that notifies, as a release before N7', async () => {
+    // This tree notifies since N7, from the project digest alone; a release before it has the entry, and no lane in it.
+    expect(Object.values(notifyOf(REQ).kinds).flatMap((k) => k.lanes)).toEqual([LANE]);
     const f = files({ hook: null, mapped: ['CLAUDE_CODE_OAUTH_TOKEN', LEGACY] });
-    const r = await run(checkout(f), github({ secrets: new Set(LANES.flatMap((l) => REQ.lanes[l]!.secrets)) }), ['--json']);
+    const r = await check(f, github({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), LEGACY]) }), beforeN7());
     expect(notifyIds(r)).toEqual([]);
     // A release without the entry at all, as every release before N10.
     const old = nextReq();

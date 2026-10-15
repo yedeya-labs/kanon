@@ -2193,7 +2193,8 @@ describe('kanon init, a feature, three questions and one summary (plan 0007 G5)'
     expect(choices(bare)).toEqual(['- **Feature:** `full`', '- **Review trigger:** `labelled`', '- **Overseer:** `installed`']);
     // With both: all three are in, and the lanes still make up Full.
     const both = checkout({ '.github/actions/explore-sweep/action.yml': 'runs:\n  using: composite\n  steps: []\n' });
-    const w = parse(await run(both, fakeGitHub({ secrets: new Set(['DIGEST_WEBHOOK']) }), ['--json', '--no-apps', '--feature', 'full']));
+    // Each digest's own chat secret: the project digest's since plan 0011 N7, the weekly's until N8.
+    const w = parse(await run(both, fakeGitHub({ secrets: new Set(['DIGEST_WEBHOOK', 'KANON_CHAT_PROJECT_DIGEST']) }), ['--json', '--no-apps', '--feature', 'full']));
     expect(callers(both)).toEqual([...featureLanes('full'), 'agent-explore', 'agent-project-digest', 'agent-weekly-digest'].sort());
     expect(w.answers.feature).toBe('full');
     expect(w.summary.some((l) => l.answer === 'Left out')).toBe(false);

@@ -614,7 +614,7 @@
       "identities": [],
       "secrets": [
         "CLAUDE_CODE_OAUTH_TOKEN",
-        "DIGEST_WEBHOOK"
+        "KANON_CHAT_PROJECT_DIGEST"
       ],
       "inputs": {
         "dry_run": {
@@ -1344,7 +1344,7 @@
         "group": "oversight",
         "does": "Posts each open project's progress to a chat channel daily, and files an issue for a lane caller that keeps failing.",
         "needs": [],
-        "cost": "A model run daily, only where the digest is posted: without `DIGEST_WEBHOOK` it runs the health job alone, with no model.",
+        "cost": "A model run daily, only where the digest is posted: without a notify hook and `KANON_CHAT_PROJECT_DIGEST` it runs the health job alone, with no model.",
         "minutes": "Not measured: Kanon's caller is new and had not run yet; it runs once a day.",
         "recommend": [
           "agent-lead-reconcile"
@@ -1481,8 +1481,8 @@
           "condition": "when the repository holds the chat channel's webhook, `DIGEST_WEBHOOK`"
         },
         "agent-project-digest": {
-          "secret": "DIGEST_WEBHOOK",
-          "condition": "when the repository holds the chat channel's webhook, `DIGEST_WEBHOOK`"
+          "secret": "KANON_CHAT_PROJECT_DIGEST",
+          "condition": "when the repository holds the project digest's chat secret, `KANON_CHAT_PROJECT_DIGEST`"
         }
       },
       "leftOut": {
@@ -1638,7 +1638,9 @@
     "kinds": {
       "project-digest": {
         "secret": "KANON_CHAT_PROJECT_DIGEST",
-        "lanes": []
+        "lanes": [
+          "agent-project-digest"
+        ]
       },
       "weekly-digest": {
         "secret": "KANON_CHAT_WEEKLY_DIGEST",

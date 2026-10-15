@@ -3,7 +3,7 @@
 #
 # A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
 # triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:`
-# this file at an exact Kanon tag, passes `dry_run` through, and maps the two secrets by name
+# this file at an exact Kanon tag, passes `dry_run` through, and maps its secrets by name
 # (never `secrets: inherit`).
 #
 # Reports where each project in `docs/projects/` has got to, and, the part that earns the
@@ -16,13 +16,24 @@
 #
 # It reads the GitHub API and the checked-out briefs only: no database and no cloud.
 #
-# THE WEBHOOK (plan 0004, decision 7). The post goes to the URL in the caller's
-# `DIGEST_WEBHOOK` secret, as a `{"text": …}` body. Without it, the digest posts nothing and
-# says so, and the run stays green: a repository with no chat channel still gets the health
-# check, and runs no model: the narrative is written only for a post or a dry run (kanon#836).
+# THE POST GOES THROUGH THE NOTIFY JOB (plan 0011 §4, §5, step N7; `K-OBS-19`). The `digest` job
+# writes one Kanon notification, `message.json` of kind `project-digest`, and uploads it; the
+# `notify` job hands it to the adopter's hook at `.github/actions/notify/action.yml` with the
+# caller's `KANON_CHAT_PROJECT_DIGEST`, and with no other secret. No job here formats for a chat
+# system, and only the `notify` job and the gate's presence boolean name the chat secret.
+#
+# NO HOOK OR NO SECRET, NO DIGEST (plan 0011 §8, decisions 2 and 12). The gate reads whether the
+# hook exists at the run's commit and whether the kind's secret is set; without both nothing would
+# post, so the `digest` job, whose whole output is the message, is skipped and no model runs. A
+# dry run still writes and prints it. The health job runs either way, and never posts (decision
+# 13): a repository with no chat channel still gets the health check (Kanon calls this lane for it).
+#
+# `DIGEST_WEBHOOK` IS GONE (decision 17, a clean break). The lane no longer declares it, so GitHub
+# refuses to start a caller that still maps it, health job included, until the line goes;
+# `kanon doctor`'s `notify.legacy-secret` and `kanon upgrade` say what to change.
 #
 # INERT until: the caller is on the default branch + these secrets (plan 0001 §8):
-#   CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, and DIGEST_WEBHOOK to post
+#   CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, and a notify hook with KANON_CHAT_PROJECT_DIGEST to post
 # ONE OF SECRETS: CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY
 # The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
 # credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
@@ -69,8 +80,10 @@ on:
         required: false
       ANTHROPIC_API_KEY:
         required: false
-      # Not required: without it the digest posts nothing (above).
-      DIGEST_WEBHOOK:
+      # This kind's chat secret (plan 0011 decision 3). Not required: without it the digest posts
+      # nothing and runs no model (above). Read only by the `notify` job, and by the gate as one
+      # presence boolean.
+      KANON_CHAT_PROJECT_DIGEST:
         required: false
 
 concurrency:
@@ -93,10 +106,16 @@ permissions:
   pull-requests: read
 
 jobs:
-  # THE MEMBERSHIP GATE (K-AGENT-45, kanon#46), in a job of its own because both jobs below
-  # need its verdict and neither may wait for the other. On the schedule the actor is whoever
-  # last changed the cron; on a dispatch, whoever ran it. A refusal leaves `member=false`, a
-  # notice and a step-summary line, and both jobs skip.
+  # THE MEMBERSHIP GATE (K-AGENT-45, kanon#46), in a job of its own because every job below
+  # needs its verdict and the digest and the health job may not wait for each other. On the
+  # schedule the actor is whoever last changed the cron; on a dispatch, whoever ran it. A refusal
+  # leaves `member=false`, a notice and a step-summary line, and every job skips.
+  #
+  # AND WHETHER ANYTHING WILL POST (plan 0011 §8): `hook` is `present` or `none`, read from a
+  # sparse checkout that runs nothing, and `post` is `true` only with the hook and
+  # `KANON_CHAT_PROJECT_DIGEST` both there. The secret is read as one presence boolean, the one
+  # reference to it outside the `notify` job that `tests/unit/notify-guard.test.ts` admits; this
+  # job holds no Claude credential and no App key.
   #
   # ONLY THE CALLER'S TWO TRIGGERS. As a called workflow it runs on whatever its caller is
   # called on (Kanon's smoke calls it on pull requests), so every other event starts nothing.
@@ -106,6 +125,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       member: ${{ steps.gate.outputs.member }}
+      hook: ${{ steps.post.outputs.hook }}
+      post: ${{ steps.post.outputs.post }}
     steps:
       - uses: $/actions/kanon-path
       - name: Is the actor a member?
@@ -114,9 +135,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
 
+      # The hook's directory alone, at the run's commit (decision 8), with no credential kept.
+      # Nothing in it runs here: the next step only asks whether the hook's file exists.
+      - name: Check out the notify hook
+        if: steps.gate.outputs.member == 'true'
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/notify
+          sparse-checkout-cone-mode: false
+
+      # NO HOOK OR NO SECRET, NO POST, SO NO DIGEST (plan 0011 §8; kanon#836's step, moved here
+      # from the `digest` job, which holds the Claude credential). Secrets can't be read in an
+      # `if:`, so the secret's presence is mapped to this step's env as one boolean, never its value.
+      - name: Will the digest be posted?
+        id: post
+        if: steps.gate.outputs.member == 'true'
+        env:
+          HAS_SECRET: ${{ secrets.KANON_CHAT_PROJECT_DIGEST != '' }}
+        run: |
+          if [ -f .github/actions/notify/action.yml ]; then hook=present; else hook=none; fi
+          if [ "$hook" = present ] && [ "$HAS_SECRET" = true ]; then post=true; else post=false; fi
+          { echo "hook=$hook"; echo "post=$post"; } >> "$GITHUB_OUTPUT"
+          if [ "$hook" = none ]; then
+            echo "No notify hook: nothing was posted, so the digest is not written and no model runs. The health job still runs (plan 0011 §8)." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$post" = false ]; then
+            echo "No chat secret for the project digest: this kind was not posted, so the digest is not written and no model runs. The health job still runs (plan 0011 §8)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # THE PRODUCER (plan 0011 §4): it writes the message and uploads it, and holds no chat secret.
+  # Only when the digest will be posted, or printed by a dry run (above).
   digest:
     needs: gate
-    if: needs.gate.outputs.member == 'true'
+    if: needs.gate.outputs.member == 'true' && (needs.gate.outputs.post == 'true' || inputs.dry_run == 'true')
     runs-on: ubuntu-latest
     # Bounds a hang (RA-1336), sized like the weekly digest's.
     timeout-minutes: 20
@@ -128,6 +179,12 @@ jobs:
       contents: read
       issues: read
       pull-requests: read
+    # The message's artifact, named with this job's own attempt, for the `notify` job to download:
+    # empty when nothing was uploaded (a dry run, or a failure before the upload). The `notify`
+    # job takes the name from here and never computes it, because after "Re-run failed jobs" its
+    # own attempt is one past this one's (plan 0011 §4, §5.4).
+    outputs:
+      message-artifact: ${{ steps.upload.outcome == 'success' && steps.message.outputs.artifact || '' }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
       # it is as close to the job's start as a step can be.
@@ -139,25 +196,6 @@ jobs:
       - uses: actions/checkout@v7
         id: checkout
 
-      # NO WEBHOOK, NO NARRATIVE (kanon#836). Without `DIGEST_WEBHOOK` the post step below posts
-      # nothing and discards the narrative, so a model run here would be paid for and thrown
-      # away. A repository may call this lane for its health job alone (Kanon does, kanon#813).
-      # So the three agent blocks run only when the digest will be posted, or printed by a dry
-      # run. Secrets can't be read in an `if:`, so the secret is mapped to this step's env and
-      # its answer is a step output, as the dispatch sweep's soft skip does.
-      - name: Will the digest be posted?
-        id: post
-        env:
-          DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}
-          DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
-        run: |
-          if [ -n "$DIGEST_WEBHOOK" ] || [ -n "$DRY_RUN" ]; then
-            echo "narrate=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "narrate=false" >> "$GITHUB_OUTPUT"
-            echo "No \`DIGEST_WEBHOOK\`: the digest posts nothing, so its narrative is not written and no model runs. The health job still runs." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       # THE AGENT-LANE BLOCKS, CALLED DIRECTLY (P8, RA-2743). This arm mints no App token, so
       # `agent-setup` gets no slug and probes nothing, as the reviewer's does; `agent-run` is
       # the narrative step; `agent-finish` records the cost row. No project setup: the agent
@@ -165,12 +203,11 @@ jobs:
       # only Node's built-in modules.
       - uses: $/actions/agent-setup
         id: setup
-        if: steps.post.outputs.narrate == 'true'
         with:
           arm: project-digest agent
           app-slug: ""
 
-      # Kanon's scripts, for the post below, and `KANON` for the agent's environment (kanon#110):
+      # Kanon's scripts, for the message below, and `KANON` for the agent's environment (kanon#110):
       # from this step's output, which no project file can rewrite.
       - uses: $/actions/kanon-path
         id: kanon
@@ -181,7 +218,6 @@ jobs:
       # or writes nothing, the digest still posts, just without the prose.
       - name: Write today's narrative (non-fatal)
         id: agent
-        if: steps.post.outputs.narrate == 'true'
         continue-on-error: true
         uses: $/actions/agent-run
         env:
@@ -257,7 +293,7 @@ jobs:
       # classifier would key on the job's status instead, which is the wrong signal here.
       - uses: $/actions/agent-finish
         id: finish
-        if: always() && steps.post.outputs.narrate == 'true'
+        if: always()
         continue-on-error: true
         with:
           claude-args-ran: ${{ steps.agent.outputs.claude-args }}
@@ -289,18 +325,36 @@ jobs:
       # FAILS THE JOB on error, deliberately. A swallowed failure means the digest quietly
       # stops and the developer stops hearing about stalled projects, which is the exact
       # failure this exists to prevent, now invisible. A red run is the cheapest detector.
-      - name: Post the digest
+      #
+      # THE MESSAGE, NOT A POST (plan 0011 §4). The script writes one contract message to
+      # `MESSAGE_DIR/message.json`, and this step names its artifact with this job's own attempt.
+      # A dry run writes the message, its plain text and the Slack hook's payload to the step
+      # summary instead, and names no artifact: nothing is uploaded, and the `notify` job skips.
+      - name: Write the digest's message
+        id: message
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}
           DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
+          MESSAGE_DIR: ${{ runner.temp }}/kanon-notify-message
         run: |
           set -euo pipefail
           # `|| true` on the read only — an absent narrative is the degraded path, not a
           # failure. Anything the script itself hits does fail the job.
           NARRATIVE="$(cat narrative.txt 2>/dev/null || true)" \
             node "$KANON/scripts/project-digest.mjs"
+          if [ -z "$DRY_RUN" ]; then
+            echo "artifact=kanon-notify-project-digest-digest-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload the message
+        id: upload
+        if: steps.message.outputs.artifact != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.message.outputs.artifact }}
+          path: ${{ runner.temp }}/kanon-notify-message/message.json
+          if-no-files-found: error
 
       # WHY THE NARRATIVE DID NOT LAND (RA-1408). A cap, an outage and a real failure want
       # different responses, and the classifier tells them apart.
@@ -329,7 +383,9 @@ jobs:
   # leaves the digest job's refusal of that scope as it is.
   #
   # NO `needs: digest`: the digest and this check answer unrelated questions, so a chat
-  # outage cannot hide a dead reconciler. It waits only for the gate.
+  # outage cannot hide a dead reconciler. It waits only for the gate, and runs with no hook or
+  # no chat secret too. It never posts a chat message (plan 0011 decision 13): the issue it
+  # files is the record.
   health:
     needs: gate
     if: needs.gate.outputs.member == 'true'
@@ -353,3 +409,26 @@ jobs:
           # A dry run prints the table and files nothing.
           APPLY: ${{ inputs.dry_run != 'true' && '1' || '' }}
         run: node "$KANON/scripts/workflow-health.mjs"
+
+  # THE POST (plan 0011 §5, `K-OBS-19`): the one job that holds the chat secret, this kind's and no
+  # other, with a token that reads contents and nothing more. It hands the `digest` job's message
+  # to the adopter's hook through Kanon's `notify` block, which validates it first and records the
+  # outcome. Only past an admitting gate, only with a hook, never on a dry run or a cancelled run;
+  # after a failed or skipped `digest` it still runs, and records `skipped`.
+  # `tests/unit/helpers/notify-jobs.ts` holds it to this shape.
+  notify:
+    needs: [gate, digest]
+    if: ${{ !cancelled() && needs.gate.outputs.member == 'true' && needs.gate.outputs.hook == 'present' && inputs.dry_run != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.notify.outputs.outcome }}
+    steps:
+      - uses: $/actions/notify
+        id: notify
+        with:
+          kind: project-digest
+          artifact: ${{ needs.digest.outputs.message-artifact }}
+          secret: ${{ secrets.KANON_CHAT_PROJECT_DIGEST }}
