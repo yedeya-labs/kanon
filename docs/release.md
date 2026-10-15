@@ -188,7 +188,9 @@ The pull requests a candidate contains are the squash commits, `<title> (#N)`, b
 
 Each candidate's changelog starts at the previous candidate's tag, so a candidate that was held and never promoted lists its changes, breaking ones included, only in its own pre-release. An adopter's Dependabot pull request jumps from the last stable release to the new one and never shows that pre-release. So the stable Release carries the promoted candidate's notes, then those of each candidate it superseded, back to the last stable release; with a single candidate, they are that candidate's notes alone.
 
-It writes as the Releaser because that App is the one bypass actor of the `v*` tag ruleset (plan 0008), as the release workflow creates its tags and moves the major tag with the Releaser's token. The check itself runs with the workflow's read-only token. A run interrupted after the tag finishes the Release and the major tag on the next run, and one interrupted after the Release moves the major tag, unless a newer stable release already holds it.
+It writes as the Releaser because that App is the one bypass actor of the `v*` tag ruleset (plan 0008), as the release workflow creates its tags and moves the major tag with the Releaser's token. The check itself runs with the workflow's read-only token. A run interrupted after the tag finishes the Release and the major tag on the next run, and one interrupted after the Release moves the major tag, unless a newer stable release already holds it. In that case the Release is published but not marked latest, and the major tag stays where it is.
+
+**It promotes nothing** when a stable release newer than the candidate exists, whether it was tagged by hand or by a fallback to plain releases. The candidate is superseded, and promoting it would move latest and the major tag back to an older release. This holds with `urgent` too.
 
 **It refuses**, failing the run without writing anything, when the candidate's commit carries a `package.json` version other than the tag's, when `vX.Y.Z` already names another commit, or when the candidate, or a candidate it superseded, has no Release.
 

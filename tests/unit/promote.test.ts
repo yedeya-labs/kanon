@@ -428,6 +428,27 @@ describe('what the promotion refuses or skips', () => {
     expect(newer.outcome.decision).toBe('none');
   });
 
+  it('never moves v0 or latest back: a candidate below a newer stable release is superseded, urgent or not (#1002; MUTATION: dropping the newer-stable check turns this red)', () => {
+    const over = { [`repos/${REPO}/git/matching-refs/tags/v`]: [ref('v0', LATER), ref('v0.40.0', PREV), ref('v0.42.0', LATER)] };
+    for (const env of [{}, { URGENT: 'true', REASON: 'a security fix' }] as Record<string, string>[]) {
+      const { outcome, gh } = run(4 * DAY, { env, over });
+      expect(outcome).toMatchObject({ decision: 'none', why: `v0.42.0 is a newer stable release, so ${CANDIDATE} is superseded: promoting it would move v0 and the latest Release back`, candidate: CANDIDATE });
+      expect(outcome.plan).toBeUndefined();
+      expect(gh.writes).toEqual([]);
+    }
+  });
+
+  it('finishes a promotion interrupted after its tag below a newer stable release: its Release, not latest, and v0 left where it is (#1002; MUTATION: apply ignoring the plan\'s `latest` or `moveMajor` turns this red)', () => {
+    const over = { [`repos/${REPO}/git/matching-refs/tags/v`]: [ref('v0', LATER), ref('v0.40.0', PREV), ref(STABLE, SHA), ref('v0.42.0', LATER)] };
+    const { outcome, gh } = run(4 * DAY, { over: { ...over, [`repos/${REPO}/git/ref/tags/v0`]: { ref: 'refs/tags/v0', object: { sha: LATER } } } });
+    expect(outcome).toMatchObject({ decision: 'promote', plan: { resume: true, publish: true, latest: false, moveMajor: false } });
+    const done = apply(outcome.plan!, { api: gh.api, repo: REPO });
+    expect(gh.writes).toEqual([
+      { method: 'POST', path: `repos/${REPO}/releases`, body: { tag_name: STABLE, name: STABLE, body: outcome.plan!.notes, draft: false, prerelease: false, make_latest: 'false' } },
+    ]);
+    expect(done).toEqual([`Published the Release ${STABLE}, not latest: a newer stable release is`]);
+  });
+
   it('reads the newest candidate by version, not by listing order, and an annotated tag by the commit it names', () => {
     const over = {
       [`repos/${REPO}/git/matching-refs/tags/candidate-v`]: [{ ref: `refs/tags/${CANDIDATE}`, object: { sha: '9'.repeat(40), type: 'tag' } }, ref('candidate-v0.9.0', OLD), ref('candidate-v0.40.0', PREV)],
