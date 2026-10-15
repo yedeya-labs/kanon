@@ -1649,7 +1649,8 @@ describe('kanon init pins the release it runs from (plan 0012 decision 5, CLI-1)
   it('pins candidate-vX.Y.Z when Kanon has only that tag: every reference it writes is the candidate', async () => {
     const dir = checkout();
     const github = fakeGitHub({ kanonTags: new Set([CANDIDATE]) });
-    const r = await run(dir, github, FULL);
+    // With Kanon's Slack hook, whose one step pins Kanon's notify action (plan 0011 §7.1).
+    const r = await run(dir, github, [...FULL, '--chat', 'slack']);
     expect(r.status, r.err).toBe(0);
     const d = parse(r);
     expect(d.pin).toBe(CANDIDATE);
@@ -1658,6 +1659,11 @@ describe('kanon init pins the release it runs from (plan 0012 decision 5, CLI-1)
     const refs = refsWritten(d);
     expect(refs.length).toBeGreaterThan(5);
     expect(new Set(refs)).toEqual(new Set([CANDIDATE]));
+    expect(read(dir, '.github/actions/notify/action.yml')).toContain(`uses: yedeya-labs/kanon/actions/notify/slack@${CANDIDATE} `);
+    // And the generic webhook hook, the same way.
+    const hooked = parse(await run(checkout(), fakeGitHub({ kanonTags: new Set([CANDIDATE]) }), [...FULL, '--chat', 'webhook']));
+    expect(hooked.files.find((f) => f.path === '.github/actions/notify/action.yml')!.content).toContain(`uses: yedeya-labs/kanon/actions/notify/webhook@${CANDIDATE} `);
+    expect(new Set(refsWritten(hooked))).toEqual(new Set([CANDIDATE]));
     expect(read(dir, '.claude/settings.json')).toBe(pluginSettingsFile(CANDIDATE));
     expect(r.err).toContain(`at Kanon ${CANDIDATE}`);
     expect(lookedFor(github.calls)).toEqual([`repos/yedeya-labs/kanon/git/ref/tags/${PINNED}`, `repos/yedeya-labs/kanon/git/ref/tags/${CANDIDATE}`]);

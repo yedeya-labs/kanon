@@ -1160,17 +1160,22 @@ export const chatHookStub = (inputs) => {
 
 /**
  * The hook file a chat answer writes at `.github/actions/notify/action.yml` (plan 0011 §7.1):
- * Kanon's prebuilt hook byte for byte, pinned at this release, for `slack` and `webhook`; the stub
- * for `hook`; nothing for `none`.
- * @param {Chat | null} chat @param {Requirements} req
+ * Kanon's prebuilt hook for `slack` and `webhook`, its one step's Kanon reference pinned at
+ * `release`, the pin `init` writes everywhere (plan 0012 decision 5): byte for byte Kanon's copy on
+ * a stable pin, and the candidate's tag on a candidate's, since `vX.Y.Z` doesn't exist until the
+ * candidate is promoted. The stub for `hook`; nothing for `none`.
+ * @param {Chat | null} chat @param {Requirements} req @param {string} release
  * @returns {string | null}
  */
-export const chatHookFile = (chat, req) => {
+export const chatHookFile = (chat, req, release) => {
   const notify = notifyOf(req);
   if (!notify || !chat || chat === 'none') return null;
   if (chat === 'hook') return chatHookStub(notify.hook.inputs);
   const prebuilt = notify.prebuilt[chat];
-  return prebuilt ? readFileSync(new URL(`../${prebuilt.hook}`, import.meta.url), 'utf8') : null;
+  if (!prebuilt) return null;
+  const text = readFileSync(new URL(`../${prebuilt.hook}`, import.meta.url), 'utf8');
+  const action = prebuilt.action.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return text.replace(new RegExp(`(uses:\\s*yedeya-labs/kanon/${action}@)[^\\s#]+`), (_, head) => `${head}${release}`);
 };
 
 /**
@@ -2198,7 +2203,7 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   if (a.database === 'hook') files.set('docs/qa/test-database.md', TEST_DATABASE_HOOK);
   files.set(req.hook.path, hookFile(req.hook.inputs));
   // The notify hook the chat answer names (plan 0011 §10.2): Kanon's prebuilt hook, or the stub.
-  const notifyHook = chatHookFile(a.chat, req);
+  const notifyHook = chatHookFile(a.chat, req, release);
   const notify = notifyOf(req);
   if (notifyHook !== null && notify) files.set(notify.hook.path, notifyHook);
   // The Lead writes each brief from the brief template, so it comes with the Lead's caller, and
