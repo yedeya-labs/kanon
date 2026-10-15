@@ -245,7 +245,7 @@ Plan 0002 S7. The lanes hold no store credentials. Each run uploads its row, run
 <!-- x-release-please-start-version -->
 
 ```yaml
-# Sends this repository's agent-run rows, and a work-item row per closed pull request, to Kanon's hosted telemetry store (docs/telemetry.md).
+# Sends this repository's telemetry rows (agent-run, work-item, deploy and notify rows) to Kanon's hosted telemetry store (docs/telemetry.md).
 # Its first run registers the repository. Delete this file to stop; dispatch it with erase: yes first to erase what was sent.
 name: Telemetry
 on:

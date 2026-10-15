@@ -23,7 +23,7 @@ flowchart LR
     M --> Q[("Merge queue<br/>and ruleset")]
     P -- "merges" --> Q
     E -. "files findings" .-> TR["Triage"] -.-> I
-    I & R -. "run rows, with consent" .-> T[("Telemetry store")]
+    I & R -. "telemetry rows, with consent" .-> T[("Telemetry store")]
     E -. "Kanon's own bugs, with consent" .-> K[("Kanon's maintainer")]
 ```
 
