@@ -35,7 +35,7 @@ export {
   sortRows, yieldRatio,
 } from './indicators.mjs';
 
-/** The delivery lanes: every lane of the schema's but the overhead lanes (§2.2, §2.3). */
+/** The delivery lanes: the schema's lanes declared delivery (§2.2, §2.3). Loading this throws if one is on neither side. */
 export const DELIVERY_LANES = deliveryLanes(LANES);
 
 /**

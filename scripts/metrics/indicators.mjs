@@ -47,15 +47,33 @@ export const ESCAPE_DAYS = /** @type {const} */ ([30, 90]);
  * The lanes whose spend is overhead, shown beside cost and never inside it, and left out of yield
  * (§2.2, §2.3): the Explorer's, the code audit, the telemetry Explorer, the Overseer, the
  * digests, and the deploy diagnose lane, which comments on a failed deploy's issue and delivers no
- * pull request (kanon#966). Every other lane is a delivery lane.
+ * pull request (kanon#966).
  */
 export const OVERHEAD_LANES = Object.freeze(['explore', 'code-audit', 'explore-telemetry', 'overseer', 'weekly-digest', 'project-digest', 'deploy-diagnose']);
 
 /**
- * The delivery lanes among `lanes`, the schema's list, which the caller passes.
+ * The lanes whose spend is delivery, in cost and yield (§2.2, §2.3): the Reviewer's, the
+ * Implementer's, the Lead's (whose runs that join no item are overhead, `LEAD_LANES` below), and
+ * `verify-acs`, an Explorer lane that checks a pull request's criteria. Role alone doesn't decide
+ * the side, so each lane is declared on one (kanon#1020): a lane in neither list is never counted
+ * as either, and `deliveryLanes` refuses it.
+ */
+export const DELIVERY_LANES = Object.freeze([
+  'review', 'merge-reconcile', 'implement', 'implement-revise', 'triage', 'rebase', 'lead', 'lead-revise', 'lead-split', 'verify-acs',
+]);
+
+/**
+ * The delivery lanes among `lanes`, the schema's list, which the caller passes. Throws on a lane
+ * declared on neither side, so a lane that joins the schema can't be counted until it is classified.
  * @param {readonly string[]} lanes
  */
-export const deliveryLanes = (lanes) => Object.freeze(lanes.filter((l) => !OVERHEAD_LANES.includes(l)));
+export const deliveryLanes = (lanes) => {
+  const unclassified = lanes.filter((l) => !DELIVERY_LANES.includes(l) && !OVERHEAD_LANES.includes(l));
+  if (unclassified.length > 0) {
+    throw new RangeError(`lanes on neither side of the delivery/overhead split: ${unclassified.join(', ')}; add each to DELIVERY_LANES or OVERHEAD_LANES`);
+  }
+  return Object.freeze(lanes.filter((l) => DELIVERY_LANES.includes(l)));
+};
 
 /**
  * The Lead's lanes. A Lead run that joins an item is in that item's cost and yield (§2.2 names
