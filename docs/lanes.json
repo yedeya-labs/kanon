@@ -150,7 +150,7 @@
       "group": "projects",
       "does": "Drives an approved brief to done: files its issues, labels them for the Implementer in order, and closes the project once its merges are deployed.",
       "needs": ["project briefs under `docs/projects/`", "your reference environment's deploy declaration (docs/lanes.md)"],
-      "cost": "No model; a short job on each merge and an hourly heartbeat.",
+      "cost": "No model; a short job on each merge and an hourly heartbeat, and a short check when a review, revise or implement run completes.",
       "minutes": "At Kanon's pace, about 77 runner-minutes a day: about a minute per closed pull request or issue, and per hourly heartbeat.",
       "recommend": ["agent-lead"],
       "requires": ["agent-lead"],
@@ -223,7 +223,7 @@
       "group": "sweeps",
       "does": "Re-dispatches, once a day, an implement or triage run that never happened, and reports what waits on a person.",
       "needs": [],
-      "cost": "No model; a short job daily.",
+      "cost": "No model; a short job daily, and a short check when an implement or triage run completes.",
       "minutes": "Not measured: Kanon's caller is new and had not run yet; it runs once a day, with no model.",
       "recommend": ["agent-implement", "agent-triage"],
       "when": "With implement or triage, so a label whose event never arrived still starts its run."

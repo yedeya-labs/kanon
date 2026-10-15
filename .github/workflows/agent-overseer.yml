@@ -174,6 +174,13 @@ concurrency:
   # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
   group: agent-overseer${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
+  # EVERY PENDING RUN IS KEPT (kanon#552, kanon#833, as the rebase lane since kanon#537). A run
+  # joins this group before any job-level `if:` can skip it, and under the default `queue: single`
+  # an arrival cancels the group's one pending run. Here the runs that only skip are the
+  # runtime-version trigger's unmerged closes of a pull request that changes the caller, which the
+  # gate turns away. `queue: max` keeps up to 100 pending, in order, and a skip-only run drains in
+  # seconds. GitHub refuses it with `cancel-in-progress: true`, which this lane never sets.
+  queue: max
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). Each job below declares its
 # own, so only the store job and the telemetry read job ever hold `id-token: write`, which the

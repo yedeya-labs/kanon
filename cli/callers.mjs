@@ -86,8 +86,12 @@ export const releasePin = async (gh, release) => {
  * merge, and reads nothing of the pull request. `deployRun` (plan 0010 D8) is a `workflow_run` of
  * the deploy lane's caller, by its name, `DEPLOY_CALLER_NAME`, on every conclusion: the lane acts
  * on a failure only. Such a caller has no `workflow_dispatch`, since the lane reads the failed run
- * from the event and a dispatch carries none.
- * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', merged?: boolean, schedule?: string, pinMoved?: boolean, deployRun?: boolean }>}
+ * from the event and a dispatch carries none. `reask` (kanon#813, #833) is a `workflow_run` of the
+ * callers of the lanes it lists, by their names here, on every conclusion: the dispatch sweep and
+ * the reconciler recover those lanes' runs, so a real run of one asks for them besides the
+ * schedule (docs/lanes.md, "Schedules are best effort"). The lane admits no run that skipped and
+ * none of its own caller, and acts only when it hasn't inside its window.
+ * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', merged?: boolean, schedule?: string, pinMoved?: boolean, deployRun?: boolean, reask?: string[] }>}
  */
 export const TRIGGERS = {
   'agent-triage': { name: 'Triage (Implementer)', job: 'triage', issues: ['labeled'], dispatch: { issue_number: true } },
@@ -100,12 +104,13 @@ export const TRIGGERS = {
   'agent-lead': { name: 'Lead (Lead) — brief', job: 'brief', dispatch: { mandate: true, context: false } },
   'agent-lead-split': { name: 'Lead (Lead) — split', job: 'split', issues: ['labeled'], dispatch: { issue: true } },
   'agent-rebase': { name: 'Rebase (Implementer)', job: 'rebase', ci: 'default', merged: true, schedule: '17 5 * * *', dispatch: { pr_number: false } },
-  'agent-lead-reconcile': { name: 'Lead (Lead) — reconcile', job: 'reconcile', pr: ['closed'], issues: ['closed'], schedule: '7 * * * *', dispatch: { project: false, apply: false } },
+  'agent-lead-reconcile': { name: 'Lead (Lead) — reconcile', job: 'reconcile', pr: ['closed'], issues: ['closed'], schedule: '7 * * * *', dispatch: { project: false, apply: false },
+    reask: ['agent-review', 'agent-implement-revise', 'agent-lead-revise', 'agent-implement'] },
   'agent-merge': { name: 'Merge (Merger)', job: 'merge', review: true, ci: 'default', schedule: '37 * * * *', dispatch: { pr_number: false, apply: false } },
   'agent-project-digest': { name: 'Daily project digest', job: 'digest', schedule: '0 7 * * *', dispatch: { dry_run: false } },
   'agent-weekly-digest': { name: 'Weekly digest', job: 'digest', schedule: '0 8 * * 1', dispatch: { week_end: false, dry_run: false } },
   'agent-explore': { name: 'Explore (Explorer)', job: 'explore', schedule: '0 3 * * *', dispatch: { tier: false } },
-  'agent-dispatch-sweep': { name: 'Dispatch sweep (Lead)', job: 'sweep', schedule: '30 4 * * *', dispatch: { apply: false } },
+  'agent-dispatch-sweep': { name: 'Dispatch sweep (Lead)', job: 'sweep', schedule: '30 4 * * *', dispatch: { apply: false }, reask: ['agent-implement', 'agent-triage'] },
   'agent-issue-backstop': { name: 'Issue backstop (Lead)', job: 'backstop', issues: ['opened'], dispatch: { issue_number: true, apply: false } },
   'agent-code-audit': { name: 'Code audit (Explorer)', job: 'audit', schedule: '30 7 */3 * *', dispatch: {} },
   'agent-explore-telemetry': { name: 'Explore the telemetry (Explorer)', job: 'explore', schedule: '30 6 * * 2', dispatch: {} },
@@ -158,6 +163,7 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   const t = TRIGGERS[lane];
   if (!t) throw new Error(`no caller template for the lane ${lane}: add its triggers to TRIGGERS in cli/callers.mjs`);
   if ((t.prTarget || t.pinMoved) && t.merged) throw new Error(`the caller template of ${lane} writes \`pull_request_target\` twice`);
+  if ([t.ci, t.deployRun, t.reask].filter(Boolean).length > 1) throw new Error(`the caller template of ${lane} writes \`workflow_run\` twice`);
   const out = [`# The caller of Kanon's ${lane} lane, written by \`kanon init\` (docs/lanes.md). The triggers are yours;`, '# the rest is the lane\'s, and `lane-check` holds this file to it.'];
   out.push(`name: ${y(spec.callerName ?? t.name)}`, '');
   if (spec.callerRunNameEndsWith) out.push(`run-name: ${t.name.split(' ')[0]} ${spec.callerRunNameEndsWith}`, '');
@@ -180,6 +186,15 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   if (t.prTarget) out.push('  pull_request_target:', `    types: [${t.prTarget.join(', ')}]`);
   if (t.issues) out.push('  issues:', `    types: [${t.issues.join(', ')}]`);
   if (t.schedule) out.push('  schedule:', `    - cron: "${t.schedule}"`);
+  if (t.reask) {
+    out.push('  # The re-ask: a real run of a lane this one recovers asks for it too, since a schedule runs late',
+      '  # and drops ticks. The lane admits no run that skipped and none of this caller (docs/lanes.md).',
+      '  workflow_run:', `    workflows: [${t.reask.map((l) => {
+        const covered = TRIGGERS[l];
+        if (!covered) throw new Error(`the caller template of ${lane} re-asks on ${l}, which has no caller template`);
+        return y(covered.name);
+      }).join(', ')}]`, '    types: [completed]');
+  }
   // A RAISED TURN LIMIT IS A DISPATCH INPUT, NEVER A SETTING (kanon#891; ADR 0005 §2, amended
   // 2026-10-15): a lane whose limit can be raised (`turns`) gets `max_turns` and the `reason` it
   // needs on its dispatch, both optional, passed through, so a person raises it for one run.

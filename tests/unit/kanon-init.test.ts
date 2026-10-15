@@ -931,6 +931,7 @@ describe('the callers kanon init writes', () => {
     ...(t.pinMoved || t.merged ? ['pull_request_target:closed'] : []),
     ...(t.issues ? [`issues:${[...t.issues].sort().join(',')}`] : []),
     ...(t.deployRun ? ['workflow_run:completed'] : []),
+    ...(t.reask ? ['workflow_run:completed'] : []),
     ...(t.schedule ? ['schedule'] : []),
     // A `deployRun` caller has no dispatch: the lane reads the failed run from the event (plan 0010 D8).
     ...(t.deployRun ? [] : [`workflow_dispatch:${Object.keys(t.dispatch).sort().join(',')}`]),
@@ -956,6 +957,48 @@ describe('the callers kanon init writes', () => {
     expect(merged).toEqual(['agent-rebase']);
     for (const lane of Object.keys(REQ.lanes).filter((l) => !merged.includes(l) && l !== 'agent-overseer')) {
       expect(callerFile(lane, REQ.lanes[lane]!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'trunk' }), lane).not.toContain('types: [closed]\n    branches:');
+    }
+  });
+
+  // kanon#833, after kanon#813: the dispatch sweep and the reconciler are re-asked by a real run
+  // of the lanes they recover, so `kanon init` writes that `workflow_run` in their callers, naming
+  // each covered caller as init writes it, exactly as docs/lanes.md's snippets give it.
+  it("writes the re-ask on the dispatch sweep's and the reconciler's callers, as docs/lanes.md gives it, and on no other (kanon#833)", () => {
+    const section = readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8').split('## Schedules are best effort')[1]!.split('\n## ')[0]!;
+    const snippet = (caller: string) => {
+      const block = [...section.matchAll(/```yaml\n# In the (.+?)'s caller\n([\s\S]*?)```/g)].find((m) => m[1] === caller);
+      expect(block, caller).toBeDefined();
+      return (parseYaml(block![2]!) as { workflow_run: unknown }).workflow_run;
+    };
+    const on = (lane: string) => (parseYaml(callerFile(lane, REQ.lanes[lane]!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'main' })) as { on: Record<string, unknown> }).on;
+    const name = (lane: string) => (parseYaml(callerFile(lane, REQ.lanes[lane]!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'main' })) as { name: string }).name;
+    const want = {
+      'agent-dispatch-sweep': { doc: 'dispatch sweep', covers: ['agent-implement', 'agent-triage'] },
+      'agent-lead-reconcile': { doc: 'reconciler', covers: ['agent-review', 'agent-implement-revise', 'agent-lead-revise', 'agent-implement'] },
+    };
+    for (const [lane, { doc, covers }] of Object.entries(want)) {
+      expect(on(lane).workflow_run, lane).toEqual({ workflows: covers.map(name), types: ['completed'] });
+      expect(on(lane).workflow_run, lane).toEqual(snippet(doc));
+      // The schedule stays the floor, and the dispatch stays.
+      expect(on(lane), lane).toHaveProperty('schedule');
+      expect(on(lane), lane).toHaveProperty('workflow_dispatch');
+    }
+    // No other caller re-asks: a `workflow_run` elsewhere is a CI's or the deploy caller's.
+    for (const lane of Object.keys(REQ.lanes).filter((l) => !(l in want))) {
+      const t = TRIGGERS[lane]!;
+      if (!t.ci && !t.deployRun) expect(on(lane), lane).not.toHaveProperty('workflow_run');
+    }
+  });
+
+  it('refuses a template that would write workflow_run twice', () => {
+    for (const extra of [{ ci: 'any' as const }, { deployRun: true }]) {
+      const t = TRIGGERS['agent-dispatch-sweep']!;
+      TRIGGERS['agent-dispatch-sweep'] = { ...t, ...extra };
+      try {
+        expect(() => callerFile('agent-dispatch-sweep', REQ.lanes['agent-dispatch-sweep']!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'trunk' })).toThrow(/workflow_run` twice/);
+      } finally {
+        TRIGGERS['agent-dispatch-sweep'] = t;
+      }
     }
   });
 
