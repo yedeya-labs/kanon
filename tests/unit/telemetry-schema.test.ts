@@ -210,6 +210,57 @@ describe('the reason codes (plan 0002 §2.3)', () => {
   });
 });
 
+/**
+ * Kanon#1008. Run 38628914592, the Lead's revise of PR #915, ran 100 turns against `--max-turns
+ * 90`. `claude-code-action` failed its step for that ("Claude reported a successful result after
+ * 100 turns, exceeding the configured maximum of 90"), but the result it wrote says `success`
+ * and `completed`, and the row recorded `completed` and `ok`. The fixture is that run's result,
+ * as its log printed it and its row recorded `terminal_reason`.
+ */
+describe('a run the action failed past its turn cap is a cap hit (kanon#1008)', () => {
+  const OVERSHOT = 'tests/fixtures/telemetry/turn-cap-overshoot.json';
+  const LEAD = {
+    TELEMETRY_LANE: 'lead-revise',
+    TELEMETRY_CLAUDE_ARGS: '--model claude-opus-5-5\n--effort high\n--max-turns 90',
+  };
+  const AGENT_FAILED = 'token=success checkout=success hook=success setup=success agent=failure finish=skipped';
+  const AGENT_PASSED = 'token=success checkout=success hook=success setup=success agent=success finish=success';
+
+  it('records terminal_reason max_turns and outcome exhausted, on both rows', () => {
+    const { row, v2, errors } = both(OVERSHOT, { ...LEAD, TELEMETRY_STAGES: AGENT_FAILED, TELEMETRY_JOB_STATUS: 'failure' });
+    expect(row).toMatchObject({ outcome: 'exhausted', terminal_reason: 'max_turns', num_turns: 100, max_turns: 90 });
+    expect(v2).toMatchObject({ outcome: 'exhausted', reason: 'turn_cap', terminal_reason: 'max_turns', num_turns: 100, max_turns: 90 });
+    expect(errors).toEqual([]);
+  });
+
+  it('reads the failed agent stage on its own, when the lane passes no job status', () => {
+    const { v2 } = both(OVERSHOT, { ...LEAD, TELEMETRY_STAGES: AGENT_FAILED, TELEMETRY_JOB_STATUS: '' });
+    expect(v2).toMatchObject({ outcome: 'exhausted', reason: 'turn_cap', terminal_reason: 'max_turns' });
+  });
+
+  it('reads a red job as the failed step on a lane whose agent step cannot fail it', () => {
+    // The review lane runs the agent `continue-on-error`, so its stage's conclusion is `success`
+    // even when the action failed it, and it reds the job before `agent-finish` only when no
+    // verdict was posted: then the job's status is what is left to read. The other
+    // `continue-on-error` lanes have no red job by then (kanon#1014).
+    const { v2 } = both(OVERSHOT, { ...LEAD, TELEMETRY_STAGES: AGENT_PASSED, TELEMETRY_JOB_STATUS: 'failure' });
+    expect(v2).toMatchObject({ outcome: 'exhausted', reason: 'turn_cap', terminal_reason: 'max_turns' });
+  });
+
+  it('leaves the same result ok and completed when nothing failed', () => {
+    // The shape of the two first-week runs that finished past their cap on an action that
+    // didn't enforce it: green, so not a cap hit.
+    const { row, v2 } = both(OVERSHOT, { ...LEAD, TELEMETRY_STAGES: AGENT_PASSED, TELEMETRY_JOB_STATUS: 'success' });
+    expect(row).toMatchObject({ outcome: 'ok', terminal_reason: 'completed' });
+    expect(v2).toMatchObject({ outcome: 'ok', reason: 'none', terminal_reason: 'completed' });
+  });
+
+  it('leaves it completed when the cap is not known', () => {
+    const { v2 } = both(OVERSHOT, { ...LEAD, TELEMETRY_CLAUDE_ARGS: '--model claude-opus-5-5', TELEMETRY_STAGES: AGENT_FAILED, TELEMETRY_JOB_STATUS: 'failure' });
+    expect(v2).toMatchObject({ outcome: 'ok', terminal_reason: 'completed' });
+  });
+});
+
 describe('every fixture\'s version-2 row validates (S1, M1)', () => {
   const fixtures = [
     ...readdirSync('tests/fixtures/agent-blocks').map((f) => join('tests/fixtures/agent-blocks', f)),

@@ -460,9 +460,9 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 ### `K-AGENT-42` Classify every run's outcome in one place
 
-**Rule.** Classify every agent run as ok, unavailable, exhausted, failed or not reached, using one shared classifier keyed on whether the configured model appears in the run's usage and on the reported terminal reason. Never classify on cost or turn count.
+**Rule.** Classify every agent run as ok, unavailable, exhausted, failed or not reached, using one shared classifier keyed on whether the configured model appears in the run's usage and on the reported terminal reason. Never classify on cost, or on turn count alone: a run past its turn cap is exhausted only when the step that ran it failed, which is the agent action's own check.
 
-**Why.** A capped run still bills a pre-flight, so cost doesn't mean the model ran; caps aren't hard stops, so turn count doesn't mean exhaustion. The right response differs by class, and two classifiers would disagree.
+**Why.** A capped run still bills a pre-flight, so cost doesn't mean the model ran; caps aren't hard stops, so turn count doesn't mean exhaustion. But the agent action fails a step that finishes past its cap, and the run still reports itself completed, so a failed step past the cap is the only record that the cap ended it. The right response differs by class, and two classifiers would disagree.
 
 **Enforced by.** The shared classifier module, used by every lane.
 
