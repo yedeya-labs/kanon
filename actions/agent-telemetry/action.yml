@@ -68,7 +68,10 @@ inputs:
     required: false
     default: ""
   pr_number:
-    description: PR under review, when there is one. Its diff size is read here and stored as the denominator.
+    description: >-
+      PR under review, when there is one. Its diff size is read here and stored as the
+      denominator. On a revise lane, the row also records the open items the Reviewer's
+      latest changes-request on it declares, `review_open_items` (#173).
     required: false
     default: ""
   issue_number:
@@ -78,7 +81,8 @@ inputs:
       work it was spent on — `pr_number` cannot stand in, because those lanes have
       no PR. The dispatch sweep reads it to avoid charging a re-dispatch attempt to
       a run that never reached the model (RA-1517). Set, the row also records the
-      issue's size and the lines this run committed (RA-2137).
+      issue's size and the lines this run committed (RA-2137), and the number of
+      acceptance criteria the issue states, `issue_ac_count` (#173).
     required: false
     default: ""
   outcome_label:
@@ -232,6 +236,48 @@ runs:
         fi
         echo "body_file=$f" >> "$GITHUB_OUTPUT"
 
+    # THE REVIEW A REVISE RUN ANSWERS (#173): its open-items count is the one turn signal the
+    # measurement found on a revise run, so a revise lane's row records it, `review_open_items`
+    # (run row version 4). Only on a revise lane (`implement-revise`, `lead-revise`) that names
+    # its pull request; the normalizer reads the count, and only from a body that opens with the
+    # Reviewer's role marker, so this step only fetches the body.
+    #
+    # THE EVENT PAYLOAD FIRST, `gh pr view` SECOND, as for the issue above. A `pull_request_review`
+    # event's changes-request is the review the run was started for. A label re-delivery or a
+    # dispatch carries none, so the latest changes-request on the pull request is read instead,
+    # with the default token, as the diff size is. A failed read, or no changes-request, leaves
+    # the count ABSENT: "unknown" and "no open items" are different.
+    - name: Read the revised review
+      id: review
+      if: inputs.pr_number != '' && endsWith(inputs.lane, '-revise')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr_number }}
+      run: |
+        f="$RUNNER_TEMP/agent-telemetry-review-body.txt"
+        rm -f "$f"
+        case "$PR" in ''|*[!0-9]*) echo "::notice title=agent-telemetry::pr_number '$PR' is not a number; the row records no open items"; exit 0 ;; esac
+        if [ -f "${GITHUB_EVENT_PATH:-}" ] \
+           && jq -e --argjson n "$PR" '.pull_request.number == $n and ((.review.state // "") | ascii_downcase) == "changes_requested"' "$GITHUB_EVENT_PATH" >/dev/null 2>&1; then
+          jq -j '.review.body // ""' "$GITHUB_EVENT_PATH" > "$f"
+          echo "source=event" >> "$GITHUB_OUTPUT"
+        elif OUT="$(gh pr view "$PR" --repo "$REPO" --json reviews 2>/dev/null)" \
+             && printf '%s' "$OUT" | jq -e '.reviews | type == "array"' >/dev/null 2>&1; then
+          # The latest changes-request by submission time; none leaves the count absent.
+          if ! printf '%s' "$OUT" | jq -e '[.reviews[] | select(.state == "CHANGES_REQUESTED")] | length > 0' >/dev/null 2>&1; then
+            echo "::notice title=agent-telemetry::no changes-request on PR #$PR; the row records no open items"
+            exit 0
+          fi
+          printf '%s' "$OUT" | jq -j '[.reviews[] | select(.state == "CHANGES_REQUESTED")] | sort_by(.submittedAt) | last | .body // ""' > "$f"
+          echo "source=api" >> "$GITHUB_OUTPUT"
+        else
+          echo "::notice title=agent-telemetry::could not read PR #$PR's reviews; the row records its open items as unknown"
+          exit 0
+        fi
+        echo "body_file=$f" >> "$GITHUB_OUTPUT"
+
     - name: Normalize and summarize
       id: row
       shell: bash
@@ -243,6 +289,7 @@ runs:
         TELEMETRY_CLAUDE_ARGS: ${{ inputs.claude_args }}
         TELEMETRY_ISSUE_NUMBER: ${{ inputs.issue_number }}
         TELEMETRY_ISSUE_BODY_FILE: ${{ steps.issue.outputs.body_file }}
+        TELEMETRY_REVIEW_BODY_FILE: ${{ steps.review.outputs.body_file }}
         # The run's own diff (RA-2137), measured from the checkout's reflog — an OUTCOME,
         # never a size control; see `producedLines` in the normalizer. Issue arms only.
         TELEMETRY_MEASURE_PRODUCED: ${{ inputs.issue_number != '' && '1' || '' }}

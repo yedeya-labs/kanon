@@ -56,7 +56,7 @@ export type Workflow = { permissions?: Record<string, string> | string; jobs: Re
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 /** A read the telemetry step makes with the workflow's default token, and when it makes it. */
-export type TelemetryRead = { scope: string; when: 'always' | 'pr' | 'issue' };
+export type TelemetryRead = { scope: string; when: 'always' | 'pr' | 'issue' | 'revise' };
 
 const GH_SCOPES: Array<[RegExp, string]> = [
   [/\bgh\s+pr\b/, 'pull-requests'],
@@ -82,7 +82,9 @@ export function telemetryReads(actionText = readFileSync(`${ROOT}actions/agent-t
     const when = cond === undefined ? 'always'
       : cond === "inputs.pr_number != ''" ? 'pr'
         : cond === "inputs.issue_number != ''" ? 'issue'
-          : null;
+          // A revise lane's review (#173): its PR's reviews, only on a lane named `*-revise`.
+          : cond === "inputs.pr_number != '' && endsWith(inputs.lane, '-revise')" ? 'revise'
+            : null;
     if (when === null) throw new Error(`agent-telemetry's step has a condition telemetryReads can't read: ${cond}`);
     for (const scope of scopes) reads.push({ scope, when });
   }
@@ -165,12 +167,12 @@ const needsOf = (j: Job) => [j.needs ?? []].flat();
 const rank = (v?: string) => (v === 'write' ? 2 : v === 'read' ? 1 : 0);
 
 /** The telemetry inputs a job passes: through the spine, `agent-finish` or `agent-telemetry`. */
-function telemetryInputs(j: Job): { pr: unknown; issue: unknown } | null {
-  if (callsSpine(j)) return { pr: j.with?.['pr-number'], issue: j.with?.['issue-number'] };
+function telemetryInputs(j: Job): { pr: unknown; issue: unknown; lane: unknown } | null {
+  if (callsSpine(j)) return { pr: j.with?.['pr-number'], issue: j.with?.['issue-number'], lane: j.with?.lane };
   const finish = (j.steps ?? []).find((s) => usesBlock(s, 'agent-finish'));
-  if (finish) return { pr: finish.with?.['pr-number'], issue: finish.with?.['issue-number'] };
+  if (finish) return { pr: finish.with?.['pr-number'], issue: finish.with?.['issue-number'], lane: finish.with?.lane };
   const telemetry = (j.steps ?? []).find((s) => usesBlock(s, 'agent-telemetry'));
-  if (telemetry) return { pr: telemetry.with?.pr_number, issue: telemetry.with?.issue_number };
+  if (telemetry) return { pr: telemetry.with?.pr_number, issue: telemetry.with?.issue_number, lane: telemetry.with?.lane };
   return null;
 }
 
@@ -196,7 +198,9 @@ export function agentJobProblems(name: string, j: Job, reads: TelemetryRead[] = 
   for (const r of reads) {
     if (r.when === 'pr' && !set(inputs.pr)) continue;
     if (r.when === 'issue' && !set(inputs.issue)) continue;
-    if (rank(p[r.scope]) < 1) out.push(`${name}: the agent job lacks ${r.scope}: read, which the telemetry step reads${r.when === 'always' ? '' : ` when it has a ${r.when} number`}`);
+    if (r.when === 'revise' && (!set(inputs.pr) || !String(inputs.lane ?? '').endsWith('-revise'))) continue;
+    const when = r.when === 'always' ? '' : r.when === 'revise' ? ' on a revise lane' : ` when it has a ${r.when} number`;
+    if (rank(p[r.scope]) < 1) out.push(`${name}: the agent job lacks ${r.scope}: read, which the telemetry step reads${when}`);
   }
   return out;
 }

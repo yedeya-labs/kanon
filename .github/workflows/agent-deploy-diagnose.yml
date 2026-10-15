@@ -128,10 +128,9 @@ jobs:
     with:
       agent: deploy-diagnose
       role: Explorer
-      # No telemetry lane name yet: the store's schema names no `deploy-diagnose` lane, and a row
-      # change ships to the store before the release that writes it (docs/telemetry.md). The
-      # version-1 row is written as for every lane.
-      lane: ""
+      # The store's schema names the lane since #966. Its intake is deployed from the release that
+      # names it before any pin reaches that release (docs/release.md, "Intake first").
+      lane: deploy-diagnose
       arm: deploy diagnose agent
       timeout-minutes: 30
       # The whole history and the tags, so the release's diff is read with read-only git.

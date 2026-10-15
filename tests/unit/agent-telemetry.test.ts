@@ -9,6 +9,7 @@ import { runWorkflowStep } from './helpers/workflow-step.js';
 import {
   buildRow,
   configFingerprint,
+  issueAcCount,
   issueSize,
   normalizeUsage,
   parseAutocompact,
@@ -17,7 +18,9 @@ import {
   primaryModel,
   producedLines,
   producedRange,
+  REVISE_LANES,
   renderSummary,
+  reviewOpenItems,
   sumNumstat,
   run as runTelemetry,
 } from '../../actions/agent-telemetry/agent-telemetry.mjs';
@@ -752,6 +755,151 @@ describe('RA-2137 — the action fetches the body from the event first', () => {
     const r = execStep({ issue: { number: 12, body: null } }, 'x');
     expect(r.outputs.source).toBe('event');
     expect(r.body).toBe('');
+  });
+});
+
+describe('#173 — the issue\'s acceptance-criteria count', () => {
+  it('counts the top-level bullets under an Acceptance criteria heading, continuations and nested items not', () => {
+    const body = [
+      'Some context that mentions acceptance criteria in passing.',
+      '',
+      '## Acceptance criteria',
+      '',
+      '- `[PAY-1]` a required from-set at every call site',
+      '  continued on a second line',
+      '    - a nested note, four spaces in, not a criterion',
+      '* two',
+      '+ three',
+      '1. four',
+      '2) five',
+      '',
+      'Not in this issue: tests.',
+      '- a bullet after prose, outside the criteria',
+    ].join('\r\n');
+    expect(issueAcCount(body)).toBe(5);
+  });
+
+  it('reads "What must be true" too, as a list or as one sentence on its own line', () => {
+    expect(issueAcCount('**What must be true:**\n- the store takes it\n- the lane names it\n\n**Evidence:** x')).toBe(2);
+    expect(issueAcCount('**What must be true:** the diagnose lane\'s runs reach the store.\n\n**Evidence:** PR 965')).toBe(1);
+    // A label with nothing after it and no bullets under it states nothing.
+    expect(issueAcCount('## Acceptance criteria\n\nSee the plan.')).toBe(0);
+    // Two regions add up.
+    expect(issueAcCount('### Acceptance criteria\n- a\n\nWhat must be true\n- b\n- c')).toBe(3);
+  });
+
+  it('adds each distinct spec clause cited outside the criteria, once, and none already in a counted bullet', () => {
+    const body = [
+      'Builds `[NOTIFY-3]` and [NOTIFY-4], and again `[NOTIFY-3]`.',
+      '',
+      'Acceptance criteria:',
+      '- `[NOTIFY-5]` the hook posts',
+      '- the summary says so',
+      '',
+      'Cites `[NOTIFY-5]` again here, which the bullet already counts.',
+    ].join('\n');
+    expect(issueAcCount(body)).toBe(2 + 2);
+    // A rule id is not a clause: it has no brackets.
+    expect(issueAcCount('Under K-OBS-16 and `K-PRIN-11`.')).toBe(0);
+  });
+
+  it('reads nothing inside a fenced block', () => {
+    expect(issueAcCount('```md\n## Acceptance criteria\n- quoted\n[ABC-1]\n```\n')).toBe(0);
+  });
+
+  it('an unread body is ABSENT, never zero; an empty one is a measured 0', () => {
+    expect(issueAcCount(null)).toBeNull();
+    expect(issueAcCount(undefined)).toBeNull();
+    expect(issueAcCount('')).toBe(0);
+  });
+});
+
+describe('#173 — the open items of the review a revise run answers', () => {
+  const REVIEWER = '**Reviewer** <!-- kanon:role=reviewer -->\n\n';
+
+  it('reads the last open-items marker of a Reviewer verdict', () => {
+    expect(reviewOpenItems(`${REVIEWER}Fix these.\n<!-- qa:open-items 3 -->`)).toBe(3);
+    expect(reviewOpenItems(`${REVIEWER}Nothing left.\n<!-- qa:open-items 0 -->`)).toBe(0);
+    // The format quoted first, the verdict's own count last.
+    expect(reviewOpenItems(`${REVIEWER}End with \`<!-- qa:open-items N -->\`.\n<!-- qa:open-items 1 -->`)).toBe(1);
+  });
+
+  it('records nothing for a body that is not the Reviewer\'s, or whose marker is missing or garbled', () => {
+    expect(reviewOpenItems('Please fix. <!-- qa:open-items 4 -->')).toBeNull();
+    expect(reviewOpenItems(`**Implementer** <!-- kanon:role=implementer -->\n<!-- qa:open-items 4 -->`)).toBeNull();
+    expect(reviewOpenItems(`${REVIEWER}No marker.`)).toBeNull();
+    expect(reviewOpenItems(`${REVIEWER}<!-- qa:open-items many -->`)).toBeNull();
+    expect(reviewOpenItems(`${REVIEWER}<!-- qa:open-items -2 -->`)).toBeNull();
+    expect(reviewOpenItems(null)).toBeNull();
+  });
+
+  it('only the revise lanes carry it', () => {
+    expect([...REVISE_LANES]).toEqual(['implement-revise', 'lead-revise']);
+  });
+});
+
+describe('#173 — the action fetches the revised review from the event first', () => {
+  const action = parse(readFileSync('actions/agent-telemetry/action.yml', 'utf8')) as {
+    runs: { steps: { id?: string; name?: string; if?: string; run?: string; env?: Record<string, string> }[] };
+  };
+  const step = action.runs.steps.find((s) => s.id === 'review')!;
+  const normalize = action.runs.steps.find((s) => s.id === 'row')!;
+
+  /** Execute the step's own `run:` with a fake `gh` answering `reviews`, and an event payload. */
+  const execStep = (event: unknown, reviews: unknown[] | null, pr = '41') => {
+    const dir = mkdtempSync(join(tmpdir(), 'telemetry-review-'));
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeStub(join(bin, 'gh'), reviews === null
+      ? '#!/usr/bin/env bash\necho \'{"message":"Resource not accessible by integration"}\'\nexit 1\n'
+      : `#!/usr/bin/env bash\ncat <<'JSON'\n${JSON.stringify({ reviews })}\nJSON\n`);
+    const eventPath = join(dir, 'event.json');
+    writeFileSync(eventPath, JSON.stringify(event));
+    const r = runWorkflowStep(step, {
+      dir,
+      env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_EVENT_PATH: eventPath, RUNNER_TEMP: dir, PR: pr, REPO: 'o/r', GH_TOKEN: 'x' },
+    });
+    if (r.status !== 0) throw new Error(`step failed: ${r.output}`);
+    const body = r.outputs.body_file && existsSync(r.outputs.body_file) ? readFileSync(r.outputs.body_file, 'utf8') : null;
+    return { outputs: r.outputs, body };
+  };
+  const cr = (body: string, submittedAt: string) => ({ state: 'CHANGES_REQUESTED', body, submittedAt });
+
+  it('runs only on a revise lane that names its pull request, and feeds the normalizer', () => {
+    expect(step.if).toBe("inputs.pr_number != '' && endsWith(inputs.lane, '-revise')");
+    expect(normalize.env?.TELEMETRY_REVIEW_BODY_FILE).toBe('${{ steps.review.outputs.body_file }}');
+    const steps = action.runs.steps.map((s) => s.id);
+    expect(steps.indexOf('review')).toBeLessThan(steps.indexOf('row'));
+  });
+
+  it('takes the triggering changes-request from the event payload, not the API', () => {
+    const r = execStep({ pull_request: { number: 41 }, review: { state: 'changes_requested', body: 'from the event' } }, [cr('from the api', '2026-10-15T10:00:00Z')]);
+    expect(r.outputs.source).toBe('event');
+    expect(r.body).toBe('from the event');
+  });
+
+  it('falls back to the latest changes-request on the pull request for a label, a dispatch, or another review', () => {
+    const reviews = [
+      cr('older', '2026-10-15T09:00:00Z'),
+      { state: 'APPROVED', body: 'an approval is no changes-request', submittedAt: '2026-10-15T11:00:00Z' },
+      cr('latest', '2026-10-15T10:00:00Z'),
+    ];
+    for (const event of [
+      { pull_request: { number: 41 }, label: { name: 'agent:revise' } },
+      { inputs: { pr_number: '41' } },
+      { pull_request: { number: 41 }, review: { state: 'commented', body: 'a comment' } },
+      { pull_request: { number: 9 }, review: { state: 'changes_requested', body: 'another PR' } },
+    ]) {
+      const r = execStep(event, reviews);
+      expect(r.outputs.source, JSON.stringify(event)).toBe('api');
+      expect(r.body, JSON.stringify(event)).toBe('latest');
+    }
+  });
+
+  it('writes NO body file when no changes-request stands or the read fails, so the count is absent', () => {
+    expect(execStep({}, [{ state: 'APPROVED', body: 'x', submittedAt: '2026-10-15T10:00:00Z' }]).outputs.body_file).toBeUndefined();
+    expect(execStep({}, null).outputs.body_file).toBeUndefined();
+    expect(execStep({}, [cr('x', '2026-10-15T10:00:00Z')], '41; rm -rf').outputs.body_file).toBeUndefined();
   });
 });
 
