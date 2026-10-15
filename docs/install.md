@@ -27,7 +27,7 @@ Every way ends in the same place: Kanon's code used by reference, pinned to one 
 | [Agent lane: finish](../actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@v0.39.0` |
 | [Agent lane: classify a red run](../actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@v0.39.0` |
 | [Agent telemetry](../actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@v0.39.0` |
-| [Agent lanes: review, triage, implement, implement-revise, lead, lead-revise, lead-reconcile, lead-split, merge, merge-reconcile, rebase, verify-acs, project-digest, weekly-digest, explore, dispatch-sweep, issue-backstop, code-audit, explore-telemetry, overseer](lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.39.0` in a job |
+| [Agent lanes: review, triage, implement, implement-revise, lead, lead-revise, lead-reconcile, lead-split, merge, merge-reconcile, rebase, verify-acs, project-digest, weekly-digest, explore, dispatch-sweep, issue-backstop, code-audit, explore-telemetry, deploy-diagnose, overseer](lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.39.0` in a job |
 | [Lane check](../actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@v0.39.0` |
 | [Kanon's scripts from a workflow step](../actions/kanon-path/README.md) | `uses: yedeya-labs/kanon/actions/kanon-path@v0.39.0` |
 

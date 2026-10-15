@@ -13,6 +13,7 @@ const CLIS: Array<[string, string[]]> = [
   ['actions-minutes', []],
   ['brief-revise-recovery', []],
   ['capability-interlock', []],
+  ['deploy-diagnose', []],
   ['deploy-gate', ['gate']],
   ['deploy-report', ['environment']],
   ['deploy-row', ['environment']],

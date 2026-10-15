@@ -80,7 +80,7 @@ describe("which of Kanon's lanes get a user scope of their own", () => {
     // these lanes, and the library must agree with them.
     const passesUser = (args: string) => /^\s*--setting-sources user\s*$/m.test(args);
     for (const f of flags) expect(loadsNoProjectSettings(f.args), f.where).toBe(passesUser(f.args));
-    expect(isolated).toEqual(['agent-lead-revise.yml', 'agent-lead.yml', 'review-agent-job.yml']);
+    expect(isolated).toEqual(['agent-deploy-diagnose.yml', 'agent-lead-revise.yml', 'agent-lead.yml', 'review-agent-job.yml']);
   });
 
   it('leaves the lanes that load their project settings alone, so the check is not vacuous', () => {

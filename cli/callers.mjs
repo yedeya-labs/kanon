@@ -53,8 +53,11 @@ export const kanonRelease = () => `v${JSON.parse(readFileSync(new URL('../packag
  * a `pull_request_target` that closed a pull request on the default branch, any file (kanon#484):
  * through a merge queue the CI run on a merge is the queue's, which the gate turns away, and this
  * fires after the queue merges, judged by the member who queued it. The lane acts on it only as a
- * merge, and reads nothing of the pull request.
- * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', merged?: boolean, schedule?: string, pinMoved?: boolean }>}
+ * merge, and reads nothing of the pull request. `deployRun` (plan 0010 D8) is a `workflow_run` of
+ * the deploy lane's caller, by its name, `DEPLOY_CALLER_NAME`, on every conclusion: the lane acts
+ * on a failure only. Such a caller has no `workflow_dispatch`, since the lane reads the failed run
+ * from the event and a dispatch carries none.
+ * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', merged?: boolean, schedule?: string, pinMoved?: boolean, deployRun?: boolean }>}
  */
 export const TRIGGERS = {
   'agent-triage': { name: 'Triage (Implementer)', job: 'triage', issues: ['labeled'], dispatch: { issue_number: true } },
@@ -77,7 +80,11 @@ export const TRIGGERS = {
   'agent-code-audit': { name: 'Code audit (Explorer)', job: 'audit', schedule: '30 7 */3 * *', dispatch: {} },
   'agent-explore-telemetry': { name: 'Explore the telemetry (Explorer)', job: 'explore', schedule: '30 6 * * 2', dispatch: {} },
   'agent-overseer': { name: 'Overseer (Overseer)', job: 'oversee', schedule: '0 6 * * 1', dispatch: {}, pinMoved: true },
+  'agent-deploy-diagnose': { name: 'Deploy diagnose (Explorer)', job: 'diagnose', deployRun: true, dispatch: {} },
 };
+
+/** The deploy lane's caller's `name:`, which `kanon init` writes and the diagnose lane's caller follows by it. */
+export const DEPLOY_CALLER_NAME = 'Deploy';
 
 /**
  * The Claude credential each answer of `kanon init --claude-auth` maps (plan 0009 §9, §10): the
@@ -129,6 +136,10 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
     out.push('  workflow_run:', `    workflows: [${y(ciName)}]`, '    types: [completed]');
     if (t.ci === 'default') out.push(`    branches: [${y(defaultBranch)}]`);
   }
+  if (t.deployRun) {
+    out.push("  # A run of the deploy lane's caller, by its name. The lane diagnoses a failed one only.",
+      '  workflow_run:', `    workflows: [${y(DEPLOY_CALLER_NAME)}]`, '    types: [completed]');
+  }
   if (t.merged) {
     out.push('  # A merged pull request: through a merge queue, the CI run on a merge is the queue\'s, which',
       '  # the lane\'s gate turns away. The lane reads nothing of the pull request (docs/lanes.md).',
@@ -140,7 +151,8 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   if (t.issues) out.push('  issues:', `    types: [${t.issues.join(', ')}]`);
   if (t.schedule) out.push('  schedule:', `    - cron: "${t.schedule}"`);
   const dispatch = Object.entries(t.dispatch);
-  if (!dispatch.length) out.push('  workflow_dispatch:');
+  // No dispatch for a `deployRun` lane: it reads the failed run from the event.
+  if (!dispatch.length) { if (!t.deployRun) out.push('  workflow_dispatch:'); }
   else {
     out.push('  workflow_dispatch:', '    inputs:');
     for (const [k, required] of dispatch) {

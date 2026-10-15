@@ -63,6 +63,7 @@ import {
   ciFile,
   dependabotFile,
   DEPENDABOT_ENTRY,
+  DEPLOY_CALLER_NAME,
   hookFile,
   kanonRelease,
   laneCheckFile,
@@ -924,6 +925,13 @@ export const rulesetGaps = (covering) => {
 
 /** The review lane, the one the review trigger is for. */
 export const REVIEW_LANE = 'agent-review';
+/** The note's start when the diagnose lane is dropped for want of a deploy lane. */
+export const DIAGNOSE_DROPPED = 'The deploy diagnose lane was left out';
+/**
+ * The deploy lane's diagnose lane (plan 0010 D8): opt-in, by `--lanes` or **Customise** as any lane
+ * outside the features, and only beside a declared deploy lane, whose failed runs it reads.
+ */
+export const DIAGNOSE_LANE = 'agent-deploy-diagnose';
 
 /** @typedef {'yes' | 'codes' | 'no'} Consent */
 /** @typedef {'flag' | 'asked' | 'inferred' | 'default'} Source */
@@ -1121,7 +1129,7 @@ const RELEASER_QUESTION = 'Create the optional Releaser App, so the release PR r
  *   installed?: string[], releases?: boolean, reusable?: (identities: string[]) => Array<{ app: string, slug: string, from?: string }>,
  *   codeowners?: string[] | null, database?: string | null, runsDco?: boolean, hasCommits?: boolean, isPrivate?: boolean,
  *   met?: (lane: string) => boolean, release?: string, secrets?: Set<string> | null,
- *   claudeMapped?: ClaudeAuth[], holders?: Array<{ workflow: string, job: string }>, defaultBranch?: string, declaredEnvironments?: string[] }} AskContext
+ *   claudeMapped?: ClaudeAuth[], holders?: Array<{ workflow: string, job: string }>, defaultBranch?: string, declaredEnvironments?: string[], deployCallerTaken?: boolean }} AskContext
  */
 
 /**
@@ -1176,6 +1184,16 @@ export const derive = (a, ctx, g = {}) => {
   } else {
     a.reviewTrigger = 'labelled';
     why.reviewTrigger = { source: g.reviewTrigger ? 'flag' : 'default', reason: '' };
+  }
+  // THE DIAGNOSE LANE NEEDS THE DEPLOY LANE (plan 0010 D8): without a declared environment, or with
+  // the deploy caller's path holding a workflow of the project's own (so init writes no deploy
+  // caller, #956), there is no deploy caller for it to follow, so it is dropped, and the person told.
+  if (a.lanes.includes(DIAGNOSE_LANE) && (!a.deployEnvironments.length || ctx.deployCallerTaken)) {
+    a.lanes = a.lanes.filter((l) => l !== DIAGNOSE_LANE);
+    const why = !a.deployEnvironments.length
+      ? 'no deploy environment is declared. Give --deploy-environments too.'
+      : `${DEPLOY_CALLER_PATH} is a deploy workflow of your own, so init writes no deploy caller for it to follow (deploy.caller-taken).`;
+    if (!a.notes.some((n) => n.startsWith(DIAGNOSE_DROPPED))) a.notes.push(`${DIAGNOSE_DROPPED}: it diagnoses the deploy lane's failed runs, and ${why}`);
   }
   if (!fixed('delegation')) {
     const author = identitiesOf(a.lanes, ctx.req).includes('author');
@@ -1755,7 +1773,7 @@ export const deployCallerFile = (environments, req, release) => {
     '# order, the last being production. When you change the list, run `kanon init` again: it',
     "# rewrites this file. To deploy a release again, dispatch this workflow at the release's tag:",
     '#   gh workflow run deploy.yml --ref <tag> -f release=<tag>',
-    'name: Deploy',
+    `name: ${DEPLOY_CALLER_NAME}`,
     '',
     'on:',
     '  release:',
@@ -1940,6 +1958,8 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   const ci = read('.github/workflows/ci.yml');
   const ciName = ci === null ? 'CI' : workflowName(ci, '.github/workflows/ci.yml');
   for (const lane of a.lanes) {
+    // The diagnose lane follows the deploy caller `init` writes, so not where the path is the project's own.
+    if (lane === DIAGNOSE_LANE && taken) continue;
     const path = callers.get(lane) ?? `.github/workflows/${lane}.yml`;
     files.set(path, callerFile(lane, /** @type {import('./callers.mjs').Lane} */ (req.lanes[lane]), { release, ciName, defaultBranch: s.defaultBranch, path, claudeAuth: a.claudeAuth }));
   }
@@ -2483,6 +2503,7 @@ const run = async (deps, opts, req, rep) => {
     holders: holders.filter((h) => h.status === 'unaccepted' && !given(h)),
     defaultBranch: s.defaultBranch,
     declaredEnvironments,
+    deployCallerTaken: deployPathTaken(read, req),
   };
   const a = await askAll(deps, opts, ctx);
   // THE SUMMARY (plan 0007 §4): every value, and where it came from, before anything is written.

@@ -171,6 +171,62 @@ describe("the Lead's shell is an allow-list that runs no tree code (kanon#243)",
   });
 });
 
+/**
+ * Plan 0010 D8 (decision 13): the deploy diagnose lane runs the Explorer after a failed deploy,
+ * with the project setup off and a shell that runs nothing from the tree, as the Lead's lanes do
+ * (`K-AGENT-50`'s last clause). It writes nothing to the tree, and its one write is a comment on
+ * the issues its gate found: the gate hands those rules in (`${{ needs.gate.outputs.rules }}`,
+ * built by `commentRules` in scripts/deploy-diagnose.mjs), one per issue number.
+ */
+describe("the deploy diagnose lane's shell is an allow-list that runs no tree code (plan 0010 D8)", () => {
+  const call = read('agent-deploy-diagnose.yml').jobs.diagnose!;
+  const RAW = String(call.with?.claude_args);
+  const RULES = '${{ needs.gate.outputs.rules }}';
+  const prompt = String(call.with?.prompt);
+  // The static list, pinned: reads only, and no `gh api`, which could write.
+  const STATIC = ['Read', 'Grep', 'Glob', 'Bash(gh release view:*)', 'Bash(gh release list:*)', 'Bash(gh issue view:*)', 'Bash(gh issue list:*)'];
+  // What the gate hands in for a run that filed on #12 and #15.
+  const rendered = RAW.replace(RULES, '--allowedTools "Bash(gh issue comment 12 --body:*)" "Bash(gh issue comment 15 --body:*)"');
+
+  it('calls the spine with the project setup off, the database and the browser too', () => {
+    expect(call.uses).toBe('$/.github/workflows/agent-lane.yml');
+    expect(call.with?.['project-setup']).toBe(false);
+    expect(call.with?.database).toBe(false);
+    expect(call.with?.browsers).toBe(false);
+  });
+
+  it('grants exactly the pinned list, and the gate\'s comment rules on a line of their own', () => {
+    expect(RAW.split('\n').map((l) => l.trim()).filter((l) => l.includes('${{'))).toEqual([RULES]);
+    expect(allowedTools(RAW.replace(RULES, '')).sort()).toEqual([...STATIC].sort());
+    expect(allowedTools(rendered).sort()).toEqual([...STATIC, 'Bash(gh issue comment 12 --body:*)', 'Bash(gh issue comment 15 --body:*)'].sort());
+    expect(disallowedTools(rendered)).toEqual([]);
+  });
+
+  it('grants Bash only for named commands that run no program of the tree, and none that dispatches or re-runs', () => {
+    const bash = allowedTools(rendered).filter((t) => /^Bash\b/.test(t));
+    expect(bash.length, 'not vacuous').toBeGreaterThan(4);
+    expect(badBashRules(bash)).toEqual([]);
+    expect(bash.filter((t) => /^Bash\(gh (workflow|run|api|pr|release (create|edit|delete|upload)|issue (create|edit|close|delete|transfer|lock))\b/.test(t))).toEqual([]);
+  });
+
+  it('writes nothing to the tree', () => {
+    expect(allowedTools(rendered).filter((t) => /^(Write|Edit|NotebookEdit|MultiEdit)\b/.test(t))).toEqual([]);
+  });
+
+  it('loads no project settings, once, and no flag widens the rules', () => {
+    const w = words(rendered);
+    const at = w.flatMap((x, i) => (/^--setting-?sources\b/i.test(x) ? [i] : []));
+    expect(at.map((i) => [w[i], w[i + 1]])).toEqual([['--setting-sources', 'user']]);
+    expect(w.filter((x) => /^--(dangerously-skip-permissions|allow-dangerously-skip-permissions|permission-mode|settings|add-dir|mcp-config|plugin-dir|strict-mcp-config|agents)\b/.test(x))).toEqual([]);
+  });
+
+  it('tells the agent what its shell allows, and runs none of Kanon\'s scripts', () => {
+    expect(prompt).toContain('YOUR SHELL IS AN ALLOW-LIST');
+    expect(prompt).toContain("YOUR PROJECT'S INSTRUCTIONS ARE NOT LOADED FOR YOU");
+    expect(prompt).not.toMatch(/node "\$KANON|\$KANON\/|kanon-(brief-guard|spec-ids|spec-coverage)/);
+  });
+});
+
 describe('the rule check', () => {
   it('fails each widening', () => {
     for (const t of ['Bash', 'Bash(*)', 'Bash(node:*)', 'Bash(npm run lint:*)', 'Bash(git:*)', 'Bash(git push:*)', 'Bash(git -c x:*)',

@@ -35,6 +35,30 @@
         "ANTHROPIC_API_KEY"
       ]
     },
+    "agent-deploy-diagnose": {
+      "identities": [
+        "author"
+      ],
+      "secrets": [
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
+      ],
+      "inputs": {},
+      "grant": {
+        "actions": "read",
+        "contents": "read",
+        "issues": "read"
+      },
+      "reads": [],
+      "readsWorkflows": [],
+      "hooks": [],
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
+    },
     "agent-dispatch-sweep": {
       "identities": [
         "author"
@@ -987,6 +1011,19 @@
         "recommend": [],
         "when": "When your telemetry registration sets `aggregate_invoker`, so you can read the aggregate."
       },
+      "agent-deploy-diagnose": {
+        "name": "Deploy diagnose",
+        "group": "explore",
+        "does": "Reads a failed run of the deploy lane, its failed jobs' logs and the release's diff, and comments its diagnosis on the issue the deploy lane filed for each environment that failed. It deploys, re-runs and dispatches nothing, holds no cloud credential and runs none of your code.",
+        "needs": [
+          "the deploy lane, with the environments `docs/qa/adoption.md`'s `## Deploy` section declares; `kanon init` writes this lane's caller only beside the deploy caller",
+          "a deploy log can hold resource names and account details, which reach the model: your adoption record's `## Data` answer covers what may"
+        ],
+        "cost": "A model run per failed deploy run, skipped when the run filed no issue.",
+        "minutes": "Not measured: Kanon's own repository deploys nothing and calls no deploy lane.",
+        "recommend": [],
+        "when": "With the deploy lane, when you want a first reading of a failed deploy on its issue before a person looks."
+      },
       "agent-triage": {
         "name": "Triage and fix",
         "group": "triage",
@@ -1254,7 +1291,8 @@
         }
       },
       "leftOut": {
-        "agent-explore-telemetry": "It needs a registration that sets `aggregate_invoker`, which only Kanon's operator sets after the collector's first run registers the repository (docs/telemetry.md), so nothing done at install makes it work."
+        "agent-explore-telemetry": "It needs a registration that sets `aggregate_invoker`, which only Kanon's operator sets after the collector's first run registers the repository (docs/telemetry.md), so nothing done at install makes it work.",
+        "agent-deploy-diagnose": "It diagnoses the deploy lane's failed runs, and the deploy lane is in no feature: it runs only where the adoption record declares environments, so you ask for this lane beside it."
       },
       "apps": [
         "author",

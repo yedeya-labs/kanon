@@ -41,6 +41,7 @@ const QUEUE_MAX: Record<string, string> = {
   'agent-lead-reconcile.yml': 'a re-ask from a run that skipped, or of its own caller (kanon#813)',
   'agent-dispatch-sweep.yml': 'a re-ask from a run that skipped, or of its own caller (kanon#813)',
   'agent-verify-acs.yml': 'every label on the issue but `qa:verify`',
+  'agent-deploy-diagnose.yml': 'a deploy run that succeeded, was cancelled or was skipped (plan 0010 D8)',
 };
 /** Each, with the clause of its group key that sends a would-be skip elsewhere. */
 const KEYED_OUT: Record<string, RegExp> = {
