@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   sweep:
-    uses: yedeya-labs/kanon/.github/workflows/agent-dispatch-sweep.yml@v0.39.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-dispatch-sweep.yml@v0.40.0
     with:
       apply: ${{ inputs.apply }}
     secrets:

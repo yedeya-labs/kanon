@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   triage:
-    uses: yedeya-labs/kanon/.github/workflows/agent-triage.yml@v0.39.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-triage.yml@v0.40.0
     with:
       issue_number: ${{ inputs.issue_number }}
     secrets:

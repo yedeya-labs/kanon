@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   reconcile:
-    uses: yedeya-labs/kanon/.github/workflows/agent-lead-reconcile.yml@v0.39.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-lead-reconcile.yml@v0.40.0
     with:
       project: ${{ inputs.project }}
       apply: ${{ inputs.apply }}
