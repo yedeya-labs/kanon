@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { UNREACHABLE_TITLE as DOCTOR_UNREACHABLE_TITLE } from '../../cli/doctor.mjs';
-import { ApiError, apply, check, GATES, laneCallers, pinTitle, Refusal, SOAK_MS, SPACING_MS, summary, UNREACHABLE_TITLE } from '../../scripts/promote.mjs';
+import { ApiError, apply, check, GATES, laneCallers, pinTitle, Refusal, RUN_LISTING_CAP, SOAK_MS, SPACING_MS, summary, UNREACHABLE_TITLE } from '../../scripts/promote.mjs';
 
 /**
  * Plan 0009 §2, §3 and §7, step S5: the promotion, on fixtures of GitHub's answers. A candidate is
@@ -18,6 +18,9 @@ const OLD = 'a'.repeat(40);
 const ITEM_101 = '1'.repeat(40);
 const ITEM_102 = '2'.repeat(40);
 const LATER = 'd'.repeat(40);
+const HELD = '4'.repeat(40);
+const ITEM_95 = '5'.repeat(40);
+const REVIEWED = '6'.repeat(40);
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const CUT = '2026-10-19T09:00:00Z';
@@ -51,7 +54,7 @@ const github = (now: number, over: Record<string, Route> = {}) => {
     [`repos/${REPO}/git/matching-refs/tags/v`]: [ref('v0', PREV), ref('v0.39.0', OLD), ref('v0.40.0', PREV)],
     [`repos/${REPO}/contents/package.json?ref=${SHA}`]: JSON.stringify({ name: 'kanon', version: VERSION }),
     [`repos/${REPO}/releases/tags/${CANDIDATE}`]: { tag_name: CANDIDATE, prerelease: true, body: CUT_NOTES, created_at: CUT },
-    [page(`repos/${REPO}/compare/candidate-v0.40.0...${SHA}`)]: {
+    [page(`repos/${REPO}/compare/v0.40.0...${SHA}`)]: {
       commits: [
         commit(ITEM_101, 'feat: a (#101)\n\nBody.', '2026-10-14T10:00:00Z'),
         commit(ITEM_102, 'fix: b (#102)', '2026-10-15T10:00:00Z'),
@@ -64,8 +67,10 @@ const github = (now: number, over: Record<string, Route> = {}) => {
     [page(`repos/${REPO}/issues?state=open&labels=bug`)]: [
       { number: 130, labels: [{ name: 'bug' }, { name: 'sev:medium' }], body: '### Introduced by\n\n#101\n' },
     ],
-    [runsPath('review.yml')]: { workflow_runs: [{ id: 1, status: 'completed', conclusion: 'success' }] },
-    [runsPath('merge.yml')]: { workflow_runs: [{ id: 2, status: 'completed', conclusion: 'success' }, { id: 3, status: 'completed', conclusion: 'cancelled' }] },
+    [runsPath('review.yml')]: { total_count: 1, workflow_runs: [{ id: 1, status: 'completed', conclusion: 'success', head_sha: REVIEWED }] },
+    [`repos/${REPO}/actions/runs/1/jobs?per_page=100`]: { jobs: [{ id: 11, name: 'review / filter', conclusion: 'success' }, { id: 12, name: 'review / review / review / review', conclusion: 'success' }] },
+    [`repos/${REPO}/contents/.github/workflows/review.yml?ref=${REVIEWED}`]: WORKFLOWS[0]!.text,
+    [runsPath('merge.yml')]: { total_count: 2, workflow_runs: [{ id: 2, status: 'completed', conclusion: 'success' }, { id: 3, status: 'completed', conclusion: 'cancelled' }] },
     [`repos/${REPO}/releases/latest`]: { tag_name: 'v0.40.0', published_at: iso(now - 8 * DAY) },
     [`repos/${REPO}/git/ref/tags/v0`]: { ref: 'refs/tags/v0', object: { sha: PREV } },
     ...over,
@@ -176,6 +181,19 @@ describe('the gates (plan 0009 §2)', () => {
     expect(outcome.gates.find((g) => g.id === 'bug')!.evidence).toContain('#131 names #102');
   });
 
+  it("a held candidate's pull requests are the next one's: an open sev:high bug naming one holds it (MUTATION: reading from the previous candidate instead of the newest stable tag turns this red)", () => {
+    const over = {
+      [`repos/${REPO}/git/matching-refs/tags/candidate-v`]: [ref('candidate-v0.40.0', PREV), ref('candidate-v0.40.1', HELD), ref(CANDIDATE, SHA)],
+      // candidate-v0.40.1 was cut, held, and never promoted: v0.40.0 is still the newest stable tag.
+      [page(`repos/${REPO}/compare/v0.40.0...${SHA}`)]: { commits: [commit(ITEM_95, 'fix: e (#95)', '2026-10-08T10:00:00Z'), commit(HELD, 'chore(main): release candidate 0.40.1 (#96)', '2026-10-12T09:00:00Z'), commit(ITEM_101, 'feat: a (#101)', '2026-10-14T10:00:00Z')] },
+      [page(`repos/${REPO}/compare/candidate-v0.40.1...${SHA}`)]: { commits: [commit(ITEM_101, 'feat: a (#101)', '2026-10-14T10:00:00Z')] },
+      [page(`repos/${REPO}/issues?state=open&labels=bug`)]: [{ number: 132, labels: [{ name: 'bug' }, { name: 'sev:high' }], body: '### Introduced by\n\n#95\n' }],
+    };
+    const { outcome } = run(4 * DAY, { over });
+    expect(verdicts(outcome)).toEqual({ ...ALL_PASS, bug: 'hold' });
+    expect(outcome.gates.find((g) => g.id === 'bug')!.evidence).toContain('#132 names #95');
+  });
+
   it('a serious bug naming a pull request the candidate does not contain holds nothing', () => {
     const bug = { [page(`repos/${REPO}/issues?state=open&labels=bug`)]: [{ number: 131, labels: [{ name: 'bug' }, { name: 'sev:critical' }], body: '### Introduced by\n\n#90\n' }] };
     expect(verdicts(run(4 * DAY, { over: bug }).outcome).bug).toBe('pass');
@@ -208,6 +226,19 @@ describe('the gates (plan 0009 §2)', () => {
     const runs = { [runsPath('merge.yml')]: { workflow_runs: [{ id: 2, status: 'completed', conclusion: 'success', run_attempt: 2 }, { id: 4, status: 'in_progress', conclusion: null }] } };
     expect(verdicts(run(4 * DAY, { over: runs }).outcome).red).toBe('pass');
   });
+
+  it('a truncated run listing holds the candidate and says so: more runs than were read, or the listing\'s cap', () => {
+    const more = { [runsPath('merge.yml')]: { total_count: 3, workflow_runs: [{ id: 2, status: 'completed', conclusion: 'success' }] } };
+    const short = run(4 * DAY, { over: more }).outcome;
+    expect(verdicts(short).red).toBe('hold');
+    expect(short.gates.find((g) => g.id === 'red')!.evidence).toBe('the run listing is truncated, so a red run may be unread: merge.yml (read 1 of 3)');
+    const full = Array.from({ length: 100 }, (_, i) => ({ id: 1000 + i, status: 'completed', conclusion: 'success' }));
+    const capped: Record<string, unknown> = {};
+    for (let n = 1; n * 100 <= RUN_LISTING_CAP; n += 1) capped[runsPath('merge.yml').replace(/page=1$/, `page=${n}`)] = { total_count: RUN_LISTING_CAP, workflow_runs: full };
+    const atCap = run(4 * DAY, { over: capped }).outcome;
+    expect(verdicts(atCap).red).toBe('hold');
+    expect(atCap.gates.find((g) => g.id === 'red')!.evidence).toContain(`merge.yml (read ${RUN_LISTING_CAP} of ${RUN_LISTING_CAP})`);
+  });
 });
 
 describe('the spacing, hold and urgent (plan 0009 §3, §7)', () => {
@@ -239,6 +270,23 @@ describe('the spacing, hold and urgent (plan 0009 §3, §7)', () => {
     const noReview = run(10 * HOUR, { env: urgent, over: { [runsPath('review.yml')]: { workflow_runs: [{ id: 1, status: 'completed', conclusion: 'cancelled' }] } } }).outcome;
     expect(verdicts(noReview).review).toBe('hold');
     expect(noReview.decision).toBe('hold');
+  });
+
+  it("urgent's review gate needs the review job itself to have succeeded: a run the filter declined reviewed nothing", () => {
+    const urgent = { URGENT: 'true', REASON: 'fix' };
+    const ok = run(10 * HOUR, { env: urgent }).outcome;
+    expect(ok.gates.find((g) => g.id === 'review')!.evidence).toBe(`review.yml run 1's \`review\` job succeeded, with the caller pinning ${CANDIDATE} at ${REVIEWED}`);
+    const filtered = { [`repos/${REPO}/actions/runs/1/jobs?per_page=100`]: { jobs: [{ id: 11, name: 'review / filter', conclusion: 'success' }, { id: 12, name: 'review / review', conclusion: 'skipped' }] } };
+    const out = run(10 * HOUR, { env: urgent, over: filtered }).outcome;
+    expect(verdicts(out).review).toBe('hold');
+    expect(out.decision).toBe('hold');
+  });
+
+  it("urgent's review gate needs the caller to pin the candidate at the reviewed run's commit", () => {
+    const old = { [`repos/${REPO}/contents/.github/workflows/review.yml?ref=${REVIEWED}`]: `    uses: ${REPO}/.github/workflows/agent-review.yml@v0.40.0\n` };
+    const out = run(10 * HOUR, { env: { URGENT: 'true', REASON: 'fix' }, over: old }).outcome;
+    expect(verdicts(out).review).toBe('hold');
+    expect(out.gates.find((g) => g.id === 'review')!.evidence).toBe(`no run of the review lane's caller since ${PIN} has a \`review\` job that succeeded with the caller pinning ${CANDIDATE}`);
   });
 
   it('urgent without a reason is refused', () => {
@@ -278,15 +326,30 @@ describe('what the promotion refuses or skips', () => {
     const done = run(4 * DAY, { over: {
       [`repos/${REPO}/git/matching-refs/tags/v`]: [ref('v0.40.0', PREV), ref(STABLE, SHA)],
       [`repos/${REPO}/releases/tags/${STABLE}`]: { tag_name: STABLE },
+      [`repos/${REPO}/git/ref/tags/v0`]: { ref: 'refs/tags/v0', object: { sha: SHA } },
     } });
     expect(done.outcome).toMatchObject({ decision: 'none', why: `${CANDIDATE} is promoted already, as ${STABLE}` });
   });
 
   it('finishes a promotion interrupted after its tag: the Release and the major tag, not the tag again', () => {
     const { outcome, gh } = run(4 * DAY, { over: { [`repos/${REPO}/git/matching-refs/tags/v`]: [ref('v0.40.0', PREV), ref(STABLE, SHA)] } });
-    expect(outcome).toMatchObject({ decision: 'promote', plan: { tag: STABLE, sha: SHA, resume: true } });
+    expect(outcome).toMatchObject({ decision: 'promote', plan: { tag: STABLE, sha: SHA, resume: true, publish: true } });
     apply(outcome.plan!, { api: gh.api, repo: REPO });
     expect(gh.writes.map((w) => `${w.method} ${w.path}`)).toEqual([`POST repos/${REPO}/releases`, `PATCH repos/${REPO}/git/refs/tags/v0`]);
+  });
+
+  it('finishes a promotion interrupted after its Release: the major tag alone, when it is not on the candidate\'s commit', () => {
+    const over = {
+      [`repos/${REPO}/git/matching-refs/tags/v`]: [ref('v0.40.0', PREV), ref(STABLE, SHA)],
+      [`repos/${REPO}/releases/tags/${STABLE}`]: { tag_name: STABLE },
+    };
+    const { outcome, gh } = run(4 * DAY, { over });
+    expect(outcome).toMatchObject({ decision: 'promote', why: `${STABLE} and its Release are on ${CANDIDATE}'s commit, but v0 is not: finishing that promotion`, plan: { resume: true, publish: false } });
+    apply(outcome.plan!, { api: gh.api, repo: REPO });
+    expect(gh.writes).toEqual([{ method: 'PATCH', path: `repos/${REPO}/git/refs/tags/v0`, body: { sha: SHA, force: true } }]);
+    // Never back: with a newer stable release, the major tag stays on it.
+    const newer = run(4 * DAY, { over: { ...over, [`repos/${REPO}/git/matching-refs/tags/v`]: [ref('v0.40.0', PREV), ref(STABLE, SHA), ref('v0.42.0', LATER)] } });
+    expect(newer.outcome.decision).toBe('none');
   });
 
   it('reads the newest candidate by version, not by listing order, and an annotated tag by the commit it names', () => {

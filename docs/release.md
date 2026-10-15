@@ -180,20 +180,20 @@ Kanon's own workflow, [`promote.yml`](../.github/workflows/promote.yml), runs [`
 | **No serious bug** | No open issue labelled `bug` and `sev:critical` or `sev:high` names, in its `Introduced by` field, a pull request the candidate contains |
 | **No unexplained red** | Every completed run of Kanon's lane callers since the pins moved succeeded at its latest attempt (so a run re-run green passes), or failed with `agent-classify`'s notice that the model was unreachable |
 
-The pull requests a candidate contains are the squash commits, `<title> (#N)`, between the previous release's tag and the candidate's commit. The step summary shows each gate's verdict and evidence, so a held candidate says which gate held it. When every gate passes, and no stable release was published in the last six days, the workflow mints the Releaser's token, narrowed to Contents write, and:
+The pull requests a candidate contains are the squash commits, `<title> (#N)`, between the newest stable tag below it and the candidate's commit, so a candidate that was held and never promoted counts against the next one. A run listing GitHub truncates (more runs than were read, or its cap of 1,000 results) holds the red gate, which says so, since a red run may be among those unread. The step summary shows each gate's verdict and evidence, so a held candidate says which gate held it. When every gate passes, and no stable release was published in the last six days, the workflow mints the Releaser's token, narrowed to Contents write, and:
 
 1. tags `vX.Y.Z` on the candidate's commit;
 2. publishes the Release `vX.Y.Z`, marked latest, with the candidate's notes and a line saying when, and on what evidence, it was promoted;
 3. moves the major tag (`v0`) to the same commit.
 
-It writes as the Releaser because that App is the one bypass actor of the `v*` tag ruleset (plan 0008), as the release workflow creates its tags and moves the major tag with the Releaser's token. The check itself runs with the workflow's read-only token. A run interrupted after the tag finishes the Release and the major tag on the next run.
+It writes as the Releaser because that App is the one bypass actor of the `v*` tag ruleset (plan 0008), as the release workflow creates its tags and moves the major tag with the Releaser's token. The check itself runs with the workflow's read-only token. A run interrupted after the tag finishes the Release and the major tag on the next run, and one interrupted after the Release moves the major tag, unless a newer stable release already holds it.
 
 **It refuses**, failing the run without writing anything, when the candidate's commit carries a `package.json` version other than the tag's, when `vX.Y.Z` already names another commit, or when the candidate has no Release.
 
 **The Owner's controls** (Owner decision 3 of plan 0009):
 
 - **Hold:** dispatch with `hold`, which reports the gates and promotes nothing, or disable the workflow.
-- **Urgent** ([plan 0009 §7](plans/0009-release-channels-and-api-key.md#7-urgent-fixes)): dispatch with `urgent` and a `reason`. It skips the soak and the six-day spacing; the other three gates still apply, and a run of the review lane's caller must have succeeded since the pins moved. The reason goes into the stable Release's notes. `urgent` without a reason is refused.
+- **Urgent** ([plan 0009 §7](plans/0009-release-channels-and-api-key.md#7-urgent-fixes)): dispatch with `urgent` and a `reason`. It skips the soak and the six-day spacing; the other three gates still apply, and a run of the review lane's caller since the pins moved must have run its `review` job to success (a run the filter declined reviewed nothing), with that caller pinning the candidate at the run's commit. The reason goes into the stable Release's notes. `urgent` without a reason is refused.
 
 A bad stable release is never deleted, since deleting a tag breaks every repository that pins it: its fix ships as the next candidate, promoted with `urgent`.
 

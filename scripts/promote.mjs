@@ -24,9 +24,13 @@
 //            `Introduced by` field (`introducedBy`), a pull request the candidate contains.
 //   red      every run of Kanon's lane callers since the pins moved succeeded at its latest attempt
 //            (so a run re-run green passes), or failed with agent-classify's `unavailable` notice
-//            (the model was never reached), on one of its failed jobs.
+//            (the model was never reached), on one of its failed jobs. A listing GitHub truncates
+//            (more runs than were read, or its 1,000-result cap) holds, since a red run may be unread.
+// What a candidate contains is every pull request since the newest STABLE tag below it, so the
+// pull requests of a candidate held and never promoted count against the next one.
 // `urgent` (plan 0009 §7) skips the soak and the six-day spacing, and asks instead that a review
-// run at the candidate succeeded (`review`). A gate added later (plan 0012's end-to-end gate, its
+// ran at the candidate (`review`): a run whose `review` job itself succeeded (a run the filter
+// declined reviewed nothing), with the caller pinning the candidate at that run's commit. A gate added later (plan 0012's end-to-end gate, its
 // step E11) is one more entry in `GATES`: the summary, the decision and the plan read the table.
 //
 // Env: GH_TOKEN, GITHUB_REPOSITORY, DEFAULT_BRANCH (default `main`), HOLD, URGENT, REASON, PLAN,
@@ -52,6 +56,10 @@ export const SERIOUS = ['sev:critical', 'sev:high'];
 export const RED = ['failure', 'timed_out', 'startup_failure'];
 /** The lane whose successful run an urgent promotion needs (plan 0009 §7). */
 export const REVIEW_LANE = 'agent-review.yml';
+/** The review lane's job that reviews, the last segment of its name in a run's jobs (`review / review / …`). */
+export const REVIEW_JOB = 'review';
+/** The most results GitHub's run listing returns for one query, however many pages are read. */
+export const RUN_LISTING_CAP = 1000;
 
 /** Kanon's own manifest, whose version release-please's `node` type writes at each release. */
 export const MANIFEST = 'package.json';
@@ -121,6 +129,7 @@ const notFound = (e) => e instanceof ApiError && e.status === 404;
 /** @typedef {{ name: string, version: string, parts: number[], sha: string }} Tag */
 /** @typedef {{ number: number, sha: string, mergedAt: string }} ContainedPr */
 /** @typedef {{ file: string, lane: string, ref: string }} Caller */
+/** @typedef {{ runs: any[], total: number, truncated: boolean }} Listing a caller's runs since the pins moved */
 /**
  * @typedef {{
  *   repo: string, branch: string, now: number, urgent: boolean, api: Api,
@@ -128,7 +137,7 @@ const notFound = (e) => e instanceof ApiError && e.status === 404;
  *   pin: { number: number, mergedAt: string } | null,
  *   callers: Caller[], contained: ContainedPr[],
  *   since: string,
- *   runsOf: (file: string) => any[],
+ *   runsOf: (file: string) => Listing,
  * }} Context what every gate reads: the candidate, the pull requests it contains, the pin, and
  *   Kanon's lane callers
  * @typedef {{ pass: boolean, evidence: string }} Verdict
@@ -267,14 +276,21 @@ export const GATES = [
       let explained = 0;
       /** @type {string[]} */
       const red = [];
+      /** @type {string[]} */
+      const truncated = [];
       for (const file of files) {
-        for (const run of runsOf(file)) {
+        const listing = runsOf(file);
+        if (listing.truncated) truncated.push(`${file} (read ${listing.runs.length} of ${listing.total})`);
+        for (const run of listing.runs) {
           if (run?.status !== 'completed') continue;
           count += 1;
           if (!RED.includes(run?.conclusion)) continue;
           if (unreachable(api, repo, Number(run.id))) explained += 1;
           else red.push(`${file} run ${run.id} (${run.conclusion})`);
         }
+      }
+      if (truncated.length) {
+        return { pass: false, evidence: `the run listing is truncated, so a red run may be unread: ${truncated.join(', ')}${red.length ? `; unexplained red since ${since}: ${red.join(', ')}` : ''}` };
       }
       return red.length
         ? { pass: false, evidence: `unexplained red since ${since}: ${red.join(', ')}` }
@@ -285,15 +301,48 @@ export const GATES = [
     id: 'review',
     title: 'A review ran green',
     when: 'urgent',
-    check: ({ callers, runsOf, since }) => {
+    check: ({ api, repo, candidate, callers, runsOf, since }) => {
       const files = [...new Set(callers.filter((c) => c.lane === REVIEW_LANE).map((c) => c.file))];
-      const green = files.flatMap((file) => runsOf(file).filter((r) => r?.conclusion === 'success').map((r) => `${file} run ${r.id}`));
-      return green.length
-        ? { pass: true, evidence: `${green[0]} succeeded at the candidate` }
-        : { pass: false, evidence: `no run of the review lane's caller succeeded since ${since}` };
+      for (const file of files) {
+        for (const run of runsOf(file).runs) {
+          if (run?.status !== 'completed' || !reviewed(api, repo, Number(run.id))) continue;
+          const sha = String(run?.head_sha ?? '');
+          if (pinsAt(api, repo, file, sha, candidate.name)) {
+            return { pass: true, evidence: `${file} run ${run.id}'s \`${REVIEW_JOB}\` job succeeded, with the caller pinning ${candidate.name} at ${sha}` };
+          }
+        }
+      }
+      return { pass: false, evidence: `no run of the review lane's caller since ${since} has a \`${REVIEW_JOB}\` job that succeeded with the caller pinning ${candidate.name}` };
     },
   },
 ];
+
+/**
+ * Whether a run's review job succeeded: a run the filter declined concludes `success` with that
+ * job skipped, and reviewed nothing. An unreadable listing counts as no.
+ * @param {Api} api @param {string} repo @param {number} id
+ */
+function reviewed(api, repo, id) {
+  try {
+    const jobs = api(`repos/${repo}/actions/runs/${id}/jobs?per_page=100`)?.jobs ?? [];
+    return jobs.some((/** @type {any} */ j) => String(j?.name ?? '').split(' / ').pop() === REVIEW_JOB && j?.conclusion === 'success');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the caller `file`, at commit `sha`, calls the review lane at `ref`. Unreadable is no.
+ * @param {Api} api @param {string} repo @param {string} file @param {string} sha @param {string} ref
+ */
+function pinsAt(api, repo, file, sha, ref) {
+  try {
+    const text = String(api(`repos/${repo}/contents/.github/workflows/${file}?ref=${sha}`, { raw: true }));
+    return laneCallers([{ file, text }], repo).some((c) => c.lane === REVIEW_LANE && c.ref === ref);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Whether a red run's failed jobs carry agent-classify's `unavailable` notice: the model was
@@ -314,7 +363,8 @@ function unreachable(api, repo, id) {
 const truthy = (v) => /^(true|1|yes)$/i.test(String(v ?? '').trim());
 
 /**
- * @typedef {{ tag: string, candidate: string, sha: string, major: string, notes: string, resume: boolean }} Plan
+ * @typedef {{ tag: string, candidate: string, sha: string, major: string, notes: string, resume: boolean, publish: boolean }} Plan
+ *   `resume`: the stable tag exists already; `publish`: the Release is still to publish
  * @typedef {{
  *   decision: 'promote' | 'hold' | 'none',
  *   why: string,
@@ -378,19 +428,33 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
   const notesOf = () => String(candidateRelease.body ?? '');
 
   if (promoted) {
-    if (releaseOf(tag)) return { decision: 'none', why: `${candidate.name} is promoted already, as ${tag}`, candidate: candidate.name, gates: [] };
-    // Interrupted after the tag: finish it, since the tag is already what adopters see.
+    // Interrupted after the tag, or after the Release: finish it, since the tag is already what
+    // adopters see. The major tag moves only to the newest stable release, never back.
+    const published = Boolean(releaseOf(tag));
+    let majorAt = '';
+    try {
+      majorAt = String(api(`repos/${repo}/git/ref/tags/${major}`)?.object?.sha ?? '');
+    } catch (e) {
+      if (!notFound(e)) throw e;
+    }
+    const newer = stable.some((t) => compareParts(t.parts, candidate.parts) > 0);
+    const moveMajor = majorAt !== candidate.sha && !newer;
+    if (published && !moveMajor) return { decision: 'none', why: `${candidate.name} is promoted already, as ${tag}`, candidate: candidate.name, gates: [] };
     return {
       decision: 'promote',
-      why: `${tag} is on ${candidate.name}'s commit with no Release: finishing that promotion`,
+      why: published
+        ? `${tag} and its Release are on ${candidate.name}'s commit, but ${major} is not: finishing that promotion`
+        : `${tag} is on ${candidate.name}'s commit with no Release: finishing that promotion`,
       candidate: candidate.name,
       gates: [],
-      plan: { tag, candidate: candidate.name, sha: candidate.sha, major, notes: notesOf(), resume: true },
+      plan: { tag, candidate: candidate.name, sha: candidate.sha, major, notes: notesOf(), resume: true, publish: !published },
     };
   }
 
-  const previous = [...candidates, ...stable].filter((t) => compareParts(t.parts, candidate.parts) < 0).sort((a, b) => compareParts(b.parts, a.parts))[0];
-  if (!previous) throw new Refusal(`no release before ${candidate.name}, so the pull requests it contains can't be read`);
+  // From the newest STABLE release below it, not the previous candidate: a candidate held and
+  // never promoted reaches adopters inside this one, so its pull requests are this one's too.
+  const previous = stable.filter((t) => compareParts(t.parts, candidate.parts) < 0).sort((a, b) => compareParts(b.parts, a.parts))[0];
+  if (!previous) throw new Refusal(`no stable release before ${candidate.name}, so the pull requests it contains can't be read`);
   const contained = commitsBetween(api, repo, previous.name, candidate.sha)
     .flatMap((c) => (c.pr === null ? [] : [{ number: c.pr, sha: c.sha, mergedAt: c.date }]));
 
@@ -403,14 +467,26 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
   const pin = pinPr ? { number: Number(pinPr.number), mergedAt: String(pinPr.pull_request.merged_at) } : null;
   const since = pin?.mergedAt ?? cutAt;
 
-  /** @type {Map<string, any[]>} */
+  /** @type {Map<string, Listing>} */
   const runs = new Map();
-  /** @param {string} file */
+  /** @param {string} file @returns {Listing} */
   const runsOf = (file) => {
     if (!runs.has(file)) {
-      runs.set(file, pages(api, `repos/${repo}/actions/workflows/${file}/runs?created=${encodeURIComponent(`>=${since}`)}`, (p) => p?.workflow_runs));
+      const path = `repos/${repo}/actions/workflows/${file}/runs?created=${encodeURIComponent(`>=${since}`)}`;
+      /** @type {any[]} */
+      const all = [];
+      let total = 0;
+      for (let n = 1; n * 100 <= RUN_LISTING_CAP; n += 1) {
+        const got = api(`${path}&per_page=100&page=${n}`);
+        if (n === 1) total = Number(got?.total_count ?? 0);
+        const list = got?.workflow_runs ?? [];
+        all.push(...list);
+        if (list.length < 100) break;
+      }
+      total = Math.max(total, all.length);
+      runs.set(file, { runs: all, total, truncated: all.length < total || all.length >= RUN_LISTING_CAP });
     }
-    return /** @type {any[]} */ (runs.get(file));
+    return /** @type {Listing} */ (runs.get(file));
   };
 
   /** @type {Context} */
@@ -443,12 +519,12 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
   const date = new Date(now).toISOString().slice(0, 10);
   const evidence = gates.map((g) => `- **${g.title}:** ${g.evidence}`).join('\n');
   const notes = `${notesOf().trimEnd()}\n\n---\n\nPromoted from \`${candidate.name}\` on ${date}${urgent ? `, out of band (urgent): ${reason}` : ''}. The gates (plan 0009 §2):\n\n${evidence}\n`;
-  return { ...base, decision: 'promote', why: urgent ? `urgent: ${reason}` : 'every gate passed', plan: { tag, candidate: candidate.name, sha: candidate.sha, major, notes, resume: false } };
+  return { ...base, decision: 'promote', why: urgent ? `urgent: ${reason}` : 'every gate passed', plan: { tag, candidate: candidate.name, sha: candidate.sha, major, notes, resume: false, publish: true } };
 }
 
 /**
  * The writes, as the Releaser: the tag on the candidate's commit (unless `resume`), its Release,
- * latest, and the major tag moved there.
+ * latest (when `publish`), and the major tag moved there.
  * @param {Plan} plan @param {{ api?: Api, repo: string }} deps
  * @returns {string[]} what it did, a line each
  */
@@ -459,8 +535,10 @@ export function apply(plan, { api = ghApi, repo }) {
     api(`repos/${repo}/git/refs`, { method: 'POST', body: { ref: `refs/tags/${plan.tag}`, sha: plan.sha } });
     done.push(`Tagged ${plan.tag} on ${plan.sha}`);
   }
-  api(`repos/${repo}/releases`, { method: 'POST', body: { tag_name: plan.tag, name: plan.tag, body: plan.notes, draft: false, prerelease: false, make_latest: 'true' } });
-  done.push(`Published the Release ${plan.tag}, latest`);
+  if (plan.publish) {
+    api(`repos/${repo}/releases`, { method: 'POST', body: { tag_name: plan.tag, name: plan.tag, body: plan.notes, draft: false, prerelease: false, make_latest: 'true' } });
+    done.push(`Published the Release ${plan.tag}, latest`);
+  }
   let exists = true;
   try {
     api(`repos/${repo}/git/ref/tags/${plan.major}`);
