@@ -1,5 +1,5 @@
 {
-  "$comment": "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. A lane's `turns` is its default turn budget and Kanon's ceiling on the `max_turns` input a caller may set (kanon#891); `kanon init` never writes that input. `catalogue` is the lane catalogue, and `features` the fixed sets of lanes offered in place of a choice per lane (plan 0007 §2), both copied from docs/lanes.json.",
+  "$comment": "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. A lane's `turns` is its turn limit and Kanon's ceiling on raising it for one dispatched run (kanon#891), through the `max_turns` and `reason` dispatch inputs `kanon init` writes on its caller. `catalogue` is the lane catalogue, and `features` the fixed sets of lanes offered in place of a choice per lane (plan 0007 §2), both copied from docs/lanes.json.",
   "lanes": {
     "agent-code-audit": {
       "identities": [
@@ -15,7 +15,11 @@
       "inputs": {
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 200. Empty takes the lane's default, 100. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 200 (the lane's limit is 100). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -53,12 +57,7 @@
         "AUTHOR_APP_PRIVATE_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN"
       ],
-      "inputs": {
-        "max_turns": {
-          "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 80. Empty takes the lane's default, 40. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
-        }
-      },
+      "inputs": {},
       "grant": {
         "actions": "read",
         "contents": "read",
@@ -71,11 +70,7 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ],
-      "turns": {
-        "default": 40,
-        "ceiling": 80
-      }
+      ]
     },
     "agent-dispatch-sweep": {
       "identities": [
@@ -123,7 +118,11 @@
       "inputs": {
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 80. Empty takes the lane's default, 40. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 80 (the lane's limit is 40). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -168,7 +167,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 120. Empty takes the lane's default, 60. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 120 (the lane's limit is 60). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -218,7 +221,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 600. Empty takes the lane's default, 300. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 600 (the lane's limit is 300). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -261,7 +268,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 600. Empty takes the lane's default, 300. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 600 (the lane's limit is 300). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -365,7 +376,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 180. Empty takes the lane's default, 90. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 180 (the lane's limit is 90). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -402,7 +417,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 160. Empty takes the lane's default, 80. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 160 (the lane's limit is 80). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -445,7 +464,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 240. Empty takes the lane's default, 120. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 240 (the lane's limit is 120). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -482,7 +505,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 60. Empty takes the lane's default, 30. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 60 (the lane's limit is 30). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -549,7 +576,11 @@
       "inputs": {
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 160. Empty takes the lane's default, 80. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 160 (the lane's limit is 80). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -592,7 +623,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 40. Empty takes the lane's default, 20. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 40 (the lane's limit is 20). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -630,7 +665,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 240. Empty takes the lane's default, 120. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 240 (the lane's limit is 120). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -671,7 +710,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 140. Empty takes the lane's default, 70. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 140 (the lane's limit is 70). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -717,7 +760,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 200. Empty takes the lane's default, 100. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 200 (the lane's limit is 100). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -759,7 +806,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 120. Empty takes the lane's default, 60. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 120 (the lane's limit is 60). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -798,7 +849,11 @@
         },
         "max_turns": {
           "type": "string",
-          "description": "The agent's turn budget for this run, a whole number from 1 to 30. Empty takes the lane's default, 15. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+          "description": "Raise the turn limit for this one dispatched run, a whole number from 1 to 30 (the lane's limit is 15). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {

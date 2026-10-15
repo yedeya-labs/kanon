@@ -63,27 +63,24 @@ laneCheck(() => {
       red((t) => t.edit(TRIAGE, (d) => { job(d).with = { issue_number: '${{ inputs.issue_number }}', bogus: '${{ inputs.bogus }}' }; }), 'passes `bogus`, which the Kanon lane agent-triage does not declare'));
   });
 
-  // kanon#891: the turn budget is the one setting a caller writes itself, a whole number up to
-  // the ceiling on the lane's `# MAX TURNS:` line (the triage lane's: 100, at most 200).
-  describe('the calling job may set its lane\'s turn budget, up to Kanon\'s ceiling', () => {
-    const withTurns = (v: unknown) => (t: Tree) => t.edit(TRIAGE, (d) => { job(d).with = { issue_number: '${{ inputs.issue_number }}', max_turns: v }; });
-    const passes = (v: unknown) => {
+  // kanon#891, as the Owner shaped it on 2026-10-15: the turn limit is raised only for one
+  // dispatched run, so a caller passes its own dispatch inputs through and never a number.
+  describe('the calling job passes a raised turn limit only through from its dispatch', () => {
+    const withTurns = (extra: Record<string, unknown>) => (t: Tree) => t.edit(TRIAGE, (d) => { job(d).with = { issue_number: '${{ inputs.issue_number }}', ...extra }; });
+    it('passes max_turns and reason, each its own dispatch input passed through', () => {
       const t = adopter();
-      withTurns(v)(t);
+      withTurns({ max_turns: '${{ inputs.max_turns }}', reason: '${{ inputs.reason }}' })(t);
       const r = check(t);
       expect(r.status, r.out).toBe(0);
-    };
-    it('passes a number at or under the ceiling, written as a number or a string', () => {
-      passes(150);
-      passes('200');
-      passes(1);
     });
-    it('passes its own dispatch input through, like any other', () => passes('${{ inputs.max_turns }}'));
-    it('refuses a number above the ceiling, naming the ceiling', () => {
-      red(withTurns(201), "passes `max_turns: 201`, which the Kanon lane agent-triage refuses: max_turns is 201, above Kanon's ceiling of 200 turns for this lane");
+    it.each([[150], ['150'], [1], ['${{ inputs.issue_number }}']])('refuses max_turns: %s, which is no dispatch passthrough: never a standing setting', (v) => {
+      red(withTurns({ max_turns: v, reason: '${{ inputs.reason }}' }), 'the turn limit is raised only for one dispatched run, never set in a caller');
     });
-    it.each([[0], [-5], ['ten'], [1.5], ['${{ inputs.issue_number }}']])('refuses %s, which is no whole number of turns', (v) => {
-      red(withTurns(v), 'must be a whole number of turns from 1 to 200');
+    it('refuses max_turns passed through without its reason', () => {
+      red(withTurns({ max_turns: '${{ inputs.max_turns }}' }), 'passes `max_turns` without `reason`; a raised turn limit needs a reason');
+    });
+    it('refuses a literal reason, like any other setting', () => {
+      red(withTurns({ max_turns: '${{ inputs.max_turns }}', reason: 'because' }), 'passes `reason: because`; a caller only passes its own input through');
     });
   });
 });

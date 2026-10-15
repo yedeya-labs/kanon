@@ -130,9 +130,9 @@ A signal that fails any test is recorded as not-paged (`K-OBS-3`).
 
 **Why.** A capped run loses its artifact, so a ceiling a normal run can hit destroys work. A ceiling well above normal only stops the runaway case.
 
-**Enforced by.** A unit test that fails when any agent step's ceiling disagrees with its turn cap and the per-turn rate.
+**Enforced by.** A unit test that fails when any agent step's ceiling disagrees with its turn cap and the per-turn rate. For a run whose turn cap a person raised for that one dispatch, `agent-run`'s turn-limit step derives the ceiling from the raised cap at the same rate, held by [`tests/unit/agent-run-turn-budget.test.ts`](../tests/unit/agent-run-turn-budget.test.ts) ([the lanes' "The turn budget"](../docs/lanes.md#the-turn-budget)).
 
-**Class.** framework. Kanon ships the per-turn rate as part of its standard lane table, so every adopter's ceilings are derived the same way ([ADR 0005](../docs/decisions/0005-roles-and-standard-lane-settings.md) §3). A caller that sets its lane's turn cap, `max_turns`, gets the ceiling derived from that cap at the same rate, at run time; the cap itself is bounded by a ceiling Kanon fixes per lane ([the lanes' "The turn budget"](../docs/lanes.md#the-turn-budget)).
+**Class.** framework. Kanon ships the per-turn rate as part of its standard lane table, so every adopter's ceilings are derived the same way ([ADR 0005](../docs/decisions/0005-roles-and-standard-lane-settings.md) §3).
 
 ### `K-OBS-13` Telemetry is written by one credentialed collector
 

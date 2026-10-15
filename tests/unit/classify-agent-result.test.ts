@@ -201,7 +201,7 @@ describe('classifyResult', () => {
     expect(n.body).not.toMatch(/re-run is reasonable/i);
     // Non-vacuity: the turn-cap notice is unchanged.
     expect(renderNotice('exhausted', classifyResult(EXHAUSTED, OPUS_5).why, { arm: 'x' }).body)
-      .toMatch(/its turn cap is the thing to raise .*the lane's `max_turns` input in your caller's `with:`, up to Kanon's ceiling/);
+      .toMatch(/its turn cap is the thing to raise .*re-dispatch this run with a higher `max_turns` and a `reason`, up to Kanon's ceiling/);
   });
 
   it('does NOT call a run oversized just because it passed its turn count', () => {
@@ -434,7 +434,8 @@ describe('renderNotice', () => {
     expect(n.body).toMatch(/RA-846/);
     // kanon#891: the remedy names the input an adopter can set, its ceiling, the one doc that
     // states both, and the telemetry that tells "raise" from "split".
-    expect(n.body).toMatch(/set the lane's `max_turns` input in your caller's `with:`, up to Kanon's ceiling for the lane/);
+    expect(n.body).toMatch(/re-dispatch this run with a higher `max_turns` and a `reason`, up to Kanon's ceiling for the lane, which raises the limit for that one run/);
+    expect(n.body).toMatch(/or split the work/);
     expect(n.body).toMatch(/docs\/lanes\.md, "The turn budget"/);
     expect(n.body).toMatch(/telemetry row shows the turns it took/);
     // The consequences it cannot observe must be gone for good.

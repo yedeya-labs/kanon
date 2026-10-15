@@ -257,10 +257,10 @@ export const blockCallOf = (step) => provenance.get(step);
  * own prompt; and its action step adds `--disallowedTools Monitor` after the lane's flags, the
  * same on every lane (kanon#621, held by `tests/unit/headless-run.test.ts`), so a lane's flags are
  * still read as its own and match the ones its telemetry step records. Those flags are the ones
- * its turn-budget step writes, which are the lane's own unless a caller set its `max_turns`
+ * its turn-limit step writes, which are the lane's own unless a dispatch raised its `max_turns`
  * (kanon#891, held by `tests/unit/agent-run-turn-budget.test.ts`), and `agent-finish` records
  * them, or the lane's own when the run stopped before they were written: so both read as the
- * lane's flags, at its default turn budget.
+ * lane's flags, at its own turn limit.
  * @type {Record<string, string>}
  */
 const PASSED_THROUGH = {

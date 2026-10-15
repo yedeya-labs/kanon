@@ -142,7 +142,7 @@ for (const lane of LANES) {
       // maps both Claude credentials, neither, or one in the other's shape, and then the agent
       // must not start at all. The TTL record (#546) is the fourth: like the start stamp, it runs
       // only `case` and `echo`, so it cannot fail on its own. The turn-budget check (kanon#891) is
-      // the fifth: it fails only on a caller's `max_turns` the lane refuses, and then the agent
+      // the fifth: it fails only on a raised `max_turns` the lane refuses, and then the agent
       // must not start.
       const agent = (spine.jobs.run.steps ?? []).find((s) => s.id === 'agent');
       const block = laneBlockOf(agent);
@@ -154,7 +154,7 @@ for (const lane of LANES) {
       expect(action, 'a step after the action could red a green agent run').toBe(inner.length - 1);
       const fallible = inner.slice(0, action).filter((s) => s['continue-on-error'] !== true).map((s) => s.name);
       expect(fallible).toEqual([
-        'Record when the agent started', 'Check the turn budget the caller set', 'Record the prompt-cache TTL the agent is pinned at', 'Check the Claude credential',
+        'Record when the agent started', 'Check the turn limit raised for this run', 'Record the prompt-cache TTL the agent is pinned at', 'Check the Claude credential',
         'Give the agent a user scope this job made, if its flags load no project settings',
       ]);
     });

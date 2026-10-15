@@ -44,7 +44,7 @@ inputs:
   claude-args-ran:
     description: >-
       agent-run's `claude-args` output: the flags the agent ran with, which differ from
-      `claude_args` when the caller set its lane's `max_turns` (kanon#891). The row records it
+      `claude_args` when a dispatch raised its lane's turn limit with `max_turns` (kanon#891). The row records it
       in place of `claude_args`; empty, when agent-run stopped before writing it, the row
       records `claude_args`.
     required: false

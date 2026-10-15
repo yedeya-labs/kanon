@@ -380,15 +380,15 @@ describe("docs/lanes.md's first-review sentence says to label a pull request whe
 });
 
 /**
- * kanon#891: docs/lanes.md's turn-budget table is each model lane's default `max_turns` and
- * Kanon's ceiling, as the requirements read them from the lanes' `# MAX TURNS:` lines. It is the
+ * kanon#891: docs/lanes.md's turn-budget table is each dispatchable model lane's turn limit and
+ * Kanon's ceiling on raising it for one run, as the requirements read them from the lanes' `# MAX TURNS:` lines. It is the
  * one place the numbers are written for an adopter, and the cap error points at it.
  */
 const turnsTable = (): string => {
   const req = loadRequirements() as unknown as { lanes: Record<string, { turns?: { default: number; ceiling: number } }>; catalogue: { lanes: Record<string, { name: string }> } };
   const rows = Object.entries(req.lanes).filter(([, l]) => l.turns).sort(([a], [b]) => a.localeCompare(b))
     .map(([lane, l]) => `| ${req.catalogue.lanes[lane]!.name} | \`${lane}.yml\` | ${l.turns!.default} | ${l.turns!.ceiling} |`);
-  return `\n\n| Lane | Workflow | Default \`max_turns\` | Ceiling |\n|---|---|---|---|\n${rows.join('\n')}\n\n`;
+  return `\n\n| Lane | Workflow | Limit | Ceiling for one dispatched run |\n|---|---|---|---|\n${rows.join('\n')}\n\n`;
 };
 
 describe("docs/lanes.md's turn-budget table is each lane's default and ceiling (kanon#891)", () => {
@@ -402,7 +402,7 @@ describe("docs/lanes.md's turn-budget table is each lane's default and ceiling (
   });
 
   it('has a row for every lane that runs a model, so the check above is not vacuous', () => {
-    expect(turnsTable().split('\n').filter((l) => l.startsWith('| ') && l.includes('`agent-')).length).toBe(17);
+    expect(turnsTable().split('\n').filter((l) => l.startsWith('| ') && l.includes('`agent-')).length).toBe(16);
     expect(turnsTable()).toContain('| `agent-lead-revise.yml` | 90 | 180 |');
   });
 

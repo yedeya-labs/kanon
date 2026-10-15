@@ -55,9 +55,9 @@
 # credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
 # `agent-run` refuses both or neither, by name, before the agent starts.
 # MAX TURNS: 120, at most 240
-# The line above is read by `lane-check` and the requirements file (kanon#891): this lane's default
-# turn budget and Kanon's ceiling on the `max_turns` a caller may set. The `--max-turns` in its
-# flags is the default, and the `max-turns-ceiling` it hands `agent-run` the ceiling.
+# The line above is read by `lane-check` and the requirements file (kanon#891): this lane's turn
+# limit, the `--max-turns` in its flags, and Kanon's ceiling on raising it, the `max-turns-ceiling`
+# it hands `agent-run`. A person raises it only for one dispatched run, with a reason.
 name: Lead — brief
 
 # THE CALLER'S TRIGGER — this lane's contract with it:
@@ -80,7 +80,12 @@ on:
         type: string
         default: ""
       max_turns:
-        description: "The agent's turn budget for this run, a whole number from 1 to 240. Empty takes the lane's default, 120. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        description: "Raise the turn limit for this one dispatched run, a whole number from 1 to 240 (the lane's limit is 120). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         required: false
         type: string
         default: ""
@@ -149,6 +154,7 @@ jobs:
     with:
       max-turns: ${{ inputs.max_turns }}
       max-turns-ceiling: "240"
+      max-turns-reason: ${{ inputs.reason }}
       agent: lead
       role: Lead
       lane: lead

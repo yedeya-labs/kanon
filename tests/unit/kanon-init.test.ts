@@ -883,6 +883,31 @@ describe('the callers kanon init writes', () => {
     expect(Object.keys(TRIGGERS).sort()).toEqual(Object.keys(REQ.lanes).sort());
   });
 
+  // kanon#891, as the Owner shaped it on 2026-10-15: a person raises a lane's turn limit for one
+  // dispatched run, so every caller of a lane whose limit can be raised carries `max_turns` and
+  // `reason` on its dispatch, optional, and passes both through; no other caller does.
+  it('writes the dispatch inputs that raise a turn limit for one run, passed through, on each lane that takes them', () => {
+    const lanes = REQ.lanes as Record<string, { turns?: unknown }>;
+    const raisable = Object.keys(lanes).filter((l) => lanes[l]!.turns).sort();
+    expect(raisable.length).toBe(16);
+    for (const lane of Object.keys(lanes)) {
+      const d = parseYaml(callerFile(lane, REQ.lanes[lane]!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'main' })) as {
+        on: { workflow_dispatch?: { inputs?: Record<string, { required?: boolean }> } | null }; jobs: Record<string, { with?: Record<string, string> }>;
+      };
+      const inputs = d.on.workflow_dispatch?.inputs ?? {};
+      const withs = Object.values(d.jobs)[0]!.with ?? {};
+      if (raisable.includes(lane)) {
+        expect(inputs.max_turns, lane).toMatchObject({ required: false });
+        expect(inputs.reason, lane).toMatchObject({ required: false });
+        expect(withs.max_turns, lane).toBe('${{ inputs.max_turns }}');
+        expect(withs.reason, lane).toBe('${{ inputs.reason }}');
+      } else {
+        expect(inputs, lane).not.toHaveProperty('max_turns');
+        expect(withs, lane).not.toHaveProperty('max_turns');
+      }
+    }
+  });
+
   // Each trigger as one line: `<event>:<types>`, `workflow_run:branches` for a default-branch
   // filter, `schedule`, and `workflow_dispatch:<inputs>`.
   const fromTable = (cell: string): string[] =>

@@ -24,6 +24,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-12.** The Reviewer's token mint asks for Checks, Commit statuses and Actions read again, after a narrowing of its permissions dropped the reads this rule depends on; a test now fails a mint that drops any of the three. [#691](https://github.com/yedeya-labs/kanon/issues/691)
 
+## `K-AGENT-37`
+
+- **2026-10-15.** The Owner decided that a person may raise one lane's turn cap for one dispatched run, with a reason, up to a ceiling Kanon fixes per lane at twice the cap; nothing in an adopter's repository sets it. `agent-run`'s turn-limit step and `lane-check` enforce it, held by `tests/unit/agent-run-turn-budget.test.ts`. [ADR 0005](../docs/decisions/0005-roles-and-standard-lane-settings.md) §2, amended 2026-10-15; [#891](https://github.com/yedeya-labs/kanon/issues/891)
+
 ## `K-AGENT-45`
 
 - **2026-10-14.** The Owner decided that the issue backstop admits whoever opens an issue, on `issues: opened` alone, with no permission check, since it runs no model, reads no issue text and writes only a bucket and labels. [#768](https://github.com/yedeya-labs/kanon/issues/768), [#840](https://github.com/yedeya-labs/kanon/pull/840)
@@ -81,6 +85,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-PROJ-16`
 
 - **2026-10-02.** A test runs the brief guard on the brief template, whose example measurement item it must accept. [#55](https://github.com/yedeya-labs/kanon/issues/55)
+
+## `K-OBS-12`
+
+- **2026-10-15.** A run whose turn cap a person raised for one dispatch gets its dollar ceiling derived from the raised cap at the same per-turn rate, by `agent-run`'s turn-limit step, held by `tests/unit/agent-run-turn-budget.test.ts`. [ADR 0005](../docs/decisions/0005-roles-and-standard-lane-settings.md) §2, amended 2026-10-15; [#891](https://github.com/yedeya-labs/kanon/issues/891)
 
 ## `K-OBS-16`
 

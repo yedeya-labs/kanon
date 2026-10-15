@@ -1,6 +1,6 @@
 # 0005. Human roles, and standard lane settings
 
-- **Status:** accepted; §5 was settled by [ADR 0006](0006-stakeholder-decisions.md), and §6 by [ADR 0007](0007-data-boundary.md)
+- **Status:** accepted; §5 was settled by [ADR 0006](0006-stakeholder-decisions.md), and §6 by [ADR 0007](0007-data-boundary.md); §2 amended 2026-10-15
 - **Date:** 2026-09-28
 
 ## Context
@@ -25,6 +25,10 @@ Each lane's settings come from **Kanon's standard lane table**, which ships with
 *Why:* this is [ADR 0002](0002-standardise-dont-parameterise.md) applied to the lanes. A per-project setting could not be compared across adopters, and every guard that checks lanes against their settings would have a second opinion to agree with. It also makes cost data from different adopters comparable, which is the point of the telemetry.
 
 *Consequence:* an adopter on a plan that can't use a model in the table is outside Kanon's target until Kanon supports that plan. That is recorded as friction, not solved with a setting.
+
+**Amended 2026-10-15, by the Owner's decision on [#891](https://github.com/yedeya-labs/kanon/issues/891): a turn cap raised for one dispatched run.** Adopters still don't edit the turn cap. A person may raise one lane's turn cap for **one dispatched run**, with a reason, up to a ceiling Kanon fixes per lane at twice the cap; the run's dollar ceiling is derived from the raised cap at §3's rate. Tests hold it: `agent-run` refuses, before any model call, a raise above the ceiling, not a whole number, without a reason or on a run that wasn't dispatched; `lane-check` fails a caller that passes `max_turns` as anything but its own dispatch input; and `tests/unit/agent-run-turn-budget.test.ts` holds every lane's cap and ceiling. The cap and ceilings are in [docs/lanes.md, "The turn budget"](../lanes.md#the-turn-budget).
+
+*Why this isn't configuration:* nothing is stored in the repository. The raise lives in one dispatch's inputs, chosen by a person for one run that stopped at its cap on work that can't be divided, and gone when that run ends; every other run of the lane, on every adopter, runs the table's cap. So the lanes still have one setting each, and ADR 0002 holds. A raised run's configuration fingerprint differs from its lane's other runs; that is accepted, because the run records it: its telemetry row carries the cap that bound it, and its step summary the raise and the reason, so cost comparisons can tell it apart.
 
 ### 3. Kanon ships the per-turn rate behind the dollar ceilings
 

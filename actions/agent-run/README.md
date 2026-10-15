@@ -42,8 +42,9 @@ On an API key, pass `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}` in pla
 |---|---|---|
 | `prompt` | yes | The agent's instructions. When `agent-setup` resolved the agent's role, one instruction is appended: open every post with the persona header and role marker (plan 0005 §3.3). When `agent-setup` put Kanon's baseline in place of a playbook you don't have, a note names it, says git ignores it there, and says to stage your own with `git add -f`. Last, a rule says the run is headless: the session ends when the agent stops, so it runs every command in the foreground and never ends its turn to wait for one ([#621](https://github.com/yedeya-labs/kanon/issues/621)). If that step fails, the prompt goes through unchanged. |
 | `claude_args` | yes | The flag block. Pass the same value to `agent-finish`, so the cost row records what ran. |
-| `max-turns` | no | The caller's turn budget, a lane's `max_turns` input passed through ([#891](https://github.com/yedeya-labs/kanon/issues/891)). Empty runs the flag block's own `--max-turns`. A whole number from 1 to `max-turns-ceiling` replaces it, and the `--max-budget-usd` beside it becomes $0.40 a turn rounded up to the next $5 (`K-OBS-12`). Anything else (above the ceiling, zero, negative, not a whole number) fails the block before the agent starts, naming `max_turns`. |
-| `max-turns-ceiling` | no | The lane's ceiling for `max-turns`, fixed by the lane. Empty means the lane takes no turn budget from its caller, and a `max-turns` is refused. |
+| `max-turns` | no | A turn limit raised for one dispatched run: a lane's `max_turns` input, which only its caller's `workflow_dispatch` fills ([#891](https://github.com/yedeya-labs/kanon/issues/891)). Empty runs the flag block's own `--max-turns`. A whole number from 1 to `max-turns-ceiling`, on a `workflow_dispatch` run with `max-turns-reason` set, replaces it, and the `--max-budget-usd` beside it becomes $0.40 a turn rounded up to the next $5 (`K-OBS-12`); the run's step summary records the raise and the reason. Anything else (above the ceiling, zero, negative, not a whole number, no reason, another event) fails the block before the agent starts, naming `max_turns`. |
+| `max-turns-ceiling` | no | The lane's ceiling for `max-turns`, fixed by the lane. Empty means the lane's limit can't be raised, and a `max-turns` is refused. |
+| `max-turns-reason` | no | Why the run's limit is raised: the lane's `reason` input, from the same dispatch. Required when `max-turns` is set. |
 | `claude-token` | one of two | The Claude subscription token, `CLAUDE_CODE_OAUTH_TOKEN`. A composite action can't read secrets, so the lane passes it in. |
 | `anthropic-api-key` | one of two | An Anthropic API key, `ANTHROPIC_API_KEY`, in place of the token. Pass exactly one of the two. |
 | `github-token` | yes | The minted App token. The agent acts as the App, never as the default token. |
@@ -54,6 +55,6 @@ On an API key, pass `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}` in pla
 |---|---|
 | `execution_file` | The action's result file, for `agent-finish`. |
 | `started-at` | When the agent started (UTC, ISO 8601). |
-| `claude-args` | The flags the agent ran with: `claude_args`, with the caller's turn budget and its dollar cap in place when it set one. Hand it to `agent-finish` as `claude-args-ran`. |
+| `claude-args` | The flags the agent ran with: `claude_args`, with a raised turn limit and its dollar cap in place when the dispatch set one. Hand it to `agent-finish` as `claude-args-ran`. |
 | `prompt-cache-ttl` | The TTL the run was pinned at, for `agent-finish`: the input, `default` when it is empty, and empty for anything but a plain word ([#546](https://github.com/yedeya-labs/kanon/issues/546)). |
 | `auth` | The credential the agent ran on: `subscription` or `api-key`. A name, never anything the secret holds. |

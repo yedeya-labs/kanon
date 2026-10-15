@@ -18,7 +18,12 @@ on:
   workflow_call:
     inputs:
       max_turns:
-        description: "The caller's turn budget (its lane's max_turns), passed through. Empty takes the lane's default."
+        description: "A turn limit raised for this one dispatched run (its lane's max_turns), passed through. Empty runs the lane's limit."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why this dispatched run raises max_turns (its lane's reason), passed through."
         required: false
         type: string
         default: ""
@@ -101,6 +106,7 @@ jobs:
     uses: $/.github/workflows/overseer-agent-job.yml
     with:
       max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
       artifact-name: ${{ inputs.artifact-name }}
       capability-watch: ${{ inputs.capability-watch }}
       telemetry-status: ${{ inputs.telemetry-status }}

@@ -41,10 +41,6 @@
 # The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
 # credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
 # `agent-run` refuses both or neither, by name, before the agent starts.
-# MAX TURNS: 40, at most 80
-# The line above is read by `lane-check` and the requirements file (kanon#891): this lane's default
-# turn budget and Kanon's ceiling on the `max_turns` a caller may set. The `--max-turns` in its
-# flags is the default, and the `max-turns-ceiling` it hands `agent-run` the ceiling.
 name: Deploy diagnose (Explorer)
 
 # THE CALLER'S TRIGGER — this lane's contract with it:
@@ -52,11 +48,6 @@ name: Deploy diagnose (Explorer)
 on:
   workflow_call:
     inputs:
-      max_turns:
-        description: "The agent's turn budget for this run, a whole number from 1 to 80. Empty takes the lane's default, 40. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
-        required: false
-        type: string
-        default: ""
       smoke:
         description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
         required: false
@@ -135,8 +126,6 @@ jobs:
       contents: read
     uses: $/.github/workflows/agent-lane.yml
     with:
-      max-turns: ${{ inputs.max_turns }}
-      max-turns-ceiling: "80"
       agent: deploy-diagnose
       role: Explorer
       # No telemetry lane name yet: the store's schema names no `deploy-diagnose` lane, and a row

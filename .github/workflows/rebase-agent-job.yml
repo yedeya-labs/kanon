@@ -18,7 +18,12 @@ on:
   workflow_call:
     inputs:
       max_turns:
-        description: "The caller's turn budget (its lane's max_turns), passed through. Empty takes the lane's default."
+        description: "A turn limit raised for this one dispatched run (its lane's max_turns), passed through. Empty runs the lane's limit."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why this dispatched run raises max_turns (its lane's reason), passed through."
         required: false
         type: string
         default: ""
@@ -199,6 +204,7 @@ jobs:
         with:
           max-turns: ${{ inputs.max_turns }}
           max-turns-ceiling: "240"
+          max-turns-reason: ${{ inputs.reason }}
           prompt: |
             You are the Implementer (Agent 2) in RESOLVE-CONFLICT mode. PR
             #${{ env.PR_NUMBER }} of this repo conflicts with `main`. Until it stops

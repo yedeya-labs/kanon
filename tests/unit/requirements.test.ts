@@ -158,17 +158,19 @@ describe('requirements.json', () => {
     expect(built.hook.inputs).toEqual(['app-slug', 'browsers', 'database', 'github-token', 'install', 'issue-number', 'lane']);
   });
 
-  it("names each model lane's turn budget, its default and Kanon's ceiling, and its max_turns input (kanon#891)", () => {
+  it("names each dispatchable model lane's turn limit and Kanon's ceiling, and its max_turns and reason inputs (kanon#891)", () => {
     const lanes = built.lanes as Record<string, { inputs: Record<string, unknown>; turns?: { default: number; ceiling: number } }>;
     expect(lanes['agent-lead-revise']!.turns).toEqual({ default: 90, ceiling: 180 });
     expect(lanes['agent-implement']!.turns).toEqual({ default: 300, ceiling: 600 });
     expect(lanes['agent-weekly-digest']!.turns).toEqual({ default: 15, ceiling: 30 });
     for (const [lane, l] of Object.entries(lanes)) {
       expect(Boolean(l.turns), lane).toBe('max_turns' in l.inputs);
+      expect(Boolean(l.turns), lane).toBe('reason' in l.inputs);
     }
-    // A lane that runs no model has neither.
+    // A lane that runs no model has neither, nor does the one no person dispatches.
     expect(lanes['agent-merge']!.turns).toBeUndefined();
-    expect(Object.values(lanes).filter((l) => l.turns).length).toBe(17);
+    expect(lanes['agent-deploy-diagnose']!.turns).toBeUndefined();
+    expect(Object.values(lanes).filter((l) => l.turns).length).toBe(16);
   });
 
   it("says which documents a lane reads have a baseline, and the stack document's sections without a default, as lane-check does", () => {
