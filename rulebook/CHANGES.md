@@ -108,6 +108,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-07.** The Owner decided that, under `drafted`, the telemetry Explorer writes each upstream finding into its run's step summary, rendered as it would be filed. [#471](https://github.com/yedeya-labs/kanon/pull/471)
 - **2026-10-12.** The Owner decided the release cadence choice: `every merge`, or `weekly, ` and a weekday. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
 - **2026-10-14.** The Owner decided that the adoption record has a `## Deploy` section of its own, holding the deploy lane's environments, its CI wait and the fallback's marker, and that the reference deploy's three bullets move there from `## Choices` at once, with no period of reading both places. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+- **2026-10-15.** The gate never waits longer than 345 minutes for the release commit's CI, whatever the record declares, so a CI that never finishes ends in `ci-timeout`, which is filed, inside the gate job's 360-minute limit, not in a cancellation, which files nothing. [#912](https://github.com/yedeya-labs/kanon/issues/912), [#961](https://github.com/yedeya-labs/kanon/pull/961)
 
 ## `K-LAYOUT-16`
 

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { ApiError, deployCheck, environmentCheck, gate, judgeProbe, maintainersOf, PROBE_FILE, PROBE_LINE, supersede } from '../../scripts/deploy-gate.mjs';
+import { ApiError, CI_WAIT_CEILING, deployCheck, environmentCheck, gate, judgeProbe, maintainersOf, PROBE_FILE, PROBE_LINE, supersede } from '../../scripts/deploy-gate.mjs';
 
 /**
  * Plan 0010 §3, §5, step D4: the deploy lane's checks, on fixtures of GitHub's answers. The gate
@@ -156,6 +156,18 @@ describe('the gate (plan 0010 §3)', () => {
     const r = run({}, { [CI_RUNS]: running, [`repos/${REPO}/contents/docs/qa/adoption.md?ref=${SHA}`]: RECORD(['- **Environments:** `staging`, `production`']) });
     expect(refusal(r)).toBe('ci-timeout');
     expect(r.sleeps).toHaveLength(90);
+  });
+
+  it('check 4: never waits past `CI_WAIT_CEILING`, so a declared 360 ends in `ci-timeout` inside the job, not in its cancellation (#912)', () => {
+    expect(CI_WAIT_CEILING).toBe(345);
+    const at = (wait: number) => run({}, { [CI_RUNS]: running, [`repos/${REPO}/contents/docs/qa/adoption.md?ref=${SHA}`]: RECORD(['- **Environments:** `staging`, `production`', `- **CI wait:** \`${wait}\``]) });
+    const capped = at(360);
+    expect(refusal(capped)).toBe('ci-timeout');
+    expect(capped.sleeps).toHaveLength(CI_WAIT_CEILING);
+    expect(!capped.ok && capped.message).toMatch(/after 345 minute\(s\), the most the gate's job can wait \(the record declares 360\)/);
+    const declared = at(CI_WAIT_CEILING);
+    expect(declared.sleeps).toHaveLength(CI_WAIT_CEILING);
+    expect(!declared.ok && declared.message).toMatch(/after the declared CI wait of 345 minute\(s\)/);
   });
 
   it("outputs the declaration's fallback marker, which the probe's `if:` reads", () => {

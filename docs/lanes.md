@@ -360,7 +360,7 @@ The deploy lane deploys your published releases to the environments your adoptio
 - **CI wait:** `90`
 ```
 
-The CI wait is how long the gate waits for the release commit's CI, in minutes from 1 to 360; without it, 90. The lane reads the section **at the release's commit**, through [`scripts/lib/deploy-declaration.mjs`](../scripts/lib/deploy-declaration.mjs), so the declaration that deploys a release is the one reviewed with it.
+The CI wait is how long the gate waits for the release commit's CI, in minutes from 1 to 360; without it, 90. The gate never waits longer than 345 minutes, whatever the record declares, so the wait ends in `ci-timeout` inside the gate job's 360-minute limit rather than in a cancellation. The lane reads the section **at the release's commit**, through [`scripts/lib/deploy-declaration.mjs`](../scripts/lib/deploy-declaration.mjs), so the declaration that deploys a release is the one reviewed with it.
 
 **The two workflows, and the caller.** [`deploy-release.yml`](../.github/workflows/deploy-release.yml) runs once per release: the gate, the trust probe, the build, and, when the run stops there, one row and one issue for the first environment. [`deploy.yml`](../.github/workflows/deploy.yml) runs once per environment: `declare`, then `deploy`, `record` and `report`. Your caller, `.github/workflows/deploy.yml`, calls the first, then the second once per environment, each `needs:` the one before and the `release` job, whose `build` output it hands on. `kanon init` writes it from the declaration ([plan 0010](plans/0010-deployment-lane.md) step D6); for the declaration above it reads:
 

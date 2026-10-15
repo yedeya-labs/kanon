@@ -13,7 +13,10 @@
 //   3. the environments the caller passes are exactly the adoption record's `## Deploy` list
 //      AT THAT COMMIT, in order (`scripts/lib/deploy-declaration.mjs`): `declaration-mismatch`;
 //   4. `ci.yml`'s `push` run on the default branch at that commit completed green, polled every
-//      60 seconds up to the CI wait the record declares at that commit: `ci-red`, `ci-timeout`.
+//      60 seconds up to the CI wait the record declares at that commit, and never past
+//      `CI_WAIT_CEILING` (345 minutes), so the wait ends inside the job's 360-minute limit in the
+//      named refusal, which is filed, never in a cancellation, which files nothing (#912):
+//      `ci-red`, `ci-timeout`.
 // Check 2 reads the compare API rather than a clone: the commit is on the default branch when
 // the branch is not behind it (`behind_by` 0), which is `git merge-base --is-ancestor`'s answer
 // without a checkout or a credential on disk.
@@ -34,7 +37,10 @@
 // the Maintainer named in the record's `## People` deploys it, by dispatch, and a dispatch by
 // anyone else is refused (`unauthorized=not-maintainer`; its row waits for PR #901 to add the code to `DEPLOY_REFUSALS`, kanon#899).
 // `supersede`, in `deploy.yml`'s `deploy` job, once it holds its concurrency slot and its
-// approval: for a `release` trigger, a commit older than the environment's last successful
+// approval (`deployCheck`): first, under either fallback marker for production (`FALLBACK` set,
+// `ROLE` production), the Maintainer check again, for whoever started THIS attempt, so a re-run
+// that reuses `declare`'s outputs still meets it (`unauthorized=not-maintainer`); then the
+// supersede check: for a `release` trigger, a commit older than the environment's last successful
 // deploy is refused `superseded`; a dispatch may go back, and says so (`rollback`). It reads
 // the commit of the deployment GitHub created for an earlier run's environment job, assumed to
 // be that run's commit (unmeasured, plan 0010 §14.2), and check 1 holds every run's commit to
@@ -46,8 +52,12 @@
 //      DISPATCH_RELEASE a dispatch's `release` input (`github.event.inputs.release`)
 //      DEFAULT_BRANCH   `github.event.repository.default_branch`; read from the API when empty
 //      ENVIRONMENTS     the caller's list, space-separated (`gate`, `probe`)
-//      ENVIRONMENT, POSITION  the environment job's own (`declare`, `supersede`); GITHUB_ACTOR (`declare`)
+//      ENVIRONMENT      the environment job's own (`declare`, `supersede`)
+//      POSITION         its position in the caller's chain (`declare`)
+//      GITHUB_TRIGGERING_ACTOR, else GITHUB_ACTOR  who started this attempt, for the Maintainer
+//                       check (`attemptActor`; `declare`, `supersede`)
 //      SHA              the commit to deploy, the `declare` job's output (`supersede`)
+//      FALLBACK, ROLE   the `declare` job's outputs: the fallback's marker and the role (`supersede`)
 //
 // Each subcommand writes its outputs to $GITHUB_OUTPUT, a line to the step summary, and exits
 // non-zero on a refusal, with `refusal=<code>` written first so the `record` job can read it.
@@ -68,6 +78,18 @@ export const PROBE_LINE = 'kanon-deploy-probe/v1';
 export const PROBE_ANSWERS = /** @type {const} */ (['refused', 'obtained', 'unconfigured']);
 /** How often the gate asks for CI's run while it waits (plan 0010 §3, check 4). */
 export const CI_POLL_MS = 60_000;
+/**
+ * The minutes `deploy-release.yml`'s `gate` job may spend outside the CI wait: its setup, the
+ * `kanon-path` step and checks 1 to 3 before the wait starts, and the last look after it ends.
+ */
+export const GATE_MARGIN_MINUTES = 15;
+/**
+ * The longest the gate waits for CI, whatever the record declares: the gate job's limit, 360
+ * minutes, a hosted job's, less `GATE_MARGIN_MINUTES`. A wait that could outlast the job would end
+ * in a cancellation, which files nothing, instead of `ci-timeout` (#912).
+ * `tests/unit/deploy-lane.test.ts` holds the job's `timeout-minutes` to it.
+ */
+export const CI_WAIT_CEILING = 360 - GATE_MARGIN_MINUTES;
 /** The workflow whose `push` run the gate waits for (`K-SHIP-8`). */
 export const CI_WORKFLOW = 'ci.yml';
 
@@ -236,12 +258,16 @@ export function checkList(passed, declared, sha) {
 
 /**
  * Check 4: the commit's CI, on the default branch's `push`, green. Waits while it runs, up to
- * `waitMinutes` from the first look.
+ * `waitMinutes` from the first look, and never more than `CI_WAIT_CEILING`.
  * @param {{ repo: string, sha: string, branch: string, waitMinutes: number, api: Api, now?: () => number, sleep?: (ms: number) => void, pollMs?: number, log?: (line: string) => void }} o
  */
 export function waitForCi({ repo, sha, branch, waitMinutes, api, now = Date.now, sleep = sleepSync, pollMs = CI_POLL_MS, log = () => {} }) {
   const start = now();
-  const deadline = start + waitMinutes * 60_000;
+  const minutes = Math.min(waitMinutes, CI_WAIT_CEILING);
+  const deadline = start + minutes * 60_000;
+  const waited = minutes < waitMinutes
+    ? `${minutes} minute(s), the most the gate's job can wait (the record declares ${waitMinutes})`
+    : `the declared CI wait of ${waitMinutes} minute(s)`;
   for (;;) {
     let runs;
     try {
@@ -266,8 +292,8 @@ export function waitForCi({ repo, sha, branch, waitMinutes, api, now = Date.now,
     }
     if (now() >= deadline) {
       throw new Refusal('ci-timeout', run
-        ? `CI's run on \`${sha.slice(0, 12)}\` was still \`${run.status}\` after the declared CI wait of ${waitMinutes} minute(s)`
-        : `no CI run on \`${sha.slice(0, 12)}\` appeared within the declared CI wait of ${waitMinutes} minute(s)`);
+        ? `CI's run on \`${sha.slice(0, 12)}\` was still \`${run.status}\` after ${waited}`
+        : `no CI run on \`${sha.slice(0, 12)}\` appeared within ${waited}`);
     }
     log(run ? `CI's run on ${sha.slice(0, 12)} is ${run.status}; asking again in ${Math.round(pollMs / 1000)} s.` : `No CI run on ${sha.slice(0, 12)} yet; asking again in ${Math.round(pollMs / 1000)} s.`);
     sleep(pollMs);
