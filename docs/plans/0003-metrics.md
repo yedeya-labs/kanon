@@ -93,7 +93,7 @@ Decided, and not reopened here:
 
 | | |
 |---|---|
-| **Formula** | **Yield** = Σ cost of delivery-lane runs joined to a merged item / Σ cost of all delivery-lane runs. Delivery lanes are every lane except explore, code-audit, overseer and the digests. A run that joins to no work item, or to one closed unmerged, counts in the denominator only. A run counts once its item is settled: its PR closed; or, for a run with no PR, its issue closed or 30 days passed with no event on it. An item idle for 30 days counts as not merged until it closes. |
+| **Formula** | **Yield** = Σ cost of delivery-lane runs joined to a merged item / Σ cost of all delivery-lane runs. Delivery lanes and overhead lanes are each declared, as `DELIVERY_LANES` and `OVERHEAD_LANES` in `scripts/metrics/indicators.mjs`, and the report refuses to run while a lane of the telemetry schema is on neither, so no lane is a delivery lane by default ([#1020](https://github.com/yedeya-labs/kanon/issues/1020)). A run that joins to no work item, or to one closed unmerged, counts in the denominator only. A run counts once its item is settled: its PR closed; or, for a run with no PR, its issue closed or 30 days passed with no event on it. An item idle for 30 days counts as not merged until it closes. |
 | **Unit** | percent. |
 | **Source** | run rows and work-item rows. |
 | **What it represents** | How much of the delivery spend bought something that shipped. Failed runs, abandoned PRs and work that bailed before opening a PR all lower it. |

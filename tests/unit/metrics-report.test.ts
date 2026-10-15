@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { LANES, validate } from '../../actions/agent-telemetry/schema.mjs';
 import { EXIT, SCHEMA, parseReportArgs, parseRows } from '../../cli/metrics-report.mjs';
 import { metrics } from '../../cli/metrics.mjs';
+import { DELIVERY_LANES as DECLARED_DELIVERY_LANES, deliveryLanes } from '../../scripts/metrics/indicators.mjs';
 import { closingIssues, joinRuns } from '../../scripts/metrics/join.mjs';
 import { DELIVERY_LANES, MINIMUM, OVERHEAD_LANES, metricsReport, renderReport, sortRows } from '../../scripts/metrics/report.mjs';
 import { bootstrap, kendallTauB, orderStatisticInterval, quantile, wilson } from '../../scripts/metrics/stats.mjs';
@@ -315,6 +316,23 @@ describe('the indicators', () => {
   it('splits the lanes into delivery and overhead, every lane in exactly one', () => {
     expect([...DELIVERY_LANES, ...OVERHEAD_LANES].sort()).toEqual([...LANES].sort());
     expect(OVERHEAD_LANES.filter((l) => !LANES.includes(l))).toEqual([]);
+  });
+
+  // kanon#1020: both sides are declared, so a lane that joins the schema is classified by whoever
+  // adds it, never a delivery lane by default. These fail on a schema lane in neither list, in both,
+  // or a declared lane the schema doesn't have.
+  it('declares every schema lane on exactly one side: the delivery list or the overhead list', () => {
+    const unclassified = LANES.filter((l) => !DECLARED_DELIVERY_LANES.includes(l) && !OVERHEAD_LANES.includes(l));
+    expect(unclassified, 'a lane in neither list: add it to DELIVERY_LANES or OVERHEAD_LANES in scripts/metrics/indicators.mjs').toEqual([]);
+    expect(DECLARED_DELIVERY_LANES.filter((l) => OVERHEAD_LANES.includes(l))).toEqual([]);
+    expect([...DECLARED_DELIVERY_LANES, ...OVERHEAD_LANES].filter((l) => !LANES.includes(l))).toEqual([]);
+    expect([...DELIVERY_LANES].sort()).toEqual([...DECLARED_DELIVERY_LANES].sort());
+  });
+
+  it('refuses to split a lane list holding a lane in neither list, rather than count it as delivery', () => {
+    expect(() => deliveryLanes([...LANES, 'some-new-lane'])).toThrow(/some-new-lane/);
+    expect(() => deliveryLanes(['implement', 'some-new-lane', 'another-lane'])).toThrow(/some-new-lane.*another-lane/);
+    expect(deliveryLanes(LANES)).toEqual(LANES.filter((l) => DECLARED_DELIVERY_LANES.includes(l)));
   });
 
   it('counts the deploy diagnose lane as overhead: it comments on an issue and delivers no pull request (kanon#966)', () => {
