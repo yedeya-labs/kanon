@@ -45,10 +45,11 @@ export const ESCAPE_DAYS = /** @type {const} */ ([30, 90]);
 
 /**
  * The lanes whose spend is overhead, shown beside cost and never inside it, and left out of yield
- * (§2.2, §2.3): the Explorer's, the code audit, the telemetry Explorer, the Overseer and the
- * digests. Every other lane is a delivery lane.
+ * (§2.2, §2.3): the Explorer's, the code audit, the telemetry Explorer, the Overseer, the
+ * digests, and the deploy diagnose lane, which comments on a failed deploy's issue and delivers no
+ * pull request (kanon#966). Every other lane is a delivery lane.
  */
-export const OVERHEAD_LANES = Object.freeze(['explore', 'code-audit', 'explore-telemetry', 'overseer', 'weekly-digest', 'project-digest']);
+export const OVERHEAD_LANES = Object.freeze(['explore', 'code-audit', 'explore-telemetry', 'overseer', 'weekly-digest', 'project-digest', 'deploy-diagnose']);
 
 /**
  * The delivery lanes among `lanes`, the schema's list, which the caller passes.

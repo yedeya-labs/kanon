@@ -317,6 +317,11 @@ describe('the indicators', () => {
     expect(OVERHEAD_LANES.filter((l) => !LANES.includes(l))).toEqual([]);
   });
 
+  it('counts the deploy diagnose lane as overhead: it comments on an issue and delivers no pull request (kanon#966)', () => {
+    expect(OVERHEAD_LANES).toContain('deploy-diagnose');
+    expect(DELIVERY_LANES).not.toContain('deploy-diagnose');
+  });
+
   it('reads rows of every kind and tag, and counts the ones it can not use', () => {
     const s = sortRows([null, [], { row_kind: 'finding', tag: 'run' }, { row_kind: 'work_item', tag: 'run', pr_number: 1 }, itemRow(2, { closed: ago(1) }), itemRow(2, { closed: ago(0.5) })]);
     expect(s.ignored).toEqual({ notRun: 0, otherKind: 1, unreadable: 3 });
