@@ -14,7 +14,9 @@
 //          ruleset (plan 0008 J6): the tag `vX.Y.Z` on the candidate's commit, its Release, latest,
 //          with the notes of every candidate since the last stable release (`notesOf`, newest
 //          first) and a line saying on what evidence it was promoted, and the major tag `v<major>`
-//          moved to the same commit, as release.yml moves it on a plain release.
+//          moved to the same commit, as release.yml moves it on a plain release. Neither latest nor
+//          the major tag ever moves back to an older release: a candidate below a newer stable tag
+//          is superseded, and promoted by nothing (#1002).
 //
 // THE GATES are one table, `GATES`, each read from GitHub, never self-reported:
 //   soak     Kanon's callers pin the candidate, through the merged pin pull request (S4's
@@ -369,8 +371,10 @@ function unreachable(api, repo, id) {
 const truthy = (v) => /^(true|1|yes)$/i.test(String(v ?? '').trim());
 
 /**
- * @typedef {{ tag: string, candidate: string, sha: string, major: string, notes: string, resume: boolean, publish: boolean }} Plan
- *   `resume`: the stable tag exists already; `publish`: the Release is still to publish
+ * @typedef {{ tag: string, candidate: string, sha: string, major: string, notes: string, resume: boolean, publish: boolean, latest: boolean, moveMajor: boolean }} Plan
+ *   `resume`: the stable tag exists already; `publish`: the Release is still to publish; `latest`:
+ *   it is published as GitHub's latest; `moveMajor`: the major tag moves to it. The last two are
+ *   false only when a newer stable release exists, so neither moves back
  * @typedef {{
  *   decision: 'promote' | 'hold' | 'none',
  *   why: string,
@@ -404,6 +408,9 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
   const major = `v${candidate.parts[0]}`;
 
   const promoted = stable.find((t) => t.version === candidate.version);
+  // A stable release above the candidate, made by hand or by plan 0009 §3's fallback to (A): latest
+  // and the major tag are on it, and stay there.
+  const newer = stable.filter((t) => compareParts(t.parts, candidate.parts) > 0).sort((a, b) => compareParts(b.parts, a.parts))[0];
   if (promoted && promoted.sha !== candidate.sha) {
     throw new Refusal(`${tag} names ${promoted.sha}, not ${candidate.name}'s commit ${candidate.sha}: a stable tag is only ever the candidate's commit, so read what moved it`);
   }
@@ -462,7 +469,6 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
     } catch (e) {
       if (!notFound(e)) throw e;
     }
-    const newer = stable.some((t) => compareParts(t.parts, candidate.parts) > 0);
     const moveMajor = majorAt !== candidate.sha && !newer;
     if (published && !moveMajor) return { decision: 'none', why: `${candidate.name} is promoted already, as ${tag}`, candidate: candidate.name, gates: [] };
     return {
@@ -472,8 +478,12 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
         : `${tag} is on ${candidate.name}'s commit with no Release: finishing that promotion`,
       candidate: candidate.name,
       gates: [],
-      plan: { tag, candidate: candidate.name, sha: candidate.sha, major, notes: notesOf(), resume: true, publish: !published },
+      plan: { tag, candidate: candidate.name, sha: candidate.sha, major, notes: notesOf(), resume: true, publish: !published, latest: !newer, moveMajor },
     };
+  }
+
+  if (newer) {
+    return { decision: 'none', why: `${newer.name} is a newer stable release, so ${candidate.name} is superseded: promoting it would move ${major} and the latest Release back`, candidate: candidate.name, gates: [] };
   }
 
   // From the newest STABLE release below it, not the previous candidate: a candidate held and
@@ -547,12 +557,12 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
   const date = new Date(now).toISOString().slice(0, 10);
   const evidence = gates.map((g) => `- **${g.title}:** ${g.evidence}`).join('\n');
   const notes = `${notesOf().trimEnd()}\n\n---\n\nPromoted from \`${candidate.name}\` on ${date}${urgent ? `, out of band (urgent): ${reason}` : ''}. The gates (plan 0009 §2):\n\n${evidence}\n`;
-  return { ...base, decision: 'promote', why: urgent ? `urgent: ${reason}` : 'every gate passed', plan: { tag, candidate: candidate.name, sha: candidate.sha, major, notes, resume: false, publish: true } };
+  return { ...base, decision: 'promote', why: urgent ? `urgent: ${reason}` : 'every gate passed', plan: { tag, candidate: candidate.name, sha: candidate.sha, major, notes, resume: false, publish: true, latest: true, moveMajor: true } };
 }
 
 /**
- * The writes, as the Releaser: the tag on the candidate's commit (unless `resume`), its Release,
- * latest (when `publish`), and the major tag moved there.
+ * The writes, as the Releaser: the tag on the candidate's commit (unless `resume`), its Release
+ * (when `publish`), latest unless `latest` is false, and the major tag moved there (when `moveMajor`).
  * @param {Plan} plan @param {{ api?: Api, repo: string }} deps
  * @returns {string[]} what it did, a line each
  */
@@ -564,9 +574,10 @@ export function apply(plan, { api = ghApi, repo }) {
     done.push(`Tagged ${plan.tag} on ${plan.sha}`);
   }
   if (plan.publish) {
-    api(`repos/${repo}/releases`, { method: 'POST', body: { tag_name: plan.tag, name: plan.tag, body: plan.notes, draft: false, prerelease: false, make_latest: 'true' } });
-    done.push(`Published the Release ${plan.tag}, latest`);
+    api(`repos/${repo}/releases`, { method: 'POST', body: { tag_name: plan.tag, name: plan.tag, body: plan.notes, draft: false, prerelease: false, make_latest: plan.latest ? 'true' : 'false' } });
+    done.push(plan.latest ? `Published the Release ${plan.tag}, latest` : `Published the Release ${plan.tag}, not latest: a newer stable release is`);
   }
+  if (!plan.moveMajor) return done;
   let exists = true;
   try {
     api(`repos/${repo}/git/ref/tags/${plan.major}`);
