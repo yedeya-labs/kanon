@@ -223,6 +223,8 @@ function renderDeploy(d) {
     `| Release lead time | ${cellText(d.leadTime.median, hours)} | From the release's publication to its forward \`ok\` deploy to production, the median, including the time in pre-production and waiting for approval; ${d.leadTime.withoutLeadTime} without the time |`,
     '',
     'What they can\'t see: a production fault found days later and fixed forward, with no rollback and no failed smoke check. A deploy row carries no commit, so it can\'t be joined to the reverts and linked fixes the escape rate counts.',
+    '',
+    'A lane failure before the deploy hook counts as a change failure, and as one to restore, though nothing changed in production: a `declare` job, or a step of the `deploy` job before the hook, that failed without refusing records `failed` at `deploy`, as the hook\'s own failure does. The run\'s log tells them apart.',
   ];
 }
 

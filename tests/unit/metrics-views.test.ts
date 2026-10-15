@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { validate } from '../../actions/agent-telemetry/schema.mjs';
 import { parseReportArgs } from '../../cli/metrics-report.mjs';
+import { classifyEnvironment } from '../../scripts/deploy-row.mjs';
 import { metrics } from '../../cli/metrics.mjs';
 import { PRICES, cacheSavings, priceOf } from '../../scripts/metrics/prices.mjs';
 import { MINIMUM, metricsReport, renderReport } from '../../scripts/metrics/report.mjs';
@@ -643,6 +644,40 @@ describe('the deploy metrics (plan 0010 §11)', () => {
     const twoReleases = renderViews(views(twoRelease(2))).join('\n');
     expect(twoReleases).toMatch(/\| Deployment frequency \| 2 a week [^|]*\| Forward `ok` deploys \(not rollbacks or redeploys\)/);
     expect(twoReleases).toMatch(/2 of 27 forward deploys \(not rollbacks or redeploys\)/);
+  });
+
+  it('says a lane failure before the deploy hook counts as a production change failure, as it does (kanon#947)', () => {
+    // The anchor: the record's row for a `declare` job that failed without refusing, and for a
+    // `deploy` job that failed before its hook (the supersede check's API call), is `failed` at
+    // `deploy`, the hook's own failure's row, with no `rollback`. When a row tells them apart, this
+    // goes red, and the caveat below goes with it.
+    const declareCrash = classifyEnvironment({ declare: { result: 'failure', outputs: {} }, environment: 'production' });
+    const preHookCrash = classifyEnvironment({ declare: { result: 'success', outputs: {} }, deploy: { result: 'failure', outputs: { 'started-at': '2026-10-01T10:00:00Z', 'build-failed': 'false' } }, environment: 'production' });
+    const hookFailure = classifyEnvironment({ declare: { result: 'success', outputs: {} }, deploy: { result: 'failure', outputs: { 'started-at': '2026-10-01T10:00:00Z', 'build-failed': 'false', 'deploy-started-at': '2026-10-01T10:01:00Z' } }, environment: 'production' });
+    expect(declareCrash).toEqual({ outcome: 'failed', failed_stage: 'deploy' });
+    expect(preHookCrash).toEqual(hookFailure);
+    expect(declareCrash).toEqual(hookFailure);
+    // So the views count it as a change that failed, on a rollback dispatch too, since only the
+    // supersede check writes `rollback` and `redeploy`, and as one to restore.
+    const crashed: Record<string, unknown> = deployRow({ days: 2, chain: 1, position: 1, dispatch: true, outcome: declareCrash.outcome, failedStage: declareCrash.failed_stage });
+    delete crashed.rollback;
+    delete crashed.redeploy;
+    expect(validate(crashed)).toEqual({ ok: true });
+    const d = deployOf([crashed]);
+    expect(d.changeFailure).toMatchObject({ reached: 1, failed: 1 });
+    expect(d.restore.unrestored).toBe(1);
+
+    const caveat = /A lane failure before the deploy hook counts as a change failure/i;
+    expect(renderViews(views(history(1))).join('\n')).toMatch(caveat);
+    const doc = readFileSync('docs/metrics.md', 'utf8');
+    const start = doc.indexOf('### The deploy views');
+    expect(start).toBeGreaterThan(-1);
+    const section = doc.slice(start, doc.indexOf('\n### ', start + 1));
+    expect(section).toMatch(caveat);
+    // It names both kinds the row can't tell from the hook's own, and the rollback it can't see.
+    expect(section).toMatch(/`declare` job fails without refusing/);
+    expect(section).toMatch(/step of its `deploy` job before the deploy hook/);
+    expect(section).toMatch(/rollback dispatch counts as a forward change/);
   });
 });
 

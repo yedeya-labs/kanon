@@ -521,6 +521,11 @@ export function byVersionOf(ctx, { start, end }) {
 // WHAT THEY CAN'T SEE: a production fault found days later and fixed forward, with no rollback and
 // no failed smoke. The row carries no commit (§10), so it can't be joined to plan 0003's reverts
 // and linked fixes.
+//
+// WHAT THEY OVER-COUNT (kanon#947): a `declare` job, or a step of the `deploy` job before the deploy
+// hook, that failed without refusing records `failed` at `deploy`, as the hook's own failure does,
+// with no `rollback` or `redeploy`. `isDeployFailure` can't tell them apart, so a lane failure
+// counts as a forward change that failed and as one to restore. `docs/metrics.md` says so.
 
 /** The deployment frequency's weeks: the median over the last 13 (plan 0010 §11). */
 export const DEPLOY_WEEKS = 13;
