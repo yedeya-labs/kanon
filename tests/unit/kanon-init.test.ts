@@ -1895,9 +1895,20 @@ describe('kanon init and telemetry (#428)', () => {
   });
 
   it('says what is sent, where, who reads it, and how to stop and erase, in its question', () => {
-    for (const s of ['no code', 'no titles', 'no logins', 'One row per lane run', 'One row per closed pull request', 'actor classes', 'Frankfurt', '13 months', "Kanon's operator", 'at least three adopters', 'deleting .github/workflows/telemetry.yml', 'erase: yes', 'Stop and erase', 'registers this repository on its first run']) expect(TELEMETRY_QUESTION).toContain(s);
+    for (const s of ['no code', 'no titles', 'no logins', 'One row per lane run', 'One row per closed pull request', 'actor classes', 'one row per environment a release run reaches, whatever its outcome', 'one row each time its notify job runs, whether the message was posted, failed or skipped', 'docs/sharing.md and K-OBS-16 list every field', 'Frankfurt', '13 months', "Kanon's operator", 'at least three adopters', 'deleting .github/workflows/telemetry.yml', 'erase: yes', 'Stop and erase', 'registers this repository on its first run']) expect(TELEMETRY_QUESTION).toContain(s);
     // No issue and no variable is asked of the adopter any more (plan 0008 §8).
     for (const s of ['registration issue', 'variable set', 'reader role']) expect(TELEMETRY_QUESTION).not.toContain(s);
+  });
+
+  // #960: the question and the adopt skill's "What is sent" bullet name every row kind the
+  // collector sends (run, work-item, deploy and notify rows) and point at the full list.
+  it('names the deploy and notify rows, and the full list, in its question and in the adopt skill (#960)', () => {
+    const bullet = read(ROOT, 'skills/adopt/SKILL.md').match(/^- \*\*What is sent:\*\* .*$/m)?.[0] ?? '';
+    for (const s of ['one row per environment a release run reaches, whatever its outcome', 'whether the message was posted, failed or skipped', 'K-OBS-16']) {
+      expect(TELEMETRY_QUESTION).toContain(s);
+      expect(bullet).toContain(s);
+    }
+    expect(bullet).toContain('docs/sharing.md');
   });
 
   // #843: init pins the caller to its own release, so whether that release publishes the hosted
