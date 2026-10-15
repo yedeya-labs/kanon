@@ -1,0 +1,166 @@
+# One lane's notification, handed to the adopter's hook in the lane's `notify` job (plan 0011 §5,
+# step N6; `K-OBS-19`).
+#
+#   notify:
+#     needs: [gate, digest]
+#     # Only past an admitting gate, only with a hook, never on a dry run or a cancelled run; it
+#     # runs after a failed or skipped producer, so a message not posted is recorded as skipped.
+#     if: ${{ !cancelled() && needs.gate.outputs.member == 'true' && needs.gate.outputs.hook == 'present' && inputs.dry_run != 'true' }}
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 5
+#     permissions:
+#       contents: read
+#     outputs:
+#       outcome: ${{ steps.notify.outputs.outcome }}
+#     steps:
+#       - uses: $/actions/notify
+#         id: notify
+#         with:
+#           kind: project-digest
+#           artifact: ${{ needs.digest.outputs.message-artifact }}
+#           secret: ${{ secrets.KANON_CHAT_PROJECT_DIGEST }}
+#
+# `tests/unit/helpers/notify-jobs.ts` holds every `notify` job to that shape: this kind's secret
+# and no other, a token that reads contents and nothing more, no App key, no Claude credential, no
+# OIDC grant, no job-level `env:`, and in no workflow a pull request can start.
+#
+# THE HOOK IS THE ADOPTER'S, READ FROM THE CHECKOUT THIS BLOCK MAKES, at the run's commit, whatever
+# branch the run is on (decision 8): a schedule runs the default branch's hook, a dispatch on a
+# branch runs that branch's. `docs/notifications.md`'s security section states what that exposes.
+# The checkout persists no credential. Kanon's prebuilt hooks are ordinary hooks: nothing here
+# knows them but the telemetry row's `hook` field (§7).
+#
+# THE STEPS, IN THE ORDER THEY RUN (§5.1 numbers them by what they do, and says this order): mask
+# the secret first, check out the hook, decide (no secret is `skipped` with `no-secret`, checked first; then no artifact is `skipped` with `no-message`; neither calls
+# the hook), download the producer's one `message.json`, validate it and the hook's declared
+# contract version (an invalid message, or a hook declaring no version this release writes, calls
+# no hook), call the hook, then on every outcome print the line doctor reads and write and upload
+# the `notify` telemetry row, and last fail the job unless the outcome is `posted` or `skipped`.
+#
+# THE ARTIFACT'S NAME IS THE PRODUCER'S OUTPUT, never computed here: after "Re-run failed jobs" this
+# job's `github.run_attempt` is one past the green producer's (§4, §5.4).
+#
+# THE OUTCOME IS AN OUTPUT (kanon#972). A job that skips is green, so a green `notify` job does
+# not mean posted: a step or job that must act only on a post reads `outcome`, which is `posted`,
+# `failed` or `skipped`, never the job's result.
+#
+# NO `vars` OR `secrets` HERE: neither exists inside a composite action. The lane hands the kind's
+# secret as `secret`, by name (`K-AGENT-47`), and this block hands it to the hook alone.
+name: Kanon notify
+description: Hands one lane's notification (kanon-notify) to the adopter's hook at .github/actions/notify, after validating it, and records the outcome.
+author: yedeya-labs
+
+inputs:
+  kind:
+    description: "The message's kind: `project-digest`, `weekly-digest` or `deploy`."
+    required: true
+  artifact:
+    description: "The producing job's `message-artifact` output: the artifact's name, with the producer's attempt. Empty when it wrote no message."
+    required: false
+    default: ""
+  secret:
+    description: "This kind's secret, and no other (`KANON_CHAT_<KIND>`). Empty when the caller maps none: the kind is then not posted."
+    required: false
+    default: ""
+  tag:
+    description: "The telemetry row's tag: `run` (the default), `smoke` or `test`."
+    required: false
+    default: run
+
+outputs:
+  outcome:
+    description: "`posted`, `failed` or `skipped` (kanon#972). Act on `posted` only: a skip leaves the job green. No Kanon lane reads it yet: the notify jobs plan 0011's later steps add publish it as their job output, for the step that acts only on a post (N9's wiring)."
+    value: ${{ steps.finish.outputs.outcome }}
+
+runs:
+  using: composite
+  steps:
+    # First, before anything prints.
+    - name: Mask the chat secret
+      shell: bash
+      env:
+        SECRET: ${{ inputs.secret }}
+      run: node "$GITHUB_ACTION_PATH/notify.mjs" mask
+
+    # The run's commit, whatever branch it is on (decision 8). No `ref:`, and no credential kept.
+    - name: Check out the notify hook
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Is there anything to post?
+      id: prepare
+      shell: bash
+      env:
+        KIND: ${{ inputs.kind }}
+        ARTIFACT: ${{ inputs.artifact }}
+        HAS_SECRET: ${{ inputs.secret != '' }}
+        TAG: ${{ inputs.tag }}
+        WORKSPACE: ${{ github.workspace }}
+        DIR: ${{ runner.temp }}/kanon-notify
+      run: node "$GITHUB_ACTION_PATH/notify.mjs" prepare
+
+    # Outside the workspace, which the checkout above has already cleaned. A missing artifact is
+    # read by the next step as a message that can't be read, and recorded.
+    - name: Download the message
+      if: steps.prepare.outputs.go == 'true'
+      continue-on-error: true
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact }}
+        path: ${{ runner.temp }}/kanon-notify/download
+
+    - name: Validate the message
+      id: check
+      if: steps.prepare.outputs.go == 'true'
+      shell: bash
+      env:
+        DIR: ${{ runner.temp }}/kanon-notify
+        DOWNLOAD: ${{ runner.temp }}/kanon-notify/download
+        WORKSPACE: ${{ github.workspace }}
+      run: node "$GITHUB_ACTION_PATH/notify.mjs" check
+
+    # The hook's failure is recorded, then fails the job in the last step.
+    - name: Post through the notify hook
+      id: hook
+      if: steps.check.outputs.call == 'true'
+      continue-on-error: true
+      uses: ./.github/actions/notify
+      with:
+        message-v1: ${{ steps.check.outputs.message-v1 }}
+        text: ${{ steps.check.outputs.text }}
+        kind: ${{ inputs.kind }}
+        secret: ${{ inputs.secret }}
+
+    - name: Record the outcome
+      id: finish
+      if: always()
+      shell: bash
+      env:
+        DIR: ${{ runner.temp }}/kanon-notify
+        # `outcome`, not `conclusion`: `continue-on-error` turns a failure's conclusion into success.
+        HOOK_OUTCOME: ${{ steps.hook.outcome }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+        KANON_REF: ${{ github.action_ref }}
+        KANON_WORKFLOW_REF: ${{ job.workflow_ref }}
+        KANON_WORKFLOW_SHA: ${{ job.workflow_sha }}
+      run: node "$GITHUB_ACTION_PATH/notify.mjs" finish
+
+    # On every outcome, as the lanes upload their run rows; only a repository that calls Kanon's
+    # telemetry collector sends it anywhere (ADR 0007).
+    - name: Upload the notify row
+      if: always() && steps.finish.outputs.row-artifact != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.finish.outputs.row-artifact }}
+        path: ${{ steps.finish.outputs.row }}
+        if-no-files-found: error
+
+    - name: Fail unless posted or skipped
+      if: always() && steps.finish.outputs.outcome != 'posted' && steps.finish.outputs.outcome != 'skipped'
+      shell: bash
+      env:
+        OUTCOME: ${{ steps.finish.outputs.outcome }}
+        DIR: ${{ runner.temp }}/kanon-notify
+      run: node "$GITHUB_ACTION_PATH/notify.mjs" fail

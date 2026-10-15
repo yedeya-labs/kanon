@@ -2,7 +2,7 @@
 
 Kanon's lanes tell people things in chat: the daily project digest, the weekly digest, and a deploy's announcement. **Kanon owns what a notification is; you own where it goes.** Every notification is one message in Kanon's contract, `kanon-notify` version 1, and the lanes hand it to a hook you choose: Kanon's Slack hook, Kanon's generic JSON webhook hook, or your own, for any other system ([plan 0011](plans/0011-notifications.md)).
 
-**What is built so far.** The contract: the message, its kinds and secrets, its limits, Kanon text, the library that builds and checks it, and the published JSON Schema ([plan 0011, step N2](plans/0011-notifications.md#12-order-of-moves)). And Kanon's two prebuilt hooks, [Slack](#kanons-slack-hook) (step N3) and the [generic webhook](#kanons-generic-webhook-hook) (step N4), which nothing calls yet. The [deploy announcement](#the-deploy-announcement) is a producer of `deploy` messages (step N9), which no lane runs yet. The `notify` job that calls a hook, and `kanon init`'s question come in the plan's later steps, and the digests still post as they do today until their release moves them. The security section below holds for the whole design, and is worth reading before you choose a hook.
+**What is built so far.** The contract: the message, its kinds and secrets, its limits, Kanon text, the library that builds and checks it, and the published JSON Schema ([plan 0011, step N2](plans/0011-notifications.md#12-order-of-moves)). And Kanon's two prebuilt hooks, [Slack](#kanons-slack-hook) (step N3) and the [generic webhook](#kanons-generic-webhook-hook) (step N4), which nothing calls yet. The [deploy announcement](#the-deploy-announcement) is a producer of `deploy` messages (step N9), which no lane runs yet. And [the `notify` block](#the-notify-job) that calls a hook in a lane's `notify` job, with its guards (step N6), which no lane runs yet either. `kanon init`'s question comes in a later step, and the digests still post as they do today until their release moves them behind the `notify` job. The security section below holds for the whole design, and is worth reading before you choose a hook.
 
 ## The message
 
@@ -106,6 +106,47 @@ A model's narrative is Kanon text by intent (it may bold a word), so it goes thr
 | `jsonSchema(version)` | The JSON Schema of a version, generated from `SCHEMAS` |
 | `parseInline(line)`, `linesOf(text)` | Kanon text parsed, one line at a time, into text, code, strong, emphasis and link nodes, with every escape resolved: for a hook that renders Kanon text into its own system's markup, as Kanon's Slack hook does, so the subset is parsed in one place |
 
+## The `notify` job
+
+Every notifying lane hands its message to one job, `notify`, after the job that produces it. Only there does a hook run ([plan 0011 §5](plans/0011-notifications.md#5-the-notify-job-where-a-hook-runs), `K-OBS-19`). The job runs Kanon's block, [`actions/notify`](../actions/notify/action.yml):
+
+```yaml
+  notify:
+    needs: [gate, digest]
+    if: ${{ !cancelled() && needs.gate.outputs.member == 'true' && needs.gate.outputs.hook == 'present' && inputs.dry_run != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.notify.outputs.outcome }}
+    steps:
+      - uses: $/actions/notify
+        id: notify
+        with:
+          kind: project-digest
+          artifact: ${{ needs.digest.outputs.message-artifact }}
+          secret: ${{ secrets.KANON_CHAT_PROJECT_DIGEST }}
+```
+
+**When it runs.** Only past an admitting gate, only when the repository has a hook at the run's commit, never on a dry run, and never on a cancelled run. It does run after a failed or skipped producer, so a message that was never posted is still recorded, as `skipped`.
+
+**What it holds.** Its kind's secret and no other, handed to the block as one input; a workflow token that reads contents and nothing else; no App key or token, no Claude credential, no OIDC grant, and no job-level `env:`. It is in no workflow a pull request can start.
+
+**What the block does, in order.**
+1. **Masks** the secret, each of its lines when it holds several, before anything prints.
+2. **Checks out the run's commit,** whatever branch it is on, keeping no credential, and reads the hook at `.github/actions/notify/action.yml`: its kind for telemetry (`slack` or `webhook` when its one step is Kanon's prebuilt action of that name, `custom` otherwise) and the contract versions it declares.
+3. **Skips, calling no hook,** when `secret` is empty (`no-secret`), and otherwise when `artifact` is empty (`no-message`). The secret is checked first: with no secret the gate also skipped the producer, so the artifact is empty too, and `no-secret` is the reason worth recording.
+4. **Downloads** the producer's one `message.json`, by the name the producer published, never one the block builds: after "Re-run failed jobs" the job's own attempt is one past the producer's.
+5. **Validates** it with `validate`, checks its kind is the job's, and checks the hook declares a version this release writes (`message-v1`). An invalid message, or a hook declaring only another version, calls no hook, and fails the job by field name, never by value.
+6. **Calls the hook** with its four inputs: `message-v1` (the message's path), `text` (`renderText`'s plain text's path), `kind` and `secret`.
+7. **Records the outcome,** on every outcome: one line for `kanon doctor`, `kanon-notify/v1 {"hook":"slack","kind":"project-digest","outcome":"posted"}`, and one `notify` telemetry row, uploaded as `kanon-delivery-<lane>-<run id>-<attempt>` ([`docs/telemetry.md`](telemetry.md)). Neither holds a URL, a channel, the message's text or the secret. A `deploy` message writes no row until the deploy lane is among the telemetry schema's lanes.
+8. **Fails the job** unless the message was posted or skipped. The producing job stays green: a failed post is reported as a failed post (`K-SHIP-10`). A re-run of the failed `notify` job posts the same message again.
+
+**The outcome is an output.** The block's `outcome` output, which the job publishes, is `posted`, `failed` or `skipped`; the row and the run's summary say why. **A green `notify` job does not mean posted:** a skip is green. So a step or job that must act only on a post, such as moving the version a deploy announcement has reached, reads `needs.notify.outputs.outcome == 'posted'`, never `needs.notify.result == 'success'` ([kanon#972](https://github.com/yedeya-labs/kanon/issues/972)).
+
+**What holds it.** `tests/unit/helpers/notify-jobs.ts` holds every `notify` job to the shape above, and `tests/unit/notify-guard.test.ts` holds each `KANON_CHAT_*` secret to its own lane's `notify` job and that lane's gate, keeps `notify` jobs out of workflows a pull request starts, and fails a script under `scripts/` that fetches a host other than GitHub's or reads a chat secret, and a producer that writes Slack's syntax. `tests/library/notify-block.test.ts` runs the block's steps against a fixture hook and Kanon's two prebuilt hooks.
+
 ## The deploy announcement
 
 [`scripts/announce-deploy.mjs`](../scripts/announce-deploy.mjs) produces the `deploy` message (`K-SHIP-10`, [plan 0011, step N9](plans/0011-notifications.md#12-order-of-moves)). Every non-draft release newer than the repository variable `ANNOUNCED_<STAGE>_VERSION`, up to and including the deployed version, becomes **one** message: a title and summary naming the release or the range and the environment, then Features, Fixes and Maintenance sections built from the release notes, and a link to the notes. A first run, with the variable unset, announces the deployed version's release alone, never the whole history. Each release-note line is text nobody controls, so it goes through `literal`; a pull request's link is kept only when it is `https://`.
@@ -113,7 +154,7 @@ A model's narrative is Kanon text by intent (it may bold a word), so it goes thr
 **Two modes, in two jobs, so a deploy is announced once.**
 
 - **Produce** (no flag) builds the message with `fit`, checks it with `validate`, writes one `message.json` (`MESSAGE_PATH`) and names it in the step's output `message` (empty when there is nothing new to announce). It posts nothing, moves nothing, and never reads a chat secret: the lane's `notify` job posts it with the kind's secret, **`KANON_CHAT_DEPLOY`**. On a dry run (`DRY_RUN`) it writes no file, and prints the message, its plain-text rendering and Kanon's Slack hook's payload, to the log and the step summary.
-- **`--advance`** moves `ANNOUNCED_<STAGE>_VERSION` to the deployed version, in a job after `notify`. **It refuses unless `NOTIFY_RESULT` is `success`** (the lane passes `needs.notify.result`), so a post that failed leaves the variable where it was, and the next deploy announces those releases again. It never moves the variable back.
+- **`--advance`** moves `ANNOUNCED_<STAGE>_VERSION` to the deployed version, in a job after `notify`. **It refuses unless `NOTIFY_RESULT` is `success`,** so a post that failed leaves the variable where it was, and the next deploy announces those releases again. It never moves the variable back. A skipped `notify` job is green too, so the lane that runs it hands `success` only when the `notify` job's [`outcome` output](#the-notify-job) is `posted`, never the job's result: otherwise a missing `KANON_CHAT_DEPLOY` would move the variable, and that release would never be announced ([kanon#972](https://github.com/yedeya-labs/kanon/issues/972)).
 
 Either mode makes requests to GitHub's API and nowhere else. It reads `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `STAGE` (the environment, as your project names it; it must make a valid variable name) and `VERSION` (the deployed version, a leading `v` allowed); produce also reads `SHA` (optional, shown as the build), `GITHUB_SERVER_URL` and `GITHUB_RUN_ID` (the message's run link). Try it locally:
 

@@ -1,0 +1,44 @@
+# A fixture notify hook (plan 0011 step N6): an adopter's own hook, at the path the `notify` block
+# calls, that posts nothing and writes what it received to `$RUNNER_TEMP/notify-hook-received.json`,
+# so `tests/library/notify-block.test.ts` can show what the block hands a hook. It never writes the
+# secret itself, only its SHA-256.
+#
+# The block names its kind `custom`: its one step is not Kanon's prebuilt action.
+name: notify
+description: A fixture hook that records the four inputs the notify block hands it.
+
+inputs:
+  message-v1:
+    description: Path to the validated message, version 1, as JSON.
+    required: true
+  text:
+    description: Path to the message's plain-text rendering.
+    required: true
+  kind:
+    description: The message's kind.
+    required: true
+  secret:
+    description: This kind's secret.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        MESSAGE_FILE: ${{ inputs.message-v1 }}
+        TEXT_FILE: ${{ inputs.text }}
+        KIND: ${{ inputs.kind }}
+        SECRET: ${{ inputs.secret }}
+      run: |
+        node -e '
+          const { createHash } = require("node:crypto");
+          const { readFileSync, writeFileSync } = require("node:fs");
+          const e = process.env;
+          writeFileSync(`${e.RUNNER_TEMP}/notify-hook-received.json`, JSON.stringify({
+            message: JSON.parse(readFileSync(e.MESSAGE_FILE, "utf8")),
+            text: readFileSync(e.TEXT_FILE, "utf8"),
+            kind: e.KIND,
+            secret_sha256: createHash("sha256").update(e.SECRET).digest("hex"),
+          }));
+        '

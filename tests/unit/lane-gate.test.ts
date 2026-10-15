@@ -9,6 +9,7 @@ import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { IMPLEMENTER_LOGIN } from './helpers/register.js';
 import { type Workflow, read, LANES, TRIGGERS, gateOf, gateProblems, REPO, type Actor, pullsWith, eventsOf, runGate, MEMBER, STRANGER, caller, STACKED, REPOSITORY } from './helpers/lane-gate.js';
 import { SPAWNS } from './helpers/spawns.js';
+import { NOTIFY_IF, NOTIFYING_LANES, notifyJob } from './helpers/notify-jobs.js';
 
 /**
  * kanon#46, `K-AGENT-45`: every lane starts real work only on a member's act, and checks it
@@ -34,6 +35,24 @@ describe('every lane carries the membership gate (K-AGENT-45)', () => {
 
   it.each(LANES)('%s: the gate is first, and nothing runs past a refusal', (file) => {
     expect(gateProblems(read(file))).toEqual([]);
+  });
+
+  // Plan 0011 step N6: a notifying lane's `notify` job starts only past an admitting gate. It runs
+  // after a failed or skipped producer (`!cancelled()`), so its `if:` must hold the gate's verdict
+  // itself; `notify-jobs.ts` holds it to `NOTIFY_IF`, and this holds that `if:` to the gate.
+  describe('the notify job waits for the gate (plan 0011 §5.1)', () => {
+    const withNotify = (file: string, cond = NOTIFY_IF) => {
+      const wf = structuredClone(read(file));
+      wf.jobs.notify = { ...notifyJob(NOTIFYING_LANES[file]!, 'digest'), if: `\${{ ${cond} }}` } as Workflow['jobs'][string];
+      return wf;
+    };
+    it.each(Object.keys(NOTIFYING_LANES))('%s: its notify job, in its shape, passes', (file) => {
+      expect(gateProblems(withNotify(file))).toEqual([]);
+    });
+    it('a notify job that reads neither the verdict nor the hook runs with no gate admitting', () => {
+      const problems = gateProblems(withNotify('agent-project-digest.yml', "!cancelled() && inputs.dry_run != 'true'"));
+      expect(problems).toEqual(['job notify can run without the gate admitting']);
+    });
   });
 
   describe('the check fails a lane that lacks it, or lets something past it', () => {

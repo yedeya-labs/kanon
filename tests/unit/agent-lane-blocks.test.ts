@@ -77,6 +77,10 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
     // Which Claude credential the agent ran on (plan 0009 §10, step A1). The run's telemetry
     // row reads it once the store accepts the field (plan 0009 §12); until then no lane does.
     'agent-run': { auth: 'subscription or api-key, for the telemetry row plan 0009 §12 adds' },
+    // Whether the notify block posted (plan 0011 step N6, kanon#972): a skip is green, so a step
+    // that acts only on a post reads this, never the job's result. The lanes' notify jobs publish
+    // it from N7 on, and the deploy announcement's advance reads it (N9's wiring).
+    notify: { outcome: 'posted, failed or skipped, for a step that acts only on a post' },
   };
 
   /**
@@ -142,6 +146,7 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
       'implementer-status: nothing',
       'kanon-path: path',
       'lane-check: nothing',
+      'notify: nothing',
       'notify/slack: nothing',
       'notify/webhook: nothing',
       'pr-title: nothing',

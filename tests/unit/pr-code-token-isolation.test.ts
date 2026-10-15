@@ -3,6 +3,7 @@ import { basename, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { calledFiles } from './helpers/called-workflow.js';
+import { NOTIFY_BLOCK, NOTIFYING_LANES, notifyJob, notifyJobProblems } from './helpers/notify-jobs.js';
 
 /**
  * `K-AGENT-50` (kanon#243): a job that runs the code under test holds no write credential.
@@ -15,6 +16,8 @@ import { calledFiles } from './helpers/called-workflow.js';
  *
  * WHAT COUNTS AS RUNNING THE CODE UNDER TEST, in a lane or a workflow a lane calls:
  *   • a `./` action: the project's own code from the checkout (the project-setup hook);
+ *   • Kanon's `notify` block, which runs the adopter's notify hook, `./.github/actions/notify`,
+ *     from the checkout it makes (plan 0011 §5);
  *   • a `run:` that invokes a package manager or build tool (`npm`, `npx`, `pnpm`, `yarn`,
  *     `bun`, `make`), which runs the tree's scripts, `postinstall` included;
  *   • Kanon's criteria runner with `--run` (`verify-acs.mjs`), which runs the tests a brief cites.
@@ -34,6 +37,13 @@ import { calledFiles } from './helpers/called-workflow.js';
  * leaves the list, and the list cannot hide a new lane). Two are the default branch's own code,
  * which the rule does not cover; two are the lanes whose agent tests the code it pushes, which
  * wait on the Owner's decision on kanon#243.
+ *
+ * THE `notify` JOB IS AN EXCEPTION BY ITS SHAPE (plan 0011 §5.2, step N6, decision 8). It runs the
+ * adopter's hook at the run's commit, whatever branch it is on, with its kind's chat secret: the
+ * one secret a hook must have to post. It is admitted only in a notifying lane, and only while
+ * `tests/unit/helpers/notify-jobs.ts` holds it to its exact shape (that one secret, `contents:
+ * read` alone, no App key, no Claude credential); `tests/unit/notify-guard.test.ts` keeps it out of
+ * any workflow a pull request starts, so a fork's pull request never runs a hook.
  */
 
 const WF = '.github/workflows';
@@ -53,6 +63,7 @@ const CRITERIA = /verify-acs\.mjs\b[^\n]*--run\b/;
 /** Why a step runs the code under test, or `undefined`. */
 export const runsCodeUnderTest = (s: Step): string | undefined => {
   if (String(s.uses ?? '').startsWith('./')) return `runs \`${s.uses}\` from the checkout`;
+  if (s.uses === NOTIFY_BLOCK) return 'runs the notify hook `./.github/actions/notify` from the checkout';
   const run = String(s.run ?? '').split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
   const tool = TOOL.exec(run);
   if (tool) return `runs \`${tool[2]}\``;
@@ -145,6 +156,17 @@ const EXCEPTIONS: Record<string, string> = {
   'deploy.yml:deploy': RELEASED,
 };
 
+/**
+ * Whether `file:job` is a notifying lane's `notify` job in its exact shape (plan 0011 §5.2), the
+ * one shape of exception admitted without a name.
+ */
+const NOTIFY_SHAPE = 'the notify job, in its exact shape: its kind\'s chat secret alone, read-only contents, in a lane no pull request starts (plan 0011 §5.2, decision 8)';
+const isNotifyException = (key: string, docs: (p: string) => Workflow = (p) => read(join(WF, p))): boolean => {
+  const [file, job] = key.split(':') as [string, string];
+  const kind = NOTIFYING_LANES[file];
+  return kind !== undefined && notifyJobProblems(docs(file) as Parameters<typeof notifyJobProblems>[0], job, kind).length === 0;
+};
+
 /** The deploy lane's two workflows: not lanes (no `agent-` name), called by an adopter's deploy caller. */
 const DEPLOY = ['deploy-release.yml', 'deploy.yml'];
 const PATHS = [...files(LANES), ...DEPLOY.map((f) => join(WF, f))].sort();
@@ -167,12 +189,12 @@ describe('K-AGENT-50: no job that runs the code under test holds a write credent
 
   it('holds for every job but the named exceptions', () => {
     const found = violations(PATHS);
-    const unexpected = Object.fromEntries(Object.entries(found).filter(([k]) => !(k in EXCEPTIONS)));
+    const unexpected = Object.fromEntries(Object.entries(found).filter(([k]) => !(k in EXCEPTIONS) && !isNotifyException(k)));
     expect(unexpected).toEqual({});
   });
 
   it('every named exception still violates it, so a fixed lane leaves the list', () => {
-    expect(Object.keys(violations(PATHS)).sort()).toEqual(Object.keys(EXCEPTIONS).sort());
+    expect(Object.keys(violations(PATHS)).filter((k) => !isNotifyException(k)).sort()).toEqual(Object.keys(EXCEPTIONS).sort());
   });
 
   it('the verify-acs lane runs its criteria in a job that is handed nothing, before the job that receives the token', () => {
@@ -219,6 +241,41 @@ describe("the deploy lane's two exceptions hold only what plan 0010 §7 lets the
     expect(credentials(wf, j)).toEqual([]);
     expect(j.permissions).toEqual({ contents: 'read' });
     expect(Object.keys(violations(PATHS))).not.toContain('deploy-release.yml:build');
+  });
+});
+
+describe(`the notify job: ${NOTIFY_SHAPE}`, () => {
+  /** The project digest with its notify job, as step N7 adds it. */
+  const lane = (edit: (job: Job & Record<string, unknown>) => void = () => {}) => {
+    const wf = structuredClone(read(join(WF, 'agent-project-digest.yml')));
+    (wf.jobs!.digest! as Job & { outputs?: Record<string, string> }).outputs = { 'message-artifact': '${{ steps.upload.outputs.name }}' };
+    const job = notifyJob('project-digest', 'digest') as Job & Record<string, unknown>;
+    edit(job);
+    wf.jobs!.notify = job;
+    return wf;
+  };
+  const docs = (wf: Workflow) => (p: string) => (p === 'agent-project-digest.yml' ? wf : read(join(WF, p)));
+
+  it('runs the code under test and holds a secret, so without its shape it would break the rule', () => {
+    const wf = lane();
+    expect(judge(wf, wf.jobs!.notify!)).toBe('runs the notify hook `./.github/actions/notify` from the checkout, and references a secret; hands `$/actions/notify` a token');
+  });
+
+  it('is admitted in its shape, in a notifying lane', () => {
+    expect(isNotifyException('agent-project-digest.yml:notify', docs(lane()))).toBe(true);
+  });
+
+  it('is not admitted holding more than its shape, or outside a notifying lane', () => {
+    for (const edit of [
+      (j: Record<string, unknown>) => { j.permissions = { contents: 'read', issues: 'write' }; },
+      (j: Record<string, unknown>) => { j.env = { CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}' }; },
+      (j: Record<string, unknown>) => { (j as Job).steps![0]!.with!.secret = '${{ secrets.KANON_CHAT_WEEKLY_DIGEST }}'; },
+    ]) {
+      const wf = lane(edit);
+      expect(judge(wf, wf.jobs!.notify!)).toBeDefined();
+      expect(isNotifyException('agent-project-digest.yml:notify', docs(wf))).toBe(false);
+    }
+    expect(isNotifyException('agent-overseer.yml:notify', docs(lane()))).toBe(false);
   });
 });
 
