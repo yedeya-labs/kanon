@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.41.0](https://github.com/yedeya-labs/kanon/compare/v0.40.0...v0.41.0) (2026-10-15)
+
+
+### Features
+
+* **doctor:** report a lane whose runs keep ending at its turn limit ([#1013](https://github.com/yedeya-labs/kanon/issues/1013)) ([c6dbca2](https://github.com/yedeya-labs/kanon/commit/c6dbca2141bcedbaaf2edf4a2654a978cb503099))
+* **lanes:** a person may raise a lane's turn limit for one dispatched run, within a Kanon ceiling ([#1001](https://github.com/yedeya-labs/kanon/issues/1001)) ([df5bc37](https://github.com/yedeya-labs/kanon/commit/df5bc37d4455e406c55ae12314eef97e5f4bc22a))
+* **register:** let the App register hold Apps that aren't agents ([#996](https://github.com/yedeya-labs/kanon/issues/996)) ([2662009](https://github.com/yedeya-labs/kanon/commit/2662009745d2e951b6415962bc1844165d807f85))
+* **release:** promote a candidate to stable once its four gates pass (plan 0009 S5) ([#978](https://github.com/yedeya-labs/kanon/issues/978)) ([11d56f4](https://github.com/yedeya-labs/kanon/commit/11d56f4f800179d530561c54ffe86d9758faffcc))
+* **release:** the pin job opens `ci(deps): run Kanon on candidate vX.Y.Z` as the Releaser ([#991](https://github.com/yedeya-labs/kanon/issues/991)) ([779c484](https://github.com/yedeya-labs/kanon/commit/779c48461bbe1cad41688d6451dec08e21f4b3fd))
+
+
+### Bug Fixes
+
+* **init:** pin the release it runs from, vX.Y.Z or its candidate, and refuse when neither tag exists ([#994](https://github.com/yedeya-labs/kanon/issues/994)) ([79d6dea](https://github.com/yedeya-labs/kanon/commit/79d6deaa6fdb54af1fcd501f68fb3e61b360a39c))
+* **init:** the telemetry question and the adopt skill name the deploy and notify rows too ([#993](https://github.com/yedeya-labs/kanon/issues/993)) ([9fce7c1](https://github.com/yedeya-labs/kanon/commit/9fce7c17ac7fb9c46f4bdd554aeba9293379197e))
+* **promote:** a stable Release's notes cover every candidate since the last stable release ([#1005](https://github.com/yedeya-labs/kanon/issues/1005)) ([e332447](https://github.com/yedeya-labs/kanon/commit/e332447ec34f46d0e731e92b11b2d52040200381))
+* **telemetry:** record a run the action fails past its turn cap as max_turns ([#1012](https://github.com/yedeya-labs/kanon/issues/1012)) ([48e576d](https://github.com/yedeya-labs/kanon/commit/48e576db777c8dde1a3b8179251626402276efe2))
+
+
+### Documentation
+
+* **deploy:** record the deploy lane's release and rehearsal, and point the store's deploy at it ([#1011](https://github.com/yedeya-labs/kanon/issues/1011)) ([0b16961](https://github.com/yedeya-labs/kanon/commit/0b169613dffe530dfe38c5aa8028e36667e97377))
+* **plans:** size plan 0012's harness for a nightly overlapping a candidate's run ([#1000](https://github.com/yedeya-labs/kanon/issues/1000)) ([ce35423](https://github.com/yedeya-labs/kanon/commit/ce354238163a8794782b12790aeb4c2bbd89c4b7))
+* **security:** state the notify job's chat-secret exposure under Accepted exposures ([#999](https://github.com/yedeya-labs/kanon/issues/999)) ([43f8bfa](https://github.com/yedeya-labs/kanon/commit/43f8bfaaf1cdbfa5f2ab19c4505998bfa9e5459e))
+
+
+### Tests
+
+* **deploy:** prove the production job's Maintainer check under the no-reviewers fallback, with mutations ([#995](https://github.com/yedeya-labs/kanon/issues/995)) ([655b061](https://github.com/yedeya-labs/kanon/commit/655b0614837dbffd8c70fa196e2342279fd4865c))
+
 ## [0.40.0](https://github.com/yedeya-labs/kanon/compare/v0.39.0...v0.40.0) (2026-10-15)
 
 
