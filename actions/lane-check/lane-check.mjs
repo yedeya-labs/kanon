@@ -155,9 +155,29 @@ const ymlFiles = (dir) => {
   return found;
 };
 const REF = new RegExp(`yedeya-labs/kanon/[^@ \\t\\n\\v\\f\\r]+@[^ \\t\\n\\v\\f\\r"']+`, 'g');
+/** This release's requirements file, or `null` before it has one. @type {any} */
+const REQUIREMENTS = (() => {
+  try { return JSON.parse(readFileSync(join(KANON_ROOT, 'requirements.json'), 'utf8')); } catch { return null; }
+})();
+// The notify hook's call to one of Kanon's prebuilt hooks' actions is not the callers' pin: it
+// follows theirs (plan 0011 decision 18), and is held to them below, as doctor's
+// `notify.hook-pin-behind` reads it. Every other reference, in the hook too, is the callers'.
+const NOTIFY = isObject(REQUIREMENTS?.notify) ? REQUIREMENTS.notify : null;
+const NOTIFY_HOOK = typeof NOTIFY?.hook?.path === 'string' ? NOTIFY.hook.path : null;
+/** `yedeya-labs/kanon/<action>` of each prebuilt hook, to its name. @type {Map<string, string>} */
+const PREBUILT = new Map(Object.entries(isObject(NOTIFY?.prebuilt) ? NOTIFY.prebuilt : {}).map(([n, p]) => [`yedeya-labs/kanon/${tostring(p?.action)}`, n]));
+/** @type {Array<{ name: string, tag: string }>} */
+const HOOK_PINS = [];
 const TAGS = sortU(ymlFiles('.github').flatMap((f) => readFileSync(f, 'utf8').split('\n')
   .filter((l) => l.includes('yedeya-labs/kanon/') && !new RegExp(`^${SP}*#`).test(l))
-  .flatMap((l) => [...l.matchAll(REF)].map((m) => m[0].slice(m[0].lastIndexOf('@') + 1)))));
+  .flatMap((l) => [...l.matchAll(REF)].flatMap((m) => {
+    const at = m[0].lastIndexOf('@');
+    const tag = m[0].slice(at + 1);
+    const name = f === NOTIFY_HOOK ? PREBUILT.get(m[0].slice(0, at)) : undefined;
+    if (name === undefined) return [tag];
+    HOOK_PINS.push({ name, tag });
+    return [];
+  }))));
 // An exact version is a stable release, `vX.Y.Z`, or a candidate, `candidate-vX.Y.Z`, the same
 // code before it is promoted (K-ADOPT-11, plan 0009). Both are compared as strings below, so a
 // candidate beside its own stable release is two versions.
@@ -170,6 +190,42 @@ if (TAGS.length > 1) {
 }
 if (EXACT.test(ACTION_REF) && TAGS.length > 0 && TAGS.join('\n') !== ACTION_REF) {
   fail('.github', `lane-check runs at ${ACTION_REF}, but the Kanon references pin ${TAGS.join(',')}`);
+}
+// The prebuilt hook's pin, against the callers' one version. Behind them it still works while it
+// declares a contract version the callers' release writes, which is this release (the rule just
+// above), so it passes with a notice; ahead of them, or on a retired version, it fails.
+/** `vX.Y.Z` or `candidate-vX.Y.Z` as `[X, Y, Z]`. @param {string} tag */
+const release = (tag) => tag.replace(/^(?:candidate-)?v/, '').split('.').map(Number);
+/** Negative when `a` is an earlier release than `b`, a candidate level with its stable release. @param {string} a @param {string} b */
+const versus = (a, b) => {
+  const [x, y] = [release(a), release(b)];
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return /** @type {number} */ (x[i]) - /** @type {number} */ (y[i]);
+  return 0;
+};
+const PINNED = TAGS.length === 1 && EXACT.test(/** @type {string} */ (TAGS[0])) ? /** @type {string} */ (TAGS[0]) : null;
+for (const { name, tag } of HOOK_PINS) {
+  const file = /** @type {string} */ (NOTIFY_HOOK);
+  if (!EXACT.test(tag)) {
+    fail(file, `a Kanon reference pins '${tag}', not an exact version: a stable release vX.Y.Z or a candidate candidate-vX.Y.Z (K-ADOPT-11)`);
+    continue;
+  }
+  if (PINNED === null || tag === PINNED) continue;
+  const at = `pins Kanon's ${name} hook at ${tag}`;
+  if (versus(tag, PINNED) > 0) {
+    fail(file, `${at}, ahead of the callers' ${PINNED}: its pin follows theirs, never leads it (plan 0011 decision 18). Pin it at ${PINNED}, or move the callers to ${tag}`);
+    continue;
+  }
+  const doc = json(file);
+  if (doc === undefined) { fail(file, 'is not valid YAML'); continue; }
+  const inputs = isObject(doc) && isObject(/** @type {any} */ (doc).inputs) ? Object.keys(/** @type {any} */ (doc).inputs) : [];
+  const declared = inputs.map((k) => /^message-v(\d+)$/.exec(k)?.[1]).filter((v) => v !== undefined).map(Number).sort((a, b) => a - b);
+  const versions = (Array.isArray(NOTIFY?.versions) ? NOTIFY.versions : []).filter((/** @type {unknown} */ v) => typeof v === 'number');
+  const v = (/** @type {number[]} */ ns) => ns.map((n) => `message-v${n}`).join(', ');
+  if (!declared.some((n) => versions.includes(n))) {
+    fail(file, `${at}, behind the callers' ${PINNED}, and declares ${declared.length ? v(declared) : 'no message-v<N> input'}, which the callers' release no longer writes: it writes ${v(versions)}, so the notify job hands it no message it reads. Move its pin to ${PINNED}, the callers' (plan 0011 decision 18)`);
+    continue;
+  }
+  out(`::notice file=${file},title=lane-check::${at}, behind the callers' ${PINNED}. It works while it declares a contract version their release still writes (${v(declared.filter((n) => versions.includes(n)))}); move it to the callers' pin when you can (plan 0011 decision 18)`);
 }
 
 // ── The callers ─────────────────────────────────────────────────────────────────────────
@@ -213,9 +269,7 @@ let COLLECTOR = false;
  * Whether this release's collector is on the token path, its requirements' `telemetry.token`
  * (plan 0008 §8), and so refuses the SigV4 path's `url` and `writer-role` without `audience`.
  */
-const TOKEN_PATH = (() => {
-  try { return JSON.parse(readFileSync(join(KANON_ROOT, 'requirements.json'), 'utf8'))?.telemetry?.token === true; } catch { return false; }
-})();
+const TOKEN_PATH = REQUIREMENTS?.telemetry?.token === true;
 /** @type {string[]} */
 const ROLES = [];
 /** @type {Array<[string, string]>} */
