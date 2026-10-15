@@ -219,7 +219,7 @@ export const TELEMETRY_CALLER_PATH = '.github/workflows/telemetry.yml';
 /**
  * The caller of Kanon's telemetry collector, exactly as docs/telemetry.md's "The caller" gives it
  * (tests/unit/kanon-init.test.ts holds the two byte for byte), pinned to `release`. `kanon init`
- * writes it only on an explicit yes (`--telemetry`, #428): it sends this repository's run rows to
+ * writes it only on an explicit yes (`--telemetry`, #428): it sends this repository's telemetry rows to
  * Kanon's hosted store. It reads no variable and maps no secret: the collector carries the hosted
  * store's URL, and its first run registers the repository (plan 0008 §8, step J5). Two dispatch
  * inputs erase what was sent and come back after an erasure.
@@ -227,7 +227,7 @@ export const TELEMETRY_CALLER_PATH = '.github/workflows/telemetry.yml';
  */
 export const telemetryCallerFile = (release) =>
   [
-    "# Sends this repository's agent-run rows, and a work-item row per closed pull request, to Kanon's hosted telemetry store (docs/telemetry.md).",
+    "# Sends this repository's telemetry rows (agent-run, work-item, deploy and notify rows) to Kanon's hosted telemetry store (docs/telemetry.md).",
     '# Its first run registers the repository. Delete this file to stop; dispatch it with erase: yes first to erase what was sent.',
     'name: Telemetry',
     'on:',
