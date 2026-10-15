@@ -238,13 +238,39 @@ describe('a run the action failed past its turn cap is a cap hit (kanon#1008)', 
     expect(v2).toMatchObject({ outcome: 'exhausted', reason: 'turn_cap', terminal_reason: 'max_turns' });
   });
 
-  it('reads a red job as the failed step on a lane whose agent step cannot fail it', () => {
-    // The review lane runs the agent `continue-on-error`, so its stage's conclusion is `success`
-    // even when the action failed it, and it reds the job before `agent-finish` only when no
-    // verdict was posted: then the job's status is what is left to read. The other
-    // `continue-on-error` lanes have no red job by then (kanon#1014).
+  it('reads a red job as the failed step, when a lane passes no agent outcome', () => {
+    // An adopter's own lane that predates `agent_outcome` (kanon#1014) still has the job's
+    // status: a lane that runs the agent `continue-on-error` and reds the job before telemetry.
     const { v2 } = both(OVERSHOT, { ...LEAD, TELEMETRY_STAGES: AGENT_PASSED, TELEMETRY_JOB_STATUS: 'failure' });
     expect(v2).toMatchObject({ outcome: 'exhausted', reason: 'turn_cap', terminal_reason: 'max_turns' });
+  });
+
+  it('reads the agent step\'s outcome on a lane that runs it continue-on-error and is still green (kanon#1014)', () => {
+    // Code audit, the Overseer, the digests, the telemetry explorer, and a reviewer that posted
+    // its verdict: the agent stage concludes `success` and nothing has redded the job when
+    // `agent-finish` runs, so the step's `outcome` is the only place the failure shows.
+    const { row, v2, errors } = both(OVERSHOT, {
+      ...LEAD, TELEMETRY_STAGES: AGENT_PASSED, TELEMETRY_JOB_STATUS: 'success', TELEMETRY_AGENT_OUTCOME: 'failure',
+    });
+    expect(row).toMatchObject({ outcome: 'exhausted', terminal_reason: 'max_turns' });
+    expect(v2).toMatchObject({ outcome: 'exhausted', reason: 'turn_cap', terminal_reason: 'max_turns' });
+    expect(errors).toEqual([]);
+  });
+
+  it('leaves it ok and completed when the agent step\'s outcome is success', () => {
+    const { v2 } = both(OVERSHOT, {
+      ...LEAD, TELEMETRY_STAGES: AGENT_PASSED, TELEMETRY_JOB_STATUS: 'success', TELEMETRY_AGENT_OUTCOME: 'success',
+    });
+    expect(v2).toMatchObject({ outcome: 'ok', reason: 'none', terminal_reason: 'completed' });
+  });
+
+  it('a failed agent outcome on a run that finished within its cap is still ok', () => {
+    // The outcome only says the step failed; the action's own predicate, past the cap, still decides.
+    const { v2 } = both(OVERSHOT, {
+      ...LEAD, TELEMETRY_CLAUDE_ARGS: '--model claude-opus-5-5\n--max-turns 100',
+      TELEMETRY_STAGES: AGENT_PASSED, TELEMETRY_JOB_STATUS: 'success', TELEMETRY_AGENT_OUTCOME: 'failure',
+    });
+    expect(v2).toMatchObject({ outcome: 'ok', terminal_reason: 'completed' });
   });
 
   it('leaves the same result ok and completed when nothing failed', () => {
@@ -735,7 +761,9 @@ describe('where the rows go', () => {
   it('passes each stage as a step conclusion, in the order the job runs those steps', () => {
     expect(laneJobs.length).toBe(12);
     for (const c of laneJobs) {
-      expect(Object.keys(c.with).filter((k) => k.endsWith('-outcome')), c.f).toEqual([]);
+      // The agent step's outcome is passed beside the stages, never as one (kanon#1014): it
+      // feeds only whether the step failed, so a tolerated step is still never blamed.
+      expect(Object.keys(c.with).filter((k) => k.endsWith('-outcome') && k !== 'agent-outcome'), c.f).toEqual([]);
       const pairs = String(c.with.stages ?? '').trim().split(/\s+(?=[a-z]+=)/);
       // A job that mints an App token passes that stage too; the digests mint none (plan 0004
       // step 10), so theirs are the checkout, the set-up and the agent.
@@ -801,6 +829,39 @@ describe('where the rows go', () => {
     expect(String(t.kanon_error)).toContain('inputs.kanon-error');
     expect(String(t.kanon_error)).toContain('steps.quality.outputs.kanon-error');
     expect(t).toMatchObject({ lane: '${{ inputs.lane }}', tag: '${{ inputs.tag }}', job_status: '${{ inputs.job-status }}' });
+  });
+
+  it('a lane that runs its agent continue-on-error hands the finish block the step\'s outcome (kanon#1014)', () => {
+    // Its conclusion is `success` even when the action failed the step, so the outcome is the
+    // only signal a turn-cap overshoot leaves. A lane whose agent step can fail has the stage.
+    const tolerant: string[] = [];
+    for (const c of laneJobs) {
+      const agent = c.job.steps!.find((s) => s.id === 'agent');
+      expect(agent?.uses, c.f).toBe('$/actions/agent-run');
+      if (agent?.['continue-on-error'] === true) {
+        tolerant.push(c.f);
+        expect(c.with['agent-outcome'], c.f).toBe('${{ steps.agent.outcome }}');
+      } else {
+        expect(c.with['agent-outcome'], c.f).toBeUndefined();
+      }
+    }
+    expect(tolerant.sort()).toEqual([
+      'agent-project-digest.yml', 'agent-weekly-digest.yml', 'code-audit-agent-job.yml',
+      'explore-telemetry-agent-job.yml', 'overseer-agent-job.yml', 'review-agent-job.yml',
+    ]);
+  });
+
+  it('the finish block hands the agent outcome to the telemetry action, which hands it to the normaliser', () => {
+    const finish = parse(readFileSync('actions/agent-finish/action.yml', 'utf8')) as {
+      inputs: Record<string, unknown>; runs: { steps: Step[] };
+    };
+    expect(finish.inputs['agent-outcome']).toMatchObject({ required: false, default: '' });
+    expect(finish.runs.steps.find((s) => s.uses === '$/actions/agent-telemetry')!.with!.agent_outcome).toBe('${{ inputs.agent-outcome }}');
+    const telemetry = parse(readFileSync('actions/agent-telemetry/action.yml', 'utf8')) as {
+      inputs: Record<string, unknown>; runs: { steps: (Step & { id?: string; env?: Record<string, string> })[] };
+    };
+    expect(telemetry.inputs.agent_outcome).toMatchObject({ required: false, default: '' });
+    expect(telemetry.runs.steps.find((s) => s.id === 'row')?.env?.TELEMETRY_AGENT_OUTCOME).toBe('${{ inputs.agent_outcome }}');
   });
 
   it('every hook-missing error writes its code', () => {

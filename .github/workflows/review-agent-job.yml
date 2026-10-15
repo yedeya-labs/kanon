@@ -1440,6 +1440,9 @@ jobs:
           arm: review agent
           agent: reviewer
           job-status: ${{ job.status }}
+          # The agent step runs `continue-on-error`, so its conclusion is `success` even when the
+          # action failed it past its turn cap: the outcome says so (kanon#1014).
+          agent-outcome: ${{ steps.agent.outcome }}
           classify: "false"
           outcome-label: ${{ steps.quality.outputs.outcome_label }}
           artifacts-filed: ${{ steps.quality.outputs.artifacts_filed }}

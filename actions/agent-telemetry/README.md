@@ -38,6 +38,7 @@ Turns `claude-code-action`'s result file into one telemetry row (cost, turns, to
 | `kanon_error` | no | A code from Kanon's error list, when one of Kanon's steps failed and wrote one. |
 | `prompt_cache_ttl` | no | The TTL the run was pinned at, as `agent-run`'s `prompt-cache-ttl` output says it: `5m`, `1h` or `default`. Recorded as the row's `prompt_cache_ttl`, from run row version 3. Empty, or any other value, records nothing. |
 | `job_status`, `job_started_at`, `timeout_minutes` | no | The job's status, start and timeout, for `job_status` and `timed_out`. A cancel within three minutes of the limit counts as the timeout, because the start stamp is the job's first step, not its start. |
+| `agent_outcome` | no | The agent step's `outcome`, for a lane that runs it `continue-on-error`. With the `agent` stage's conclusion and the job's status, it says whether the step failed, which a run past its turn cap needs to be recorded as one ([#1014](https://github.com/yedeya-labs/kanon/issues/1014)). It is not a stage and never moves `failed_stage`. |
 | `retention_days` | no | How long the version-1 artifact is kept for the collector. Default 7. The version-2 artifact is always kept 90 days, below. |
 
 ## Two rows, two artifacts

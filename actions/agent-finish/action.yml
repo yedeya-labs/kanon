@@ -126,6 +126,14 @@ inputs:
       never reach the row. This block adds its own stage, `finish`, last.
     required: false
     default: ""
+  agent-outcome:
+    description: >-
+      The agent step's `outcome` (`steps.agent.outcome`), for a lane that runs it
+      `continue-on-error`. Its conclusion is `success` even when the action failed it, so this is
+      how the row records a run the action failed past its turn cap (kanon#1014). Not a stage: it
+      never moves `failed_stage`. Empty for a lane whose agent step can fail.
+    required: false
+    default: ""
   kanon-error:
     description: >-
       A code from Kanon's error list that an earlier Kanon step wrote as its `kanon-error`
@@ -241,6 +249,7 @@ runs:
         stages: ${{ inputs.stages }} finish=${{ steps.quality.conclusion }}
         kanon_error: ${{ inputs.kanon-error || steps.quality.outputs.kanon-error }}
         job_status: ${{ inputs.job-status }}
+        agent_outcome: ${{ inputs.agent-outcome }}
         job_started_at: ${{ inputs.job-started-at }}
         timeout_minutes: ${{ inputs.timeout-minutes }}
         prompt_cache_ttl: ${{ inputs.prompt-cache-ttl }}
