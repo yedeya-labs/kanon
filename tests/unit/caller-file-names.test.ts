@@ -70,6 +70,9 @@ const SITES: Site[] = [
   { file: 'scripts/telemetry-collect.mjs', line: '/actions/workflows/${encodeURIComponent(file)}/runs', reaches: 'self' },
   // A re-ask's due check lists its own caller's runs, by the file `GITHUB_WORKFLOW_REF` names (kanon#813).
   { file: 'scripts/reask-due.mjs', line: '/actions/workflows/${file}/runs', reaches: 'self' },
+  // The promotion's red gate lists the runs of each of Kanon's lane callers since its pins moved to
+  // the candidate, by the files that call a lane on the default branch (plan 0009 S5).
+  { file: 'scripts/promote.mjs', line: '/actions/workflows/${file}/runs?created=', reaches: 'callers' },
   // The deploy gate waits for the release commit's `ci.yml` push run (`K-SHIP-8`, plan 0010 §3 check 4).
   { file: 'scripts/deploy-gate.mjs', line: '/actions/workflows/${CI_WORKFLOW}/runs', reaches: 'ci.yml', constant: 'CI_WORKFLOW', deployLane: 'deploy-release.yml' },
 ];
