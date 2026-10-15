@@ -1035,7 +1035,8 @@ describe('the callers kanon init writes', () => {
     const lc = laneCheck(dir);
     expect(lc.status, lc.out).toBe(0);
     expect(lc.out).toContain(`${Object.keys(REQ.lanes).length} lane caller(s) pass`);
-    expect(r.out).toContain('gh secret set DIGEST_WEBHOOK -R acme/widgets');
+    // No lane takes DIGEST_WEBHOOK since plan 0011 N7 and N8; the kind secrets' steps come with N11.
+    expect(r.out).not.toContain('gh secret set DIGEST_WEBHOOK');
   }, 60_000);
 });
 
@@ -1429,7 +1430,8 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     const all = Object.keys(REQ.lanes).map((l) => l.slice('agent-'.length)).join(',');
     const d = parse(await run(checkout(), fakeGitHub(), ['--yes', '--json', '--no-apps', '--lanes', all]));
     const real = d.findings.filter((f) => ['secret.claude-code-oauth-token', 'secret.digest-webhook'].includes(f.id));
-    expect(real.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token', 'secret.digest-webhook']);
+    // No lane takes DIGEST_WEBHOOK since plan 0011 N7 and N8, so no step asks for it.
+    expect(real.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token']);
     for (const f of real) {
       expect(f.fix.text, f.id).toMatch(/in your own terminal/);
       expect(f.fix.text, f.id).toMatch(/never with `!` at the Claude Code prompt/);
@@ -2236,8 +2238,8 @@ describe('kanon init, a feature, three questions and one summary (plan 0007 G5)'
     expect(choices(bare)).toEqual(['- **Feature:** `full`', '- **Review trigger:** `labelled`', '- **Overseer:** `installed`']);
     // With both: all three are in, and the lanes still make up Full.
     const both = checkout({ '.github/actions/explore-sweep/action.yml': 'runs:\n  using: composite\n  steps: []\n' });
-    // Each digest's own chat secret: the project digest's since plan 0011 N7, the weekly's until N8.
-    const w = parse(await run(both, fakeGitHub({ secrets: new Set(['DIGEST_WEBHOOK', 'KANON_CHAT_PROJECT_DIGEST']) }), ['--json', '--no-apps', '--feature', 'full']));
+    // Each digest's own chat secret (plan 0011 N7 and N8).
+    const w = parse(await run(both, fakeGitHub({ secrets: new Set(['KANON_CHAT_PROJECT_DIGEST', 'KANON_CHAT_WEEKLY_DIGEST']) }), ['--json', '--no-apps', '--feature', 'full']));
     expect(callers(both)).toEqual([...featureLanes('full'), 'agent-explore', 'agent-project-digest', 'agent-weekly-digest'].sort());
     expect(w.answers.feature).toBe('full');
     expect(w.summary.some((l) => l.answer === 'Left out')).toBe(false);
@@ -2434,7 +2436,8 @@ describe('kanon init, a feature, three questions and one summary (plan 0007 G5)'
       expect(f.conditional.map((c) => c.lane)).toEqual(Object.keys(spec.conditional));
     }
     expect(new Set(d.features[0]!.secrets as string[])).toEqual(new Set(['JUDGE_APP_ID', 'JUDGE_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']));
-    expect(d.features[2]!.secrets).toContain('DIGEST_WEBHOOK');
+    expect(d.features[2]!.secrets).toEqual(expect.arrayContaining(['KANON_CHAT_PROJECT_DIGEST', 'KANON_CHAT_WEEKLY_DIGEST']));
+    expect(d.features[2]!.secrets).not.toContain('DIGEST_WEBHOOK');
   });
 
   // Plan 0007 §9, Owner decision 15: the disclosure ADR 0007 and K-OBS-16 require stays in Q4.

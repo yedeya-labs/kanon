@@ -10,12 +10,18 @@
 # for the editorial rules. It adds to an adopter's per-release announcements; it does not
 # replace them.
 #
-# THE WEBHOOK (plan 0004, decision 7). The post goes to the URL in the caller's
-# `DIGEST_WEBHOOK` secret, as a `{"text": …}` body. Without it, the digest posts nothing and
-# says so, and the run stays green.
+# THE POST (plan 0011, step N8; `K-OBS-19`). The `digest` job builds one `weekly-digest`
+# message in Kanon's notification contract and uploads it; it holds no chat secret and posts
+# nothing. The `notify` job hands the message to the adopter's hook at
+# `.github/actions/notify/action.yml`, with the caller's `KANON_CHAT_WEEKLY_DIGEST` and no
+# other secret. The gate decides first whether anything will be posted: with no hook, or no
+# `KANON_CHAT_WEEKLY_DIGEST`, the `digest` job and its model don't run, and the run stays
+# green. `DIGEST_WEBHOOK` is gone (decision 17, a clean break): a caller that still maps it
+# is refused by GitHub, and its lane does not start.
 #
 # INERT until: the caller is on the default branch + these secrets (plan 0001 §8):
-#   CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, and DIGEST_WEBHOOK to post
+#   CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, and to post, a notify hook and
+#   KANON_CHAT_WEEKLY_DIGEST
 # ONE OF SECRETS: CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY
 # The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
 # credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
@@ -67,8 +73,9 @@ on:
         required: false
       ANTHROPIC_API_KEY:
         required: false
-      # Not required: without it the digest posts nothing (above).
-      DIGEST_WEBHOOK:
+      # Not required: without it nothing is posted, and no model runs (above). Only the
+      # `notify` job reads it, and the gate, as one presence boolean.
+      KANON_CHAT_WEEKLY_DIGEST:
         required: false
 
 concurrency:
@@ -104,6 +111,11 @@ jobs:
     timeout-minutes: 5
     outputs:
       member: ${{ steps.gate.outputs.member }}
+      # `present` or `none`, and empty when the gate refused: the `notify` job starts only on
+      # `present` (plan 0011 §8).
+      hook: ${{ steps.post.outputs.hook }}
+      # `true` when the digest will be posted, or on a dry run, which prints it.
+      narrate: ${{ steps.post.outputs.narrate }}
     steps:
       - uses: $/actions/kanon-path
       - name: Is the actor a member?
@@ -112,13 +124,57 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
 
+      # WHETHER ANYTHING WILL BE POSTED (plan 0011 §8, step N8), decided here, before any model
+      # runs and outside the job that holds the Claude credential. The hook's presence comes from
+      # a sparse checkout of its directory alone, which runs nothing and keeps no credential.
+      - name: Check out the notify hook's directory, to see whether it exists
+        if: steps.gate.outputs.member == 'true'
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/notify
+
+      # The kind's secret is read here only as one presence boolean, which is all the guard
+      # (`tests/unit/notify-guard.test.ts`) admits outside the `notify` job. With a hook and the
+      # secret, the digest runs and `notify` posts it; with a hook and no secret, the digest and
+      # its model are skipped and `notify` records `skipped` (`no-secret`); with no hook,
+      # nothing runs but the gate, whatever secret is set (decision 2: no built-in fallback). A
+      # dry run writes and prints the digest either way, and posts nothing.
+      - name: Will the digest be posted?
+        id: post
+        if: steps.gate.outputs.member == 'true'
+        env:
+          HAS_SECRET: ${{ secrets.KANON_CHAT_WEEKLY_DIGEST != '' }}
+          DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
+        run: |
+          set -euo pipefail
+          if [ -f .github/actions/notify/action.yml ]; then hook=present; else hook=none; fi
+          if [ -n "$DRY_RUN" ] || { [ "$hook" = present ] && [ "$HAS_SECRET" = true ]; }; then narrate=true; else narrate=false; fi
+          { echo "hook=$hook"; echo "narrate=$narrate"; } >> "$GITHUB_OUTPUT"
+          if [ "$hook" = none ]; then
+            echo "No notify hook: nothing was posted, and no model ran for it. docs/notifications.md says how to add one." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$HAS_SECRET" != true ]; then
+            # Named in words: the guard admits the secret's name once in this job, above.
+            echo "No chat secret for the weekly digest: this kind was not posted, and no model ran for it." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -n "$DRY_RUN" ]; then
+            echo "A dry run: the digest is written and printed, and nothing is posted." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   digest:
     needs: gate
-    if: needs.gate.outputs.member == 'true'
+    # Only when the digest will be posted, or on a dry run (the gate's `narrate`): the whole
+    # job's output is the message, so with nothing to post it doesn't run, and no model runs.
+    if: needs.gate.outputs.member == 'true' && needs.gate.outputs.narrate == 'true'
     runs-on: ubuntu-latest
     # Bounds a hang (RA-1336). Sized at ~3x the longest real run measured on the reference
     # adopter, so it never truncates work.
     timeout-minutes: 20
+    outputs:
+      # The message artifact's name, with this job's attempt, which the `notify` job takes as is
+      # (plan 0011 §4): after "Re-run failed jobs" its own attempt is one past this one's. Empty
+      # when nothing was uploaded.
+      message-artifact: ${{ steps.upload.outputs.artifact-id && format('kanon-notify-weekly-digest-digest-{0}-{1}', github.run_id, github.run_attempt) || '' }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1).
       - name: Record when the job started
@@ -137,7 +193,7 @@ jobs:
           arm: weekly-digest agent
           app-slug: ""
 
-      # Kanon's scripts, for the post below, and `KANON` for the agent's environment (kanon#110):
+      # Kanon's scripts, for the message below, and `KANON` for the agent's environment (kanon#110):
       # from this step's output, which no project file can rewrite.
       - uses: $/actions/kanon-path
         id: kanon
@@ -252,19 +308,36 @@ jobs:
       # FAILS THE JOB on error, deliberately. A swallowed failure means the digest quietly
       # stops and its reader simply stops hearing from the project, which nobody notices for
       # weeks. A red run is the cheapest possible detector (RA-644).
-      - name: Post the digest
+      #
+      # It writes the message and posts nothing (plan 0011 §4): no chat secret reaches this job.
+      # On a dry run it prints the message, its plain text and Kanon's Slack hook's payload to
+      # the step summary, and writes nothing to upload.
+      - name: Write the digest's message
+        id: message
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}
           WEEK_END: ${{ inputs.week_end }}
           DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
+          MESSAGE_PATH: ${{ runner.temp }}/kanon-notify-message/message.json
         run: |
           set -euo pipefail
+          mkdir -p "$(dirname "$MESSAGE_PATH")"
           # `|| true` on the read only — an absent narrative is the degraded path, not a
           # failure. Anything the script itself hits does fail the job.
           NARRATIVE="$(cat narrative.txt 2>/dev/null || true)" \
             node "$KANON/scripts/weekly-digest.mjs"
+
+      # The one message artifact, named for this lane, this job and this attempt (plan 0011 §4);
+      # the job's `message-artifact` output names it for the `notify` job.
+      - name: Upload the message
+        id: upload
+        if: steps.message.outputs.message != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-notify-weekly-digest-digest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.message.outputs.message }}
+          if-no-files-found: error
 
       # WHY THE NARRATIVE DID NOT LAND (RA-1408). GATED ON THE STEP, NOT THE JOB (RA-1503): the
       # narrative step is `continue-on-error`, so the job stays green when it fails, and
@@ -276,3 +349,25 @@ jobs:
         with:
           arm: weekly-digest agent
           non-fatal: "true"
+
+  # THE POST (plan 0011 §5, `K-OBS-19`): the adopter's hook, with this kind's secret and no other,
+  # a token that reads contents and nothing more, and no Claude credential. Of the shape
+  # `tests/unit/helpers/notify-jobs.ts` holds every `notify` job to. It starts only past an
+  # admitting gate with a hook, never on a dry run or a cancelled run, and after a skipped or
+  # failed `digest` job too, so a message not posted is recorded as `skipped`.
+  notify:
+    needs: [gate, digest]
+    if: ${{ !cancelled() && needs.gate.outputs.member == 'true' && needs.gate.outputs.hook == 'present' && inputs.dry_run != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.notify.outputs.outcome }}
+    steps:
+      - uses: $/actions/notify
+        id: notify
+        with:
+          kind: weekly-digest
+          artifact: ${{ needs.digest.outputs.message-artifact }}
+          secret: ${{ secrets.KANON_CHAT_WEEKLY_DIGEST }}

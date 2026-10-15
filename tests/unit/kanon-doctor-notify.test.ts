@@ -116,8 +116,8 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
   });
 
   it('asks nothing where the checked release has no lane that notifies, as a release before N7', async () => {
-    // This tree notifies since N7, from the project digest alone; a release before it has the entry, and no lane in it.
-    expect(Object.values(notifyOf(REQ).kinds).flatMap((k) => k.lanes)).toEqual([LANE]);
+    // This tree notifies since N7 and N8, from both digests; a release before them has the entry, and no lane in it.
+    expect(Object.values(notifyOf(REQ).kinds).flatMap((k) => k.lanes)).toEqual([LANE, 'agent-weekly-digest']);
     const f = files({ hook: null, mapped: ['CLAUDE_CODE_OAUTH_TOKEN', LEGACY] });
     const r = await check(f, github({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), LEGACY]) }), beforeN7());
     expect(notifyIds(r)).toEqual([]);

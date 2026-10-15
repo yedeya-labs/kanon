@@ -16,7 +16,6 @@
   "tests/library/decomposition-contract.test.ts": 0.1,
   "tests/library/deploy-revert.test.ts": 0.1,
   "tests/library/digest-audience.test.ts": 0.1,
-  "tests/library/digest-webhook.test.ts": 0.1,
   "tests/library/dispatch-sweep-breaker-report.test.ts": 0.1,
   "tests/library/dispatch-sweep-cost-read.test.ts": 0.7,
   "tests/library/dispatch-sweep-park.test.ts": 0.1,

@@ -39,7 +39,7 @@ The "Its short and skipped runs" column is held to the lanes' jobs by [`tests/un
 | `agent-verify-acs` | An issue labelled; a dispatch | Every label other than `qa:verify` (skipped, nothing billed) | Projects verified |
 | `agent-overseer` | A weekly schedule; a merged change to its caller; a dispatch | A merged caller change that doesn't move the agent runtime forward (a short gate job) | Weeks |
 | `agent-project-digest` | A daily schedule; a dispatch | A run without both the notify hook and `KANON_CHAT_PROJECT_DIGEST`: the gate skips the `digest` job and runs only the health job, at no model cost (plan 0011 §8) | Days, and open projects |
-| `agent-weekly-digest` | A weekly schedule; a dispatch | None to speak of | Weeks |
+| `agent-weekly-digest` | A weekly schedule; a dispatch | No notify hook, or no `KANON_CHAT_WEEKLY_DIGEST`: a short gate job, and no model, since nothing would be posted (plan 0011 §8) | Weeks |
 | `agent-merge` | A review submitted; CI finishing on the default branch; an hourly schedule; a dispatch | None: it runs no model, so every run is short | Reviews, merges and hours |
 | `agent-rebase` | CI finishing on the default branch; a pull request merged; a daily schedule; a dispatch | A check that finds no agent pull request in conflict | Merges, and conflicts on agent pull requests |
 | `agent-dispatch-sweep` | A daily schedule; a run of a lane it recovers completing; a dispatch | None: it runs no model, so every run is short | Days, and the implement and triage runs that re-ask it ([Schedules are best effort](lanes.md#schedules-are-best-effort)) |

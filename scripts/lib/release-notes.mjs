@@ -1,10 +1,10 @@
 // @ts-nocheck -- moved from the reference adopter's pipeline library, which doesn't type-check its scripts (plan 0001 §3; ADR 0009)
 /**
  * Pure text helpers for turning release-please release bodies into chat text. Shared:
- * `parseSections`, `scopeOf`, `classify` and `INTERNAL_SCOPES`. Kanon text, for the deploy
- * announcement's `deploy` message (plan 0011 step N9): `kanonBullet`, `kanonList`,
- * `kanonMaint`. Slack mrkdwn, for the weekly digest alone until it moves behind the
- * `notify` job too (step N8): `slackInline`, `cleanBullet`, `dropScopePrefix`.
+ * `parseSections`, `scopeOf`, `classify`, `INTERNAL_SCOPES` and `bulletProse`. Kanon text, for
+ * the deploy announcement's `deploy` message (plan 0011 step N9): `kanonBullet`, `kanonList`,
+ * `kanonMaint`. Nothing here writes a chat system's markup: the weekly digest's `weekly-digest`
+ * message (step N8) is Kanon text too, and each hook renders it for its own system.
  *
  * Extracted from announce-deploy.mjs so the weekly digest (RA-502) can reuse them
  * instead of growing a second, drifting copy — the two posts read the same release
@@ -20,12 +20,6 @@
  */
 
 import { literal } from './notify-contract.mjs';
-
-/** Inline markdown → Slack mrkdwn (bold + links) for a single bullet's prose. */
-export const slackInline = (s) =>
-  s
-    .replace(/\*\*(.+?)\*\*/g, '*$1*')
-    .replace(/\[(.+?)\]\((https?:[^\s)]+)\)/g, '<$2|$1>');
 
 /**
  * Parse a release-please body into { sectionName: [rawBulletLine, ...] }.
@@ -65,8 +59,12 @@ export function classify(heading, scope) {
   return 'maint';
 }
 
-/** Render a raw bullet as `scope: prose (<url|#pr>)`, dropping noise refs. */
-export function cleanBullet(raw) {
+/**
+ * A raw bullet's parts: its scope (`**scope:**`), its prose, and the refs release-please appends
+ * (`([label](url))`), each removed from the prose.
+ * @param {string} raw
+ */
+function partsOf(raw) {
   const refs = [];
   let s = raw
     .replace(/\s*\(\[([^\]]+)\]\(([^)]+)\)\)/g, (_, label, url) => {
@@ -76,13 +74,16 @@ export function cleanBullet(raw) {
     .trim();
   const scope = s.match(/^\*\*(.+?):\*\*\s*/);
   if (scope) s = s.slice(scope[0].length);
-  const pr = [...refs].reverse().find((r) => /^#\d+/.test(r.label));
-  const link = pr ? ` (<${pr.url}|${pr.label}>)` : '';
-  return `${scope ? `${scope[1]}: ` : ''}${slackInline(s)}${link}`;
+  return { scope: scope ? scope[1] : null, prose: s, refs };
 }
 
-/** Strip the scope prefix from a cleaned bullet — the digest groups BY scope, so repeating it in every line is noise. */
-export const dropScopePrefix = (cleaned) => cleaned.replace(/^[a-z0-9._/-]+:\s*/i, '');
+/**
+ * A raw bullet's prose alone, as plain text: no scope, no refs. The weekly digest groups by
+ * scope and links no pull request, so this is all it shows of a bullet; it is a commit's
+ * subject, text nobody controls, so the digest puts it into Kanon text through `literal`.
+ * @param {string} raw
+ */
+export const bulletProse = (raw) => partsOf(raw).prose;
 
 /**
  * Maintenance as its parts, each plain text: dependency bumps rolled into a count, other
@@ -114,24 +115,15 @@ export function maintParts(bullets) {
 const LINKABLE = /^https:\/\/[^\s()<>]+$/;
 
 /**
- * A raw bullet as one line of Kanon text, `scope: prose ([#pr](url))`, read the way
- * `cleanBullet` reads it: the scope prefix and noise refs dropped, the last `#N` ref kept
- * as a link. The prose is a commit's subject, so it goes through `literal`; the link is
+ * A raw bullet as one line of Kanon text, `scope: prose ([#pr](url))`, read by `partsOf`: the
+ * scope prefix and noise refs dropped, the last `#N` ref kept as a link. The prose is a commit's subject, so it goes through `literal`; the link is
  * kept only when its URL is `https://`.
  */
 export function kanonBullet(raw) {
-  const refs = [];
-  let s = raw
-    .replace(/\s*\(\[([^\]]+)\]\(([^)]+)\)\)/g, (_, label, url) => {
-      refs.push({ label, url });
-      return '';
-    })
-    .trim();
-  const scope = s.match(/^\*\*(.+?):\*\*\s*/);
-  if (scope) s = s.slice(scope[0].length);
+  const { scope, prose, refs } = partsOf(raw);
   const pr = [...refs].reverse().find((r) => /^#\d+$/.test(r.label) && LINKABLE.test(r.url));
   const link = pr ? ` ([${pr.label}](${pr.url}))` : '';
-  return `${scope ? `${literal(scope[1])}: ` : ''}${literal(s)}${link}`;
+  return `${scope ? `${literal(scope)}: ` : ''}${literal(prose)}${link}`;
 }
 
 /**

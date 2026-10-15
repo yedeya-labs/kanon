@@ -32,10 +32,8 @@ const FILES = readdirSync(WF).filter((f) => /\.ya?ml$/.test(f)).sort();
 const read = (f: string) => parse(readFileSync(join(WF, f), 'utf8')) as Workflow & { on?: { workflow_call?: { secrets?: Record<string, unknown> } } };
 const DOCS: Record<string, ReturnType<typeof read>> = Object.fromEntries(FILES.map((f) => [f, read(f)]));
 
-/** The lanes still posting from their own job, until the step that moves each (decision 17). */
-const PENDING_LANES: Record<string, string> = {
-  'agent-weekly-digest.yml': 'N8',
-};
+/** The lanes still posting from their own job, until the step that moves each (decision 17): none since N7 and N8. */
+const PENDING_LANES: Record<string, string> = {};
 /** The chat secret the digests used before the contract, which no moved lane may take. */
 const LEGACY = 'DIGEST_WEBHOOK';
 const KIND_OF_SECRET: Record<string, string> = Object.fromEntries(Object.entries(KIND_SECRETS).map(([k, s]) => [s, k]));
@@ -268,16 +266,13 @@ const SOURCES = Object.fromEntries(SCRIPTS.map((f) => [f, readFileSync(f, 'utf8'
  */
 const FETCH_EXCEPTIONS: Record<string, string> = {
   'scripts/telemetry/jev.mjs: ENDPOINT': "Jev, the upstream-finding judge (plan 0006 §7): Kanon's own private job, never a lane, posts no message",
-  'scripts/weekly-digest.mjs: webhook': 'the weekly digest posts from its own job until step N8 moves it behind the notify job',
 };
-/** The scripts that read a chat secret until the step that moves their lane. */
-const SECRET_EXCEPTIONS: Record<string, string> = {
-  'scripts/lib/digest-webhook.mjs: DIGEST_WEBHOOK': 'the weekly digest\'s webhook until step N8, which deletes this file (the project digest stopped reading it in N7)',
-};
+/** The scripts that read a chat secret until the step that moves their lane: none since N7 and N8. */
+const SECRET_EXCEPTIONS: Record<string, string> = {};
 /** The producers of each kind's message (§3.2), and the step that moves each still to move. */
 const PRODUCERS: Record<string, string | null> = {
   'scripts/project-digest.mjs': null,
-  'scripts/weekly-digest.mjs': 'N8',
+  'scripts/weekly-digest.mjs': null,
   'scripts/announce-deploy.mjs': null,
 };
 
@@ -400,6 +395,46 @@ describe('the guard on a moved lane (the project digest, as N7 left it)', () => 
     expect(chatSecretProblems(ok)).toEqual([]);
     const wrong = { ...with_(moved()), 'x-caller.yml': { on: 'workflow_dispatch', jobs: { digest: { uses: '$/.github/workflows/agent-weekly-digest.yml', secrets: { KANON_CHAT_PROJECT_DIGEST: '${{ secrets.KANON_CHAT_PROJECT_DIGEST }}' } } } } as ReturnType<typeof read> };
     expect(chatSecretProblems(wrong)).toEqual(['x-caller.yml:digest: KANON_CHAT_PROJECT_DIGEST']);
+  });
+});
+
+describe('the weekly digest, moved (plan 0011 N8)', () => {
+  const WEEKLY = 'agent-weekly-digest.yml';
+  const lane = () => structuredClone(DOCS[WEEKLY]!);
+  const with_ = (wf: ReturnType<typeof lane>, smoke = DOCS['agent-lanes-smoke.yml']!) => ({ ...DOCS, [WEEKLY]: wf, 'agent-lanes-smoke.yml': smoke });
+
+  it('has one notify job of its shape, with its own kind and secret, and declares no DIGEST_WEBHOOK', () => {
+    expect(notifyJobsOf(DOCS[WEEKLY]!)).toEqual(['notify']);
+    expect(producersOf(DOCS[WEEKLY]!)).toEqual(['digest']);
+    expect(notifyJobProblems(DOCS[WEEKLY]!, 'notify', 'weekly-digest')).toEqual([]);
+    expect(Object.keys(DOCS[WEEKLY]!.on!.workflow_call!.secrets!)).toContain('KANON_CHAT_WEEKLY_DIGEST');
+    expect(JSON.stringify(DOCS[WEEKLY])).not.toContain(LEGACY);
+    expect(JSON.stringify(DOCS[WEEKLY])).not.toContain('KANON_CHAT_PROJECT_DIGEST');
+  });
+
+  it("fails a step in the digest job that curls the chat secret with raw text (the issue's mutation)", () => {
+    const wf = lane();
+    wf.jobs!.digest!.steps!.push({ name: 'Post', env: { URL: '${{ secrets.KANON_CHAT_WEEKLY_DIGEST }}' }, run: 'curl -fsS -d "{\\"text\\": \\"$TEXT\\"}" "$URL"' });
+    expect(chatSecretProblems(with_(wf))).toEqual([`${WEEKLY}:digest: KANON_CHAT_WEEKLY_DIGEST`]);
+  });
+
+  it("fails the project digest's secret in the weekly digest's notify job, or a second read of its own in the gate", () => {
+    const wf = lane();
+    wf.jobs!.notify!.steps![0]!.with!.secret = '${{ secrets.KANON_CHAT_PROJECT_DIGEST }}';
+    expect(notifyLaneProblems(with_(wf))).toEqual(expect.arrayContaining([`${WEEKLY}:notify: its secret is not KANON_CHAT_WEEKLY_DIGEST`]));
+    expect(chatSecretProblems(with_(wf))).toEqual([`${WEEKLY}:notify: KANON_CHAT_PROJECT_DIGEST`]);
+    const gate = lane();
+    gate.jobs!.gate!.steps!.at(-1)!.env = { ...gate.jobs!.gate!.steps!.at(-1)!.env, URL: '${{ secrets.KANON_CHAT_WEEKLY_DIGEST }}' };
+    expect(chatSecretProblems(with_(gate))).toEqual([`${WEEKLY}:gate: KANON_CHAT_WEEKLY_DIGEST`]);
+  });
+
+  it('fails DIGEST_WEBHOOK declared back in the lane, or left in agent-lanes-smoke.yml (decision 17)', () => {
+    const wf = lane();
+    wf.on!.workflow_call!.secrets![LEGACY] = { required: false };
+    expect(notifyLaneProblems(with_(wf))).toEqual([`${WEEKLY}: a moved lane still names ${LEGACY}`]);
+    const smoke = structuredClone(DOCS['agent-lanes-smoke.yml']!);
+    (smoke.jobs!['weekly-digest']!.secrets as Record<string, string>)[LEGACY] = '${{ secrets.KANON_SMOKE_UNSET }}';
+    expect(notifyLaneProblems(with_(lane(), smoke))).toEqual([`agent-lanes-smoke.yml:weekly-digest: maps ${LEGACY} into ${WEEKLY}, which no longer declares it`]);
   });
 });
 

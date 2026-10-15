@@ -26,15 +26,17 @@ laneCheck(() => {
       red((t) => { extra(t, DAILY); t.edit(DAILY, (d) => { (d as Caller).permissions!.issues = 'read'; }); }, 'needs issues: write'));
     it('refuses a daily caller that does not grant the health job its read of runs', () =>
       red((t) => { extra(t, DAILY); t.edit(DAILY, (d) => { delete (d as Caller).permissions!.actions; }); }, 'needs actions: read'));
-    it('refuses a caller that does not map the webhook under its fixed name (decision 7)', () =>
+    // Plan 0011 decision 17, the clean break: the weekly digest takes its kind's secret, and a
+    // caller still mapping DIGEST_WEBHOOK is refused, as GitHub refuses to start it.
+    it('refuses a weekly caller that still maps DIGEST_WEBHOOK in place of its kind\'s secret (plan 0011 decision 17)', () =>
       red((t) => {
         extra(t, WEEKLY);
         t.edit(WEEKLY, (d) => {
           const secrets = job(d).secrets as Record<string, string>;
-          delete secrets.DIGEST_WEBHOOK;
-          secrets.SLACK_RELEASE_WEBHOOK = '${{ secrets.SLACK_RELEASE_WEBHOOK }}';
+          delete secrets.KANON_CHAT_WEEKLY_DIGEST;
+          secrets.DIGEST_WEBHOOK = '${{ secrets.DIGEST_WEBHOOK }}';
         });
-      }, 'the Kanon lane agent-weekly-digest takes exactly [ANTHROPIC_API_KEY,CLAUDE_CODE_OAUTH_TOKEN,DIGEST_WEBHOOK]'));
+      }, 'the Kanon lane agent-weekly-digest takes exactly [ANTHROPIC_API_KEY,CLAUDE_CODE_OAUTH_TOKEN,KANON_CHAT_WEEKLY_DIGEST]'));
     it('refuses a caller that passes `dry_run` as a setting rather than its own input', () =>
       red((t) => { extra(t, WEEKLY); t.edit(WEEKLY, (d) => { (job(d).with as Record<string, string>).dry_run = 'true'; }); }, 'passes `dry_run: true`'));
   });

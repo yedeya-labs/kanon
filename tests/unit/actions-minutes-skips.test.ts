@@ -79,6 +79,9 @@ const SKIPS: Record<string, Spec> = {
   // the kind's secret; `hook` starts the notify job, which records a skip and bills next to nothing.
   'agent-project-digest': { outputs: { post: ['without both the notify hook and `KANON_CHAT_PROJECT_DIGEST`', 'runs only the health job'], hook: null } },
   'agent-rebase': { outputs: { prs: ['finds no agent pull request in conflict'] } },
+  // Plan 0011 N8: `narrate` skips the digest job and its model when nothing would be posted;
+  // `hook` starts the notify job, which runs no model, so it ends no run early on its own.
+  'agent-weekly-digest': { outputs: { narrate: ['no notify hook', 'no `KANON_CHAT_WEEKLY_DIGEST`'], hook: null } },
   // Plan 0010 D8: its caller fires on every conclusion, and its gate admits a failure alone.
   'agent-deploy-diagnose': {
     outputs: { issues: ['a failed run that filed no issue'] },
@@ -216,9 +219,12 @@ describe(`docs/actions-minutes.md's "Its short and skipped runs" column is the l
     });
 
     it('"None to speak of" on a lane that skips, or missing on one that skips nothing; a dispatch-only lane that gains a trigger', () => {
-      const digest = lane('agent-weekly-digest');
-      red('agent-weekly-digest', withIf(digest, 'gate', (s) => `${s} || github.event.label.name == 'qa:digest'`), /skips some runs, but the row reads/);
       const audit = lane('agent-code-audit');
+      red('agent-code-audit', withIf(audit, 'gate', (s) => `${s} || github.event.label.name == 'qa:audit'`), /skips some runs, but the row reads/);
+      // The weekly digest's row names its gate's decision (plan 0011 N8); dropped, it is red.
+      const weekly = lane('agent-weekly-digest');
+      red('agent-weekly-digest', { ...weekly, cell: NOTHING }, /skips some runs, but the row reads/);
+      red('agent-weekly-digest', { ...weekly, cell: weekly.cell.replace('No notify hook', 'No hook') }, /doesn't say "no notify hook"/);
       red('agent-code-audit', { ...audit, cell: 'A commit already audited' }, /skips nothing, so the row must read "None to speak of"/);
       const lead = lane('agent-lead');
       red('agent-lead', withIf(lead, 'filter', (s) => `${s} || github.event_name == 'schedule'`), /runs on more than a dispatch/);

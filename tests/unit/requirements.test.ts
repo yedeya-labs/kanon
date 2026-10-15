@@ -317,7 +317,7 @@ describe('requirements.json', () => {
       expect(full!.lanes).toEqual([...build!.lanes, 'agent-lead', 'agent-lead-revise', 'agent-lead-split', 'agent-lead-reconcile', 'agent-verify-acs', 'agent-merge', 'agent-overseer', 'agent-code-audit']);
       expect(Object.keys(full!.conditional).sort()).toEqual(['agent-explore', 'agent-project-digest', 'agent-weekly-digest']);
       expect(full!.conditional['agent-explore']).toMatchObject({ hook: '.github/actions/explore-sweep/action.yml' });
-      expect(full!.conditional['agent-weekly-digest']).toMatchObject({ secret: 'DIGEST_WEBHOOK' });
+      expect(full!.conditional['agent-weekly-digest']).toMatchObject({ secret: 'KANON_CHAT_WEEKLY_DIGEST' });
       expect(full!.conditional['agent-project-digest']).toMatchObject({ secret: 'KANON_CHAT_PROJECT_DIGEST' });
       expect(Object.keys(full!.leftOut ?? {})).toEqual(['agent-explore-telemetry', 'agent-deploy-diagnose']);
       expect(features.map((f) => f.apps)).toEqual([['judge'], ['author', 'judge'], ['author', 'judge']]);
