@@ -211,7 +211,50 @@ describe('classifyResult', () => {
     // decomposed, which is worse than the missing detection it was meant to add.
     for (const run of OVER_CAP_BUT_FINISHED) {
       expect(classifyResult(run, OPUS_5).kind, `num_turns ${run.num_turns} finished cleanly`).toBe('ok');
+      // Still `ok` with the cap known, while the step that ran it passed: these two finished
+      // on an action that didn't yet enforce `--max-turns` (kanon#1008).
+      expect(classifyResult(run, OPUS_5, { maxTurns: 150, stepFailed: false }).kind).toBe('ok');
     }
+  });
+
+  // KANON#1008. Verbatim off run 38628914592 (the Lead's revise of PR #915), whose row said
+  // `completed`. `claude-code-action` since #1607 fails the step itself when a result says
+  // `success` past `--max-turns` ("Claude reported a successful result after 100 turns,
+  // exceeding the configured maximum of 90"), so the CLI's terminal reason is not the one
+  // that ended the run.
+  const OVERSHOT = {
+    type: 'result', subtype: 'success', is_error: false, terminal_reason: 'completed',
+    duration_ms: 718909, num_turns: 100, total_cost_usd: 5.2277682,
+    modelUsage: { ...HAIKU, 'claude-opus-5-5': { contextWindow: 1000000, maxOutputTokens: 128000 } },
+  };
+
+  it('calls a run the action failed past its turn cap `exhausted` (kanon#1008)', () => {
+    const c = classifyResult(OVERSHOT, 'claude-opus-5-5', { maxTurns: 90, stepFailed: true });
+    expect(c.kind).toBe('exhausted');
+    expect(c.code).toBe('turn_cap');
+    expect(c.why).toMatch(/turn cap/);
+    expect(c.why, 'naming the count and the cap').toMatch(/num_turns 100 past --max-turns 90/);
+    // And the turn cap's notice, not the dollar cap's.
+    expect(renderNotice(c.kind, c.why, { arm: 'x' }).body).toMatch(/`--max-turns` is the thing to raise/);
+  });
+
+  it('needs the failed step, the cap and the action\'s whole predicate to call an overshoot (kanon#1008)', () => {
+    const model = 'claude-opus-5-5';
+    // No failed step: the run finished, as the two rows above did.
+    expect(classifyResult(OVERSHOT, model, { maxTurns: 90, stepFailed: false }).kind).toBe('ok');
+    // No cap known: nothing to be past.
+    expect(classifyResult(OVERSHOT, model, { stepFailed: true }).kind).toBe('ok');
+    expect(classifyResult(OVERSHOT, model).kind).toBe('ok');
+    // AT the cap is not past it: the action fails a step only on `num_turns > maxTurns`.
+    expect(classifyResult({ ...OVERSHOT, num_turns: 90 }, model, { maxTurns: 90, stepFailed: true }).kind).toBe('ok');
+    // An errored result is the action's other failure, and stays `failed`.
+    expect(classifyResult({ ...OVERSHOT, subtype: 'error', is_error: true }, model, { maxTurns: 90, stepFailed: true }).kind)
+      .toBe('failed');
+    expect(classifyResult({ ...OVERSHOT, subtype: 'error_during_execution' }, model, { maxTurns: 90, stepFailed: true }).kind)
+      .toBe('ok');
+    // And a model that never ran is still `unavailable`, whatever the count.
+    expect(classifyResult({ ...OPUS_CAPPED, num_turns: 100 }, OPUS_5, { maxTurns: 90, stepFailed: true }).kind)
+      .toBe('unavailable');
   });
 
   it('still prefers `unavailable` when the model never ran, cap or no cap', () => {

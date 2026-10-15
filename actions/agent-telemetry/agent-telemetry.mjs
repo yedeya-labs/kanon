@@ -36,7 +36,9 @@
 //                 ADVICE differs — a re-run reproduces it (RA-1781). Keyed on the
 //                 reported terminal reason and NEVER on `num_turns` against
 //                 `max_turns`: two runs in the first week finished cleanly at 166 and
-//                 157 turns against a cap of 150.
+//                 157 turns against a cap of 150. The one exception is the action's
+//                 own check (kanon#1008): past the cap on a step that failed, it is
+//                 the turn cap, and the row records `terminal_reason: 'max_turns'`.
 //   failed      — it errored, but on the right model: a genuine mid-run death.
 //   not-reached — no result file at all. An ABSENCE of measurement, never a
 //                 measurement of zero.
@@ -399,7 +401,9 @@ export function buildRow(result, ctx, classification) {
     num_turns: num(result.num_turns),
     duration_ms: num(result.duration_ms),
     duration_api_ms: num(result.duration_api_ms),
-    terminal_reason: result.terminal_reason ?? null,
+    // A TURN-CAP STOP IS RECORDED AS ONE, whatever the CLI reported (kanon#1008): a run the
+    // action failed past its cap says `completed`, and the cap-hit counts read this field.
+    terminal_reason: classification.code === "turn_cap" ? "max_turns" : (result.terminal_reason ?? null),
     total_cost_usd: num(result.total_cost_usd),
     usage: normalizeUsage(result),
     models,
@@ -614,7 +618,14 @@ function collect(args, env) {
   ctx.configured_model = configuredModel || null;
   const model = configuredModel || parseModelArg(ctx.claude_args) || "";
   ctx.execution_file_form = form;
-  const classification = classifyResult(result, model);
+  // WHETHER THE STEP FAILED, for a run that `claude-code-action` failed past its turn cap
+  // (kanon#1008). The agent stage's conclusion says so on a lane whose agent step can red the
+  // job. A lane that runs it `continue-on-error` reports `success` there, so a red job is read
+  // as the failure too.
+  const stages = parseStages(args.stages ?? env.TELEMETRY_STAGES);
+  const stepFailed = stages.some(([s, v]) => s === "agent" && v === "failure")
+    || (args.job_status ?? env.TELEMETRY_JOB_STATUS) === "failure";
+  const classification = classifyResult(result, model, { maxTurns: parseMaxTurns(ctx.claude_args), stepFailed });
   return { row: buildRow(result, ctx, classification), classification, path };
 }
 

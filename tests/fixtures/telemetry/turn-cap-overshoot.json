@@ -1,0 +1,26 @@
+{
+  "type": "system",
+  "subtype": "init",
+  "message": "Claude Code initialized",
+  "model": "claude-opus-5-5"
+}
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "terminal_reason": "completed",
+  "duration_ms": 718909,
+  "num_turns": 100,
+  "total_cost_usd": 5.227768200000002,
+  "permission_denials_count": 4,
+  "modelUsage": {
+    "claude-haiku-4-5-20251001": {
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000
+    },
+    "claude-opus-5-5": {
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000
+    }
+  }
+}

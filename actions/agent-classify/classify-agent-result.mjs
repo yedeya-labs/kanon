@@ -86,6 +86,12 @@ const configuredModelRan = (usage, model) => {
  *   (`num_turns` 166 and 157 against `--max-turns 150`, both `terminal_reason:
  *   'completed'`), so that rule would send healthy issues to be decomposed. The cap is
  *   not the hard stop it reads as; the reported terminal reason is authoritative.
+ *   EXCEPT WHERE THE ACTION ENDS THE RUN ITSELF (kanon#1008). Since its #1607,
+ *   `claude-code-action` fails the step when a result says `success` past `--max-turns`,
+ *   and the result it wrote still says `completed`: run 38628914592 ran 100 turns against
+ *   90 and recorded `ok`. So a result the action's own check catches (`subtype: 'success'`,
+ *   not `is_error`, `num_turns > maxTurns`), on a step that failed, is the turn cap too.
+ *   Both of the caller's facts are required: the two clean runs above passed their step.
  *   ALSO the dollar cap (RA-1879): `terminal_reason === 'budget_exhausted'` from
  *   `--max-budget-usd`. Same advice, so same kind; the `why` says which cap.
  * `failed` — the agent ran and did not finish cleanly. Retrying is reasonable.
@@ -106,8 +112,14 @@ const configuredModelRan = (usage, model) => {
  *
  * There is no `unknown` return. `renderNotice` keeps an arm for it as a fall-through
  * for an unexpected caller, but every path above returns one of the five.
+ *
+ * `maxTurns` and `stepFailed` are the caller's: the run's `--max-turns` and whether the step
+ * that ran it failed. Without both, an overshoot is classified by its terminal reason alone.
+ *
+ * @param {{ maxTurns?: number | null, stepFailed?: boolean }} [opts]
  */
-export function classifyResult(result, model = '') {
+export function classifyResult(result, model = '', opts = {}) {
+  const { maxTurns = null, stepFailed = false } = opts;
   if (!result || typeof result !== 'object') {
     // NO RESULT FILE IS ITS OWN ANSWER (RA-1503 review). These steps run on
     // `if: failure()`, which is true when ANY earlier step failed — and in most arms
@@ -157,6 +169,17 @@ export function classifyResult(result, model = '') {
       code: 'turn_cap',
       why: `it stopped at its turn cap (num_turns ${Number.isFinite(turns) ? turns : '?'}, `
         + `total_cost_usd ${Number.isFinite(cost) ? cost.toFixed(2) : '?'})`,
+    };
+  }
+  // THE ACTION'S OWN TURN-CAP CHECK (kanon#1008), its predicate as `claude-code-action` writes
+  // it, on a step that failed. See `exhausted` above for why the failed step is required.
+  if (stepFailed && Number.isInteger(maxTurns) && result.subtype === 'success' && !errored
+      && Number.isFinite(turns) && turns > maxTurns) {
+    return {
+      kind: 'exhausted',
+      code: 'turn_cap',
+      why: `it stopped at its turn cap (num_turns ${turns} past --max-turns ${maxTurns}, so the action `
+        + `failed the step; total_cost_usd ${Number.isFinite(cost) ? cost.toFixed(2) : '?'})`,
     };
   }
   // THE DOLLAR CAP IS THE SAME SHAPE AS THE TURN CAP (RA-1879). `--max-budget-usd` ends a
