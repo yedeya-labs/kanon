@@ -19,10 +19,11 @@ const mutate = (change: (wf: Workflow) => void): string[] => {
 const job = (wf: Workflow, name: string): Job => wf.jobs[name]!;
 
 describe('the telemetry step\'s reads, from its own action', () => {
-  it('are the PR diff size and the issue body, each only when the row names one', () => {
+  it('are the PR diff size, the issue body and a revise lane\'s review, each only when the row names one', () => {
     expect(telemetryReads()).toEqual([
       { scope: 'pull-requests', when: 'pr' },
       { scope: 'issues', when: 'issue' },
+      { scope: 'pull-requests', when: 'revise' },
     ]);
   });
 

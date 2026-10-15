@@ -107,6 +107,36 @@ describe('widenings: what the release accepts that the deployed intake refuses',
   });
 });
 
+describe('the release that names deploy-diagnose and writes run row version 4 needs intake first (kanon#966, #173)', () => {
+  /** The schemas as the release before it had them: no version 4, no `deploy-diagnose` lane. */
+  const before = () => {
+    const s = copy();
+    delete s.run![4];
+    // Every row kind that names a lane takes the run row's list.
+    for (const versions of Object.values(s)) {
+      for (const fields of Object.values(versions)) {
+        const lane = fields.lane;
+        if (lane && Array.isArray(lane.values)) fields.lane = { ...lane, values: lane.values.filter((l) => l !== 'deploy-diagnose') };
+      }
+    }
+    return s;
+  };
+
+  it('names the new lane on every row that names a lane, and run row version 4, as widenings', () => {
+    expect(widenings(before(), copy())).toEqual([
+      'run v2 lane: accepts deploy-diagnose, which the deployed intake does not',
+      'run v3 lane: accepts deploy-diagnose, which the deployed intake does not',
+      'run v4: a version the deployed intake does not know',
+      'finding v1 lane: accepts deploy-diagnose, which the deployed intake does not',
+      'notify v1 lane: accepts deploy-diagnose, which the deployed intake does not',
+    ]);
+  });
+
+  it('narrows nothing: a release before it writes only what this one accepts', () => {
+    expect(narrowings(before(), copy())).toEqual([]);
+  });
+});
+
 describe('narrowings: what the deployed intake accepts, and so an older pin can write, that the release refuses (kanon#828)', () => {
   it('names nothing when the schemas are the same, or the release only widens', () => {
     expect(narrowings(copy(), copy())).toEqual([]);

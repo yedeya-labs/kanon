@@ -15,8 +15,8 @@
 // offending FIELDS only. It never echoes a value: a rejected row may hold the content this
 // schema exists to keep out, and the rejection is what reaches a log.
 //
-// FIVE ROW KINDS, each with its own version (plan 0002 §2.2). A `run` row (version 2) describes
-// one agent run. A `work_item` row (version 1, plan 0003 §3.3) describes one pull request; S1
+// FIVE ROW KINDS, each with its own version (plan 0002 §2.2). A `run` row (versions 2 to 4)
+// describes one agent run. A `work_item` row (version 1, plan 0003 §3.3) describes one pull request; S1
 // ships its field list only, and nothing writes one until plan 0003's M4. A `finding` row
 // (version 1, plan 0006 §2) carries one upstream finding, a finding only Kanon can act on; F1
 // ships its field list and checks; the Overseer's and the telemetry Explorer's filing steps write
@@ -62,6 +62,8 @@ export const LANE_ROLES = Object.freeze({
   overseer: 'overseer',
   'weekly-digest': 'overseer',
   'project-digest': 'overseer',
+  // Plan 0010 D8's diagnose lane, which reads a failed deploy and comments on it (#966).
+  'deploy-diagnose': 'explorer',
 });
 export const LANES = Object.freeze(Object.keys(LANE_ROLES));
 /** The work-item partition's name, which no lane may take (plan 0002 §4). */
@@ -370,6 +372,20 @@ const RUN_V3 = Object.freeze({
   prompt_cache_ttl: oneOf(PROMPT_CACHE_TTLS),
 });
 
+/**
+ * The run row, version 4: version 3's sixty fields and two counts the turn-budget measurement
+ * asked for (#173), each a work-size count `K-OBS-16` allows, absent when unknown:
+ * `review_open_items`, on a revise lane's run, the open items the Reviewer's latest
+ * changes-request declares in its `<!-- qa:open-items N -->` marker; and `issue_ac_count`, on a
+ * run that names its issue, the acceptance criteria the issue states.
+ */
+const RUN_V4 = Object.freeze({
+  ...RUN_V3,
+  schema_version: req(oneOf([4])),
+  review_open_items: count,
+  issue_ac_count: count,
+});
+
 /** The work-item row, version 1: eighty-four fields (plan 0003 §3.3). */
 const WORK_ITEM_V1 = Object.freeze({
   // Row and join
@@ -573,7 +589,7 @@ const NOTIFY_V1 = Object.freeze({
  * @type {Readonly<Record<string, Readonly<Record<number, Readonly<Record<string, Field>>>>>>}
  */
 export const SCHEMAS = Object.freeze({
-  run: Object.freeze({ 2: RUN_V2, 3: RUN_V3 }),
+  run: Object.freeze({ 2: RUN_V2, 3: RUN_V3, 4: RUN_V4 }),
   work_item: Object.freeze({ 1: WORK_ITEM_V1 }),
   finding: Object.freeze({ 1: FINDING_V1 }),
   deploy: Object.freeze({ 1: DEPLOY_V1 }),

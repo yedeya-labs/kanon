@@ -59,6 +59,8 @@ import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { classifyResult, parseObjects, readConfiguredModel, readResult } from "../agent-classify/classify-agent-result.mjs";
 import { LANE_ROLES, PROMPT_CACHE_TTLS, STAGES, TERMINAL_REASONS, describeErrors, validate } from "./schema.mjs";
 import { isCliEntry } from "../../scripts/lib/cli-entry.mjs";
+import { markedRole } from "../../scripts/lib/role-marker.mjs";
+import { openItems } from "../../scripts/merge-reconcile-gate.mjs";
 
 const SCHEMA = 1;
 
@@ -235,6 +237,95 @@ export function issueSize(body) {
   }
   return { issue_body_chars: [...text].length, issue_paths_named: paths.size };
 }
+
+// ------------------------------------------- the two counts #173 asked for (run row v4)
+//
+// CANDIDATE TURN PREDICTORS, RECORDED TO BE MEASURED (#173). The turn-budget measurement found
+// the review's open-items count the one signal on a revise run, and asked for the issue's
+// acceptance-criteria count beside the other size proxies, to measure again on more rows. Both
+// are counts, which `K-OBS-16` allows; neither text nor any value it derives from is stored.
+// Absent means unknown, never 0, as for the issue size above.
+
+/** A line that opens an issue's criteria: the label alone, optionally a heading or bold. */
+const AC_START = /^\s{0,3}(?:#{1,6}\s+)?(?:\*\*|__)?\s*(?:acceptance criteri(?:a|on)|what must be true)\b/i;
+/** A top-level list item, as `brief-guard.mjs`'s `acBullets` reads one. */
+const AC_ITEM = /^\s{0,3}(?:[-*+]|\d+[.)])\s+/;
+/** A spec clause cited by id, `[PAY-3]`, backticked or not. */
+const CLAUSE_REF = /\[([A-Z][A-Z0-9]*-\d+)\]/g;
+/** A Markdown heading, which ends a criteria region without being a criterion. */
+const HEADING = /^\s{0,3}#{1,6}\s/;
+/** A fenced block's fence: nothing inside one is read. */
+const FENCE = /^\s{0,3}(?:```|~~~)/;
+
+/**
+ * How many acceptance criteria an issue states: the top-level bullets under each line that opens
+ * with "Acceptance criteria" or "What must be true", plus each distinct `[ID-n]` spec clause the
+ * body cites outside those bullets. A label with no bullets under it is one criterion when it
+ * states one in prose: its own text after it (`**What must be true:** the lane's runs reach the
+ * store`), or a paragraph under it (`## What must be true`, then a sentence), as a Reviewer
+ * follow-up is written. A label followed by nothing, or by another heading, is 0. A region ends, as
+ * `acBullets`' does, at the first line that resumes prose at column zero; a fenced block is never
+ * read. Null for an unread body, so unknown stays absent; an empty body is a measured 0.
+ * @param {unknown} body
+ * @returns {number | null}
+ */
+export function issueAcCount(body) {
+  if (typeof body !== "string") return null;
+  const lines = [];
+  let fenced = false;
+  for (const line of body.replace(/\r\n/g, "\n").split("\n")) {
+    if (FENCE.test(line)) { fenced = !fenced; continue; }
+    if (!fenced) lines.push(line);
+  }
+  let count = 0;
+  const counted = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    const m = AC_START.exec(lines[i]);
+    if (!m) continue;
+    const bullets = [];
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      const line = lines[j];
+      if (!line.trim()) continue;
+      if (AC_ITEM.test(line)) { bullets.push(j); continue; }
+      if (/^\s/.test(line)) continue;
+      break;
+    }
+    if (bullets.length) {
+      count += bullets.length;
+      for (const b of bullets) counted.add(b);
+    } else if (lines[i].slice(m[0].length).replace(/^[\s*_:.—–-]+/, "").trim()) {
+      count += 1;
+      counted.add(i);
+    } else if (j < lines.length && !HEADING.test(lines[j]) && !AC_START.test(lines[j])) {
+      // A heading followed by a prose paragraph, as a Reviewer follow-up states its one criterion.
+      count += 1;
+      counted.add(j);
+    }
+    i = j - 1;
+  }
+  const inCriteria = new Set([...counted].flatMap((k) => [...lines[k].matchAll(CLAUSE_REF)].map((r) => r[1])));
+  const cited = new Set(lines.flatMap((l, k) => (counted.has(k) ? [] : [...l.matchAll(CLAUSE_REF)].map((r) => r[1]))));
+  for (const id of cited) if (!inCriteria.has(id)) count += 1;
+  return count;
+}
+
+/**
+ * The open items a revise run is answering: the count the Reviewer's verdict declares in its last
+ * `<!-- qa:open-items N -->` marker, read by the merge-reconcile gate's own `openItems`. Only a
+ * body that opens with the Reviewer's role marker is read, so a person's changes-request records
+ * nothing. Null when the body is unread, not the Reviewer's, or its marker is missing or garbled.
+ * @param {unknown} body
+ * @returns {number | null}
+ */
+export function reviewOpenItems(body) {
+  if (typeof body !== "string" || markedRole(body) !== "Reviewer") return null;
+  const n = openItems(body);
+  return typeof n === "number" ? n : null;
+}
+
+/** The lanes that revise a pull request after a changes-request, whose rows carry `review_open_items`. */
+export const REVISE_LANES = Object.freeze(Object.keys(LANE_ROLES).filter((l) => l.endsWith("-revise")));
 
 // ------------------------------------------------- the run's own diff (RA-2137)
 //
@@ -604,10 +695,22 @@ function collect(args, env) {
   // THE ISSUE-SIDE SIZE (RA-2137), from the body file the action wrote — only on a row that
   // names an issue, so a body file left over from anything else cannot label a PR arm.
   const bodyFile = args.issue_body_file ?? env.TELEMETRY_ISSUE_BODY_FILE;
+  /** The run row version 4's counts (#173), for the version-2 row only: absent when unknown. */
+  const counts = { issue_ac_count: null, review_open_items: null };
   if (ctx.issue_number !== null && bodyFile && bodyFile !== "true") {
     let body;
     try { body = readFileSync(bodyFile, "utf8"); } catch { body = null; }
     Object.assign(ctx, issueSize(body));
+    counts.issue_ac_count = issueAcCount(body);
+  }
+  // THE REVIEW THE RUN REVISES, from the body file the action wrote: only on a revise lane's row
+  // that names its pull request, so a stray file can't label another lane's run.
+  const reviewFile = args.review_body_file ?? env.TELEMETRY_REVIEW_BODY_FILE;
+  const lane = args.lane ?? env.TELEMETRY_LANE ?? "";
+  if (ctx.pr_number !== null && REVISE_LANES.includes(lane) && reviewFile && reviewFile !== "true") {
+    let body;
+    try { body = readFileSync(reviewFile, "utf8"); } catch { body = null; }
+    counts.review_open_items = reviewOpenItems(body);
   }
   // …AND THE RUN'S OWN DIFF, on the same arms and only when the run produced a result:
   // a `not-reached` run committed nothing because it never ran, which is not a 0.
@@ -628,7 +731,7 @@ function collect(args, env) {
   const stepFailed = stages.some(([s, v]) => s === "agent" && v === "failure")
     || (args.job_status ?? env.TELEMETRY_JOB_STATUS) === "failure";
   const classification = classifyResult(result, model, { maxTurns: parseMaxTurns(ctx.claude_args), stepFailed });
-  return { row: buildRow(result, ctx, classification), classification, path };
+  return { row: buildRow(result, ctx, classification), classification, path, counts };
 }
 
 // ================================================= the version-2 row (plan 0002 §2)
@@ -824,11 +927,16 @@ export function buildRowV2(row, classification, extra) {
   // THE TTL THE RUN WAS PINNED AT (#546), as `agent-run` said it. A value outside the list is
   // left out, never written as `default`: a lane that didn't say is not a lane that didn't pin.
   const ttl = PROMPT_CACHE_TTLS.includes(extra.prompt_cache_ttl) ? extra.prompt_cache_ttl : undefined;
+  // THE TWO COUNTS #173 ASKED FOR, each a whole number or absent.
+  const reviewOpen = Number.isInteger(extra.review_open_items) && extra.review_open_items >= 0 ? extra.review_open_items : undefined;
+  const acCount = Number.isInteger(extra.issue_ac_count) && extra.issue_ac_count >= 0 ? extra.issue_ac_count : undefined;
+  const v4 = reviewOpen !== undefined || acCount !== undefined;
   const v2 = {
-    // Version 3 only for a row that carries its one field. A row without it is still a valid
-    // version-2 row, which a collector or ingest function from an older release still accepts:
-    // the blocks smoke's row, whose agent step never runs, is one (plan 0002 §2.2).
-    schema_version: ttl === undefined ? 2 : 3,
+    // The lowest version that holds the row's fields (plan 0002 §2.2): version 4 only for a row
+    // that carries one of its two counts, version 3 for one that carries its TTL, and version 2
+    // otherwise, which a collector or ingest function from an older release still accepts: the
+    // blocks smoke's row, whose agent step never runs, is one.
+    schema_version: v4 ? 4 : (ttl === undefined ? 2 : 3),
     row_kind: "run",
     tag: extra.tag || "run",
     recorded_at: row.recorded_at,
@@ -880,6 +988,8 @@ export function buildRowV2(row, classification, extra) {
     changed_files: row.changed_files ?? undefined,
     issue_body_chars: row.issue_body_chars ?? undefined,
     issue_paths_named: row.issue_paths_named ?? undefined,
+    issue_ac_count: acCount,
+    review_open_items: reviewOpen,
     produced_lines: row.produced_lines ?? undefined,
     artifacts_filed: row.artifacts_filed ?? undefined,
     ...parseSeverities(row.severities),
@@ -914,8 +1024,8 @@ function readExtra(args, env, path) {
  * predates it doesn't; `errors` lists what made a built row invalid, by field name only.
  */
 export function runBoth(args, env) {
-  const { row, classification, path } = collect(args, env);
-  const extra = readExtra(args, env, path);
+  const { row, classification, path, counts } = collect(args, env);
+  const extra = { ...readExtra(args, env, path), ...counts };
   if (!extra.lane) return { row, v2: null, errors: [] };
   const v2 = buildRowV2(row, classification, extra);
   const verdict = validate(v2);

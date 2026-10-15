@@ -360,7 +360,7 @@ describe('the mutations plan 0002 §8 lists each fail validate', () => {
   });
   it('a version the kind does not have', () => {
     fails({ ...finished(), schema_version: 1 }, 'schema_version');
-    fails({ ...finished(), schema_version: 4 }, 'schema_version');
+    fails({ ...finished(), schema_version: 5 }, 'schema_version');
     const item = { schema_version: 2, row_kind: 'work_item', tag: 'run', recorded_at: '2026-10-02T10:00:00Z', pr_number: 7, closed_at: '2026-10-01T09:00:00Z', fate: 'merged' };
     fails(item, 'schema_version');
   });
@@ -652,15 +652,13 @@ describe('where the rows go', () => {
   const spineCalls = workflows.flatMap(({ f, doc }) => Object.values(doc.jobs)
     .filter((j) => j.uses === '$/.github/workflows/agent-lane.yml').map((j) => ({ f, with: j.with ?? {} })));
 
-  // THE ONE EXEMPTION (`K-PRIN-11`): a lane the store's schema doesn't name yet passes `lane: ""`,
+  // THE EXEMPTION (`K-PRIN-11`): a lane the store's schema doesn't name yet passes `lane: ""`,
   // which the spine documents as writing the version-1 row alone, so it sends no version-2 row the
   // store would refuse. Its name joins `LANE_ROLES` once the store's intake takes it, which ships
-  // before the release that writes it (docs/telemetry.md). The list is pinned: a second lane is a
-  // red test until it is named here, with the change that ends its exemption.
-  const NOT_YET_IN_SCHEMA: Record<string, string> = {
-    // Plan 0010 D8: the deploy diagnose lane, until kanon#966 adds `deploy-diagnose` to the schema.
-    'agent-deploy-diagnose.yml': 'kanon#966',
-  };
+  // before the release that writes it (docs/telemetry.md). The list is pinned: a lane is a red test
+  // until it is named here, with the change that ends its exemption. Empty since kanon#966 named
+  // the diagnose lane, `deploy-diagnose`.
+  const NOT_YET_IN_SCHEMA: Record<string, string> = {};
   type LaneCall = { f: string; with: Record<string, unknown> };
   const laneCalls = (): LaneCall[] => [...finishCalls, ...spineCalls].filter((c) => c.f !== 'agent-lane.yml' && c.f !== 'lane-agent-job.yml' && c.f !== 'agent-blocks-smoke.yml');
   /** What is wrong with the lanes' names: each names a schema lane, or is exempt and names none. */
@@ -678,30 +676,53 @@ describe('where the rows go', () => {
     return out;
   };
 
-  it('every Kanon lane names a lane from the schema\'s list, but the one named exemption', () => {
+  it('every Kanon lane names a lane from the schema\'s list, with no exemption left', () => {
     expect(laneCalls().length).toBe(17);
-    expect(Object.keys(NOT_YET_IN_SCHEMA)).toEqual(['agent-deploy-diagnose.yml']);
+    expect(Object.keys(NOT_YET_IN_SCHEMA)).toEqual([]);
     expect(laneNameProblems(laneCalls(), NOT_YET_IN_SCHEMA)).toEqual([]);
   });
 
+  it('the diagnose lane passes its own name, deploy-diagnose, which the schema names as the Explorer\'s (kanon#966)', () => {
+    const diagnose = laneCalls().filter((c) => c.f === 'agent-deploy-diagnose.yml');
+    expect(diagnose.map((c) => c.with.lane)).toEqual(['deploy-diagnose']);
+    expect(diagnose.map((c) => c.with.role)).toEqual(['Explorer']);
+    expect(LANE_ROLES['deploy-diagnose']).toBe('explorer');
+    // Its rows validate under the name: the role the lane maps to, and no other.
+    const row = { ...finished(), lane: 'deploy-diagnose', role: 'explorer' };
+    expect(validate(row)).toEqual({ ok: true });
+    expect(validate({ ...row, role: 'reviewer' })).toEqual({ ok: false, errors: [{ field: 'role', problem: 'lane-mismatch' }] });
+    // Passing nothing again, or the schema dropping the name, is red.
+    const blank = laneCalls().map((c) => (c.f === 'agent-deploy-diagnose.yml' ? { ...c, with: { ...c.with, lane: '' } } : c));
+    expect(laneNameProblems(blank, NOT_YET_IN_SCHEMA)).toEqual(['agent-deploy-diagnose.yml names the lane "", which the schema lacks']);
+    expect(laneNameProblems(laneCalls(), NOT_YET_IN_SCHEMA, LANES.filter((l) => l !== 'deploy-diagnose')))
+      .toEqual(['agent-deploy-diagnose.yml names the lane "deploy-diagnose", which the schema lacks']);
+  });
+
   describe('the exemption cannot widen (K-PRIN-11)', () => {
+    /** An exemption as kanon#966's was, for a lane the schema doesn't name: the diagnose lane, before it. */
+    const BEFORE = LANES.filter((l) => l !== 'deploy-diagnose');
+    const EXEMPT = { 'agent-deploy-diagnose.yml': 'kanon#966' };
+    const unnamed = () => laneCalls().map((c) => (c.f === 'agent-deploy-diagnose.yml' ? { ...c, with: { ...c.with, lane: '' } } : c));
+
+    it('an exempt lane that passes lane: "" while the schema lacks it is green', () => {
+      expect(laneNameProblems(unnamed(), EXEMPT, BEFORE)).toEqual([]);
+    });
     it('a lane passing lane: "" outside the list is red', () => {
       const calls = laneCalls().map((c) => (c.f === 'agent-lead.yml' ? { ...c, with: { ...c.with, lane: '' } } : c));
       expect(laneNameProblems(calls, NOT_YET_IN_SCHEMA)).toEqual(['agent-lead.yml names the lane "", which the schema lacks']);
     });
-    it('a second lane added to the list is red, whether the schema names it or no such lane runs', () => {
-      expect(laneNameProblems(laneCalls(), { ...NOT_YET_IN_SCHEMA, 'agent-lead.yml': 'kanon#966' })).toEqual(expect.arrayContaining([
+    it('a lane added to the list is red, whether the schema names it or no such lane runs', () => {
+      expect(laneNameProblems(laneCalls(), { 'agent-lead.yml': 'kanon#966' })).toEqual(expect.arrayContaining([
         'agent-lead.yml is exempt, but the schema names it now', 'agent-lead.yml is exempt, so it must pass lane: ""',
       ]));
-      expect(laneNameProblems(laneCalls(), { ...NOT_YET_IN_SCHEMA, 'agent-nothing.yml': 'kanon#966' })).toEqual(['agent-nothing.yml is exempt, but no such lane runs the agent']);
+      expect(laneNameProblems(laneCalls(), { 'agent-nothing.yml': 'kanon#966' })).toEqual(['agent-nothing.yml is exempt, but no such lane runs the agent']);
     });
     it('an exemption with no issue, or kept once the schema names the lane, is red', () => {
-      expect(laneNameProblems(laneCalls(), { 'agent-deploy-diagnose.yml': 'later' })).toEqual(['agent-deploy-diagnose.yml is exempt without the issue that ends it']);
-      expect(laneNameProblems(laneCalls(), NOT_YET_IN_SCHEMA, [...LANES, 'deploy-diagnose'])).toEqual(['agent-deploy-diagnose.yml is exempt, but the schema names it now']);
+      expect(laneNameProblems(unnamed(), { 'agent-deploy-diagnose.yml': 'later' }, BEFORE)).toEqual(['agent-deploy-diagnose.yml is exempt without the issue that ends it']);
+      expect(laneNameProblems(unnamed(), EXEMPT)).toEqual(['agent-deploy-diagnose.yml is exempt, but the schema names it now']);
     });
     it('the exempt lane naming a lane is red', () => {
-      const calls = laneCalls().map((c) => (c.f === 'agent-deploy-diagnose.yml' ? { ...c, with: { ...c.with, lane: 'explore' } } : c));
-      expect(laneNameProblems(calls, NOT_YET_IN_SCHEMA)).toEqual(['agent-deploy-diagnose.yml is exempt, so it must pass lane: ""']);
+      expect(laneNameProblems(laneCalls(), EXEMPT, BEFORE)).toEqual(['agent-deploy-diagnose.yml is exempt, so it must pass lane: ""']);
     });
   });
 
@@ -926,6 +947,86 @@ describe('run row version 3: the TTL the run was pinned at (#546)', () => {
     }
     // The twelve lane jobs, the blocks smoke, and the direct-lane fixture.
     expect(calls).toBe(14);
+  });
+});
+
+describe('run row version 4: the counts the turn-budget measurement asked for (#173)', () => {
+  const V3 = SCHEMAS.run![3]!;
+  const V4 = SCHEMAS.run![4]!;
+  const COUNTS = ['review_open_items', 'issue_ac_count'];
+  const tmp = mkdtempSync(join(tmpdir(), 'telemetry-v4-'));
+  const body = (name: string, text: string) => { const f = join(tmp, name); writeFileSync(f, text); return f; };
+  const REVIEW = body('review.md', '**Reviewer** <!-- kanon:role=reviewer -->\n\nTwo things.\n\n<!-- qa:open-items 2 -->\n');
+  const ISSUE = body('issue.md', '## Acceptance criteria\n\n- one\n- two\n- three\n');
+  const FINISHED = 'tests/fixtures/agent-blocks/finished.json';
+  const revise = { TELEMETRY_LANE: 'implement-revise', TELEMETRY_PR: '41', TELEMETRY_REVIEW_BODY_FILE: REVIEW };
+  const implement = { TELEMETRY_LANE: 'implement', TELEMETRY_ISSUE_NUMBER: '7', TELEMETRY_ISSUE_BODY_FILE: ISSUE };
+
+  it('is version 3 and the two counts, nothing else, each a non-negative integer', () => {
+    expect(Object.keys(V4).sort()).toEqual([...Object.keys(V3), ...COUNTS].sort());
+    for (const [name, field] of Object.entries(V3)) if (name !== 'schema_version') expect(V4[name], name).toEqual(field);
+    for (const c of COUNTS) expect(V4[c], c).toEqual({ type: 'int', max: 2 ** 31 - 1 });
+    expect(V4.schema_version).toEqual({ type: 'enum', values: [4], required: true });
+  });
+
+  it('accepts each count, 0 among them, and refuses a negative, a fraction or a string', () => {
+    const row: Row = { ...finished(), schema_version: 4 };
+    for (const c of COUNTS) {
+      for (const n of [0, 1, 37]) expect(validate({ ...row, [c]: n }), `${c} ${n}`).toEqual({ ok: true });
+      for (const [bad, problem] of [[-1, 'range'], [1.5, 'type'], ['3', 'type'], [null, 'type']] as const) {
+        expect(validate({ ...row, [c]: bad }), `${c} ${String(bad)}`).toEqual({ ok: false, errors: [{ field: c, problem }] });
+      }
+    }
+  });
+
+  it('still accepts versions 2 and 3, and refuses the counts on them', () => {
+    for (const version of [2, 3]) {
+      const old: Row = { ...finished(), schema_version: version };
+      expect(validate(old)).toEqual({ ok: true });
+      for (const c of COUNTS) expect(validate({ ...old, [c]: 1 }), `${version} ${c}`).toEqual({ ok: false, errors: [{ field: c, problem: 'unknown' }] });
+    }
+  });
+
+  it('a revise run records the open items of the review it answers, at version 4', () => {
+    const { v2, errors } = both(FINISHED, revise);
+    expect(errors).toEqual([]);
+    expect(v2).toMatchObject({ schema_version: 4, lane: 'implement-revise', review_open_items: 2 });
+    expect(v2).not.toHaveProperty('issue_ac_count');
+    // With its TTL too: version 4 holds version 3's field.
+    expect(both(FINISHED, { ...revise, TELEMETRY_PROMPT_CACHE_TTL: '1h' }).v2)
+      .toMatchObject({ schema_version: 4, prompt_cache_ttl: '1h', review_open_items: 2 });
+  });
+
+  it('only a revise lane reads the review, and only for a row that names its pull request', () => {
+    for (const env of [{ ...revise, TELEMETRY_LANE: 'review' }, { ...revise, TELEMETRY_PR: '' }]) {
+      const { v2, errors } = both(FINISHED, env);
+      expect(errors).toEqual([]);
+      expect(v2).toMatchObject({ schema_version: 2 });
+      expect(v2).not.toHaveProperty('review_open_items');
+    }
+    expect(both(FINISHED, { ...revise, TELEMETRY_LANE: 'lead-revise' }).v2).toMatchObject({ schema_version: 4, review_open_items: 2 });
+  });
+
+  it('an implement run records the issue\'s acceptance criteria, at version 4', () => {
+    const { v2, errors } = both(FINISHED, implement);
+    expect(errors).toEqual([]);
+    expect(v2).toMatchObject({ schema_version: 4, lane: 'implement', issue_ac_count: 3 });
+    expect(v2).not.toHaveProperty('review_open_items');
+  });
+
+  it('an unread body, or a review the count can\'t be read from, records nothing and stays at version 2', () => {
+    const cases = [
+      { ...implement, TELEMETRY_ISSUE_BODY_FILE: join(tmp, 'missing.md') },
+      { ...revise, TELEMETRY_REVIEW_BODY_FILE: join(tmp, 'missing.md') },
+      { ...revise, TELEMETRY_REVIEW_BODY_FILE: body('person.md', 'Please fix. <!-- qa:open-items 4 -->') },
+      { ...revise, TELEMETRY_REVIEW_BODY_FILE: body('old.md', '**Reviewer** <!-- kanon:role=reviewer -->\nNo marker.') },
+    ];
+    for (const env of cases) {
+      const { v2, errors } = both(FINISHED, env);
+      expect(errors).toEqual([]);
+      expect(v2).toMatchObject({ schema_version: 2 });
+      for (const c of COUNTS) expect(v2).not.toHaveProperty(c);
+    }
   });
 });
 
