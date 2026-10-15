@@ -12,6 +12,14 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-14.** The Owner decided that a rule records no history of its own: a rule whose premise changed is rewritten so its Why states the premise that holds now, and the change is recorded here, not in a "Premise changed" note beside the rule. [#578](https://github.com/yedeya-labs/kanon/issues/578), [#859](https://github.com/yedeya-labs/kanon/pull/859)
 
+## `K-AGENT-2`
+
+- **2026-10-15.** The Owner decided that the Releaser may open a candidate's pin pull request, the one exception to its touching no file outside the release file set, where the adoption record declares the Workflows write that pull request needs. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
+
+## `K-AGENT-3`
+
+- **2026-10-15.** The Owner decided that a repository widens one of its Apps beyond Kanon's shared grant only by declaring it, as an `Extra App permission` bullet under the adoption record's `## Choices`, which `kanon apps`, `apps-check` and doctor honour for that repository alone; the shared grant stays. Kanon declares Workflows write for its Releaser, for a candidate's pin pull request. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
+
 ## `K-AGENT-24`
 
 - **2026-10-12.** The Reviewer's token mint asks for Checks, Commit statuses and Actions read again, after a narrowing of its permissions dropped the reads this rule depends on; a test now fails a mint that drops any of the three. [#691](https://github.com/yedeya-labs/kanon/issues/691)
@@ -88,6 +96,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-14.** The deploy lane's fallback: where the plan provides no environments or no required reviewers, the adoption record marks it in `## Deploy`, production deploys only in the Maintainer's dispatch, and under `no-environments` the trust probe is skipped. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 
+## `K-ADOPT-8`
+
+- **2026-10-15.** The Owner decided that an App may hold, beyond its roles' rows, an extra permission its repository's adoption record declares, for that repository alone, and that `apps-check` and doctor hold each App to its grant plus that declaration. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
+
 ## `K-ADOPT-11`
 
 - **2026-10-06.** The Skill's pin, declared in the repository's `.claude/settings.json`, moves with the other pins, and `kanon doctor` reports one that differs from the release the callers pin. [#376](https://github.com/yedeya-labs/kanon/issues/376)
@@ -109,6 +121,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-12.** The Owner decided the release cadence choice: `every merge`, or `weekly, ` and a weekday. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
 - **2026-10-14.** The Owner decided that the adoption record has a `## Deploy` section of its own, holding the deploy lane's environments, its CI wait and the fallback's marker, and that the reference deploy's three bullets move there from `## Choices` at once, with no period of reading both places. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 - **2026-10-15.** The gate never waits longer than 345 minutes for the release commit's CI, whatever the record declares, so a CI that never finishes ends in `ci-timeout`, which is filed, inside the gate job's 360-minute limit, not in a cancellation, which files nothing. [#912](https://github.com/yedeya-labs/kanon/issues/912), [#961](https://github.com/yedeya-labs/kanon/pull/961)
+- **2026-10-15.** The Owner decided the extra App permission choice: one bullet per App and permission under `## Choices`, with its reason, which widens that repository's App alone. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
 
 ## `K-LAYOUT-16`
 

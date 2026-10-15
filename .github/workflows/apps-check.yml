@@ -6,7 +6,8 @@
 # App's roles sharing its slug), this mints that App's token and checks, with
 # cli/apps-check.mjs: its roles name one slug, the minted slug is that one, the installation
 # covers this repository (a warning when it covers all of its owner's), and its permissions
-# are exactly the App's in rulebook/agent-permissions.json. Each App's job writes a summary.
+# are exactly the App's in rulebook/agent-permissions.json, plus any extra permission the
+# adoption record declares for it (K-LAYOUT-10). Each App's job writes a summary.
 #
 # Run by hand, after creating or changing an App; it is not a required check. Kanon runs it
 # on itself:
@@ -94,6 +95,8 @@ jobs:
           APP: ${{ matrix.app.key }}
           ROLES: ${{ join(matrix.app.roles, ',') }}
           REGISTER_SLUG: ${{ matrix.app.slug }}
+          # What the adoption record declares beyond the App's shared grant (`K-AGENT-3`), or null.
+          EXTRA: ${{ toJSON(matrix.app.extra) }}
           REPOSITORY: ${{ github.repository }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}

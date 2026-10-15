@@ -65,6 +65,7 @@ import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '.
 import { LEDGER as CAPABILITY_LEDGER, parseCapabilityWatch } from '../scripts/lib/capability-watch.mjs';
 import { DeclarationError, DEPLOY_HEADING, movedReferenceBullets, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
 import { PROBE_LINE } from '../scripts/deploy-gate.mjs';
+import { EXTRA_LABEL, readAppExtras, withExtras } from '../scripts/lib/app-extras.mjs';
 import { REFUSED_TITLE, UNPUBLISHED_JOB } from '../scripts/lib/telemetry-token.mjs';
 import { defaultEscalationFile, ESCALATION_FILE, inPipelineCode, parseEscalationFile } from '../scripts/lib/escalation-paths.mjs';
 import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
@@ -1583,10 +1584,16 @@ export const diagnose = async (deps, opts) => {
   const ownerInstallations = () =>
     (installations ??= listInstallations(deps.gh, s.owner, s.kind));
 
+  // An App's grant widens only where the adoption record declares it (`K-AGENT-3`): doctor then
+  // expects the extra permission on that repository's App, and on no other repository's.
+  const appExtras = readAppExtras(read(ADOPTION_RECORD), Object.keys(req.identities.apps));
+  for (const e of appExtras.errors) find('declaration.malformed', ADOPTION_RECORD, e, { text: `Write each extra permission under ## Choices as \`- **${EXTRA_LABEL}:** \`<app>\` \`<permission>: <read | write>\` (<why the App holds it>)\`, or remove it.` });
+
   /** @type {Map<string, number>} identity → its App's id, read with its permissions */
   const appIdOf = new Map();
   for (const [id, slug] of slugOf) {
-    const need = req.identities.apps[id]?.permissions ?? req.identities.roles[id]?.permissions ?? {};
+    const base = req.identities.apps[id]?.permissions ?? req.identities.roles[id]?.permissions ?? {};
+    const need = req.identities.apps[id] ? withExtras(base, appExtras.extras[id]) : base;
     const r = await deps.gh(['api', `apps/${slug}`]);
     /** @type {any} */
     let app = ghJsonOf(r);
@@ -1609,7 +1616,7 @@ export const diagnose = async (deps, opts) => {
     if (missing.length) {
       findItems('app.permission-missing', slug, missing.map(([k]) => k), (xs) => {
         const some = missing.filter(([k]) => xs.includes(k));
-        return [`The ${id} App \`${slug}\` holds ${some.map(([k]) => `${k}: ${have[k] ?? 'none'}`).join(', ')}; Kanon ${checked} needs ${some.map(([k, v]) => `${k}: ${v}`).join(', ')}.`, {
+        return [`The ${id} App \`${slug}\` holds ${some.map(([k]) => `${k}: ${have[k] ?? 'none'}`).join(', ')}; Kanon ${checked} needs ${some.map(([k, v]) => `${k}: ${v}`).join(', ')}${some.some(([k]) => appExtras.extras[id]?.[k]) ? `, with what ${ADOPTION_RECORD} declares under ## Choices (${EXTRA_LABEL})` : ''}.`, {
           text: `Widen the App's permissions on its settings page, then accept the new permissions on its installation (GitHub asks the installation's owner), and run your apps-check caller.`,
           url,
         }];

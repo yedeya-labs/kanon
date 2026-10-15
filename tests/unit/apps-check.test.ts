@@ -1,5 +1,5 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -363,6 +363,36 @@ describe('main check, with GitHub mocked', () => {
     expect(out).toEqual(['apps=[{"key":"author","app":"Author","slug":"example-author","roles":["Implementer","Lead"],"secret":"AUTHOR"}]']);
   });
 
+  // `K-AGENT-3`: an extra permission the adoption record declares rides the matrix as `extra`.
+  it('hands on the extra permissions the adoption record declares, and fails on a malformed one', async () => {
+    const adopter = join(ROOT, 'tests/fixtures/lane-check/adopter');
+    const dir = mkdtempSync(join(tmpdir(), 'apps-check-extra-'));
+    try {
+      cpSync(adopter, dir, { recursive: true });
+      mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+      writeFileSync(join(dir, 'docs/qa/adoption.md'), '# Adoption record\n\n## Choices\n\n- **Extra App permission:** `author` `deployments: read` (this repository needs it)\n');
+      const out: string[] = [];
+      expect(await main(['apps'], { env: { REGISTER_DIR: dir }, out: (l) => out.push(l) })).toBe(0);
+      expect(out).toEqual(['apps=[{"key":"author","app":"Author","slug":"example-author","roles":["Implementer","Lead"],"secret":"AUTHOR","extra":{"deployments":"read"}}]']);
+      writeFileSync(join(dir, 'docs/qa/adoption.md'), '# Adoption record\n\n## Choices\n\n- **Extra App permission:** `author` `deployments: admin` (no)\n');
+      const bad: string[] = [];
+      expect(await main(['apps'], { env: { REGISTER_DIR: dir }, out: (l) => bad.push(l) })).toBe(1);
+      expect(bad.join('\n')).toContain('docs/qa/adoption.md:5 is not');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('checks the installation against the grant plus the declared extra, and only where declared', async () => {
+    const held = { ...APPS.author!.permissions, deployments: 'read' };
+    expect((await run({ permissions: held }, { APP: 'author', EXTRA: '{"deployments":"read"}' })).status).toBe(0);
+    expect((await run({ permissions: held }, { APP: 'author', EXTRA: 'null' })).status).toBe(1);
+    const missing = await run({ permissions: { ...APPS.author!.permissions } }, { APP: 'author', EXTRA: '{"deployments":"read"}' });
+    expect(missing.status).toBe(1);
+    expect(missing.output).toContain('deployments: none, expected read');
+    expect((await run({ permissions: held }, { APP: 'author', EXTRA: '{"deployments":"admin"}' })).status).toBe(1);
+  });
+
   it('refuses an App key that is not one of Kanon\'s three', async () => {
     const r = await run({}, { APP: 'reviewer' });
     expect(r.status).toBe(1);
@@ -486,7 +516,8 @@ describe('the apps-check workflow', () => {
   it('keeps the logic in the script: one run line per job', () => {
     expect(check.steps.map((s) => s.run).filter(Boolean)).toEqual(['node "$KANON/cli/apps-check.mjs" check']);
     const env = check.steps.at(-1)!.env!;
-    expect(Object.keys(env).sort()).toEqual(['APP', 'APP_ID', 'APP_PRIVATE_KEY', 'APP_SLUG', 'INSTALLATION_ID', 'REGISTER_SLUG', 'REPOSITORY', 'ROLES', 'TOKEN']);
+    expect(Object.keys(env).sort()).toEqual(['APP', 'APP_ID', 'APP_PRIVATE_KEY', 'APP_SLUG', 'EXTRA', 'INSTALLATION_ID', 'REGISTER_SLUG', 'REPOSITORY', 'ROLES', 'TOKEN']);
+    expect(env.EXTRA).toBe('${{ toJSON(matrix.app.extra) }}');
     expect(env.APP_SLUG).toBe('${{ steps.app-token.outputs.app-slug }}');
     expect(env.INSTALLATION_ID).toBe('${{ steps.app-token.outputs.installation-id }}');
     expect(env.REGISTER_SLUG).toBe('${{ matrix.app.slug }}');

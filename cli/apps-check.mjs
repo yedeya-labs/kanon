@@ -14,7 +14,10 @@
 // An App fails when its roles name more than one slug, when the minted App's slug isn't the
 // register's, when the installation doesn't cover this repository, or when its permissions
 // differ from the App's in rulebook/agent-permissions.json (the `apps` block: the union of
-// its roles' rows, plus any broadened permission). It warns when the installation covers ALL
+// its roles' rows, plus any broadened permission), raised by any extra permission the
+// repository's adoption record declares for it under `## Choices` (`K-AGENT-3`;
+// scripts/lib/app-extras.mjs), which `apps` reads from the checkout and hands to `check` in the
+// matrix as `extra`. It warns when the installation covers ALL
 // of its owner's repositories. Covering several is what one App per owner means (plan 0005
 // §3.2, `K-ADOPT-8` as amended), so it is no longer a warning.
 //
@@ -30,11 +33,12 @@
 // that reads the installation's permissions; it is never printed or written.
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appJwt, loadRoles, REGISTER_PATH } from './apps.mjs';
 import { isCliEntry } from '../scripts/lib/cli-entry.mjs';
+import { ADOPTION_RECORD, readAppExtras, withExtras } from '../scripts/lib/app-extras.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const AWK = join(ROOT, 'actions/lane-check/app-register.awk');
@@ -42,7 +46,7 @@ const API = 'https://api.github.com';
 const HEADERS = { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'kanon-apps-check' };
 
 /** @typedef {{ app: string, roles: string[], permissions: Record<string, string>, optional?: boolean }} AppSpec */
-/** @typedef {{ key: string, app: string, slug: string, roles: string[], secret: string }} RegisteredApp */
+/** @typedef {{ key: string, app: string, slug: string, roles: string[], secret: string, extra?: Record<string, string> }} RegisteredApp */
 
 /** @returns {Record<string, AppSpec>} The `apps` block of rulebook/agent-permissions.json. */
 export const loadApps = () => JSON.parse(readFileSync(join(ROOT, 'rulebook/agent-permissions.json'), 'utf8')).apps;
@@ -96,10 +100,11 @@ export const registeredApps = (registerPath, apps, roles, read = (role) => spawn
  *   selection: string,
  *   repositories: string[],
  *   permissions: Record<string, string>,
- * }} a
+ *   extra?: Record<string, string>,
+ * }} a  extra: what the adoption record declares for this App, beyond its shared grant
  * @returns {{ failures: string[], warnings: string[] }}
  */
-export const compare = ({ app, spec, registerSlug, appSlug, repository, selection, repositories, permissions }) => {
+export const compare = ({ app, spec, registerSlug, appSlug, repository, selection, repositories, permissions, extra }) => {
   /** @type {string[]} */
   const failures = [];
   /** @type {string[]} */
@@ -113,10 +118,10 @@ export const compare = ({ app, spec, registerSlug, appSlug, repository, selectio
   } else if (!repositories.some((n) => n.toLowerCase() === want)) {
     failures.push(`${app}: the installation doesn't cover ${repository} (it covers: ${repositories.join(', ') || 'nothing'}).`);
   }
-  const expected = spec.permissions;
+  const expected = withExtras(spec.permissions, extra);
   const keys = [...new Set([...Object.keys(expected), ...Object.keys(permissions)])].sort();
   const drift = keys.filter((k) => permissions[k] !== expected[k]).map((k) => `${k}: ${permissions[k] ?? 'none'}, expected ${expected[k] ?? 'none'}`);
-  if (drift.length) failures.push(`${app}: the installation's permissions differ from the ${app}'s in rulebook/agent-permissions.json: ${drift.join('; ')}.`);
+  if (drift.length) failures.push(`${app}: the installation's permissions differ from the ${app}'s in rulebook/agent-permissions.json${extra && Object.keys(extra).length ? `, with what ${ADOPTION_RECORD} declares for it` : ''}: ${drift.join('; ')}.`);
   return { failures, warnings };
 };
 
@@ -234,9 +239,31 @@ const need = (deps, name) => {
   return v;
 };
 
+/**
+ * The matrix's `extra` for one App, as `apps` wrote it: absent (`null`, or unset), or permission
+ * names mapped to `read` or `write`.
+ * @param {string | undefined} raw
+ * @returns {Record<string, string> | undefined}
+ */
+export const extraOf = (raw) => {
+  if (!raw || raw === 'null') return undefined;
+  const v = JSON.parse(raw);
+  if (!v || typeof v !== 'object' || Array.isArray(v) || !Object.entries(v).every(([k, l]) => /^[a-z_]+$/.test(k) && (l === 'read' || l === 'write'))) {
+    throw new Error(`EXTRA is not a map of permissions to read or write: ${raw}`);
+  }
+  return v;
+};
+
 /** @param {Deps} deps */
 const appList = (deps) => {
-  const list = registeredApps(join(deps.env.REGISTER_DIR ?? process.cwd(), REGISTER_PATH), loadApps(), loadRoles(), deps.read);
+  const dir = deps.env.REGISTER_DIR ?? process.cwd();
+  const list = registeredApps(join(dir, REGISTER_PATH), loadApps(), loadRoles(), deps.read);
+  // The extra permissions the adoption record declares (`K-AGENT-3`): a malformed one fails here.
+  const recordPath = join(dir, ADOPTION_RECORD);
+  const record = existsSync(recordPath) ? readFileSync(recordPath, 'utf8') : null;
+  const { extras, errors } = readAppExtras(record, Object.keys(loadApps()));
+  if (errors.length) throw new Error(errors.join('; '));
+  for (const app of list) if (extras[app.key]) app.extra = extras[app.key];
   deps.out(`apps=${JSON.stringify(list)}`);
   return 0;
 };
@@ -252,6 +279,7 @@ const check = async (deps) => {
   const unminted = unmintedMessage(spec.app, key, repository, deps.env);
   if (unminted) throw new Error(unminted);
   const registerSlug = need(deps, 'REGISTER_SLUG');
+  const extra = extraOf(deps.env.EXTRA);
   const appSlug = need(deps, 'APP_SLUG');
   const installation = need(deps, 'INSTALLATION_ID');
   const token = need(deps, 'TOKEN');
@@ -274,7 +302,7 @@ const check = async (deps) => {
   }
 
   deps.out(resultLine({ app: key, slug: appSlug, permissions }));
-  const { failures, warnings } = compare({ app: spec.app, spec, registerSlug, appSlug, repository, selection, repositories, permissions });
+  const { failures, warnings } = compare({ app: spec.app, spec, registerSlug, appSlug, repository, selection, repositories, permissions, extra });
   for (const w of warnings) deps.out(`::warning title=apps-check::${w}`);
   for (const f of failures) deps.out(`::error title=apps-check::${f}`);
   if (deps.env.GITHUB_STEP_SUMMARY) {
