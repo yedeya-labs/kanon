@@ -12,7 +12,7 @@ import {
 } from '../../scripts/lib/deploy-declaration.mjs';
 import { readDeploy } from '../../scripts/lead-reconcile.mjs';
 import { EXIT, FINDINGS, UNWAIVABLE } from '../../cli/doctor.mjs';
-import { checkout, fakeGitHub, healthyFiles, ids, run } from './helpers/doctor.js';
+import { checkout, fakeGitHub, HEALTHY_DEPLOY, healthyFiles, ids, run } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 
 /**
@@ -220,7 +220,7 @@ describe('doctor reports bullets left under `## Choices` as deploy.declaration-m
 
   it('is quiet once they are in `## Deploy`', async () => {
     const files = healthyFiles();
-    files['docs/qa/adoption.md'] += `\n## Deploy\n\n${LEFT}`;
+    files['docs/qa/adoption.md'] = files['docs/qa/adoption.md']!.replace(HEALTHY_DEPLOY, '') + `\n## Deploy\n\n${LEFT}`;
     const r = await run(checkout(files), fakeGitHub(), ['--json']);
     expect(ids(r)).toEqual([]);
   });

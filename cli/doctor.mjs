@@ -56,14 +56,15 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
+import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '../scripts/lib/upstream-findings.mjs';
 import { LEDGER as CAPABILITY_LEDGER, parseCapabilityWatch } from '../scripts/lib/capability-watch.mjs';
-import { DEPLOY_HEADING, movedReferenceBullets } from '../scripts/lib/deploy-declaration.mjs';
+import { DeclarationError, DEPLOY_HEADING, movedReferenceBullets, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
+import { PROBE_LINE } from '../scripts/deploy-gate.mjs';
 import { REFUSED_TITLE, UNPUBLISHED_JOB } from '../scripts/lib/telemetry-token.mjs';
 import { defaultEscalationFile, ESCALATION_FILE, inPipelineCode, parseEscalationFile } from '../scripts/lib/escalation-paths.mjs';
 import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
@@ -249,6 +250,25 @@ export const UNWAIVABLE = {
   'ruleset.approval-off': 'the adoption record says bootstrap ended, and bootstrap never returns: a ruleset that stopped requiring approval is an incident to fix (K-ADOPT-6)',
   'upstream.unsent': 'it is about the adoption record itself, which says findings are sent when nothing sends them, and lane-check fails it whatever a waiver says',
   'deploy.declaration-moved': 'it is about the adoption record itself: the reconciler and lane-check read the reference deploy from `## Deploy` alone, and fail on bullets left under `## Choices` whatever a waiver says (plan 0010 D2)',
+  'deploy.declaration': 'it protects production: the lane, `kanon init` and the gate read the chain from it, and the gate refuses a record it can\'t read (plan 0010 §12)',
+  'deploy.caller-mismatch': 'it protects production: the gate refuses a caller that differs from the declaration, so no environment deploys until `kanon init` writes it again (plan 0010 §12)',
+  'deploy.environment-missing': 'it protects production: a declared environment that doesn\'t exist has no protection rule and no deployment policy, and a job naming it creates it with none (plan 0010 §12)',
+  'deploy.reviewers-missing': 'it protects production: with no required reviewer, nothing stands between a release and production but the lane\'s own code (plan 0010 §12)',
+  'deploy.subject-custom': 'it protects production: a subject without the environment lets a job outside it assume its role (plan 0010 §5, §12)',
+};
+
+/**
+ * The finding ids no waiver waives under one fallback marker of the adoption record's `## Deploy`
+ * section (plan 0010 §12, §13), each with the marker and why. Under any other marker, or none,
+ * they are waived like any other note. A waiver of one under its marker is malformed, and waives
+ * nothing.
+ * @type {Record<string, { fallback: string, why: string }>}
+ */
+export const UNWAIVABLE_UNDER = {
+  'deploy.tag-ruleset': {
+    fallback: 'no-reviewers',
+    why: 'under the `no-reviewers` fallback no reviewer stands in front of production, so who may create, move or delete a release tag is what guards its secret and its role (plan 0010 §13)',
+  },
 };
 
 /**
@@ -285,14 +305,14 @@ export const ITEMIZED = {
  * `unchecked[].check` it is listed under: a waiver of such a finding can't be called stale.
  * @type {Record<string, string>}
  */
-const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset', 'notify-secrets': 'secret', 'notify-hook': 'declaration', 'notify-runs': 'caller' };
+const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset', 'notify-secrets': 'secret', 'notify-hook': 'declaration', 'notify-runs': 'caller', 'deploy-hook': 'declaration', 'deploy-ci': 'caller', 'deploy-environments': 'deploy', 'deploy-subject': 'deploy', 'deploy-runs': 'deploy', 'deploy-retention': 'deploy', 'deploy-rulesets': 'deploy' };
 
 /**
  * The finding categories, in the order a finding is listed and fixed: the pin decides which
  * release's requirements apply; an App's rows and permissions come before the secrets that name
  * it; the files a lane reads before the callers that call it; the platform's own state last.
  */
-export const CATEGORIES = ['pin', 'app', 'secret', 'declaration', 'caller', 'label', 'ruleset', 'id-token'];
+export const CATEGORIES = ['pin', 'app', 'secret', 'declaration', 'caller', 'label', 'ruleset', 'deploy', 'id-token'];
 
 /**
  * Every finding `doctor` can report, by its stable id: its category, and whether it blocks (sets
@@ -305,6 +325,7 @@ export const FINDINGS = {
   'pin.candidate': { category: 'pin', blocking: false },
   'plugin.version-mismatch': { category: 'pin', blocking: false },
   'notify.hook-pin-behind': { category: 'pin', blocking: false },
+  'notify.hook-pin-ahead': { category: 'pin', blocking: true },
   'register.missing-row': { category: 'app', blocking: true },
   'register.split-slug': { category: 'app', blocking: true },
   'register.shared-slug': { category: 'app', blocking: true },
@@ -320,6 +341,9 @@ export const FINDINGS = {
   'declaration.malformed': { category: 'declaration', blocking: true },
   'upstream.unsent': { category: 'declaration', blocking: true },
   'deploy.declaration-moved': { category: 'declaration', blocking: true },
+  'deploy.declaration': { category: 'declaration', blocking: true },
+  'deploy.reference-undeclared': { category: 'declaration', blocking: false },
+  'deploy.hook-missing': { category: 'declaration', blocking: true },
   'hook.missing': { category: 'declaration', blocking: true },
   'hook.input-missing': { category: 'declaration', blocking: true },
   'workflow.missing': { category: 'declaration', blocking: true },
@@ -355,6 +379,9 @@ export const FINDINGS = {
   'notify.hook-unreviewed': { category: 'declaration', blocking: true },
   'notify.legacy-secret': { category: 'caller', blocking: true },
   'notify.failing': { category: 'caller', blocking: false },
+  'deploy.caller-mismatch': { category: 'caller', blocking: true },
+  'deploy.releaser-missing': { category: 'caller', blocking: true },
+  'deploy.ci-push-missing': { category: 'caller', blocking: true },
   'label.missing': { category: 'label', blocking: false },
   'ruleset.missing': { category: 'ruleset', blocking: true },
   'ruleset.rule-missing': { category: 'ruleset', blocking: true },
@@ -363,6 +390,17 @@ export const FINDINGS = {
   'ruleset.bypass-extra': { category: 'ruleset', blocking: true },
   'ruleset.bootstrap-can-end': { category: 'ruleset', blocking: true },
   'ruleset.approval-off': { category: 'ruleset', blocking: true },
+  // The deploy lane's platform state (plan 0010 §12). A fallback marker turns some blocks into
+  // notes and one note into a block: `find`'s `warnOnly` and `escalate`.
+  'deploy.environment-missing': { category: 'deploy', blocking: true },
+  'deploy.reviewers-missing': { category: 'deploy', blocking: true },
+  'deploy.branch-policy': { category: 'deploy', blocking: true },
+  'deploy.self-review': { category: 'deploy', blocking: false },
+  'deploy.admin-bypass': { category: 'deploy', blocking: false },
+  'deploy.subject-custom': { category: 'deploy', blocking: true },
+  'deploy.trust-unproven': { category: 'deploy', blocking: true },
+  'deploy.artifact-retention': { category: 'deploy', blocking: false },
+  'deploy.tag-ruleset': { category: 'deploy', blocking: false },
   'id-token.unaccepted': { category: 'id-token', blocking: true },
   'id-token.stale-acceptance': { category: 'id-token', blocking: false },
 };
@@ -705,6 +743,9 @@ export const idTokenHolders = ({ workflows, accepted, pinned, req }) => {
       // Kanon's telemetry collector (#428): its one job that holds the grant is held by Kanon's
       // id-token guard, as a store-coupled lane's store jobs are.
       if (call && pinned(call.ref) && req.telemetry && call.workflow === req.telemetry.collector) status = 'kanon-lane';
+      // The deploy lane's two workflows (plan 0010 §12): `deploy-release.yml`'s probe and
+      // `deploy.yml`'s deploy job hold the grant, to their exact shapes in Kanon's id-token guard.
+      if (call && pinned(call.ref) && deployWorkflows(req).includes(call.workflow)) status = 'kanon-lane';
       holders.push({ workflow: file, job, grant: g.from, how: g.how, calls, status, reason: status === 'kanon-lane' ? null : reason });
     }
   }
@@ -847,6 +888,130 @@ const headingCount = (text, heading) => {
   const inFence = fenced(lines);
   return lines.filter((l, i) => !inFence.has(i) && l === heading).length;
 };
+
+// ── The deploy lane (plan 0010 §12, step D7) ──────────────────────────────────────────────
+
+/**
+ * The deploy lane's two reusable workflows at a release, by file name without `.yml`: its
+ * `release` workflow and its per-environment one. None for a release without the lane.
+ * @param {Requirements} req @returns {string[]}
+ */
+export const deployWorkflows = (req) => {
+  const w = /** @type {{ deploy?: { workflows?: { release?: string, environment?: string } } }} */ (/** @type {unknown} */ (req)).deploy?.workflows;
+  return w ? [w.release, w.environment].filter((x) => typeof x === 'string') : [];
+};
+
+/** How many of the deploy caller's latest completed runs doctor looks through for one that counts. */
+export const DEPLOY_RUNS = 20;
+
+/** The `build` input every `deploy-<position>` job passes (plan 0010 §4, D5). */
+const BUILD_INPUT = /^\$\{\{\s*needs\.release\.outputs\.build\s*\}\}$/;
+
+/**
+ * What a deploy caller lacks against the declared chain (`deploy.caller-mismatch`, plan 0010 §4,
+ * §12): a `release` job calling the lane's release workflow with the declared list; then, per
+ * environment in order, a `deploy-<position>` job calling its per-environment workflow with that
+ * environment and position, passing `build: ${{ needs.release.outputs.build }}`, and needing the
+ * one before it and `release` (the first `release` alone); all at one release, and no other job.
+ * With no environment declared, any caller is the problem. One sentence per problem; none when it
+ * matches, as `kanon init` writes it.
+ * @param {Record<string, any>} wf the caller @param {string[]} environments the declared list
+ * @param {{ release: string, environment: string }} workflows the lane's two, by file name without `.yml`
+ * @returns {string[]}
+ */
+export const deployCallerProblems = (wf, environments, workflows) => {
+  if (!environments.length) return [`it calls the deploy lane, but ${ADOPTION_RECORD} declares no environment under ## Deploy, so the gate refuses every run`];
+  /** @type {string[]} */
+  const problems = [];
+  const jobs = isMap(wf.jobs) ? wf.jobs : {};
+  const want = ['release', ...environments.map((_, i) => `deploy-${i + 1}`)];
+  /** @param {unknown} v @returns {string[]} */
+  const list = (v) => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.map(String) : []);
+  /** @param {string[]} xs */
+  const spans = (xs) => (xs.length ? xs.map((x) => `\`${x}\``).join(' and ') : 'nothing');
+  /** @type {Set<string>} */
+  const refs = new Set();
+  for (const key of want) {
+    if (!isMap(jobs[key])) problems.push(key === 'release' ? `it has no \`release\` job calling ${workflows.release}.yml` : `it has no \`${key}\` job, for \`${environments[Number(key.slice('deploy-'.length)) - 1]}\``);
+  }
+  for (const key of Object.keys(jobs)) if (!want.includes(key)) problems.push(`it has a job \`${key}\` that the declaration doesn't ask for`);
+  const release = jobs.release;
+  if (isMap(release)) {
+    const call = kanonCall(release.uses);
+    if (call?.workflow !== workflows.release) problems.push(`its \`release\` job doesn't call Kanon's ${workflows.release}.yml`);
+    else refs.add(call.ref);
+    const passed = String(isMap(release.with) ? release.with.environments ?? '' : '').trim().split(/\s+/).filter(Boolean);
+    if (passed.join(' ') !== environments.join(' ')) problems.push(`its \`release\` job passes the environments ${passed.length ? `\`${passed.join(' ')}\`` : 'none'}, not the declared \`${environments.join(' ')}\`, in that order`);
+  }
+  environments.forEach((environment, i) => {
+    const n = i + 1;
+    const key = `deploy-${n}`;
+    const job = jobs[key];
+    if (!isMap(job)) return;
+    const call = kanonCall(job.uses);
+    if (call?.workflow !== workflows.environment) problems.push(`\`${key}\` doesn't call Kanon's ${workflows.environment}.yml`);
+    else refs.add(call.ref);
+    const w = isMap(job.with) ? job.with : {};
+    if (String(w.environment ?? '') !== environment) problems.push(`\`${key}\` deploys ${w.environment === undefined ? 'no environment' : `\`${String(w.environment)}\``}, not \`${environment}\`, the declared environment at position ${n}`);
+    if (String(w.position ?? '') !== String(n)) problems.push(`\`${key}\` passes ${w.position === undefined ? 'no position' : `position ${String(w.position)}`}, not ${n}`);
+    if (!BUILD_INPUT.test(String(w.build ?? '').trim())) problems.push(`\`${key}\` doesn't pass \`build: \${{ needs.release.outputs.build }}\`, which ${workflows.environment}.yml requires, so the run fails before any job starts`);
+    const needs = [...new Set(list(job.needs))].sort();
+    const ought = (n === 1 ? ['release'] : ['release', `deploy-${n - 1}`]).sort();
+    if (needs.join('\n') !== ought.join('\n')) problems.push(`\`${key}\` needs ${spans(needs)}, not ${spans(ought)}${n > 1 && !needs.includes('release') ? `: without \`release\` it can't read the build it deploys` : ''}`);
+  });
+  if (refs.size > 1) problems.push(`its jobs call the lane at different releases, ${[...refs].sort().join(' and ')}: each calls the one pinned release`);
+  return problems;
+};
+
+/**
+ * The probe's answer a `probe` job's log printed (plan 0010 §5): the last `kanon-deploy-probe/v1`
+ * line's JSON object, or null when there is none it can read.
+ * @param {string} log @returns {Record<string, unknown> | null}
+ */
+export const probeAnswer = (log) => {
+  /** @type {Record<string, unknown> | null} */
+  let said = null;
+  for (const line of log.split('\n')) {
+    const at = line.indexOf(`${PROBE_LINE} {`);
+    if (at === -1) continue;
+    try {
+      const v = JSON.parse(line.slice(at + PROBE_LINE.length + 1).trim());
+      said = isMap(v) ? v : null;
+    } catch {
+      said = null;
+    }
+  }
+  return said;
+};
+
+/**
+ * Whether a workflow runs on `push` to `branch`: its `on:` names `push`, and a `branches` filter,
+ * when it has one, matches it (a glob is taken to match), and a `branches-ignore` doesn't name it.
+ * @param {Record<string, any>} wf @param {string} branch
+ */
+export const runsOnPush = (wf, branch) => {
+  const on = triggers(wf);
+  if (!on?.includes('push')) return false;
+  const push = isMap(wf.on) ? wf.on.push : null;
+  if (!isMap(push)) return true;
+  /** @param {unknown} v @returns {string[]} */
+  const list = (v) => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.map(String) : []);
+  if (push.branches !== undefined) return list(push.branches).some((b) => b === branch || /[*?[]/.test(b));
+  if (push.tags !== undefined && push['branches-ignore'] === undefined) return false;
+  return !list(push['branches-ignore']).includes(branch);
+};
+
+/** The three rules a release-tag ruleset holds (plan 0010 §12): who may create, move or delete a tag. */
+export const TAG_RULES = /** @type {const} */ (['creation', 'update', 'deletion']);
+
+/**
+ * Whether a ruleset restricts who may create, move and delete tags (`deploy.tag-ruleset`): an
+ * active one, on tags, with the creation, update and deletion rules all. One that restricts
+ * creation alone doesn't: moving an existing release tag onto another commit opens the same path.
+ * @param {any} r a ruleset, read whole
+ */
+export const restrictsTags = (r) => isMap(r) && r.target === 'tag' && r.enforcement === 'active'
+  && TAG_RULES.every((t) => (Array.isArray(r.rules) ? r.rules : []).some((/** @type {any} */ x) => x?.type === t));
 
 // ── The requirements of a release ─────────────────────────────────────────────────────────
 
@@ -1040,12 +1205,15 @@ export const diagnose = async (deps, opts) => {
    * @param {string} id @param {string} subject @param {string} message
    * @param {{ text: string, commands?: string[], url?: string | null }} fix
    * @param {boolean} [warnOnly] a finding of a blocking id that doesn't block yet: a fixed
-   *   caller's name or job id against a release before `FAILS_FROM`, which lane-check warns of
+   *   caller's name or job id against a release before `FAILS_FROM`, which lane-check warns of,
+   *   or a deploy check a fallback marker turns into a note (plan 0010 §13)
+   * @param {boolean} [escalate] a finding of a note's id that blocks here: `deploy.tag-ruleset`
+   *   under the `no-reviewers` marker
    */
-  const find = (id, subject, message, fix, warnOnly = false) => {
+  const find = (id, subject, message, fix, warnOnly = false, escalate = false) => {
     const kind = FINDINGS[id];
     if (!kind) throw new Error(`no finding "${id}" in FINDINGS`);
-    findings.push({ id, category: kind.category, blocking: kind.blocking && !warnOnly, subject, message, fix: { text: fix.text, commands: fix.commands ?? [], url: fix.url ?? null } });
+    findings.push({ id, category: kind.category, blocking: (kind.blocking && !warnOnly) || escalate, subject, message, fix: { text: fix.text, commands: fix.commands ?? [], url: fix.url ?? null } });
   };
   /**
    * The items each finding of an `ITEMIZED` id lists, and how to write it again for some of them,
@@ -2192,6 +2360,16 @@ export const diagnose = async (deps, opts) => {
         const m = /^([^@\s]+)@(\S+)$/.exec(u);
         const name = m ? prebuiltActions.get(/** @type {string} */ (m[1])) : undefined;
         if (!m || name === undefined || m[2] === pinned) continue;
+        // Ahead of the callers, `lane-check` fails it (its `HOOK_PINS`, `K-ADOPT-11`): the pin
+        // follows theirs, never leads it, so doctor blocks on it too (#958). A candidate is level
+        // with its stable release here, as there.
+        if (EXACT_RELEASE.test(/** @type {string} */ (m[2])) && newer(/** @type {string} */ (m[2]), pinned) > 0) {
+          find('notify.hook-pin-ahead', hookPath, `is Kanon's ${name} hook at ${m[2]}, ahead of the callers' ${pinned}: its pin follows theirs, never leads it, so lane-check fails it on the next pull request (K-ADOPT-11, plan 0011 decision 18).`, {
+            text: `Move its pin back to the callers', or move the callers to ${m[2]} with the upgrade skill:`,
+            commands: [`    - uses: ${m[1]}@${pinned}`],
+          });
+          continue;
+        }
         const behind = EXACT_RELEASE.test(/** @type {string} */ (m[2])) && newer(/** @type {string} */ (m[2]), pinned) < 0;
         find('notify.hook-pin-behind', hookPath, `is Kanon's ${name} hook at ${m[2]}, and the callers pin ${pinned}: ${behind ? 'it is behind them' : 'they differ'}. It works while it declares a contract version the callers' release still writes; kanon upgrade moves it with the callers (plan 0011 decision 18).`, {
           text: `Move its pin to the callers', as the upgrade skill does:`,
@@ -2335,6 +2513,300 @@ export const diagnose = async (deps, opts) => {
     notes.push(backlogFeedNote(feeders, vars, repo));
   }
 
+  // ── The deploy lane (plan 0010 §12, step D7) ─────────────────────────────────────────────────
+  // The declaration is read through the one parser every reader uses, from the checkout, with
+  // the reference bullets `deploy.declaration-moved` reports (below) set aside, so a record with
+  // only those to move isn't malformed too. Three checks concern the reference deploy and run for
+  // every adopter; the rest only where the record declares an environment or a deploy caller
+  // exists (decision 2): an adopter with neither has no deploy lane.
+  const deployRecord = read(ADOPTION_RECORD);
+  const movedLines = new Set(deployRecord === null ? [] : movedReferenceBullets(deployRecord).map((m) => m.line));
+  /** @type {import('../scripts/lib/deploy-declaration.mjs').DeployDeclaration | null} */
+  let deployDecl = null;
+  let deployBroken = false;
+  if (deployRecord !== null) {
+    try {
+      deployDecl = parseDeployDeclaration(deployRecord.replace(/\r\n?/g, '\n').split('\n').map((l, i) => (movedLines.has(i + 1) ? '' : l)).join('\n'));
+    } catch (e) {
+      if (!(e instanceof DeclarationError)) throw e;
+      deployBroken = true;
+      find('deploy.declaration', ADOPTION_RECORD, `${/** @type {Error} */ (e).message}. The deploy lane's gate, \`kanon init\` and the reconciler read ${DEPLOY_HEADING} through one parser, which refuses it (plan 0010 §4).`, {
+        text: `Write ${DEPLOY_HEADING} as docs/lanes.md ("The deploy lane") shows: the environments in deploy order, the CI wait, the three reference deploy bullets (all or none) and the fallback's marker, each a \`- \` bullet with its bold label and one code span:`,
+        commands: [DEPLOY_HEADING, '', '- **Environments:** `<first>`, `<production>`', '- **Reference environment:** `<first>`', '- **Reference deploy workflow:** `deploy.yml`', '- **Reference deploy job:** `<first> / deploy`'],
+      });
+    }
+  }
+  /** The fallback's marker the record declares (plan 0010 §13), or null. */
+  const deployFallback = deployDecl?.fallback ?? null;
+  const chain = deployDecl?.environments ?? [];
+  const laneWorkflows = deployWorkflows(req);
+  const deployDeclared = /** @type {{ deploy?: { workflows: { release: string, environment: string }, hooks: Array<{ path: string, inputs: string[] }> } }} */ (/** @type {unknown} */ (req)).deploy;
+  // A deploy caller: any workflow with a job that calls one of the lane's two workflows.
+  const deployCallers = [...workflows].filter(([, wf]) => Object.values(isMap(wf.jobs) ? wf.jobs : {}).some((j) => isMap(j) && laneWorkflows.includes(kanonCall(j.uses)?.workflow ?? ''))).map(([f]) => f).sort();
+  // ── `deploy.reference-undeclared` (a note): with no chain, the three reference bullets in
+  // `## Deploy`, naming any workflow and job, as today; with one, the first environment's job of
+  // the caller, as `init` writes it. Not while bullets wait to move, which is that finding's fix.
+  if (deployRecord !== null && !deployBroken && deployDecl && !movedLines.size) {
+    const ref = deployDecl.reference;
+    const callerName = basename(deployCallers[0] ?? DEPLOY_CALLER_PATH);
+    if (!ref) {
+      find('deploy.reference-undeclared', ADOPTION_RECORD, `${ADOPTION_RECORD} declares no reference deploy under ${DEPLOY_HEADING}, so no project can close: the reconciler confirms a project's merges are deployed by that deploy job's run (K-PROJ-11). ${chain.length ? `With the chain declared, it is the first environment's, \`${chain[0]}\`.` : 'A repository that deploys nothing keeps it so, and can waive this note with its reason.'}`, {
+        text: chain.length ? `Add the three bullets under ${DEPLOY_HEADING}, as kanon init writes them for the first environment:` : `Add the three bullets under ${DEPLOY_HEADING}, naming the environment a project's merges reach, the workflow file that deploys it and its job as a run lists it:`,
+        commands: chain.length
+          ? [`- **Reference environment:** \`${chain[0]}\``, `- **Reference deploy workflow:** \`${callerName}\``, `- **Reference deploy job:** \`${chain[0]} / deploy\``]
+          : ['- **Reference environment:** `<environment>`', '- **Reference deploy workflow:** `<workflow>.yml`', '- **Reference deploy job:** `<job, as a run lists it>`'],
+      });
+    } else if (chain.length && (ref.workflow !== callerName || ref.job !== `${ref.environment} / deploy`)) {
+      find('deploy.reference-undeclared', ADOPTION_RECORD, `${ADOPTION_RECORD}'s reference deploy names ${ref.workflow}'s job \`${ref.job}\`, not the deploy caller's job for \`${ref.environment}\`, \`${ref.environment} / deploy\` in ${callerName}. Doctor can't tell a deliberate choice from a stale one: the reconciler confirms a project by the job named there (K-PROJ-11).`, {
+        text: `Keep it if it is meant, and waive this note with the reason; otherwise name the caller's job:`,
+        commands: [`- **Reference deploy workflow:** \`${callerName}\``, `- **Reference deploy job:** \`${ref.environment} / deploy\``],
+      });
+    }
+  }
+  if (!deployBroken && (chain.length || deployCallers.length) && !deployDeclared) {
+    notes.push(`${chain.length ? `${ADOPTION_RECORD} declares the deploy environments ${chain.join(', ')}` : `${deployCallers.join(', ')} call${deployCallers.length > 1 ? '' : 's'} a deploy lane`}, but Kanon ${checked} ships no deploy lane, so doctor checks none of it (plan 0010).`);
+  }
+  if (!deployBroken && (chain.length || deployCallers.length) && deployDeclared) {
+    const lane = deployDeclared.workflows;
+    const marker = deployFallback ? ` (the adoption record's fallback, \`${deployFallback}\`, plan 0010 §13)` : '';
+    // ── `deploy.caller-mismatch`: the caller against the declaration, as `kanon init` writes it.
+    const own = deployCallers.includes(DEPLOY_CALLER_PATH) ? DEPLOY_CALLER_PATH : deployCallers[0];
+    const initFix = { text: `Run kanon init again: it writes ${DEPLOY_CALLER_PATH} from the ${DEPLOY_HEADING} list, one job per environment, in order (docs/lanes.md, "The deploy lane").`, commands: ['kanon init'] };
+    if (!own) {
+      find('deploy.caller-mismatch', DEPLOY_CALLER_PATH, `is missing: ${ADOPTION_RECORD} declares the environments ${chain.join(', ')}, and no workflow calls the deploy lane, so no release deploys.`, initFix);
+    }
+    for (const file of deployCallers) {
+      const problems = file === own
+        ? deployCallerProblems(/** @type {Record<string, any>} */ (workflows.get(file)), chain, lane)
+        : [`it calls the deploy lane beside ${own}, the repository's deploy caller: a release would deploy twice`];
+      if (problems.length) {
+        find('deploy.caller-mismatch', file, `doesn't match ${ADOPTION_RECORD}'s ${DEPLOY_HEADING} (${chain.length ? chain.join(', ') : 'no environment'}): ${problems.join('; ')}. The gate refuses a caller whose list isn't the declaration's (plan 0010 §4, §12).`, file === own
+          ? (chain.length ? initFix : { text: `Remove it, or declare the environments under ${DEPLOY_HEADING} and run kanon init again (docs/lanes.md, "The deploy lane").`, commands: [`git rm ${file}`] })
+          : { text: `Remove it: the deploy lane has one caller, ${own}.`, commands: [`git rm ${file}`] });
+      }
+    }
+    if (chain.length) {
+      // ── `deploy.hook-missing`: the three hooks, each declaring the inputs the lane passes.
+      for (const hook of deployDeclared.hooks) {
+        const text = read(hook.path);
+        /** @type {unknown} */
+        let doc = null;
+        if (text !== null) {
+          try {
+            doc = parseYaml(text);
+          } catch (e) {
+            unchecked.push({ check: 'deploy-hook', subject: hook.path, reason: `could not read it: ${/** @type {Error} */ (e).message}` });
+            continue;
+          }
+        }
+        const inputs = isMap(doc) && isMap(doc.inputs) ? Object.keys(doc.inputs) : [];
+        const lacks = hook.inputs.filter((k) => !inputs.includes(k));
+        if (text === null || lacks.length) {
+          find('deploy.hook-missing', hook.path, text === null ? `is missing; the deploy lane calls it at ${checked} (plan 0010 §7).` : `does not declare ${lacks.join(', ')}, which the deploy lane passes it at ${checked} (plan 0010 §7).`, text === null
+            ? { text: `Let kanon init write its stub, which fails by name until you replace its step with your own; it never overwrites a hook.`, commands: ['kanon init'] }
+            : { text: `Add under inputs:`, commands: lacks.flatMap((k) => [`  ${k}:`, "    description: Passed by Kanon's deploy lane (docs/lanes.md).", '    default: ""']) });
+        }
+      }
+      // ── `deploy.releaser-missing`: a release made with the workflow's token starts no run.
+      if (!releaseCallers.some((c) => isMap(c.job.secrets) && releaserSecrets.every((n) => n in c.job.secrets))) {
+        const file = releaseCallers[0]?.file ?? '.github/workflows/release.yml';
+        find('deploy.releaser-missing', file, `${releaseCallers.length ? `calls Kanon's release workflow without mapping the Releaser's ${releaserSecrets.join(' and ')}` : 'is not there: no workflow calls Kanon\'s release workflow'}, so a release is made with the workflow's token, which starts no run: the deploy lane never starts on a release (plan 0010 §3).`, {
+          text: `Install the Releaser App (kanon apps), and map its two secrets in the release caller's job, as kanon init writes it (docs/release.md):`,
+          commands: releaserSecrets.map((n) => `      ${n}: \${{ secrets.${n} }}`),
+        });
+      }
+      // ── `deploy.ci-push-missing`: the gate waits for the release commit's `ci.yml` push run.
+      const onDefault = await defaultWorkflows();
+      if (onDefault.error !== null) unchecked.push({ check: 'deploy-ci', subject: '.github/workflows/ci.yml', reason: `could not read the workflows on ${s.defaultBranch} (${onDefault.error}), so doctor can't tell whether ci.yml runs on push there, which the deploy lane's gate waits for` });
+      else {
+        const ci = onDefault.workflows?.get('.github/workflows/ci.yml');
+        if (!ci || !runsOnPush(ci, s.defaultBranch)) {
+          find('deploy.ci-push-missing', '.github/workflows/ci.yml', `${ci ? `on ${s.defaultBranch} doesn't run on push to ${s.defaultBranch}` : `is not on ${s.defaultBranch}`}: the deploy lane's gate waits for the release commit's ci.yml push run, and refuses ci-timeout without one (plan 0010 §3, K-SHIP-8).`, {
+            text: `Run ci.yml on push to ${s.defaultBranch}, as kanon init writes it, and merge it:`,
+            commands: ['on:', '  push:', `    branches: [${s.defaultBranch}]`],
+          });
+        }
+      }
+      // ── The environments: each declared one exists, production has reviewers, every one
+      // admits the release tags alone, and production's two notes.
+      const production = /** @type {string} */ (chain[chain.length - 1]);
+      const envsRead = await deps.gh(['api', `repos/${repo}/environments?per_page=100`]);
+      const envList = ghJsonOf(envsRead)?.environments;
+      const settingsUrl = `https://github.com/${repo}/settings/environments`;
+      if (!Array.isArray(envList)) {
+        unchecked.push({ check: 'deploy-environments', subject: repo, reason: `the token can't read ${repo}'s environments (${envsRead.stderr.trim() || `exit ${envsRead.status}`}); it needs Actions: read, or Environments: read on a fine-grained token` });
+      } else {
+        /** @type {Map<string, any>} */
+        const envs = new Map(envList.filter(isMap).map((e) => [String(e.name), e]));
+        const noEnvironments = deployFallback === 'no-environments';
+        for (const name of chain) {
+          if (envs.has(name)) continue;
+          find('deploy.environment-missing', name, noEnvironments
+            ? `is declared and isn't one of ${repo}'s environments, as the \`no-environments\` fallback says: its job sets no environment, so its role trusts the release tags' subject, and any job at a release tag with id-token: write can assume it. Weaker, as the record states (plan 0010 §13).`
+            : `is declared in ${ADOPTION_RECORD} and isn't one of ${repo}'s environments: a job that names it creates it with no protection rule and no deployment policy (plan 0010 §4).`, {
+            text: noEnvironments ? `Nothing to do on a plan without environments. Once the plan has them, create it, and remove the marker.` : `Create it on the environments page, with required reviewers where it is production, and the release tags alone as its deployment refs:`,
+            url: settingsUrl,
+          }, noEnvironments);
+        }
+        const reviewersOf = (/** @type {any} */ e) => (Array.isArray(e?.protection_rules) ? e.protection_rules : []).find((/** @type {any} */ r) => r?.type === 'required_reviewers') ?? null;
+        const prod = envs.get(production);
+        const prodReviewers = prod ? reviewersOf(prod) : null;
+        if (!prodReviewers && (prod || deployFallback)) {
+          find('deploy.reviewers-missing', production, deployFallback
+            ? `is production, and has no required reviewers${marker}: production deploys only on the Maintainer's dispatch, a check of the lane's own code at the release's commit, not the platform's. Weaker, as the record states.`
+            : `is production, and has no required reviewers: nothing on the platform stands between a release and production (plan 0010 §4).`, {
+            text: deployFallback ? `Nothing to do while the plan offers no reviewers. Once it does, add them, and remove the marker.` : `Add a required reviewers rule to ${production} on the environments page, or declare the fallback's marker where the plan offers none (plan 0010 §13).`,
+            url: settingsUrl,
+          }, Boolean(deployFallback));
+        }
+        for (const name of chain.slice(0, -1).filter((n) => envs.has(n))) {
+          notes.push(`The pre-production environment ${name} ${reviewersOf(envs.get(name)) ? 'has' : 'has no'} required reviewers rule; the declaration names none, so either is the project's choice (plan 0010 §12).`);
+        }
+        for (const name of chain.filter((n) => envs.has(n))) {
+          const e = envs.get(name);
+          const policy = isMap(e.deployment_branch_policy) ? e.deployment_branch_policy : null;
+          /** @type {string | null} */
+          let wrong = null;
+          if (!policy) wrong = 'admits every branch and tag ("No restriction")';
+          else if (policy.protected_branches) wrong = 'admits the protected branches ("Protected branches only"), the default branch among them';
+          else {
+            const listed = await deps.gh(['api', `repos/${repo}/environments/${encodeURIComponent(name)}/deployment-branch-policies?per_page=100`]);
+            const rules = ghJsonOf(listed)?.branch_policies;
+            if (!Array.isArray(rules)) {
+              unchecked.push({ check: 'deploy-environments', subject: name, reason: `the token can't read its deployment refs (${listed.stderr.trim() || `exit ${listed.status}`})` });
+              continue;
+            }
+            const branches = rules.filter((r) => r?.type !== 'tag').map((r) => String(r?.name ?? ''));
+            if (branches.length) wrong = `admits the branch${branches.length > 1 ? 'es' : ''} ${branches.map((b) => `\`${b}\``).join(', ')}`;
+            else if (!rules.length) wrong = 'restricts its deployment refs to an empty list';
+          }
+          if (wrong) {
+            find('deploy.branch-policy', name, `${wrong}: the lane asks for the release tags' pattern alone, since every job of it runs at a release tag. Any job on an admitted branch that names ${name} gets its secrets and its role${deployFallback === 'no-reviewers' ? ', with no reviewer in front of them under the `no-reviewers` fallback' : ''} (plan 0010 §4, §15.1).`, {
+              text: `On the environments page, set its deployment branches and tags to "Selected branches and tags", with one tag rule, the release tags' pattern, and no branch rule.`,
+              url: settingsUrl,
+            });
+          }
+        }
+        if (prodReviewers && prodReviewers.prevent_self_review !== true) {
+          find('deploy.self-review', production, `lets a reviewer approve a run they started. Never a block: with self-review prevention on, a maintainer can't approve a run their own token started, a release they published by hand or any dispatch, rollback included, so for a project whose only reviewer is the person who dispatches or publishes it must stay off (plan 0010 §4, decision 18).`, {
+            text: `Nothing to do where one person reviews and publishes. With a second reviewer, turn "Prevent self-review" on for ${production}.`,
+            url: settingsUrl,
+          });
+        }
+        if (prod && prod.can_admins_bypass !== false) {
+          find('deploy.admin-bypass', production, `lets administrators bypass its protection rules, which is GitHub's default: an administrator can deploy to production with no reviewer (plan 0010 §12).`, {
+            text: `Turn "Allow administrators to bypass configured protection rules" off for ${production}, unless an administrator deploying alone is meant.`,
+            url: settingsUrl,
+          });
+        }
+      }
+      // ── `deploy.subject-custom`: the environment must be in the OIDC subject (plan 0010 §5).
+      const sub = await deps.gh(['api', `repos/${repo}/actions/oidc/customization/sub`]);
+      const subject = ghJsonOf(sub);
+      if (!isMap(subject)) unchecked.push({ check: 'deploy-subject', subject: repo, reason: `the token can't read ${repo}'s OIDC subject template (${sub.stderr.trim() || `exit ${sub.status}`}), so doctor can't tell whether the environment is in each deploy job's subject` });
+      else if (subject.use_default !== true && !(Array.isArray(subject.include_claim_keys) && subject.include_claim_keys.includes('context'))) {
+        find('deploy.subject-custom', repo, `uses a custom OIDC subject template whose claims (${(Array.isArray(subject.include_claim_keys) ? subject.include_claim_keys : []).join(', ') || 'none'}) leave out \`context\`, so the environment isn't in a deploy job's subject, and a role that trusts \`…:environment:<name>\` can't tell a job inside the environment from one outside it (plan 0010 §5).`, {
+          text: `Go back to the default template, or add \`context\` to the template's claims:`,
+          commands: [`gh api -X PUT repos/${repo}/actions/oidc/customization/sub -F use_default=true`],
+        });
+      }
+      // ── `deploy.trust-unproven`: the probe's line, from the latest run of the caller that counts.
+      const unproven = (/** @type {string} */ message, /** @type {boolean} */ note, /** @type {string[]} */ commands = []) => find('deploy.trust-unproven', own ?? DEPLOY_CALLER_PATH, message, {
+        text: note && deployFallback === 'no-environments' ? `Nothing to do on a plan without environments: nothing outside an environment can be proved where no job is inside one.` : `Make each environment's role trust only its own subject, \`…:environment:<name>\`, and let the deploy hook find each role from outside its environment (docs/lanes.md, "The trust probe"); the next release's run proves it, or dispatch the caller at a release's tag:`,
+        commands,
+      }, note);
+      const dispatch = `gh workflow run ${basename(own ?? DEPLOY_CALLER_PATH)} -R ${repo} --ref <tag> -f release=<tag>`;
+      if (deployFallback === 'no-environments') {
+        unproven(`The lane skips the trust probe under the \`no-environments\` fallback: every role trusts the release tags' subject, which the probe's own job carries, so nothing proves that a job outside an environment is refused. Weaker, as the record states (plan 0010 §5, §13).`, true);
+      } else if (own) {
+        const name = basename(own);
+        const listed = await deps.gh(['api', `repos/${repo}/actions/workflows/${name}/runs?status=completed&per_page=${DEPLOY_RUNS}`]);
+        const runs = ghJsonOf(listed)?.workflow_runs;
+        /** @type {{ run: any, said: Record<string, unknown> | null } | null} */
+        let latest = null;
+        /** @type {string | null} */
+        let blind = Array.isArray(runs) || /HTTP 404|Not Found/i.test(listed.stderr) ? null : `the token can't list ${name}'s runs (${listed.stderr.trim() || `exit ${listed.status}`}); it needs Actions: read`;
+        for (const run of Array.isArray(runs) ? runs : []) {
+          if (blind || latest) break;
+          // A run counts when it is this repository's own, a `release` run or a dispatch, at a
+          // release's tag (the dispatch decision), whose commit is on the default branch.
+          const from = isMap(run?.head_repository) ? String(run.head_repository.full_name ?? '') : '';
+          if (!isMap(run) || run.status !== 'completed' || from.toLowerCase() !== repo.toLowerCase()) continue;
+          if (run.event !== 'release' && run.event !== 'workflow_dispatch') continue;
+          const tag = String(run.head_branch ?? '');
+          if (!tag || tag === s.defaultBranch) continue;
+          const release = await deps.gh(['api', `repos/${repo}/releases/tags/${encodeURIComponent(tag)}`]);
+          if (!isMap(ghJsonOf(release))) continue;
+          const compared = ghJsonOf(await deps.gh(['api', `repos/${repo}/compare/${encodeURIComponent(String(run.head_sha ?? ''))}...${encodeURIComponent(s.defaultBranch)}`]));
+          if (!isMap(compared)) { blind = `the token can't compare ${run.html_url}'s commit with ${s.defaultBranch}`; break; }
+          if (compared.behind_by !== 0) continue;
+          const jobs = ghJsonOf(await deps.gh(['api', `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`]))?.jobs;
+          if (!Array.isArray(jobs)) { blind = `the token can't list the jobs of ${run.html_url}; it needs Actions: read`; break; }
+          const job = jobs.find((j) => isMap(j) && (j.name === 'probe' || String(j.name).endsWith(' / probe')) && (j.conclusion === 'success' || j.conclusion === 'failure'));
+          if (!job) continue;
+          const path = `repos/${repo}/actions/jobs/${job.id}/logs`;
+          let log = await deps.gh(['api', '--allow-escape-sequences', path]);
+          if (log.status !== 0 && /unknown flag/.test(log.stderr)) log = await deps.gh(['api', path]);
+          if (log.status !== 0) { blind = `the token can't read the log of the probe job of ${run.html_url}, which needs Actions: read (${log.stderr.trim() || `exit ${log.status}`})`; break; }
+          latest = { run, said: probeAnswer(log.stdout) };
+        }
+        if (blind) unchecked.push({ check: 'deploy-runs', subject: own, reason: blind });
+        else if (!latest) {
+          unproven(`No run of ${own} that counts has probed the environments yet: a \`release\` run, or a dispatch at a release's tag, of this repository, on a commit of ${s.defaultBranch}. Until one does, nothing shows that each environment's role refuses a job outside it (plan 0010 §5). It blocks once the lane has run.`, true, [dispatch]);
+        } else {
+          const said = latest.said;
+          const where = `${latest.run.html_url} (${latest.run.event === 'release' ? 'a release' : 'a dispatch'} at ${String(latest.run.head_branch)}, ${String(latest.run.created_at ?? '').slice(0, 10)})`;
+          const keys = said ? Object.keys(said).sort() : [];
+          const missing = chain.filter((e) => !keys.includes(e));
+          const extra = keys.filter((e) => !chain.includes(e));
+          const notRefused = chain.filter((e) => keys.includes(e) && said?.[e] !== 'refused');
+          if (!said) unproven(`The probe job of ${where}, the latest run that counts, printed no ${PROBE_LINE} line doctor can read, so nothing shows that each environment's role refuses a job outside it (plan 0010 §5).`, false, [`gh run view ${latest.run.id} -R ${repo} --log`]);
+          else if (missing.length || extra.length || notRefused.length) {
+            unproven(`The probe of ${where}, the latest run that counts, said ${JSON.stringify(said)}: ${[
+              ...(notRefused.length ? [`${notRefused.join(', ')} ${notRefused.length > 1 ? 'were' : 'was'} not refused`] : []),
+              ...(missing.length ? [`${missing.join(', ')} ${missing.length > 1 ? 'are' : 'is'} declared and unproven, added since that run`] : []),
+              ...(extra.length ? [`it probed ${extra.join(', ')}, which the declaration no longer names`] : []),
+            ].join('; ')}. The probe must answer exactly the declared environments, each refused (plan 0010 §5).`, false, [`gh run view ${latest.run.id} -R ${repo} --log`, dispatch]);
+          }
+        }
+      }
+      // ── `deploy.artifact-retention` (a note): the artifact must outlive a production approval.
+      const kept = await deps.gh(['api', `repos/${repo}/actions/permissions/artifact-and-log-retention`]);
+      const days = Number(ghJsonOf(kept)?.days);
+      if (!Number.isFinite(days)) unchecked.push({ check: 'deploy-retention', subject: repo, reason: `the token can't read ${repo}'s artifact retention (${kept.stderr.trim() || `exit ${kept.status}`}); it needs Administration: read` });
+      else if (days < 30) {
+        find('deploy.artifact-retention', repo, `keeps artifacts ${days} days, which caps the build's 35: a production job may wait up to 30 days for its reviewer, and fails at the build stage, by name, once its artifact has expired (plan 0010 §4).`, {
+          text: `Raise the repository's artifact retention to at least 30 days, under Settings, Actions, General:`,
+          commands: [`gh api -X PUT repos/${repo}/actions/permissions/artifact-and-log-retention -F days=35`],
+        });
+      }
+      // ── `deploy.tag-ruleset`: who may create, move or delete a release tag. A note, but a
+      // block under `no-reviewers`, where it is what guards production's tag path (§13).
+      const tagRules = await deps.gh(['api', `repos/${repo}/rulesets?includes_parents=true&per_page=100`]);
+      const listedRules = ghJsonOf(tagRules);
+      const noRulesets = /upgrade to github pro|make this repository public/i.test(tagRules.stderr);
+      if (!Array.isArray(listedRules) && !noRulesets) unchecked.push({ check: 'deploy-rulesets', subject: repo, reason: `the token can't read ${repo}'s rulesets (${tagRules.stderr.trim() || `exit ${tagRules.status}`})` });
+      else {
+        let restricted = false;
+        for (const r of (Array.isArray(listedRules) ? listedRules : []).filter((x) => isMap(x) && x.target === 'tag')) {
+          const whole = ghJsonOf(await deps.gh(['api', `repos/${repo}/rulesets/${r.id}`]));
+          if (restrictsTags(whole)) { restricted = true; break; }
+        }
+        if (!restricted) {
+          const blocks = deployFallback === 'no-reviewers';
+          find('deploy.tag-ruleset', repo, blocks
+            ? `has no active tag ruleset restricting who may create, move and delete the release tags. Under the \`no-reviewers\` fallback no reviewer stands in front of production, so a release tag is an admitted ref to its secret and its role for any workflow that names the environment: whoever creates or moves one deploys (plan 0010 §13, §15.1).`
+            : deployFallback === 'no-environments'
+              ? `has no tag ruleset restricting who may create, move and delete the release tags${noRulesets ? ', and its plan offers none' : ''}. Under the \`no-environments\` fallback any workflow at a release tag reaches every role, so the tag path stays open: weaker, as the record states (plan 0010 §13).`
+              : `has no active tag ruleset restricting who may create, move and delete the release tags (creation, update and deletion); a ruleset that restricts creation alone leaves moving a tag onto another commit open (plan 0010 §12).`, {
+            text: noRulesets ? (blocks ? `The plan offers no rulesets: make the repository public, or move to a plan with them, then add a tag ruleset on the release tags' pattern with the creation, update and deletion rules.` : `Nothing to do on a plan without rulesets.`) : `Add a tag ruleset on the release tags' pattern with the creation, update and deletion rules, letting the Releaser and the Maintainer bypass it:`,
+            url: `https://github.com/${repo}/settings/rules`,
+          }, false, blocks);
+        }
+      }
+    }
+  }
+
   // ── The id-token holders ────────────────────────────────────────────────────────────────────
   const record = readHolderAcceptances(read(ADOPTION_RECORD));
   for (const e of record.errors) find('declaration.malformed', ADOPTION_RECORD, e, { text: `Write each acceptance under ## Choices as \`- **${HOLDER_LABEL}:** \`<workflow>.yml\` job \`<job>\` (<why it holds the grant>)\` (K-LAYOUT-10).` });
@@ -2399,6 +2871,13 @@ export const diagnose = async (deps, opts) => {
   for (const w of waiverRecord.waivers) groups.set(`${w.id} ${w.subject}`, [...(groups.get(`${w.id} ${w.subject}`) ?? []), w]);
   for (const ws of groups.values()) {
     const { id, subject } = /** @type {(typeof ws)[number]} */ (ws[0]);
+    // A finding no waiver waives under the record's fallback marker (plan 0010 §12): the bullet is
+    // malformed there, and waives nothing.
+    const under = UNWAIVABLE_UNDER[id];
+    if (under && under.fallback === deployFallback) {
+      for (const w of ws) find('declaration.malformed', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives \`${id}\`, which can't be waived under the \`${under.fallback}\` fallback the record declares: ${under.why}.`, { text: `Remove the bullet, and fix the finding (docs/doctor.md, "What can't be waived").` });
+      continue;
+    }
     const hits = findings.filter((f) => f.id === id && f.subject === subject);
     const category = /** @type {{ category: string }} */ (FINDINGS[id]).category;
     const blind = unchecked.find((u) => u.subject === subject || UNCHECKED_CATEGORY[u.check] === category);
@@ -2537,7 +3016,7 @@ const checkGaps = async ({ defaultWorkflows, s, checked, gaps, checkout, find, u
 
 /** @typedef {Extract<Awaited<ReturnType<typeof diagnose>>, { report: any }>['report']} Report */
 
-const TITLES = /** @type {Record<string, string>} */ ({ pin: 'Pin', app: 'App', secret: 'Secret', declaration: 'Declaration', caller: 'Caller', label: 'Label', ruleset: 'Ruleset', 'id-token': 'id-token' });
+const TITLES = /** @type {Record<string, string>} */ ({ pin: 'Pin', app: 'App', secret: 'Secret', declaration: 'Declaration', caller: 'Caller', label: 'Label', ruleset: 'Ruleset', deploy: 'Deploy', 'id-token': 'id-token' });
 
 /**
  * The report as prose for a person.

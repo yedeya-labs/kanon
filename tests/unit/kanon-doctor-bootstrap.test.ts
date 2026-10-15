@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { appsCheckFile, callerFile } from '../../cli/callers.mjs';
 import { bootstrapEnded, EXIT, WAIVER_LABEL } from '../../cli/doctor.mjs';
-import { checkout, fakeGitHub, healthyFiles, ids, PINNED, registerText, REQ, run, type Result } from './helpers/doctor.js';
+import { checkout, fakeGitHub, HEALTHY_DEPLOY, healthyFiles, ids, PINNED, registerText, REQ, run, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 
 /**
@@ -19,7 +19,7 @@ import { SPAWNS } from './helpers/spawns.js';
  */
 vi.setConfig({ testTimeout: SPAWNS.timeout });
 
-const RECORD = '# Adoption record\n\n## People\n\n| Role | Who |\n|---|---|\n| Owner | `@octo` |\n\n';
+const RECORD = `# Adoption record\n\n## People\n\n| Role | Who |\n|---|---|\n| Owner | \`@octo\` |\n\n${HEALTHY_DEPLOY}\n`;
 const record = (bootstrap: string, choices = '- **Overseer:** `not installed`\n') => `${RECORD}## Bootstrap\n\n\`${bootstrap}\`\n\n## Choices\n\n${choices}`;
 
 /** The fake GitHub, with the ruleset requiring `approvals` approving reviews. */
