@@ -235,7 +235,8 @@ describe('classifyResult', () => {
     expect(c.why).toMatch(/turn cap/);
     expect(c.why, 'naming the count and the cap').toMatch(/num_turns 100 past --max-turns 90/);
     // And the turn cap's notice, not the dollar cap's.
-    expect(renderNotice(c.kind, c.why, { arm: 'x' }).body).toMatch(/`--max-turns` is the thing to raise/);
+    expect(renderNotice(c.kind, c.why, { arm: 'x' }).body)
+      .toMatch(/its turn cap is the thing to raise .*re-dispatch this run with a higher `max_turns` and a `reason`/);
   });
 
   it('needs the failed step, the cap and the action\'s whole predicate to call an overshoot (kanon#1008)', () => {

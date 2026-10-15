@@ -620,8 +620,10 @@ function collect(args, env) {
   ctx.execution_file_form = form;
   // WHETHER THE STEP FAILED, for a run that `claude-code-action` failed past its turn cap
   // (kanon#1008). The agent stage's conclusion says so on a lane whose agent step can red the
-  // job. A lane that runs it `continue-on-error` reports `success` there, so a red job is read
-  // as the failure too.
+  // job. The job's status covers the review lane, which runs the agent `continue-on-error` but
+  // reds the job before this runs when no verdict was posted. The other `continue-on-error`
+  // lanes (code audit, the Overseer, the digests) have nothing red by then, so an overshoot
+  // there still reads `completed` (kanon#1014).
   const stages = parseStages(args.stages ?? env.TELEMETRY_STAGES);
   const stepFailed = stages.some(([s, v]) => s === "agent" && v === "failure")
     || (args.job_status ?? env.TELEMETRY_JOB_STATUS) === "failure";

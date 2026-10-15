@@ -28,6 +28,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-15.** The Owner decided that a person may raise one lane's turn cap for one dispatched run, with a reason, up to a ceiling Kanon fixes per lane at twice the cap; nothing in an adopter's repository sets it. `agent-run`'s turn-limit step and `lane-check` enforce it, held by `tests/unit/agent-run-turn-budget.test.ts`. [ADR 0005](../docs/decisions/0005-roles-and-standard-lane-settings.md) §2, amended 2026-10-15; [#891](https://github.com/yedeya-labs/kanon/issues/891)
 
+## `K-AGENT-42`
+
+- **2026-10-15.** The classifier may read the turn count in one case: a run past its turn cap is exhausted when the step that ran it failed, which is the agent action's own check, since that action fails such a step while the run still reports itself completed. [#1008](https://github.com/yedeya-labs/kanon/issues/1008), [#1012](https://github.com/yedeya-labs/kanon/pull/1012)
+
 ## `K-AGENT-45`
 
 - **2026-10-14.** The Owner decided that the issue backstop admits whoever opens an issue, on `issues: opened` alone, with no permission check, since it runs no model, reads no issue text and writes only a bucket and labels. [#768](https://github.com/yedeya-labs/kanon/issues/768), [#840](https://github.com/yedeya-labs/kanon/pull/840)

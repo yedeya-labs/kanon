@@ -239,8 +239,10 @@ describe('a run the action failed past its turn cap is a cap hit (kanon#1008)', 
   });
 
   it('reads a red job as the failed step on a lane whose agent step cannot fail it', () => {
-    // The review lane and others run the agent `continue-on-error`, so its stage's conclusion
-    // is `success` even when the action failed it; the job's status is what is left to read.
+    // The review lane runs the agent `continue-on-error`, so its stage's conclusion is `success`
+    // even when the action failed it, and it reds the job before `agent-finish` only when no
+    // verdict was posted: then the job's status is what is left to read. The other
+    // `continue-on-error` lanes have no red job by then (kanon#1014).
     const { v2 } = both(OVERSHOT, { ...LEAD, TELEMETRY_STAGES: AGENT_PASSED, TELEMETRY_JOB_STATUS: 'failure' });
     expect(v2).toMatchObject({ outcome: 'exhausted', reason: 'turn_cap', terminal_reason: 'max_turns' });
   });
