@@ -13,7 +13,8 @@
 //
 // A HELD PRODUCTION (kanon#894: under a fallback marker, on a `release` run) is neither a deploy
 // nor a failure: nothing is filed, commented on or closed. A production dispatch refused because
-// its actor isn't the Maintainer files as a refusal, `not-maintainer`.
+// its actor isn't the Maintainer files as a refusal, `not-maintainer`, at the stage its row
+// records, `deploy`.
 //
 // A RUN THAT STOPPED BEFORE ANY ENVIRONMENT (the gate, the probe or the build) files on the
 // FIRST environment's issue (open-question decision 4), `sev:medium`, or `sev:high` when the
@@ -126,11 +127,8 @@ export function reportFrom(env, kind) {
   // A held production neither files, comments nor closes (kanon#894).
   if (declared.held === 'true') return null;
   // A non-Maintainer's production attempt, refused by `declare` or by the `deploy` job's own check
-  // on a re-run: filed at `deploy`, the stage #899 gives `not-maintainer` (pending PR #901).
-  const unauthorized = declared.unauthorized || needs.deploy?.outputs?.unauthorized;
-  if (unauthorized) {
-    return { ...base, environment, position: Number(env.POSITION), role: ROLES.production, outcome: 'refused', failed_stage: 'deploy', refusal: unauthorized };
-  }
+  // on a re-run, files what its row records, or, when the record failed, what
+  // `classifyEnvironment` reads: `not-maintainer` at `deploy` either way.
   const ending = rec.outcome ? { outcome: rec.outcome, failed_stage: rec.stage || undefined, refusal: rec.refusal || undefined } : classifyEnvironment({ ...needs, environment });
   const role = needs.declare?.outputs?.role === ROLES.preProduction ? ROLES.preProduction : ROLES.production;
   return { ...base, environment, position: Number(env.POSITION), role, ...ending };
