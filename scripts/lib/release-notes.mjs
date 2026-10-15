@@ -1,8 +1,10 @@
 // @ts-nocheck -- moved from the reference adopter's pipeline library, which doesn't type-check its scripts (plan 0001 §3; ADR 0009)
 /**
- * Pure text helpers for turning release-please release bodies into chat text: Kanon text for
- * the deploy announcement (a `deploy` message, plan 0011 step N9), and Slack mrkdwn for the
- * weekly digest until it moves behind the `notify` job too (step N8).
+ * Pure text helpers for turning release-please release bodies into chat text. Shared:
+ * `parseSections`, `scopeOf`, `classify` and `INTERNAL_SCOPES`. Kanon text, for the deploy
+ * announcement's `deploy` message (plan 0011 step N9): `kanonBullet`, `kanonList`,
+ * `kanonMaint`. Slack mrkdwn, for the weekly digest alone until it moves behind the
+ * `notify` job too (step N8): `slackInline`, `cleanBullet`, `dropScopePrefix`.
  *
  * Extracted from announce-deploy.mjs so the weekly digest (RA-502) can reuse them
  * instead of growing a second, drifting copy — the two posts read the same release
@@ -82,23 +84,9 @@ export function cleanBullet(raw) {
 /** Strip the scope prefix from a cleaned bullet — the digest groups BY scope, so repeating it in every line is noise. */
 export const dropScopePrefix = (cleaned) => cleaned.replace(/^[a-z0-9._/-]+:\s*/i, '');
 
-/** Headline section: deduped bullets, capped, with a "+N more" tail. */
-export function renderList(title, bullets, max = 8) {
-  if (bullets.length === 0) return '';
-  const cleaned = [...new Set(bullets.map(cleanBullet))];
-  const shown = cleaned.slice(0, max);
-  const extra = cleaned.length - shown.length;
-  return (
-    `\n*${title}*\n` +
-    shown.map((b) => `• ${b}`).join('\n') +
-    (extra > 0 ? `\n  …+${extra} more` : '') +
-    '\n'
-  );
-}
-
 /**
  * Maintenance as its parts, each plain text: dependency bumps rolled into a count, other
- * scopes listed. `renderMaint` and `kanonMaint` join them for their system.
+ * scopes listed. `kanonMaint` joins them into Kanon text.
  */
 export function maintParts(bullets) {
   let deps = 0;
@@ -118,12 +106,6 @@ export function maintParts(bullets) {
   if (deps) parts.push(`${approx ? '~' : ''}${deps} dependency update${deps === 1 ? '' : 's'}`);
   if (scopes.size) parts.push(`${[...scopes].sort().join(', ')} updates`);
   return parts;
-}
-
-/** Maintenance: roll dependency bumps into a count, list other scopes. */
-export function renderMaint(bullets) {
-  const parts = maintParts(bullets);
-  return parts.length ? `\n*Maintenance* — ${parts.join(' · ')}\n` : '';
 }
 
 // ------------------------------------------------------------ Kanon text (plan 0011)

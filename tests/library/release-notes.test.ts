@@ -1,12 +1,12 @@
 /**
- * Locks the pure release-note → Slack helpers shared by announce-deploy.mjs and
- * weekly-digest.mjs (RA-502).
+ * Locks the pure release-note helpers shared by announce-deploy.mjs (Kanon text,
+ * plan 0011 N9) and weekly-digest.mjs (Slack mrkdwn until N8 moves it) (RA-502).
  *
- * These had NO test coverage while they lived inside announce-deploy.mjs. They
- * are covered now because two callers depend on them: the release announcement
- * and the weekly digest must categorise the same commit identically, and a
- * silent drift between them is invisible until a stakeholder reads two posts
- * that disagree.
+ * Both callers parse and classify with the same functions (`parseSections`,
+ * `scopeOf`, `classify`): the deploy announcement and the weekly digest must
+ * categorise the same commit identically, and a silent drift between them is
+ * invisible until a stakeholder reads two posts that disagree. The Kanon-text
+ * renderers are tested here too; announce-deploy.test.ts tests the message.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -14,9 +14,9 @@ import {
   cleanBullet,
   dropScopePrefix,
   INTERNAL_SCOPES,
+  kanonList,
+  kanonMaint,
   parseSections,
-  renderList,
-  renderMaint,
   scopeOf,
   slackInline,
 } from '../../scripts/lib/release-notes.mjs';
@@ -114,44 +114,41 @@ describe('dropScopePrefix', () => {
   });
 });
 
-describe('renderList', () => {
+describe('kanonList', () => {
   it('is empty for no bullets, so the section disappears rather than showing a header', () => {
-    expect(renderList('Features', [])).toBe('');
+    expect(kanonList([])).toBe('');
   });
 
   it('dedupes identical bullets', () => {
-    const out = renderList('Features', ['**a:** x', '**a:** x']);
-    expect(out.match(/•/g)).toHaveLength(1);
+    expect(kanonList(['**a:** x', '**a:** x'])).toBe('- a: x');
   });
 
   it('caps and reports the remainder', () => {
     const bullets = Array.from({ length: 10 }, (_, i) => `**a:** item ${i}`);
-    const out = renderList('Features', bullets, 3);
-    expect(out.match(/•/g)).toHaveLength(3);
-    expect(out).toContain('…+7 more');
+    const out = kanonList(bullets, 3);
+    expect(out.match(/^- /gm)).toHaveLength(3);
+    expect(out).toContain('…and 7 more');
   });
 });
 
-describe('renderMaint', () => {
+describe('kanonMaint', () => {
   it('rolls single dependency bumps into a count', () => {
-    expect(renderMaint(['**deps:** bump a', '**deps:** bump b'])).toContain('2 dependency updates');
+    expect(kanonMaint(['**deps:** bump a', '**deps:** bump b'])).toContain('2 dependency updates');
   });
 
   it('reads a batched "with N updates" bump and marks the total approximate', () => {
-    expect(renderMaint(['**deps:** bump the group with 5 updates'])).toContain('~5 dependency updates');
+    expect(kanonMaint(['**deps:** bump the group with 5 updates'])).toContain('~5 dependency updates');
   });
 
   it('singularises one update', () => {
-    expect(renderMaint(['**deps:** bump a'])).toContain('1 dependency update');
-    expect(renderMaint(['**deps:** bump a'])).not.toContain('updates');
+    expect(kanonMaint(['**deps:** bump a'])).toBe('1 dependency update');
   });
 
   it('lists non-dependency scopes separately and sorts them', () => {
-    const out = renderMaint(['**test:** x', '**ci:** y']);
-    expect(out).toContain('ci, test updates');
+    expect(kanonMaint(['**test:** x', '**ci:** y'])).toBe('ci, test updates');
   });
 
   it('is empty when nothing qualifies', () => {
-    expect(renderMaint([])).toBe('');
+    expect(kanonMaint([])).toBe('');
   });
 });

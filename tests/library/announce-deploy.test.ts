@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validate } from '../../scripts/lib/notify-contract.mjs';
-import { kanonBullet, kanonList, kanonMaint, renderMaint } from '../../scripts/lib/release-notes.mjs';
+import { kanonBullet, kanonList, kanonMaint } from '../../scripts/lib/release-notes.mjs';
 import { API, advance, buildDeployMessage, main, produce, selectReleases } from '../../scripts/announce-deploy.mjs';
 
 /**
@@ -98,12 +98,10 @@ describe('the release-note helpers in Kanon text', () => {
     expect(kanonBullet('**a:** b ([#1](https://x.test/1))')).toBe('a: b ([#1](https://x.test/1))');
   });
 
-  it('caps a list with an …and N more line, and Maintenance matches the Slack rendering', () => {
+  it('caps a list with an …and N more line, and rolls Maintenance into one line', () => {
     expect(kanonList(['**a:** 1', '**a:** 2', '**a:** 3'], 2)).toBe('- a: 1\n- a: 2\n…and 1 more');
     expect(kanonList([])).toBe('');
-    const maint = ['**deps:** bump x', '**ci:** y'];
-    expect(kanonMaint(maint)).toBe('1 dependency update · ci updates');
-    expect(renderMaint(maint)).toBe('\n*Maintenance* — 1 dependency update · ci updates\n');
+    expect(kanonMaint(['**deps:** bump x', '**ci:** y'])).toBe('1 dependency update · ci updates');
   });
 
   it('selects the releases since the last announced, or the deployed one alone on a first run', () => {
