@@ -53,6 +53,9 @@ export const RED = ['failure', 'timed_out', 'startup_failure'];
 /** The lane whose successful run an urgent promotion needs (plan 0009 §7). */
 export const REVIEW_LANE = 'agent-review.yml';
 
+/** Kanon's own manifest, whose version release-please's `node` type writes at each release. */
+export const MANIFEST = 'package.json';
+
 const CANDIDATE = /^candidate-v(\d+)\.(\d+)\.(\d+)$/;
 const STABLE = /^v(\d+)\.(\d+)\.(\d+)$/;
 
@@ -329,12 +332,12 @@ const truthy = (v) => /^(true|1|yes)$/i.test(String(v ?? '').trim());
  * @returns {Outcome}
  */
 export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
-  const repo = String(env.GITHUB_REPOSITORY ?? '');
+  if (!env.GITHUB_REPOSITORY) throw new Refusal('GITHUB_REPOSITORY must be set');
+  const repo = String(env.GITHUB_REPOSITORY);
   const branch = env.DEFAULT_BRANCH || 'main';
   const urgent = truthy(env.URGENT);
   const reason = String(env.REASON ?? '').trim();
   const hold = truthy(env.HOLD);
-  if (!repo) throw new Refusal('GITHUB_REPOSITORY is not set');
   if (urgent && !reason) throw new Refusal('`urgent` needs a reason: it skips the soak and the six-day spacing, and the reason goes into the stable Release\'s notes (plan 0009 §7)');
 
   const candidates = tagsOf(api, repo, 'candidate-v', CANDIDATE).sort((a, b) => compareParts(b.parts, a.parts));
@@ -353,12 +356,12 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
   // release-please's `node` type writes).
   let version;
   try {
-    version = JSON.parse(String(api(`repos/${repo}/contents/package.json?ref=${candidate.sha}`, { raw: true }))).version;
+    version = JSON.parse(String(api(`repos/${repo}/contents/${MANIFEST}?ref=${candidate.sha}`, { raw: true }))).version;
   } catch (e) {
-    throw new Refusal(`can't read package.json at ${candidate.name}'s commit ${candidate.sha}: ${String(/** @type {Error} */ (e)?.message ?? e).split('\n')[0]}`);
+    throw new Refusal(`can't read ${MANIFEST} at ${candidate.name}'s commit ${candidate.sha}: ${String(/** @type {Error} */ (e)?.message ?? e).split('\n')[0]}`);
   }
   if (version !== candidate.version) {
-    throw new Refusal(`${candidate.name}'s commit ${candidate.sha} says it is version ${version} in package.json, not ${candidate.version}: a tag must name the version its commit carries`);
+    throw new Refusal(`${candidate.name}'s commit ${candidate.sha} says it is version ${version} in ${MANIFEST}, not ${candidate.version}: a tag must name the version its commit carries`);
   }
 
   /** @param {string} name */
@@ -486,6 +489,10 @@ export function summary(o) {
 function main() {
   const mode = process.argv[2];
   const env = process.env;
+  if (!env.GITHUB_REPOSITORY) {
+    console.error('promote: GITHUB_REPOSITORY must be set; the runner sets it, and the promotion never guesses a repository');
+    process.exit(2);
+  }
   const say = (/** @type {string} */ text) => {
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, text);
     console.log(text);
