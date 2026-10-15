@@ -156,6 +156,10 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     /** Each run's jobs, by run id (`GET actions/runs/<id>/jobs`), and each job's annotations, by its check run id. */
     runJobs: {} as Record<number, Array<{ id: number; name: string; conclusion: string }>>,
     annotations: {} as Record<number, Array<{ title: string; annotation_level: string; message: string }>>,
+    /** The repository's run artifacts (`GET actions/artifacts`), newest first, each with its zip's bytes; none by default. */
+    artifacts: [] as FakeArtifact[],
+    /** The artifact listing's answer when it fails, such as a token without Actions: read. */
+    artifactsRefused: null as string | null,
   };
   const calls: string[][] = [];
   const inputs: string[] = [];
@@ -188,6 +192,12 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
       const list = st.appsCheck.runs.filter((x) => (!q.get('branch') || x.head_branch === q.get('branch')) && (!q.get('event') || st.appsCheck.ignoresEvent || x.event === q.get('event')) && (!q.get('status') || q.get('status') === 'completed'));
       return ok({ total_count: list.length, workflow_runs: list.slice(0, Number(q.get('per_page') ?? 30)) });
     }
+    const listed = /^repos\/acme\/widgets\/actions\/artifacts\?per_page=100&page=(\d+)$/.exec(path);
+    if (listed) {
+      if (st.artifactsRefused) return no(st.artifactsRefused);
+      const page = Number(listed[1]);
+      return ok({ total_count: st.artifacts.length, artifacts: st.artifacts.slice((page - 1) * 100, page * 100).map((a) => ({ id: a.id, name: a.name, created_at: a.created_at, expires_at: a.expires_at, expired: a.expired ?? false, workflow_run: a.workflow_run })) });
+    }
     const jobs = /^repos\/acme\/widgets\/actions\/runs\/(\d+)\/jobs(\?.*)?$/.exec(path);
     if (jobs) return ok({ jobs: st.runJobs[Number(jobs[1])] ?? st.appsCheck.jobs[Number(jobs[1])] ?? [] });
     const notes = /^repos\/acme\/widgets\/check-runs\/(\d+)\/annotations(\?.*)?$/.exec(path);
@@ -215,7 +225,21 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     }
     return no(`unexpected gh ${args.join(' ')}`);
   };
-  return { st, gh, calls, inputs };
+  /** One artifact's zip, by id, as `gh api repos/<repo>/actions/artifacts/<id>/zip` gives its bytes. */
+  const download = async (repo: string, id: number) => {
+    calls.push(['api', `repos/${repo}/actions/artifacts/${id}/zip`]);
+    const a = repo === REPO ? st.artifacts.find((x) => x.id === id) : undefined;
+    if (!a || a.zip === null) return { status: 1, bytes: Buffer.alloc(0), stderr: 'gh: Not Found (HTTP 404)' };
+    return { status: 0, bytes: a.zip, stderr: '' };
+  };
+  return { st, gh, download, calls, inputs };
+};
+
+/** An artifact as `GET repos/<repo>/actions/artifacts` lists it, with its zip (null: its download fails). */
+export type FakeArtifact = {
+  id: number; name: string; created_at: string; expires_at: string; expired?: boolean;
+  workflow_run: { id: number; repository_id: number; head_repository_id: number } | null;
+  zip: Buffer | null;
 };
 
 /** A log as the runner writes it: each secret's value, wherever it appears, is `***`. */
@@ -263,6 +287,7 @@ export const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, ar
   const err: string[] = [];
   const status = await doctor(['--dir', dir, ...argv], {
     gh: github.gh,
+    download: github.download,
     env: {},
     out: (l: string) => out.push(l),
     err: (l: string) => err.push(l),
