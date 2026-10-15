@@ -43,4 +43,11 @@ describe('isReleasePr', () => {
     for (const t of ['chore(main): release 0.35.0', 'chore(release-1.x): release v1.2.3', 'chore(main): release 2.0.0-rc.1']) expect(RELEASE_TITLE.test(t), t).toBe(true);
     for (const t of ['chore: release 0.35.0', 'feat(main): release 1.0.0', 'chore(main): release notes', 'chore(main): release 1.0.0 and more']) expect(RELEASE_TITLE.test(t), t).toBe(false);
   });
+
+  it("reads a component's release title, a Kanon candidate's among them (plan 0009 S3)", () => {
+    for (const t of ['chore(main): release candidate 0.41.0', 'chore(main): release web 1.2.3', 'chore(main): release @acme/web v1.2.3']) expect(RELEASE_TITLE.test(t), t).toBe(true);
+    for (const t of ['chore(main): release candidate', 'chore(main): release candidate 0.41', 'chore(main): release a candidate 0.41.0', 'chore(main): release candidate 0.41.0 and more']) expect(RELEASE_TITLE.test(t), t).toBe(false);
+    expect(isReleasePr(PR({ author: ACTIONS, title: 'chore(main): release candidate 0.41.0' }), REGISTER)).toBe(true);
+    expect(isReleasePr(PR({ title: 'chore(main): release candidate 0.41.0' }), REGISTER)).toBe(false);
+  });
 });

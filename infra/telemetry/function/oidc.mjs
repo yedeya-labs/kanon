@@ -12,7 +12,8 @@
 //   401 `iss`, 401 `aud`, 401 `time`                     checks 3 to 5;
 //   403 `event`     check 6: `event_name` is not `schedule` or `workflow_dispatch` (an allow-list);
 //   403 `workflow`  check 7: `job_workflow_ref` is not one of the endpoint's workflows in Kanon's
-//                   repository at a release tag `v<X>.<Y>.<Z>` at or above `MIN_TOKEN_VERSION`;
+//                   repository at a release tag `v<X>.<Y>.<Z>`, or a candidate's
+//                   `candidate-v<X>.<Y>.<Z>` (plan 0009 S3), at or above `MIN_TOKEN_VERSION`;
 //   403 `owner`     check 8: `repository_id` or `repository_owner_id` is not a decimal string, or the
 //                   owner differs from the registration's; 404 `not-registered`: no registration;
 //   403 `ref`       check 9: `ref_type` is not `branch`, `ref` is not a branch's, or `ref` differs
@@ -87,7 +88,7 @@ const PART = /^[A-Za-z0-9_-]+$/;
 const ID = /^[1-9][0-9]{0,19}$/;
 const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const JOB_WORKFLOW_REF = new RegExp(
-  `^${WORKFLOW_REPOSITORY.replace(/[.-]/g, '\\$&')}/\\.github/workflows/([A-Za-z0-9_.-]+)@refs/tags/v((?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*))$`,
+  `^${WORKFLOW_REPOSITORY.replace(/[.-]/g, '\\$&')}/\\.github/workflows/([A-Za-z0-9_.-]+)@refs/tags/(?:candidate-)?v((?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*))$`,
 );
 const BRANCH_REF = /^refs\/heads\/\S+$/;
 
@@ -252,7 +253,7 @@ export async function verifyToken(token, { audience, endpoint, now = Date.now(),
   const eventName = c.event_name;
   if (typeof eventName !== 'string' || !EVENTS.includes(eventName)) return refuse(403, 'event');
 
-  // 7. Kanon's own workflow for this endpoint, at a release tag at or above the floor.
+  // 7. Kanon's own workflow for this endpoint, at a release or a candidate's tag at or above the floor.
   const workflowRef = typeof c.job_workflow_ref === 'string' ? JOB_WORKFLOW_REF.exec(c.job_workflow_ref) : null;
   if (!workflowRef) return refuse(403, 'workflow');
   const [, workflow, version] = /** @type {[string, string, string]} */ (/** @type {unknown} */ (workflowRef));

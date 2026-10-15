@@ -121,6 +121,12 @@ describe('a valid token', () => {
       expect(await verify(token(claims({ job_workflow_ref: `${COLLECT}@refs/tags/v${v}` }))), v).toMatchObject({ ok: true, caller: { version: v } });
     }
   });
+
+  it("passes at a candidate's tag, candidate-vX.Y.Z, above the floor (plan 0009 S3: Kanon's callers pin each candidate)", async () => {
+    for (const v of ['0.40.0', '0.41.0', '1.0.0']) {
+      expect(await verify(token(claims({ job_workflow_ref: `${COLLECT}@refs/tags/candidate-v${v}` }))), v).toMatchObject({ ok: true, caller: { version: v } });
+    }
+  });
 });
 
 describe('§2.5: every check fails closed, and each one can fail', () => {
@@ -218,6 +224,12 @@ describe('§2.5: every check fails closed, and each one can fail', () => {
   it('version floor dropped: a release below `MIN_TOKEN_VERSION` is refused', async () => {
     for (const v of ['0.39.9', '0.39.100', '0.4.0', '0.0.40']) {
       expect(await verify(token(claims({ job_workflow_ref: `${COLLECT}@refs/tags/v${v}` }))), v).toEqual(refused(403, 'workflow'));
+    }
+  });
+
+  it("a candidate's tag in any other form, or below the floor, is refused", async () => {
+    for (const at of ['candidate-v9.0', 'candidate-9.0.0', 'candidate-v9.0.0-rc.1', 'candidate-v9.0.0x', 'xcandidate-v9.0.0', 'rc-v9.0.0', 'candidate-v0.39.9', 'candidate-candidate-v9.0.0']) {
+      expect(await verify(token(claims({ job_workflow_ref: `${COLLECT}@refs/tags/${at}` }))), at).toEqual(refused(403, 'workflow'));
     }
   });
 
