@@ -228,7 +228,10 @@ export const buildRequirements = (root: string) => {
       .map(([k, v]) => [k, { type: v.type ?? 'string', description: String(v.description ?? '').trim() }]))])),
     grants: Object.fromEntries(Object.values(deployFiles).map((f) => [f, deployGrant(deployDocs[f]!)])),
     hooks: Object.entries(deployHooks).sort(([a], [b]) => a.localeCompare(b)).map(([path, inputs]) => ({ path, inputs: [...inputs].sort() })),
-    environmentSecrets: [...new Set(Object.values(deployFiles).flatMap((f) => [...readFileSync(join(root, '.github/workflows', `${f}.yml`), 'utf8').matchAll(/\$\{\{ secrets\.([A-Z0-9_]+) \}\}/g)].map((m) => m[1]!)))].sort(),
+    // The environment's own secrets: every secret the lane reads but those its caller maps, which
+    // `deploy.yml` declares (`KANON_CHAT_DEPLOY`, the announcement's, plan 0011 N9).
+    environmentSecrets: [...new Set(Object.values(deployFiles).flatMap((f) => [...readFileSync(join(root, '.github/workflows', `${f}.yml`), 'utf8').matchAll(/\$\{\{ secrets\.([A-Z0-9_]+) \}\}/g)].map((m) => m[1]!)
+      .filter((name) => !Object.hasOwn(((deployDocs[f]!.on.workflow_call ?? {}).secrets ?? {}) as Record<string, unknown>, name))))].sort(),
     declaration: { path: 'docs/qa/adoption.md', section: '## Deploy' },
     catalogue: lanesJson.deploy,
   };

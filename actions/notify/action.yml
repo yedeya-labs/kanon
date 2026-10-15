@@ -66,10 +66,14 @@ inputs:
     description: "The telemetry row's tag: `run` (the default), `smoke` or `test`."
     required: false
     default: run
+  position:
+    description: "The deploy lane's alone: the environment's position, which keeps the row's artifact name apart from the other environments' notify jobs in the same run. Empty in every other lane."
+    required: false
+    default: ""
 
 outputs:
   outcome:
-    description: "`posted`, `failed` or `skipped` (kanon#972). Act on `posted` only: a skip leaves the job green. The digests' notify jobs publish it; N9's wiring will read it for the step that acts only on a post."
+    description: "`posted`, `failed` or `skipped` (kanon#972). Act on `posted` only: a skip leaves the job green. Every notify job publishes it; nothing in Kanon acts on it today."
     value: ${{ steps.finish.outputs.outcome }}
 
 runs:
@@ -142,6 +146,7 @@ runs:
         HOOK_OUTCOME: ${{ steps.hook.outcome }}
         RUN_ID: ${{ github.run_id }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
+        POSITION: ${{ inputs.position }}
         KANON_REF: ${{ github.action_ref }}
         KANON_WORKFLOW_REF: ${{ job.workflow_ref }}
         KANON_WORKFLOW_SHA: ${{ job.workflow_sha }}

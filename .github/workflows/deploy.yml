@@ -5,7 +5,7 @@
 # `build` output, step D5): the role (`production` for the last, `pre-production` for the
 # others) is read from the adoption record at the release's commit, never passed in.
 #
-#   declare → deploy (environment, concurrency, approval) → record → report
+#   declare → deploy (environment, concurrency, approval) → record → report → announce → notify
 #
 # DECLARE (`scripts/deploy-gate.mjs declare`), with `contents: read` alone and no credential: the
 # release again, and the adoption record's `## Deploy` list at its commit must hold this
@@ -39,6 +39,18 @@
 # reading the run's approvals to tell a rejection from a failure (kanon#890), and `report` files,
 # comments on or closes this environment's issue (`scripts/deploy-report.mjs`), with no checkout.
 #
+# THE ANNOUNCEMENT (`K-SHIP-10`; plan 0011 N9, plan 0010 §8; the Owner's decisions of
+# 2026-10-15). Each environment announces its own deploy. `announce` (`scripts/announce-deploy.mjs`)
+# writes one `deploy` message from the record's outcome: a deploy that landed names the releases
+# since the environment's previous successful GitHub deployment (`deployments: read`, nothing
+# written back), and a failure is `critical` on production and `warning` elsewhere, linking the run
+# and the issue `report` filed. A refusal, a rejection or a cancel announces nothing. It holds no
+# chat secret, and runs only when the run's commit has a notify hook. `notify` hands the message to
+# the adopter's hook (`$/actions/notify`) with `KANON_CHAT_DEPLOY`, an optional secret of this
+# workflow and the only one its caller maps, and no other: the one job here that holds it, of the
+# shape `tests/unit/helpers/notify-jobs.ts` holds every `notify` job to. A post that fails turns
+# `notify` red and leaves every deploy job green, so a failure to announce is never a deploy's.
+#
 # NO MODEL IN THE DEPLOY PATH (plan 0010 §9): no agent, no Claude credential, no App key or App
 # token (`tests/unit/deploy-lane.test.ts`).
 name: Deploy
@@ -58,6 +70,12 @@ on:
         description: "The build to deploy: `deploy-release.yml`'s `build` output, as the caller's `needs.release.outputs.build`. The lane downloads the artifact it names, which must be this run's, and checks it against its digest."
         required: true
         type: string
+    secrets:
+      # The `deploy` kind's secret (plan 0011 §3.2), read by the `notify` job alone. Optional: a
+      # caller that maps none deploys as before, and `notify` records `skipped` (`no-secret`).
+      KANON_CHAT_DEPLOY:
+        description: Where the adopter's notify hook posts this environment's deploy announcement. Optional.
+        required: false
 
 # Each job declares its own, and none is granted more than it uses.
 permissions: {}
@@ -238,9 +256,13 @@ jobs:
     timeout-minutes: 5
     permissions:
       issues: write
+    outputs:
+      # The issue a failure filed or commented on, for the announcement's link; empty otherwise.
+      issue: ${{ steps.issue.outputs.issue }}
     steps:
       - uses: $/actions/kanon-path
       - name: File, comment on or close this environment's issue
+        id: issue
         env:
           GH_TOKEN: ${{ github.token }}
           NEEDS: ${{ toJSON(needs) }}
@@ -249,3 +271,88 @@ jobs:
           RELEASE: ${{ needs.declare.outputs.tag || github.event.release.tag_name || github.event.inputs.release }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node "$KANON/scripts/deploy-report.mjs" environment
+
+  # THE ANNOUNCEMENT'S MESSAGE (plan 0011 N9): written from the record's outcome, after the report,
+  # so a failure links its issue. Never for a held or refused environment, nor in a cancelled run.
+  # No chat secret, no write: it reads the releases and this environment's deployments.
+  announce:
+    needs: [declare, deploy, record, report]
+    if: ${{ !cancelled() && needs.declare.outputs.held == 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      deployments: read
+    outputs:
+      # `present` or `none`: the `notify` job starts only with a hook (plan 0011 decision 2).
+      hook: ${{ steps.hook.outputs.hook }}
+      # The message artifact's name, with this job's attempt and the environment's position, which
+      # the `notify` job takes as is (plan 0011 §4). Empty when nothing was uploaded.
+      message-artifact: ${{ steps.upload.outputs.artifact-id && format('kanon-notify-deploy-announce-{0}-{1}-{2}', inputs.position, github.run_id, github.run_attempt) || '' }}
+    steps:
+      # The hook's presence, at the run's commit, from a sparse checkout of its directory alone,
+      # which runs nothing and keeps no credential.
+      - name: Check out the notify hook's directory, to see whether it exists
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/notify
+      - name: Is there a notify hook?
+        id: hook
+        run: |
+          set -euo pipefail
+          if [ -f .github/actions/notify/action.yml ]; then hook=present; else hook=none; fi
+          echo "hook=$hook" >> "$GITHUB_OUTPUT"
+          if [ "$hook" = none ]; then
+            echo "No notify hook: this deploy is not announced. docs/notifications.md says how to add one." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: $/actions/kanon-path
+        if: steps.hook.outputs.hook == 'present'
+      - name: Write the deploy message
+        id: message
+        if: steps.hook.outputs.hook == 'present'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          STAGE: ${{ inputs.environment }}
+          VERSION: ${{ needs.declare.outputs.tag }}
+          SHA: ${{ needs.declare.outputs.sha }}
+          ROLE: ${{ needs.declare.outputs.role }}
+          OUTCOME: ${{ needs.record.outputs.outcome }}
+          FAILED_STAGE: ${{ needs.record.outputs.stage }}
+          ISSUE: ${{ needs.report.outputs.issue }}
+          MESSAGE_PATH: ${{ runner.temp }}/kanon-notify-message/message.json
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$MESSAGE_PATH")"
+          node "$KANON/scripts/announce-deploy.mjs"
+      - name: Upload the message
+        id: upload
+        if: steps.message.outputs.message != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-notify-deploy-announce-${{ inputs.position }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.message.outputs.message }}
+          if-no-files-found: error
+
+  # THE POST (plan 0011 §5, `K-OBS-19`): the adopter's hook, with this kind's secret and no other,
+  # a token that reads contents and nothing more. Past an admitting `declare` and with a hook,
+  # never in a cancelled run, and after a failed `announce` too, so a message not
+  # posted is recorded as `skipped`. Its position keeps its telemetry row's artifact apart from
+  # the other environments' in the same run.
+  notify:
+    needs: [declare, announce]
+    if: ${{ !cancelled() && needs.declare.outputs.held == 'false' && needs.announce.outputs.hook == 'present' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.notify.outputs.outcome }}
+    steps:
+      - uses: $/actions/notify
+        id: notify
+        with:
+          kind: deploy
+          artifact: ${{ needs.announce.outputs.message-artifact }}
+          secret: ${{ secrets.KANON_CHAT_DEPLOY }}
+          position: ${{ inputs.position }}

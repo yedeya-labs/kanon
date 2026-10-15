@@ -9,7 +9,7 @@ import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { IMPLEMENTER_LOGIN } from './helpers/register.js';
 import { type Workflow, read, LANES, TRIGGERS, gateOf, gateProblems, REPO, type Actor, pullsWith, eventsOf, runGate, MEMBER, STRANGER, caller, STACKED, REPOSITORY } from './helpers/lane-gate.js';
 import { SPAWNS } from './helpers/spawns.js';
-import { NOTIFY_IF, NOTIFYING_LANES, notifyJob } from './helpers/notify-jobs.js';
+import { GATED, NOTIFY_IF, NOTIFYING_LANES, notifyJob } from './helpers/notify-jobs.js';
 
 /**
  * kanon#46, `K-AGENT-45`: every lane starts real work only on a member's act, and checks it
@@ -46,7 +46,13 @@ describe('every lane carries the membership gate (K-AGENT-45)', () => {
       wf.jobs.notify = { ...notifyJob(NOTIFYING_LANES[file]!, 'digest'), if: `\${{ ${cond} }}` } as Workflow['jobs'][string];
       return wf;
     };
-    it.each(Object.keys(NOTIFYING_LANES))('%s: its notify job, in its shape, passes', (file) => {
+    // The deploy lane has no membership gate: its notify job is gated by `declare` (`GATED`), which
+    // `notify-guard.test.ts` evaluates.
+    const MEMBER_GATED = Object.keys(NOTIFYING_LANES).filter((f) => !GATED[NOTIFYING_LANES[f]!]);
+    it('reads the membership-gated notifying lanes, and only the deploy lane is gated otherwise', () => {
+      expect(Object.keys(NOTIFYING_LANES).filter((f) => !MEMBER_GATED.includes(f))).toEqual(['deploy.yml']);
+    });
+    it.each(MEMBER_GATED)('%s: its notify job, in its shape, passes', (file) => {
       expect(gateProblems(withNotify(file))).toEqual([]);
     });
     it('a notify job that reads neither the verdict nor the hook runs with no gate admitting', () => {

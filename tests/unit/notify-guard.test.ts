@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { KIND_SECRETS } from '../../scripts/lib/notify-contract.mjs';
 import {
-  type Job, type NotifyWorld, type Workflow, NOTIFY_IF, NOTIFYING_LANES,
+  type Job, type NotifyWorld, type Workflow, DEPLOY_NOTIFY_IF, NOTIFY_IF, NOTIFYING_LANES,
   gateJobOf, notifyJob, notifyJobProblems, notifyJobsOf, producersOf, startsNotify,
 } from './helpers/notify-jobs.js';
 
@@ -111,6 +111,13 @@ export const notifyLaneProblems = (docs: Record<string, ReturnType<typeof read>>
     const declaresChat = Object.keys(wf.on?.workflow_call?.secrets ?? {}).some((n) => /^KANON_CHAT_/.test(n));
     if ((declaresChat || notifies.length) && (notifies.length !== 1 || producersOf(wf).length !== 1)) {
       out.push(`${f}: a lane that takes a chat secret has ${notifies.length} notify jobs and ${producersOf(wf).length} producing jobs, not one of each`);
+    }
+    // kanon#972: a skipped `notify` job is green, so nothing may act on its result; what acts only
+    // on a post reads its `outcome` output.
+    for (const id of notifies) {
+      for (const [other, job] of Object.entries(wf.jobs ?? {})) {
+        if (new RegExp(`needs\\.${id}\\.result\\b`).test(JSON.stringify(job))) out.push(`${f}:${other}: reads the ${id} job's result, which a skip leaves green; read its outcome output (kanon#972)`);
+      }
     }
     // The clean break (decision 17): a moved lane neither declares nor reads DIGEST_WEBHOOK, and
     // no workflow maps it into one.
@@ -435,6 +442,89 @@ describe('the weekly digest, moved (plan 0011 N8)', () => {
     const smoke = structuredClone(DOCS['agent-lanes-smoke.yml']!);
     (smoke.jobs!['weekly-digest']!.secrets as Record<string, string>)[LEGACY] = '${{ secrets.KANON_SMOKE_UNSET }}';
     expect(notifyLaneProblems(with_(lane(), smoke))).toEqual([`agent-lanes-smoke.yml:weekly-digest: maps ${LEGACY} into ${WEEKLY}, which no longer declares it`]);
+  });
+});
+
+describe('the deploy lane, wired (plan 0011 N9; the Owner\'s decisions of 2026-10-15)', () => {
+  const DEPLOY = 'deploy.yml';
+  const lane = () => structuredClone(DOCS[DEPLOY]!);
+  const with_ = (wf: ReturnType<typeof lane>) => ({ ...DOCS, [DEPLOY]: wf });
+
+  it('has one notify job of its shape, gated by declare, with no exception to the guard', () => {
+    expect(notifyJobsOf(DOCS[DEPLOY]!)).toEqual(['notify']);
+    expect(producersOf(DOCS[DEPLOY]!)).toEqual(['announce']);
+    expect(notifyJobProblems(DOCS[DEPLOY]!, 'notify', 'deploy')).toEqual([]);
+    expect(DOCS[DEPLOY]!.jobs!.notify).toEqual(notifyJob('deploy', 'announce'));
+    expect(Object.keys(DOCS[DEPLOY]!.on!.workflow_call!.secrets!)).toEqual(['KANON_CHAT_DEPLOY']);
+    expect(notifyLaneProblems(with_(lane()))).toEqual([]);
+    expect(chatSecretProblems(with_(lane()))).toEqual([]);
+  });
+
+  it('fails the chat secret read by the announcing job, or a digest\'s secret in its notify job', () => {
+    const wf = lane();
+    wf.jobs!.announce!.steps!.find((s) => s.id === 'message')!.env!.URL = '${{ secrets.KANON_CHAT_DEPLOY }}';
+    expect(chatSecretProblems(with_(wf))).toEqual([`${DEPLOY}:announce: KANON_CHAT_DEPLOY`]);
+    const other = lane();
+    other.jobs!.notify!.steps![0]!.with!.secret = '${{ secrets.KANON_CHAT_WEEKLY_DIGEST }}';
+    expect(notifyLaneProblems(with_(other))).toEqual(expect.arrayContaining([`${DEPLOY}:notify: its secret is not KANON_CHAT_DEPLOY`]));
+  });
+
+  it('fails an if: without the admitting declare, the digests\' if:, or no position', () => {
+    const noDeclare = lane();
+    noDeclare.jobs!.notify!.if = "${{ !cancelled() && needs.announce.outputs.hook == 'present' }}";
+    expect(notifyLaneProblems(with_(noDeclare))).toEqual([`${DEPLOY}:notify: its if: is not \`${DEPLOY_NOTIFY_IF}\``]);
+    const digest = lane();
+    digest.jobs!.notify!.if = `\${{ ${NOTIFY_IF} }}`;
+    expect(notifyLaneProblems(with_(digest))).toEqual([`${DEPLOY}:notify: its if: is not \`${DEPLOY_NOTIFY_IF}\``]);
+    const noPosition = lane();
+    delete noPosition.jobs!.notify!.steps![0]!.with!.position;
+    expect(notifyLaneProblems(with_(noPosition))).toEqual([`${DEPLOY}:notify: its position is not \`\${{ inputs.position }}\``]);
+    // A digest's notify job may not hand the block a position.
+    const weekly = structuredClone(DOCS['agent-weekly-digest.yml']!);
+    weekly.jobs!.notify!.steps![0]!.with!.position = '${{ inputs.position }}';
+    expect(notifyLaneProblems({ ...DOCS, 'agent-weekly-digest.yml': weekly })).toEqual(['agent-weekly-digest.yml:notify: its step hands the block `position`']);
+  });
+
+  it('fails a pull_request trigger on the deploy lane', () => {
+    const wf = lane() as ReturnType<typeof lane> & { on: Record<string, unknown> };
+    wf.on.pull_request = null;
+    expect(notifyLaneProblems(with_(wf))).toEqual([`${DEPLOY}: a notifying lane started by pull_request`]);
+  });
+
+  it("fails a job that acts on the notify job's result rather than its outcome (kanon#972)", () => {
+    const wf = lane();
+    wf.jobs!.after = { needs: ['notify'], if: "${{ needs.notify.result == 'success' }}", 'runs-on': 'ubuntu-latest', steps: [{ run: 'true' }] };
+    expect(notifyLaneProblems(with_(wf))).toEqual([`${DEPLOY}:after: reads the notify job's result, which a skip leaves green; read its outcome output (kanon#972)`]);
+    const outcome = lane();
+    outcome.jobs!.after = { needs: ['notify'], if: "${{ needs.notify.outputs.outcome == 'posted' }}", 'runs-on': 'ubuntu-latest', steps: [{ run: 'true' }] };
+    expect(notifyLaneProblems(with_(outcome))).toEqual([]);
+  });
+
+  describe('its if:, evaluated', () => {
+    const job = notifyJob('deploy', 'announce');
+    const needs = ['declare', 'announce'];
+    const world = (held: string, hook: string, over: Partial<NotifyWorld> = {}): NotifyWorld => ({
+      member: '', hook: '', dryRun: '', cancelled: false, gate: 'success', producer: 'success', outputs: { 'declare.held': held, 'announce.hook': hook }, ...over,
+    });
+    const starts = (cond: string | undefined, w: NotifyWorld) => startsNotify(cond, needs, w, 'declare');
+
+    it('starts past an admitting declare with a hook, and after a failed announce, to record what happened', () => {
+      expect(starts(job.if, world('false', 'present'))).toBe(true);
+      expect(starts(job.if, world('false', 'present', { producer: 'failure' }))).toBe(true);
+    });
+
+    it('does not start for a held environment, a declare that refused (any event but a release or a dispatch), no hook, a skipped announce, or a cancel', () => {
+      expect(starts(job.if, world('true', 'present'))).toBe(false);
+      expect(starts(job.if, world('', 'present', { gate: 'failure' }))).toBe(false);
+      expect(starts(job.if, world('false', 'none'))).toBe(false);
+      expect(starts(job.if, world('false', '', { producer: 'skipped' }))).toBe(false);
+      expect(starts(job.if, world('false', 'present', { cancelled: true }))).toBe(false);
+    });
+
+    it('the mutations: without the declare condition it would start after a refusal, and with always() in a cancelled run', () => {
+      expect(starts("!cancelled() && needs.announce.outputs.hook == 'present'", world('', 'present', { gate: 'failure' }))).toBe(true);
+      expect(starts(DEPLOY_NOTIFY_IF.replace('!cancelled()', 'always()'), world('false', 'present', { cancelled: true }))).toBe(true);
+    });
   });
 });
 

@@ -38,6 +38,13 @@ import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 export const HOOK_PATH = '.github/actions/notify/action.yml';
 /** The line the block prints for doctor (§5.1, step 6), before its JSON: `cli/doctor.mjs`'s `NOTIFY_LINE`. */
 export const LINE = 'kanon-notify/v1';
+/**
+ * The telemetry lane a kind's `notify` row is written under, where it isn't the kind's own name:
+ * the deploy lane's is `deploy-announce`, since `deploy` is the deploy rows' partition, which no
+ * lane may take (`schema.mjs`, `DEPLOY_PARTITION`; plan 0011 N9).
+ * @type {Readonly<Record<string, string>>}
+ */
+export const ROW_LANES = Object.freeze({ deploy: 'deploy-announce' });
 /** The file a producer's artifact holds (§4): one message. */
 export const MESSAGE_FILE = 'message.json';
 /** The block's state between its steps, in its directory under `runner.temp`. */
@@ -262,9 +269,9 @@ export function finish(env, now = Date.now()) {
   const notices = [];
   /** @type {Record<string, string>} */
   const outputs = { outcome: result.outcome, reason: result.skip_reason ?? result.failure ?? '', row: '', 'row-artifact': '' };
-  // The row's lane is the kind's own lane (§3.2). The deploy lane isn't in the schema's lanes
-  // until plan 0010 adds it (§11), so a deploy message writes no row until then.
-  const lane = state.kind;
+  // The row's lane is the kind's own lane (§3.2): the digests' by their kind's name, and the deploy
+  // lane's as `deploy-announce`, since `deploy` is the deploy rows' reserved partition (N9).
+  const lane = ROW_LANES[state.kind] ?? state.kind;
   if (!LANES.includes(lane)) {
     notices.push(`no notify row: the ${lane} lane is not in the telemetry schema's lanes yet`);
   } else {
@@ -293,7 +300,9 @@ export function finish(env, now = Date.now()) {
       mkdirSync(join(dir, 'row'), { recursive: true });
       writeFileSync(rowFile, `${JSON.stringify(row)}\n`);
       outputs.row = rowFile;
-      outputs['row-artifact'] = deliveryArtifactName(lane, String(env.RUN_ID), String(env.RUN_ATTEMPT));
+      // The deploy lane notifies once per environment in one run: its position keeps the names apart.
+      const position = /^\d+$/.test(String(env.POSITION ?? '')) ? String(env.POSITION) : undefined;
+      outputs['row-artifact'] = deliveryArtifactName(lane, String(env.RUN_ID), String(env.RUN_ATTEMPT), position);
     } else {
       // Telemetry is an observer: a row that doesn't validate is not uploaded, and the post's
       // outcome stands. It is a Kanon bug, said by field name.

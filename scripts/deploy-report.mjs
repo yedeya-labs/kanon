@@ -26,7 +26,10 @@
 //      RELEASE        the release's tag, for the body
 //      RUN_URL        the run's link
 //      GITHUB_REPOSITORY, GH_TOKEN (the job's `issues: write` token)
+//      GITHUB_OUTPUT  `issue=<number>` when a failure filed or commented on the environment's
+//                     issue, else `issue=`: the `announce` job links it (plan 0011 N9)
 
+import { appendFileSync } from 'node:fs';
 import { ghApi, splitEnvironments } from './deploy-gate.mjs';
 import { classifyEnvironment, classifyRelease } from './deploy-row.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
@@ -107,6 +110,13 @@ export function report({ repo, api = ghApi, ...r }) {
 }
 
 /**
+ * The issue a failure filed or commented on, for the `announce` job's link: its number, or empty
+ * when the report closed one or did nothing.
+ * @param {{ action: string, number?: number }} done
+ */
+export const issueOf = (done) => ((done.action === 'filed' || done.action === 'commented') && done.number ? String(done.number) : '');
+
+/**
  * What the report job reports: the record's outcome when it wrote one, else the jobs' own.
  * @param {Record<string, string | undefined>} env @param {'environment' | 'release'} kind
  * @returns {Report | null}
@@ -152,6 +162,7 @@ if (isCliEntry(import.meta.url)) {
   }
   else {
     const done = report({ repo: String(process.env.GITHUB_REPOSITORY), ...r });
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `issue=${issueOf(done)}\n`);
     console.log(done.action === 'none'
       ? `\`${r.environment}\`: ${r.outcome}, nothing to file or close.`
       : `\`${r.environment}\`: ${r.outcome}; ${done.action} issue #${done.number}.`);

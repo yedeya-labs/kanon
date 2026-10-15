@@ -89,10 +89,15 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-14.** Production is the last environment of the declared chain, its required reviewer gates `deploy.yml`'s job, and `kanon doctor` blocks without one; the fallback is a dispatch the Maintainer starts. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 
+## `K-SHIP-12`
+
+- **2026-10-15.** The deploy lane holds one more secret, the announcement's `KANON_CHAT_DEPLOY`, declared by `deploy.yml` as optional and read by its `notify` job alone, which holds no cloud credential; the guard admits exactly that. [Plan 0011](../docs/plans/0011-notifications.md) N9, [#972](https://github.com/yedeya-labs/kanon/issues/972)
+
 ## `K-SHIP-10`
 
 - **2026-10-14.** The rule is prose only: Kanon's deploy lane announces nothing, so the announcement stays the project's own step. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 - **2026-10-14.** The rule is enforced by the `notify` job of `K-OBS-19`: a deploy's announcement is a `deploy` message posted by a job of its own, so a failed post never reads as a failed deploy, and the announced version moves only after the post. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)
+- **2026-10-15.** The Owner decided that each environment announces its own deploy, that a failure posts too (`critical` for production), and that what was announced is read from the environment's previous successful deployment rather than kept in a variable moved after the post. The deploy lane runs the announcement. [Plan 0011](../docs/plans/0011-notifications.md) N9, [#972](https://github.com/yedeya-labs/kanon/issues/972)
 
 ## `K-PROJ-16`
 
