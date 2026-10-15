@@ -601,29 +601,57 @@ describe('where the rows go', () => {
   const spineCalls = workflows.flatMap(({ f, doc }) => Object.values(doc.jobs)
     .filter((j) => j.uses === '$/.github/workflows/agent-lane.yml').map((j) => ({ f, with: j.with ?? {} })));
 
-  // A lane the store's schema doesn't name yet passes `lane: ""`, which the spine documents as
-  // writing the version-1 row alone, so it sends no version-2 row the store would refuse. Its name
-  // joins `LANE_ROLES` once the store's intake takes it, which ships before the release that
-  // writes it (docs/telemetry.md). Each entry names that change.
+  // THE ONE EXEMPTION (`K-PRIN-11`): a lane the store's schema doesn't name yet passes `lane: ""`,
+  // which the spine documents as writing the version-1 row alone, so it sends no version-2 row the
+  // store would refuse. Its name joins `LANE_ROLES` once the store's intake takes it, which ships
+  // before the release that writes it (docs/telemetry.md). The list is pinned: a second lane is a
+  // red test until it is named here, with the change that ends its exemption.
   const NOT_YET_IN_SCHEMA: Record<string, string> = {
-    // Plan 0010 D8: the deploy diagnose lane, until kanon#966 adds `deploy-diagnose`.
+    // Plan 0010 D8: the deploy diagnose lane, until kanon#966 adds `deploy-diagnose` to the schema.
     'agent-deploy-diagnose.yml': 'kanon#966',
   };
-
-  it('every Kanon lane names a lane from the schema\'s list', () => {
-    const lanes = [...finishCalls, ...spineCalls].filter((c) => c.f !== 'agent-lane.yml' && c.f !== 'lane-agent-job.yml' && c.f !== 'agent-blocks-smoke.yml');
-    expect(lanes.length).toBe(17);
-    for (const c of lanes) {
-      if (c.f in NOT_YET_IN_SCHEMA) expect(c.with.lane, c.f).toBe('');
-      else expect(LANES, c.f).toContain(c.with.lane);
+  type LaneCall = { f: string; with: Record<string, unknown> };
+  const laneCalls = (): LaneCall[] => [...finishCalls, ...spineCalls].filter((c) => c.f !== 'agent-lane.yml' && c.f !== 'lane-agent-job.yml' && c.f !== 'agent-blocks-smoke.yml');
+  /** What is wrong with the lanes' names: each names a schema lane, or is exempt and names none. */
+  const laneNameProblems = (calls: LaneCall[], exempt: Record<string, string>, schema: readonly string[] = LANES): string[] => {
+    const out: string[] = [];
+    for (const [f, why] of Object.entries(exempt)) {
+      if (!/^kanon#\d+$/.test(why)) out.push(`${f} is exempt without the issue that ends it`);
+      if (schema.includes(f.replace(/^agent-|\.yml$/g, ''))) out.push(`${f} is exempt, but the schema names it now`);
+      if (!calls.some((c) => c.f === f)) out.push(`${f} is exempt, but no such lane runs the agent`);
     }
+    for (const c of calls) {
+      if (c.f in exempt) { if (c.with.lane !== '') out.push(`${c.f} is exempt, so it must pass lane: ""`); }
+      else if (!schema.includes(String(c.with.lane))) out.push(`${c.f} names the lane "${String(c.with.lane)}", which the schema lacks`);
+    }
+    return out;
+  };
+
+  it('every Kanon lane names a lane from the schema\'s list, but the one named exemption', () => {
+    expect(laneCalls().length).toBe(17);
+    expect(Object.keys(NOT_YET_IN_SCHEMA)).toEqual(['agent-deploy-diagnose.yml']);
+    expect(laneNameProblems(laneCalls(), NOT_YET_IN_SCHEMA)).toEqual([]);
   });
 
-  it('admits a lane outside the schema only while the schema lacks it, and only as a lane that sends no version-2 row', () => {
-    for (const f of Object.keys(NOT_YET_IN_SCHEMA)) {
-      expect(LANES, f).not.toContain(f.replace(/^agent-|\.yml$/g, ''));
-      expect([...finishCalls, ...spineCalls].some((c) => c.f === f), f).toBe(true);
-    }
+  describe('the exemption cannot widen (K-PRIN-11)', () => {
+    it('a lane passing lane: "" outside the list is red', () => {
+      const calls = laneCalls().map((c) => (c.f === 'agent-lead.yml' ? { ...c, with: { ...c.with, lane: '' } } : c));
+      expect(laneNameProblems(calls, NOT_YET_IN_SCHEMA)).toEqual(['agent-lead.yml names the lane "", which the schema lacks']);
+    });
+    it('a second lane added to the list is red, whether the schema names it or no such lane runs', () => {
+      expect(laneNameProblems(laneCalls(), { ...NOT_YET_IN_SCHEMA, 'agent-lead.yml': 'kanon#966' })).toEqual(expect.arrayContaining([
+        'agent-lead.yml is exempt, but the schema names it now', 'agent-lead.yml is exempt, so it must pass lane: ""',
+      ]));
+      expect(laneNameProblems(laneCalls(), { ...NOT_YET_IN_SCHEMA, 'agent-nothing.yml': 'kanon#966' })).toEqual(['agent-nothing.yml is exempt, but no such lane runs the agent']);
+    });
+    it('an exemption with no issue, or kept once the schema names the lane, is red', () => {
+      expect(laneNameProblems(laneCalls(), { 'agent-deploy-diagnose.yml': 'later' })).toEqual(['agent-deploy-diagnose.yml is exempt without the issue that ends it']);
+      expect(laneNameProblems(laneCalls(), NOT_YET_IN_SCHEMA, [...LANES, 'deploy-diagnose'])).toEqual(['agent-deploy-diagnose.yml is exempt, but the schema names it now']);
+    });
+    it('the exempt lane naming a lane is red', () => {
+      const calls = laneCalls().map((c) => (c.f === 'agent-deploy-diagnose.yml' ? { ...c, with: { ...c.with, lane: 'explore' } } : c));
+      expect(laneNameProblems(calls, NOT_YET_IN_SCHEMA)).toEqual(['agent-deploy-diagnose.yml is exempt, so it must pass lane: ""']);
+    });
   });
 
   type Job = { 'timeout-minutes'?: number; steps?: (Step & { id?: string; name?: string; run?: string; 'continue-on-error'?: boolean })[] };

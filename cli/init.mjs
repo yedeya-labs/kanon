@@ -1129,7 +1129,7 @@ const RELEASER_QUESTION = 'Create the optional Releaser App, so the release PR r
  *   installed?: string[], releases?: boolean, reusable?: (identities: string[]) => Array<{ app: string, slug: string, from?: string }>,
  *   codeowners?: string[] | null, database?: string | null, runsDco?: boolean, hasCommits?: boolean, isPrivate?: boolean,
  *   met?: (lane: string) => boolean, release?: string, secrets?: Set<string> | null,
- *   claudeMapped?: ClaudeAuth[], holders?: Array<{ workflow: string, job: string }>, defaultBranch?: string, declaredEnvironments?: string[] }} AskContext
+ *   claudeMapped?: ClaudeAuth[], holders?: Array<{ workflow: string, job: string }>, defaultBranch?: string, declaredEnvironments?: string[], deployCallerTaken?: boolean }} AskContext
  */
 
 /**
@@ -1185,11 +1185,15 @@ export const derive = (a, ctx, g = {}) => {
     a.reviewTrigger = 'labelled';
     why.reviewTrigger = { source: g.reviewTrigger ? 'flag' : 'default', reason: '' };
   }
-  // THE DIAGNOSE LANE NEEDS THE DEPLOY LANE (plan 0010 D8): without a declared environment there
-  // is no deploy caller for it to follow, so it is dropped, and the person told.
-  if (a.lanes.includes(DIAGNOSE_LANE) && !a.deployEnvironments.length) {
+  // THE DIAGNOSE LANE NEEDS THE DEPLOY LANE (plan 0010 D8): without a declared environment, or with
+  // the deploy caller's path holding a workflow of the project's own (so init writes no deploy
+  // caller, #956), there is no deploy caller for it to follow, so it is dropped, and the person told.
+  if (a.lanes.includes(DIAGNOSE_LANE) && (!a.deployEnvironments.length || ctx.deployCallerTaken)) {
     a.lanes = a.lanes.filter((l) => l !== DIAGNOSE_LANE);
-    if (!a.notes.some((n) => n.startsWith(DIAGNOSE_DROPPED))) a.notes.push(`${DIAGNOSE_DROPPED}: it diagnoses the deploy lane's failed runs, and no deploy environment is declared. Give --deploy-environments too.`);
+    const why = !a.deployEnvironments.length
+      ? 'no deploy environment is declared. Give --deploy-environments too.'
+      : `${DEPLOY_CALLER_PATH} is a deploy workflow of your own, so init writes no deploy caller for it to follow (deploy.caller-taken).`;
+    if (!a.notes.some((n) => n.startsWith(DIAGNOSE_DROPPED))) a.notes.push(`${DIAGNOSE_DROPPED}: it diagnoses the deploy lane's failed runs, and ${why}`);
   }
   if (!fixed('delegation')) {
     const author = identitiesOf(a.lanes, ctx.req).includes('author');
@@ -2499,6 +2503,7 @@ const run = async (deps, opts, req, rep) => {
     holders: holders.filter((h) => h.status === 'unaccepted' && !given(h)),
     defaultBranch: s.defaultBranch,
     declaredEnvironments,
+    deployCallerTaken: deployPathTaken(read, req),
   };
   const a = await askAll(deps, opts, ctx);
   // THE SUMMARY (plan 0007 §4): every value, and where it came from, before anything is written.

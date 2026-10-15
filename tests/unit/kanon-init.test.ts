@@ -3010,10 +3010,12 @@ describe('kanon init and the deploy diagnose lane (plan 0010 D8)', () => {
     expect(d.notes.filter((n: string) => n.startsWith(DIAGNOSE_DROPPED))).toHaveLength(1);
   });
 
-  it("writes no caller for it where the deploy caller's path is a workflow of the project's own", async () => {
+  it("is left out, with a note, where the deploy caller's path is a workflow of the project's own", async () => {
     const own = 'name: Ship\non: push\njobs:\n  ship:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./ship.sh\n';
-    const { dir } = await initWith(['--lanes', 'review,deploy-diagnose', '--deploy-environments', 'production'], { '.github/workflows/deploy.yml': own });
+    const { dir, d } = await initWith(['--lanes', 'review,deploy-diagnose', '--deploy-environments', 'production'], { '.github/workflows/deploy.yml': own });
     expect(read(dir, '.github/workflows/deploy.yml')).toBe(own);
     expect(existsSync(join(dir, CALLER))).toBe(false);
+    expect(d.answers.lanes).toEqual(['agent-review']);
+    expect(d.notes.filter((n: string) => n.startsWith(DIAGNOSE_DROPPED))).toEqual([expect.stringContaining('.github/workflows/deploy.yml is a deploy workflow of your own')]);
   });
 });
