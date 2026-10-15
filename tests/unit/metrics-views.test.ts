@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { validate } from '../../actions/agent-telemetry/schema.mjs';
 import { parseReportArgs } from '../../cli/metrics-report.mjs';
+import { classifyEnvironment, environmentRow } from '../../scripts/deploy-row.mjs';
 import { metrics } from '../../cli/metrics.mjs';
 import { PRICES, cacheSavings, priceOf } from '../../scripts/metrics/prices.mjs';
 import { MINIMUM, metricsReport, renderReport } from '../../scripts/metrics/report.mjs';
@@ -643,6 +644,61 @@ describe('the deploy metrics (plan 0010 §11)', () => {
     const twoReleases = renderViews(views(twoRelease(2))).join('\n');
     expect(twoReleases).toMatch(/\| Deployment frequency \| 2 a week [^|]*\| Forward `ok` deploys \(not rollbacks or redeploys\)/);
     expect(twoReleases).toMatch(/2 of 27 forward deploys \(not rollbacks or redeploys\)/);
+  });
+
+  it('says a lane failure before the deploy hook counts as a production change failure, as it does (kanon#947)', () => {
+    // The anchor: the record's row for a `declare` job that failed without refusing, and for a
+    // `deploy` job that failed before its hook (the supersede check's API call), is `failed` at
+    // `deploy`, the hook's own failure's row. When a row tells them apart, this
+    // goes red, and the caveat below goes with it.
+    const declareCrash = classifyEnvironment({ declare: { result: 'failure', outputs: {} }, environment: 'production' });
+    const preHookCrash = classifyEnvironment({ declare: { result: 'success', outputs: {} }, deploy: { result: 'failure', outputs: { 'started-at': '2026-10-01T10:00:00Z', 'build-failed': 'false' } }, environment: 'production' });
+    const hookFailure = classifyEnvironment({ declare: { result: 'success', outputs: {} }, deploy: { result: 'failure', outputs: { 'started-at': '2026-10-01T10:00:00Z', 'build-failed': 'false', 'deploy-started-at': '2026-10-01T10:01:00Z' } }, environment: 'production' });
+    expect(declareCrash).toEqual({ outcome: 'failed', failed_stage: 'deploy' });
+    expect(preHookCrash).toEqual(hookFailure);
+    expect(declareCrash).toEqual(hookFailure);
+    // So the views count it as one to restore, and as a change that failed unless the row is a
+    // rollback's or a redeploy's. Only the supersede check writes them, on a release's run as on a
+    // dispatch's: a failure before it wrote its outputs (here `declare`'s) leaves the row without
+    // them, so a rollback or a redeploy counts as a forward change; one after it (here the
+    // checkout's) keeps what it wrote, so it doesn't.
+    const ran = (event: string, needs: object) => environmentRow(
+      { GITHUB_REPOSITORY: 'acme/app', GITHUB_RUN_ID: '123456', GITHUB_RUN_ATTEMPT: '1', GITHUB_EVENT_NAME: event, KANON_WORKFLOW_REF: 'yedeya-labs/kanon/.github/workflows/deploy.yml@refs/tags/v0.41.0', KANON_WORKFLOW_SHA: 'c'.repeat(40), NEEDS: JSON.stringify(needs), ENVIRONMENT: 'production', POSITION: '1' },
+      { now: new Date(ago(2)), api: () => ({}) },
+    ) as Record<string, unknown>;
+    const declared = { result: 'success', outputs: { role: 'production', prerelease: 'false', sha: 'a'.repeat(40) } };
+    const crashed = { declare: { result: 'failure', outputs: {} }, deploy: { result: 'skipped', outputs: {} } };
+    const checkedOut = (supersede: object) => ({ declare: declared, deploy: { result: 'failure', outputs: { 'started-at': '2026-10-01T10:00:00Z', 'build-failed': 'false', ...supersede } } });
+    const beforeSupersede = [ran('workflow_dispatch', crashed), ran('release', crashed)];
+    const rollback = ran('workflow_dispatch', checkedOut({ rollback: 'true', redeploy: 'false' }));
+    const releaseRedeploy = ran('release', checkedOut({ rollback: 'false', redeploy: 'true' }));
+    for (const r of [...beforeSupersede, rollback, releaseRedeploy]) {
+      expect(r).toMatchObject({ outcome: 'failed', failed_stage: 'deploy' });
+      expect(validate(r)).toEqual({ ok: true });
+      expect(deployOf([r]).restore.unrestored).toBe(1);
+    }
+    for (const r of beforeSupersede) {
+      expect(r.rollback).toBeUndefined();
+      expect(r.redeploy).toBeUndefined();
+      expect(deployOf([r]).changeFailure).toMatchObject({ reached: 1, failed: 1 });
+    }
+    expect(rollback).toMatchObject({ trigger: 'workflow_dispatch', rollback: true });
+    expect(releaseRedeploy).toMatchObject({ trigger: 'release', redeploy: true });
+    for (const r of [rollback, releaseRedeploy]) expect(deployOf([r]).changeFailure).toMatchObject({ reached: 0, failed: 0 });
+
+    const caveat = /A lane failure before the deploy hook counts as a change failure/i;
+    expect(renderViews(views(history(1))).join('\n')).toMatch(caveat);
+    const doc = readFileSync('docs/metrics.md', 'utf8');
+    const start = doc.indexOf('### The deploy views');
+    expect(start).toBeGreaterThan(-1);
+    const section = doc.slice(start, doc.indexOf('\n### ', start + 1));
+    expect(section).toMatch(caveat);
+    // It names both kinds the row can't tell from the hook's own, and the rollback it can't see.
+    expect(section).toMatch(/`declare` job fails without refusing/);
+    expect(section).toMatch(/step of its `deploy` job before the deploy hook/);
+    expect(section).toMatch(/failure before it has written them .* counts as a forward change that failed, though the run was a rollback or a redeploy/);
+    expect(section).toMatch(/failure after it, as the checkout's, keeps what it wrote/);
+    expect(section).toMatch(/That holds for any run: a dispatch's rollback, and a release's redeploy/);
   });
 });
 
