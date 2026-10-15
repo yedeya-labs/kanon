@@ -447,7 +447,7 @@ describe("K-SHIP-7 Kanon's release caller", () => {
 
     it('moves the pins with scripts/move-pins.mjs at the pushed commit, before any token is minted', () => {
       expect(steps[0]?.uses).toBe('actions/checkout@v7');
-      expect(steps[0]?.with).toEqual({ ref: '${{ github.sha }}', 'persist-credentials': false });
+      expect(steps[0]?.with).toEqual({ 'persist-credentials': false });
       expect(move?.env).toEqual({ TAG: '${{ needs.candidate.outputs.tag }}' });
       expect(move?.run).toContain('node scripts/move-pins.mjs "$TAG" > "$RUNNER_TEMP/moved"');
       expect(at((s) => s === move)).toBeLessThan(at((s) => s === mint));

@@ -12,6 +12,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-14.** The Owner decided that a rule records no history of its own: a rule whose premise changed is rewritten so its Why states the premise that holds now, and the change is recorded here, not in a "Premise changed" note beside the rule. [#578](https://github.com/yedeya-labs/kanon/issues/578), [#859](https://github.com/yedeya-labs/kanon/pull/859)
 
+## `K-AGENT-3`
+
+- **2026-10-15.** The Owner decided that the Releaser App holds Workflows write, recorded as a broadened permission: Kanon's pin job opens its pull request as the Releaser, and that pull request moves Kanon's own pins in `.github/workflows`, which GitHub refuses without it. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
+
 ## `K-AGENT-24`
 
 - **2026-10-12.** The Reviewer's token mint asks for Checks, Commit statuses and Actions read again, after a narrowing of its permissions dropped the reads this rule depends on; a test now fails a mint that drops any of the three. [#691](https://github.com/yedeya-labs/kanon/issues/691)

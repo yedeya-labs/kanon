@@ -8,7 +8,7 @@
 | Lead | `yedeya-labs-author` | Read & write | Read & write | Read & write | Read & write | Read | Commit statuses: Read & write |
 | Overseer | `yedeya-labs-author` | Read & write | Read & write | Read & write | Read & write | Read | Commit statuses: Read & write |
 | Merger | `yedeya-labs-judge` | Read & write | Read & write | Read & write | No access | Read & write | Checks: Read, Commit statuses: Read |
-| Releaser | `yedeya-labs-releaser` | Read & write | No access | Read & write | No access | No access | None |
+| Releaser | `yedeya-labs-releaser` | Read & write | No access | Read & write | Read & write | No access | None |
 
 Every App also holds Metadata: Read (`K-ADOPT-8`).
 
