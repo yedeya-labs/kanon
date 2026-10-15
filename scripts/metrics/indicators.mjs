@@ -526,9 +526,9 @@ export function byVersionOf(ctx, { start, end }) {
 // hook, that failed without refusing records `failed` at `deploy`, as the hook's own failure does.
 // `isDeployFailure` can't tell them apart, so a lane failure counts as one to restore, and as a
 // change that failed unless the row is a rollback's or a redeploy's. One before the supersede check
-// wrote its outputs carries no `rollback` or `redeploy`, so on a rollback dispatch it counts as a
-// forward change; one after it, as the checkout's, carries what the check wrote. `docs/metrics.md`
-// says so.
+// wrote its outputs carries no `rollback` or `redeploy`, so a rollback or a redeploy, a release's or
+// a dispatch's, counts as a forward change; one after it, as the checkout's, carries what the check
+// wrote. `docs/metrics.md` says so.
 
 /** The deployment frequency's weeks: the median over the last 13 (plan 0010 §11). */
 export const DEPLOY_WEEKS = 13;

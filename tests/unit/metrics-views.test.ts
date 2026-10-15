@@ -658,25 +658,33 @@ describe('the deploy metrics (plan 0010 §11)', () => {
     expect(preHookCrash).toEqual(hookFailure);
     expect(declareCrash).toEqual(hookFailure);
     // So the views count it as one to restore, and as a change that failed unless the row is a
-    // rollback's. Only the supersede check writes `rollback`: a failure before it wrote its outputs
-    // (here `declare`'s) leaves the row without it, so a rollback dispatch counts as a forward
-    // change; one after it (here the checkout's) keeps what it wrote, so it doesn't.
-    const dispatched = (needs: object) => environmentRow(
-      { GITHUB_REPOSITORY: 'acme/app', GITHUB_RUN_ID: '123456', GITHUB_RUN_ATTEMPT: '1', GITHUB_EVENT_NAME: 'workflow_dispatch', KANON_WORKFLOW_REF: 'yedeya-labs/kanon/.github/workflows/deploy.yml@refs/tags/v0.41.0', KANON_WORKFLOW_SHA: 'c'.repeat(40), NEEDS: JSON.stringify(needs), ENVIRONMENT: 'production', POSITION: '1' },
+    // rollback's or a redeploy's. Only the supersede check writes them, on a release's run as on a
+    // dispatch's: a failure before it wrote its outputs (here `declare`'s) leaves the row without
+    // them, so a rollback or a redeploy counts as a forward change; one after it (here the
+    // checkout's) keeps what it wrote, so it doesn't.
+    const ran = (event: string, needs: object) => environmentRow(
+      { GITHUB_REPOSITORY: 'acme/app', GITHUB_RUN_ID: '123456', GITHUB_RUN_ATTEMPT: '1', GITHUB_EVENT_NAME: event, KANON_WORKFLOW_REF: 'yedeya-labs/kanon/.github/workflows/deploy.yml@refs/tags/v0.41.0', KANON_WORKFLOW_SHA: 'c'.repeat(40), NEEDS: JSON.stringify(needs), ENVIRONMENT: 'production', POSITION: '1' },
       { now: new Date(ago(2)), api: () => ({}) },
     ) as Record<string, unknown>;
     const declared = { result: 'success', outputs: { role: 'production', prerelease: 'false', sha: 'a'.repeat(40) } };
-    const beforeSupersede = dispatched({ declare: { result: 'failure', outputs: {} }, deploy: { result: 'skipped', outputs: {} } });
-    const afterSupersede = dispatched({ declare: declared, deploy: { result: 'failure', outputs: { 'started-at': '2026-10-01T10:00:00Z', 'build-failed': 'false', rollback: 'true', redeploy: 'false' } } });
-    for (const r of [beforeSupersede, afterSupersede]) {
-      expect(r).toMatchObject({ outcome: 'failed', failed_stage: 'deploy', trigger: 'workflow_dispatch' });
+    const crashed = { declare: { result: 'failure', outputs: {} }, deploy: { result: 'skipped', outputs: {} } };
+    const checkedOut = (supersede: object) => ({ declare: declared, deploy: { result: 'failure', outputs: { 'started-at': '2026-10-01T10:00:00Z', 'build-failed': 'false', ...supersede } } });
+    const beforeSupersede = [ran('workflow_dispatch', crashed), ran('release', crashed)];
+    const rollback = ran('workflow_dispatch', checkedOut({ rollback: 'true', redeploy: 'false' }));
+    const releaseRedeploy = ran('release', checkedOut({ rollback: 'false', redeploy: 'true' }));
+    for (const r of [...beforeSupersede, rollback, releaseRedeploy]) {
+      expect(r).toMatchObject({ outcome: 'failed', failed_stage: 'deploy' });
       expect(validate(r)).toEqual({ ok: true });
       expect(deployOf([r]).restore.unrestored).toBe(1);
     }
-    expect(beforeSupersede.rollback).toBeUndefined();
-    expect(deployOf([beforeSupersede]).changeFailure).toMatchObject({ reached: 1, failed: 1 });
-    expect(afterSupersede.rollback).toBe(true);
-    expect(deployOf([afterSupersede]).changeFailure).toMatchObject({ reached: 0, failed: 0 });
+    for (const r of beforeSupersede) {
+      expect(r.rollback).toBeUndefined();
+      expect(r.redeploy).toBeUndefined();
+      expect(deployOf([r]).changeFailure).toMatchObject({ reached: 1, failed: 1 });
+    }
+    expect(rollback).toMatchObject({ trigger: 'workflow_dispatch', rollback: true });
+    expect(releaseRedeploy).toMatchObject({ trigger: 'release', redeploy: true });
+    for (const r of [rollback, releaseRedeploy]) expect(deployOf([r]).changeFailure).toMatchObject({ reached: 0, failed: 0 });
 
     const caveat = /A lane failure before the deploy hook counts as a change failure/i;
     expect(renderViews(views(history(1))).join('\n')).toMatch(caveat);
@@ -688,8 +696,9 @@ describe('the deploy metrics (plan 0010 §11)', () => {
     // It names both kinds the row can't tell from the hook's own, and the rollback it can't see.
     expect(section).toMatch(/`declare` job fails without refusing/);
     expect(section).toMatch(/step of its `deploy` job before the deploy hook/);
-    expect(section).toMatch(/failure before it has written them .* rollback dispatch counts as a forward change/);
+    expect(section).toMatch(/failure before it has written them .* counts as a forward change that failed, though the run was a rollback or a redeploy/);
     expect(section).toMatch(/failure after it, as the checkout's, keeps what it wrote/);
+    expect(section).toMatch(/That holds for any run: a dispatch's rollback, and a release's redeploy/);
   });
 });
 
