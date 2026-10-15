@@ -24,13 +24,16 @@
 //            `Introduced by` field (`introducedBy`), a pull request the candidate contains.
 //   red      every run of Kanon's lane callers since the pins moved succeeded at its latest attempt
 //            (so a run re-run green passes), or failed with agent-classify's `unavailable` notice
-//            (the model was never reached), on one of its failed jobs. A listing GitHub truncates
-//            (more runs than were read, or its 1,000-result cap) holds, since a red run may be unread.
+//            (the model was never reached), on one of its failed jobs. Each red conclusion is listed
+//            by itself (`status=failure`, …): GitHub's filter matches the latest attempt, so a run
+//            re-run green drops out, and the green runs are counted, never read. A red listing
+//            GitHub truncates (more runs than were read, or its 1,000-result cap) holds.
 // What a candidate contains is every pull request since the newest STABLE tag below it, so the
 // pull requests of a candidate held and never promoted count against the next one.
 // `urgent` (plan 0009 §7) skips the soak and the six-day spacing, and asks instead that a review
-// ran at the candidate (`review`): a run whose `review` job itself succeeded (a run the filter
-// declined reviewed nothing), with the caller pinning the candidate at that run's commit. A gate added later (plan 0012's end-to-end gate, its
+// ran at the candidate (`review`): a run that called the review lane at the candidate's tag, by
+// its `referenced_workflows`, and whose `review` job itself succeeded (a run the filter declined
+// reviewed nothing). A gate added later (plan 0012's end-to-end gate, its
 // step E11) is one more entry in `GATES`: the summary, the decision and the plan read the table.
 //
 // Env: GH_TOKEN, GITHUB_REPOSITORY, DEFAULT_BRANCH (default `main`), HOLD, URGENT, REASON, PLAN,
@@ -137,7 +140,8 @@ const notFound = (e) => e instanceof ApiError && e.status === 404;
  *   pin: { number: number, mergedAt: string } | null,
  *   callers: Caller[], contained: ContainedPr[],
  *   since: string,
- *   runsOf: (file: string) => Listing,
+ *   runsOf: (file: string, status: string) => Listing,
+ *   completedOf: (file: string) => number,
  * }} Context what every gate reads: the candidate, the pull requests it contains, the pin, and
  *   Kanon's lane callers
  * @typedef {{ pass: boolean, evidence: string }} Verdict
@@ -270,7 +274,7 @@ export const GATES = [
     id: 'red',
     title: 'No unexplained red',
     when: 'always',
-    check: ({ api, repo, callers, runsOf, since }) => {
+    check: ({ api, repo, callers, runsOf, completedOf, since }) => {
       const files = [...new Set(callers.map((c) => c.file))];
       let count = 0;
       let explained = 0;
@@ -279,18 +283,21 @@ export const GATES = [
       /** @type {string[]} */
       const truncated = [];
       for (const file of files) {
-        const listing = runsOf(file);
-        if (listing.truncated) truncated.push(`${file} (read ${listing.runs.length} of ${listing.total})`);
-        for (const run of listing.runs) {
-          if (run?.status !== 'completed') continue;
-          count += 1;
-          if (!RED.includes(run?.conclusion)) continue;
-          if (unreachable(api, repo, Number(run.id))) explained += 1;
-          else red.push(`${file} run ${run.id} (${run.conclusion})`);
+        count += completedOf(file);
+        // Each red conclusion listed by itself: GitHub's `status` filter matches a run's latest
+        // attempt, so a run re-run green is not listed, and the green runs, which can pass the
+        // listing's cap in a soak, are never read.
+        for (const conclusion of RED) {
+          const listing = runsOf(file, conclusion);
+          if (listing.truncated) truncated.push(`${file} ${conclusion} (read ${listing.runs.length} of ${listing.total})`);
+          for (const run of listing.runs) {
+            if (unreachable(api, repo, Number(run.id))) explained += 1;
+            else red.push(`${file} run ${run.id} (${conclusion})`);
+          }
         }
       }
       if (truncated.length) {
-        return { pass: false, evidence: `the run listing is truncated, so a red run may be unread: ${truncated.join(', ')}${red.length ? `; unexplained red since ${since}: ${red.join(', ')}` : ''}` };
+        return { pass: false, evidence: `a red run listing is truncated, so a red run may be unread: ${truncated.join(', ')}${red.length ? `; unexplained red since ${since}: ${red.join(', ')}` : ''}` };
       }
       return red.length
         ? { pass: false, evidence: `unexplained red since ${since}: ${red.join(', ')}` }
@@ -304,15 +311,15 @@ export const GATES = [
     check: ({ api, repo, candidate, callers, runsOf, since }) => {
       const files = [...new Set(callers.filter((c) => c.lane === REVIEW_LANE).map((c) => c.file))];
       for (const file of files) {
-        for (const run of runsOf(file).runs) {
-          if (run?.status !== 'completed' || !reviewed(api, repo, Number(run.id))) continue;
-          const sha = String(run?.head_sha ?? '');
-          if (pinsAt(api, repo, file, sha, candidate.name)) {
-            return { pass: true, evidence: `${file} run ${run.id}'s \`${REVIEW_JOB}\` job succeeded, with the caller pinning ${candidate.name} at ${sha}` };
-          }
+        for (const run of runsOf(file, 'success').runs) {
+          // The lane the run itself called, as GitHub recorded it: the caller's head copy is a pull
+          // request's for `pull_request_target`, not the one that ran.
+          const lane = laneRefOf(run, repo);
+          if (lane !== candidate.name || !reviewed(api, repo, Number(run.id))) continue;
+          return { pass: true, evidence: `${file} run ${run.id} called ${REVIEW_LANE}@${lane}, and its \`${REVIEW_JOB}\` job succeeded` };
         }
       }
-      return { pass: false, evidence: `no run of the review lane's caller since ${since} has a \`${REVIEW_JOB}\` job that succeeded with the caller pinning ${candidate.name}` };
+      return { pass: false, evidence: `no run of the review lane's caller since ${since} called ${REVIEW_LANE}@${candidate.name} and had its \`${REVIEW_JOB}\` job succeed` };
     },
   },
 ];
@@ -332,16 +339,14 @@ function reviewed(api, repo, id) {
 }
 
 /**
- * Whether the caller `file`, at commit `sha`, calls the review lane at `ref`. Unreadable is no.
- * @param {Api} api @param {string} repo @param {string} file @param {string} sha @param {string} ref
+ * The ref at which a run called the review lane, from the run's `referenced_workflows`
+ * (`owner/repo/.github/workflows/agent-review.yml@<ref>`), or null when it called none.
+ * @param {any} run @param {string} repo
  */
-function pinsAt(api, repo, file, sha, ref) {
-  try {
-    const text = String(api(`repos/${repo}/contents/.github/workflows/${file}?ref=${sha}`, { raw: true }));
-    return laneCallers([{ file, text }], repo).some((c) => c.lane === REVIEW_LANE && c.ref === ref);
-  } catch {
-    return false;
-  }
+export function laneRefOf(run, repo) {
+  const prefix = `${repo}/.github/workflows/${REVIEW_LANE}@`;
+  const hit = (run?.referenced_workflows ?? []).map((/** @type {any} */ w) => String(w?.path ?? '')).find((/** @type {string} */ p) => p.startsWith(prefix));
+  return hit ? hit.slice(prefix.length) : null;
 }
 
 /**
@@ -467,31 +472,35 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
   const pin = pinPr ? { number: Number(pinPr.number), mergedAt: String(pinPr.pull_request.merged_at) } : null;
   const since = pin?.mergedAt ?? cutAt;
 
+  /** @param {string} file */
+  const runsPath = (file) => `repos/${repo}/actions/workflows/${file}/runs?created=${encodeURIComponent(`>=${since}`)}`;
   /** @type {Map<string, Listing>} */
   const runs = new Map();
-  /** @param {string} file @returns {Listing} */
-  const runsOf = (file) => {
-    if (!runs.has(file)) {
-      const path = `repos/${repo}/actions/workflows/${file}/runs?created=${encodeURIComponent(`>=${since}`)}`;
+  /** A caller's runs since the pins moved whose latest attempt has `status`. @param {string} file @param {string} status @returns {Listing} */
+  const runsOf = (file, status) => {
+    const key = `${file} ${status}`;
+    if (!runs.has(key)) {
       /** @type {any[]} */
       const all = [];
       let total = 0;
       for (let n = 1; n * 100 <= RUN_LISTING_CAP; n += 1) {
-        const got = api(`${path}&per_page=100&page=${n}`);
+        const got = api(`${runsPath(file)}&status=${status}&per_page=100&page=${n}`);
         if (n === 1) total = Number(got?.total_count ?? 0);
         const list = got?.workflow_runs ?? [];
         all.push(...list);
         if (list.length < 100) break;
       }
       total = Math.max(total, all.length);
-      runs.set(file, { runs: all, total, truncated: all.length < total || all.length >= RUN_LISTING_CAP });
+      runs.set(key, { runs: all, total, truncated: all.length < total || all.length >= RUN_LISTING_CAP });
     }
-    return /** @type {Listing} */ (runs.get(file));
+    return /** @type {Listing} */ (runs.get(key));
   };
+  /** How many runs completed since the pins moved, by the listing's count. @param {string} file */
+  const completedOf = (file) => Number(api(`${runsPath(file)}&status=completed&per_page=1`)?.total_count ?? 0);
 
   /** @type {Context} */
   const ctx = {
-    repo, branch, now, urgent, api, candidate, previous, cutAt, pin, contained, since, runsOf,
+    repo, branch, now, urgent, api, candidate, previous, cutAt, pin, contained, since, runsOf, completedOf,
     callers: laneCallers(workflows ?? readWorkflows(), repo),
   };
   const gates = GATES.filter((g) => g.when !== (urgent ? 'normal' : 'urgent')).map((g) => ({ id: g.id, title: g.title, skipped: false, ...g.check(ctx) }));

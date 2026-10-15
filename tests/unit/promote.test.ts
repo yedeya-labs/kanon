@@ -36,7 +36,22 @@ const CUT_NOTES = '## [0.41.0](https://github.com/yedeya-labs/kanon/compare/cand
 const ref = (name: string, sha: string) => ({ ref: `refs/tags/${name}`, object: { sha, type: 'commit' } });
 const commit = (sha: string, message: string, date: string) => ({ sha, commit: { message, committer: { date } } });
 const page = (path: string, n = 1) => `${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${n}`;
-const runsPath = (file: string, since = PIN) => page(`repos/${REPO}/actions/workflows/${file}/runs?created=${encodeURIComponent(`>=${since}`)}`);
+const runsBase = (file: string, since = PIN) => `repos/${REPO}/actions/workflows/${file}/runs?created=${encodeURIComponent(`>=${since}`)}`;
+/** One page of a caller's runs whose latest attempt has `status`. */
+const runsPath = (file: string, status: string, since = PIN, n = 1) => `${runsBase(file, since)}&status=${status}&per_page=100&page=${n}`;
+/** The count of a caller's completed runs. */
+const countPath = (file: string, since = PIN) => `${runsBase(file, since)}&status=completed&per_page=1`;
+const RED_STATUSES = ['failure', 'timed_out', 'startup_failure'];
+/** Every listing the gates read, for the two callers, empty of red runs. */
+const listings = (since = PIN) => Object.fromEntries(['review.yml', 'merge.yml'].flatMap((file) => [
+  [countPath(file, since), { total_count: 2, workflow_runs: [] }],
+  ...RED_STATUSES.map((s) => [runsPath(file, s, since), { total_count: 0, workflow_runs: [] }]),
+]));
+/** A review run as GitHub lists it: the lane it called, by `referenced_workflows`. */
+const reviewRun = (laneRef: string) => ({
+  id: 1, status: 'completed', conclusion: 'success', event: 'pull_request_target', head_sha: REVIEWED,
+  referenced_workflows: [{ path: `${REPO}/.github/workflows/agent-review.yml@${laneRef}`, sha: SHA, ref: `refs/tags/${laneRef}` }],
+});
 const pinSearch = `search/issues?q=${encodeURIComponent(`repo:${REPO} is:pr is:merged in:title "${pinTitle(VERSION)}"`)}&per_page=100`;
 
 const WORKFLOWS = [
@@ -67,16 +82,17 @@ const github = (now: number, over: Record<string, Route> = {}) => {
     [page(`repos/${REPO}/issues?state=open&labels=bug`)]: [
       { number: 130, labels: [{ name: 'bug' }, { name: 'sev:medium' }], body: '### Introduced by\n\n#101\n' },
     ],
-    [runsPath('review.yml')]: { total_count: 1, workflow_runs: [{ id: 1, status: 'completed', conclusion: 'success', head_sha: REVIEWED }] },
+    ...listings(),
+    [runsPath('review.yml', 'success')]: { total_count: 1, workflow_runs: [reviewRun(CANDIDATE)] },
     [`repos/${REPO}/actions/runs/1/jobs?per_page=100`]: { jobs: [{ id: 11, name: 'review / filter', conclusion: 'success' }, { id: 12, name: 'review / review / review / review', conclusion: 'success' }] },
-    [`repos/${REPO}/contents/.github/workflows/review.yml?ref=${REVIEWED}`]: WORKFLOWS[0]!.text,
-    [runsPath('merge.yml')]: { total_count: 2, workflow_runs: [{ id: 2, status: 'completed', conclusion: 'success' }, { id: 3, status: 'completed', conclusion: 'cancelled' }] },
     [`repos/${REPO}/releases/latest`]: { tag_name: 'v0.40.0', published_at: iso(now - 8 * DAY) },
     [`repos/${REPO}/git/ref/tags/v0`]: { ref: 'refs/tags/v0', object: { sha: PREV } },
     ...over,
   };
   const writes: Write[] = [];
+  const reads: string[] = [];
   const api = (path: string, { method = 'GET', body }: { method?: string; body?: unknown; raw?: boolean } = {}) => {
+    if (method === 'GET') reads.push(path);
     if (method !== 'GET') {
       writes.push({ method, path, body });
       return {};
@@ -84,7 +100,7 @@ const github = (now: number, over: Record<string, Route> = {}) => {
     if (!(path in routes) || routes[path] === undefined) throw new ApiError(`${path}: HTTP 404`, 404);
     return routes[path];
   };
-  return { api, writes };
+  return { api, writes, reads };
 };
 
 const ENV = { GITHUB_REPOSITORY: REPO, DEFAULT_BRANCH: 'main' };
@@ -144,8 +160,7 @@ describe('the gates (plan 0009 §2)', () => {
     // With no pin, the runs are read from the cut.
     const unpinned = {
       [pinSearch]: { items: [{ number: 110, title: pinTitle(VERSION), pull_request: { merged_at: null } }] },
-      [runsPath('review.yml', CUT)]: { workflow_runs: [] },
-      [runsPath('merge.yml', CUT)]: { workflow_runs: [] },
+      ...listings(CUT),
     };
     expect(run(4 * DAY, { over: unpinned }).outcome.gates[0]!.evidence)
       .toMatch(/^no merged pull request titled `ci\(deps\): run Kanon on candidate v0\.41\.0`/);
@@ -201,7 +216,7 @@ describe('the gates (plan 0009 §2)', () => {
 
   it('a candidate with an unexplained red run is held (MUTATION: the red gate removed turns this red)', () => {
     const red = {
-      [runsPath('merge.yml')]: { workflow_runs: [{ id: 2, status: 'completed', conclusion: 'failure' }] },
+      [runsPath('merge.yml', 'failure')]: { total_count: 1, workflow_runs: [{ id: 2, status: 'completed', conclusion: 'failure' }] },
       [`repos/${REPO}/actions/runs/2/jobs?per_page=100`]: { jobs: [{ id: 21, conclusion: 'failure' }] },
       [`repos/${REPO}/check-runs/21/annotations?per_page=100`]: [{ title: 'Process completed with exit code 1' }],
     };
@@ -213,7 +228,7 @@ describe('the gates (plan 0009 §2)', () => {
   it("a red run whose failed job carries agent-classify's `unavailable` notice is explained: the model was never reached", () => {
     expect(UNREACHABLE_TITLE).toBe(DOCTOR_UNREACHABLE_TITLE);
     const red = {
-      [runsPath('merge.yml')]: { workflow_runs: [{ id: 2, status: 'completed', conclusion: 'failure' }] },
+      [runsPath('merge.yml', 'failure')]: { total_count: 1, workflow_runs: [{ id: 2, status: 'completed', conclusion: 'failure' }] },
       [`repos/${REPO}/actions/runs/2/jobs?per_page=100`]: { jobs: [{ id: 20, conclusion: 'success' }, { id: 21, conclusion: 'failure' }] },
       [`repos/${REPO}/check-runs/21/annotations?per_page=100`]: [{ title: UNREACHABLE_TITLE }],
     };
@@ -222,22 +237,34 @@ describe('the gates (plan 0009 §2)', () => {
     expect(outcome.decision).toBe('promote');
   });
 
-  it('a run re-run green counts by its latest attempt; one still in progress is no verdict', () => {
-    const runs = { [runsPath('merge.yml')]: { workflow_runs: [{ id: 2, status: 'completed', conclusion: 'success', run_attempt: 2 }, { id: 4, status: 'in_progress', conclusion: null }] } };
-    expect(verdicts(run(4 * DAY, { over: runs }).outcome).red).toBe('pass');
+  it('reads only the red listings, and counts the completed runs: an all-green caller far over the listing cap passes', () => {
+    const busy = { [countPath('review.yml')]: { total_count: 4 * RUN_LISTING_CAP, workflow_runs: [] } };
+    const { outcome, gh } = run(4 * DAY, { over: busy });
+    expect(verdicts(outcome).red).toBe('pass');
+    expect(outcome.gates.find((g) => g.id === 'red')!.evidence).toBe(`${4 * RUN_LISTING_CAP + 2} completed runs of 2 callers since ${PIN}, 0 red with the model unreachable`);
+    // A run re-run green is not in a red listing (GitHub's filter matches the latest attempt), and
+    // no green listing is read.
+    expect(gh.reads.filter((r) => r.includes('/actions/workflows/') && !r.includes('status=completed') && !RED_STATUSES.some((st) => r.includes(`status=${st}&`)))).toEqual([]);
   });
 
-  it('a truncated run listing holds the candidate and says so: more runs than were read, or the listing\'s cap', () => {
-    const more = { [runsPath('merge.yml')]: { total_count: 3, workflow_runs: [{ id: 2, status: 'completed', conclusion: 'success' }] } };
+  it('a truncated red listing holds the candidate and says so: more runs than were read, or the listing\'s cap (MUTATION: ignoring truncation turns this red)', () => {
+    const explained = (id: number) => ({
+      [`repos/${REPO}/actions/runs/${id}/jobs?per_page=100`]: { jobs: [{ id: id * 10, conclusion: 'failure' }] },
+      [`repos/${REPO}/check-runs/${id * 10}/annotations?per_page=100`]: [{ title: UNREACHABLE_TITLE }],
+    });
+    const more = { [runsPath('merge.yml', 'failure')]: { total_count: 3, workflow_runs: [{ id: 2, status: 'completed', conclusion: 'failure' }] }, ...explained(2) };
     const short = run(4 * DAY, { over: more }).outcome;
     expect(verdicts(short).red).toBe('hold');
-    expect(short.gates.find((g) => g.id === 'red')!.evidence).toBe('the run listing is truncated, so a red run may be unread: merge.yml (read 1 of 3)');
-    const full = Array.from({ length: 100 }, (_, i) => ({ id: 1000 + i, status: 'completed', conclusion: 'success' }));
+    expect(short.gates.find((g) => g.id === 'red')!.evidence).toBe('a red run listing is truncated, so a red run may be unread: merge.yml failure (read 1 of 3)');
     const capped: Record<string, unknown> = {};
-    for (let n = 1; n * 100 <= RUN_LISTING_CAP; n += 1) capped[runsPath('merge.yml').replace(/page=1$/, `page=${n}`)] = { total_count: RUN_LISTING_CAP, workflow_runs: full };
+    for (let n = 1; n * 100 <= RUN_LISTING_CAP; n += 1) {
+      const ids = Array.from({ length: 100 }, (_, i) => n * 1000 + i);
+      capped[runsPath('merge.yml', 'timed_out', PIN, n)] = { total_count: RUN_LISTING_CAP, workflow_runs: ids.map((id) => ({ id, status: 'completed', conclusion: 'timed_out' })) };
+      for (const id of ids) Object.assign(capped, explained(id));
+    }
     const atCap = run(4 * DAY, { over: capped }).outcome;
     expect(verdicts(atCap).red).toBe('hold');
-    expect(atCap.gates.find((g) => g.id === 'red')!.evidence).toContain(`merge.yml (read ${RUN_LISTING_CAP} of ${RUN_LISTING_CAP})`);
+    expect(atCap.gates.find((g) => g.id === 'red')!.evidence).toBe(`a red run listing is truncated, so a red run may be unread: merge.yml timed_out (read ${RUN_LISTING_CAP} of ${RUN_LISTING_CAP})`);
   });
 });
 
@@ -267,7 +294,7 @@ describe('the spacing, hold and urgent (plan 0009 §3, §7)', () => {
     const urgent = { URGENT: 'true', REASON: 'fix' };
     const bug = { [page(`repos/${REPO}/issues?state=open&labels=bug`)]: [{ number: 131, labels: [{ name: 'bug' }, { name: 'sev:high' }], body: '### Introduced by\n\n#101\n' }] };
     expect(run(10 * HOUR, { env: urgent, over: bug }).outcome.decision).toBe('hold');
-    const noReview = run(10 * HOUR, { env: urgent, over: { [runsPath('review.yml')]: { workflow_runs: [{ id: 1, status: 'completed', conclusion: 'cancelled' }] } } }).outcome;
+    const noReview = run(10 * HOUR, { env: urgent, over: { [runsPath('review.yml', 'success')]: { total_count: 0, workflow_runs: [] } } }).outcome;
     expect(verdicts(noReview).review).toBe('hold');
     expect(noReview.decision).toBe('hold');
   });
@@ -275,18 +302,22 @@ describe('the spacing, hold and urgent (plan 0009 §3, §7)', () => {
   it("urgent's review gate needs the review job itself to have succeeded: a run the filter declined reviewed nothing", () => {
     const urgent = { URGENT: 'true', REASON: 'fix' };
     const ok = run(10 * HOUR, { env: urgent }).outcome;
-    expect(ok.gates.find((g) => g.id === 'review')!.evidence).toBe(`review.yml run 1's \`review\` job succeeded, with the caller pinning ${CANDIDATE} at ${REVIEWED}`);
+    expect(ok.gates.find((g) => g.id === 'review')!.evidence).toBe(`review.yml run 1 called agent-review.yml@${CANDIDATE}, and its \`review\` job succeeded`);
     const filtered = { [`repos/${REPO}/actions/runs/1/jobs?per_page=100`]: { jobs: [{ id: 11, name: 'review / filter', conclusion: 'success' }, { id: 12, name: 'review / review', conclusion: 'skipped' }] } };
     const out = run(10 * HOUR, { env: urgent, over: filtered }).outcome;
     expect(verdicts(out).review).toBe('hold');
     expect(out.decision).toBe('hold');
   });
 
-  it("urgent's review gate needs the caller to pin the candidate at the reviewed run's commit", () => {
-    const old = { [`repos/${REPO}/contents/.github/workflows/review.yml?ref=${REVIEWED}`]: `    uses: ${REPO}/.github/workflows/agent-review.yml@v0.40.0\n` };
+  it("urgent's review gate reads the lane the run called, not the caller's head copy: a pull_request_target run whose head pins the candidate but which ran the previous release holds (MUTATION: reading the head copy turns this red)", () => {
+    const old = {
+      [runsPath('review.yml', 'success')]: { total_count: 1, workflow_runs: [reviewRun('v0.40.0')] },
+      // The pull request's own copy of the caller, at the run's head, pins the candidate.
+      [`repos/${REPO}/contents/.github/workflows/review.yml?ref=${REVIEWED}`]: WORKFLOWS[0]!.text,
+    };
     const out = run(10 * HOUR, { env: { URGENT: 'true', REASON: 'fix' }, over: old }).outcome;
     expect(verdicts(out).review).toBe('hold');
-    expect(out.gates.find((g) => g.id === 'review')!.evidence).toBe(`no run of the review lane's caller since ${PIN} has a \`review\` job that succeeded with the caller pinning ${CANDIDATE}`);
+    expect(out.gates.find((g) => g.id === 'review')!.evidence).toBe(`no run of the review lane's caller since ${PIN} called agent-review.yml@${CANDIDATE} and had its \`review\` job succeed`);
   });
 
   it('urgent without a reason is refused', () => {
