@@ -279,11 +279,10 @@
       "feature": "full",
       "title": "Full pipeline",
       "does": "Also plans projects, merges approved work and audits the pipeline, with the same two Apps.",
-      "lanes": ["agent-review", "agent-implement", "agent-implement-revise", "agent-triage", "agent-rebase", "agent-dispatch-sweep", "agent-issue-backstop", "agent-merge-reconcile", "agent-lead", "agent-lead-revise", "agent-lead-split", "agent-lead-reconcile", "agent-verify-acs", "agent-merge", "agent-overseer", "agent-code-audit"],
+      "lanes": ["agent-review", "agent-implement", "agent-implement-revise", "agent-triage", "agent-rebase", "agent-dispatch-sweep", "agent-issue-backstop", "agent-merge-reconcile", "agent-lead", "agent-lead-revise", "agent-lead-split", "agent-lead-reconcile", "agent-verify-acs", "agent-merge", "agent-overseer", "agent-code-audit", "agent-project-digest"],
       "conditional": {
         "agent-explore": { "hook": ".github/actions/explore-sweep/action.yml", "condition": "when the repository has the sweep hook you write (docs/explore-sweep.md)" },
-        "agent-weekly-digest": { "secret": "KANON_CHAT_WEEKLY_DIGEST", "condition": "when the repository holds the weekly digest's chat secret, `KANON_CHAT_WEEKLY_DIGEST`" },
-        "agent-project-digest": { "secret": "KANON_CHAT_PROJECT_DIGEST", "condition": "when the repository holds the project digest's chat secret, `KANON_CHAT_PROJECT_DIGEST`" }
+        "agent-weekly-digest": { "hook": ".github/actions/notify/action.yml", "condition": "when the repository has a notify hook at `.github/actions/notify/action.yml`, which `kanon init` writes for any chat answer but none (docs/notifications.md)" }
       },
       "leftOut": {
         "agent-explore-telemetry": "It needs a registration that sets `aggregate_invoker`, which only Kanon's operator sets after the collector's first run registers the repository (docs/telemetry.md), so nothing done at install makes it work.",
@@ -298,7 +297,7 @@
         "the `Lane check` rule, after the merge",
         "the Author App: create it, or reuse one with a new key",
         "the sign-off delegation, your own act (`K-AGENT-44`), where the repository runs Kanon's DCO check",
-        "the chat channel's webhook, `DIGEST_WEBHOOK`, when the digests are in"
+        "each chat kind's secret, `KANON_CHAT_PROJECT_DIGEST` and, with the weekly digest, `KANON_CHAT_WEEKLY_DIGEST`, when you choose a notify hook"
       ]
     }
   ]

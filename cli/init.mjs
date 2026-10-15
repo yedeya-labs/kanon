@@ -6,13 +6,15 @@
 //    declaration files, callers and App register.
 // 2. ASKS three questions (plan 0007 §3): the feature, a fixed set of lanes (or the lanes one by
 //    one), whether the repository holds private or sensitive material, and one consent question
-//    for sharing. Everything else it infers or defaults (§4), and it shows every value in one
+//    for sharing; and, only when the chosen lanes post to a chat channel and no notify hook
+//    answers it already, which hook posts them (plan 0011 §10). Everything else it infers or defaults (§4), and it shows every value in one
 //    summary, with where each came from, which the person confirms, changes or stops at (`--yes`
 //    takes the defaults and confirms).
 // 3. WRITES the declarations, only the sections that differ from their documented defaults (an
 //    omitted section means its default, plan 0005 §5.2), the lane callers, the `apps-check`
 //    caller, `lane-check` in CI, the Dependabot entry, a starting project-setup hook, the Lead's
-//    brief template beside the Lead's caller (#749) and, when the person says yes, the kanon
+//    brief template beside the Lead's caller (#749), the notify hook the chat answer names (plan
+//    0011 §10.2) and, when the person says yes, the kanon
 //    plugin's declaration in `.claude/settings.json` (#376), every Kanon reference pinned to the
 //    release it runs from, and prints the diff. It commits nothing.
 // 4. CREATES the taxonomy's labels (rulebook/labels.json), the bucket milestones (`kanon
@@ -82,6 +84,7 @@ import { parseYaml } from './workflow-yaml.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL, sends } from '../scripts/lib/upstream-findings.mjs';
 import { HOSTED_INGEST_URL } from '../scripts/lib/telemetry-token.mjs';
 import { OTHER_APP } from '../scripts/app-register.mjs';
+import { hookKind, HOOK_PATH as NOTIFY_HOOK_PATH } from '../actions/notify/notify.mjs';
 import { ADOPTION_RECORD as DEPLOY_RECORD, CHAIN_LABELS, DeclarationError, DEPLOY_HEADING, LABELS as REFERENCE_LABELS, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
@@ -129,7 +132,8 @@ Options:
   -h, --help             this text
 
 Without --yes it asks three questions, what Kanon should do here, whether the repository holds
-private or sensitive material, and whether to share with Kanon, then shows one summary of
+private or sensitive material, and whether to share with Kanon, and, when the chosen lanes
+post to a chat channel and no notify hook answers it, which hook posts them; then shows one summary of
 every value, asked, inferred or defaulted, and asks whether to install, change something or
 stop. The flags below answer the questions and set the values the summary shows.
 
@@ -146,6 +150,12 @@ The questions:
   --consent <level>      share with Kanon (docs/sharing.md): yes, run data and scrubbed bug
                          evidence; codes, run data and Kanon bugs as codes; or no (the
                          default); not with --telemetry or --upstream-findings
+  --chat <which>         the hook the digests post through (docs/notifications.md), only for
+                         lanes that post to a chat channel: slack, Kanon's Slack hook;
+                         webhook, Kanon's generic JSON webhook hook; hook, a stub of your
+                         own that fails until you fill it; or none, which writes no hook and
+                         leaves the weekly digest out (default: the kind of the hook at
+                         .github/actions/notify/action.yml, else none)
 
 The other values, each inferred or defaulted, as the summary shows:
   --project-owner <who>  the project's Owner (K-ADOPT-1 step 2), a GitHub login or a name
@@ -361,7 +371,7 @@ export const realDeps = {
  *   releaser?: boolean, reuseApps?: boolean, plugin?: boolean, telemetry?: boolean, createApps?: boolean,
  *   upstreamFindings?: import('../scripts/lib/upstream-findings.mjs').Value,
  *   feature?: 'review' | 'build' | 'full', reviewTrigger?: 'labelled', sensitiveData?: boolean, consent?: Consent,
- *   claudeAuth?: ClaudeAuth, acceptHolders?: AcceptedHolder[], deployEnvironments?: string[],
+ *   claudeAuth?: ClaudeAuth, acceptHolders?: AcceptedHolder[], deployEnvironments?: string[], chat?: Chat,
  * }} Given
  */
 
@@ -369,7 +379,7 @@ export const realDeps = {
 const ACCEPT_FLAG = '--accept-id-token-holder';
 
 /** The flags that take a value. */
-const VALUE_FLAGS = ['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email', '--upstream-findings', '--feature', '--review-trigger', '--consent', '--claude-auth', '--deploy-environments', ACCEPT_FLAG];
+const VALUE_FLAGS = ['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email', '--upstream-findings', '--feature', '--review-trigger', '--consent', '--claude-auth', '--deploy-environments', '--chat', ACCEPT_FLAG];
 
 /** Pairs of flags that contradict each other, refused by name when both are given. */
 /** @type {Array<[string, string]>} */
@@ -474,6 +484,11 @@ export const parseArgs = (argv, req) => {
       g.claudeAuth = v;
     }
     else if (flag === '--deploy-environments') g.deployEnvironments = parseDeployEnvironments(value());
+    else if (flag === '--chat') {
+      const v = value();
+      if (!CHAT_OPTIONS.some((o) => o.value === v)) throw new Error(`--chat takes slack, webhook, hook or none, not "${v}"`);
+      g.chat = /** @type {Chat} */ (v);
+    }
     else if (flag === '--accept-id-token-holder') {
       const h = parseHolder(value(false));
       const holders = (g.acceptHolders ??= []);
@@ -510,6 +525,13 @@ export const parseArgs = (argv, req) => {
   }
   // A review trigger without the review lane is no answer (plan 0007 §6).
   if (g.reviewTrigger && opts.lanes && !opts.lanes.includes(REVIEW_LANE)) throw new Error(`--review-trigger is for a lane set with the review lane, and --lanes ${opts.lanes.map((l) => l.slice('agent-'.length)).join(',')} has none`);
+  // A chat answer without a lane that posts is no answer (plan 0011 §10.1).
+  if (g.chat) {
+    const chosen = opts.lanes ?? (g.feature ? req.features?.find((f) => f.feature === g.feature)?.lanes : null);
+    if (chosen && !chosen.some((l) => notifyingLanes(req).includes(l))) {
+      throw new Error(`--chat is for lanes that post to a chat channel (${notifyingLanes(req).map((l) => l.slice('agent-'.length)).join(', ')}), and ${opts.lanes ? `--lanes ${opts.lanes.map((l) => l.slice('agent-'.length)).join(',')}` : `--feature ${g.feature}`} has none`);
+    }
+  }
   if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
   // `--json` asks nothing (docs/cli-json.md): each question takes its flag or its default.
   if (opts.json) opts.yes = true;
@@ -1055,10 +1077,145 @@ export const CONFIRM_OPTIONS = [
   { value: 'stop', label: 'Stop', does: 'Nothing is written.', names: ['s', 'n', 'no'] },
 ];
 /** The groups of the summary's lines that **Change something** offers, each asked in today's shape. */
-export const CHANGE_GROUPS = ['People', 'Lanes and Apps', 'Gates, database and delegation', 'Labels, plugin and pin', 'Data and sharing', 'Claude credential', 'Deploy environments'];
+export const CHANGE_GROUPS = ['People', 'Lanes and Apps', 'Gates, database and delegation', 'Labels, plugin and pin', 'Data and sharing', 'Claude credential', 'Deploy environments', 'Chat channel'];
 
 /** The deploy environments' question, asked at the terminal only through **Change something** (plan 0010 D6). */
 export const DEPLOY_QUESTION = "The deploy lane's environments, comma-separated, in deploy order, the last being production; or none for no deploy lane";
+
+/** @typedef {'slack' | 'webhook' | 'hook' | 'none'} Chat */
+/** @typedef {import('./doctor.mjs').NotifyRequirements} NotifyRequirements */
+
+/** The release's `notify` entry (plan 0011 §9), or null for a release before it. @param {Requirements} req @returns {NotifyRequirements | null} */
+export const notifyOf = (req) => /** @type {any} */ (req).notify ?? null;
+
+/** The lanes that post to a chat channel, each through its kind's `notify` job (plan 0011 §4). @param {Requirements} req */
+export const notifyingLanes = (req) => Object.values(notifyOf(req)?.kinds ?? {}).flatMap((k) => k.lanes);
+
+/**
+ * The chat question (plan 0011 §10.1, decision 11), asked only when the chosen lanes post to a chat
+ * channel and no notify hook at `.github/actions/notify/action.yml` answers it already. The adopt
+ * skill asks it word for word.
+ */
+export const CHAT_QUESTION = 'Post digests to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own.';
+/** Its options, Kanon's Slack hook recommended (decision 11). @type {Array<Option<Chat>>} */
+export const CHAT_OPTIONS = [
+  { value: 'slack', label: "Kanon's Slack hook", does: 'init writes it at .github/actions/notify/action.yml; the digests post through Slack incoming webhooks you create, one secret per kind.', names: ['slack'] },
+  { value: 'webhook', label: "Kanon's generic webhook hook", does: 'init writes it; each kind posts its message as JSON to a URL you choose, one secret per kind.', names: ['webhook'] },
+  { value: 'hook', label: 'My own hook', does: 'init writes a stub hook that fails by name until you fill it; nothing posts until then.', names: ['hook', 'own'] },
+  { value: 'none', label: 'None', does: 'No hook; nothing posts; the daily digest still runs its health checks, and no model runs for posts.', names: ['none', 'n'] },
+];
+/**
+ * What each chat answer writes as the adoption record's `- **Chat channel:**` bullet under
+ * `## Choices` (plan 0011 §10.2, `K-ADOPT-1` step 10).
+ * @type {Record<Chat, string>}
+ */
+export const CHAT_RECORD = {
+  slack: "Slack, through Kanon's Slack hook (one secret per kind)",
+  webhook: "a JSON webhook, through Kanon's generic webhook hook",
+  hook: 'our own hook, .github/actions/notify',
+  none: 'none yet',
+};
+/** The notify hook's path, from the release's `notify` entry. @param {Requirements} req */
+const hookPathOf = (req) => notifyOf(req)?.hook.path ?? NOTIFY_HOOK_PATH;
+/** Slack's page on incoming webhooks (plan 0011 §13), where the Slack steps' webhooks are made. */
+export const SLACK_WEBHOOKS_PAGE = 'https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks';
+/** What each message kind is called in a person's step. @type {Record<string, string>} */
+const KIND_WORDS = { 'project-digest': 'daily project digest', 'weekly-digest': 'weekly digest', deploy: 'deploy announcement' };
+/** The step id of each kind's chat secret (plan 0011 §10.2); the deploy lane's, `secret.chat-deploy`, comes with that lane. */
+const CHAT_STEPS = [{ kind: 'project-digest', id: 'secret.chat-project-digest' }, { kind: 'weekly-digest', id: 'secret.chat-weekly-digest' }];
+/** The answer an existing hook infers (plan 0011 §10.1), from its kind as the `notify` block names it. @type {Record<'slack' | 'webhook' | 'custom', Chat>} */
+const CHAT_OF_HOOK = { slack: 'slack', webhook: 'webhook', custom: 'hook' };
+
+/**
+ * The stub hook `--chat hook` writes (plan 0011 §10.2): a composite action declaring the four
+ * inputs the `notify` job passes (§6.1), whose one step fails by name, so a `notify` job run before
+ * the adopter fills it fails there, saying which file to fill. `init` never overwrites a hook.
+ * @param {string[]} inputs the hook's inputs, from the release's `notify` entry
+ */
+export const chatHookStub = (inputs) => {
+  /** @type {Record<string, string>} */
+  const said = {
+    'message-v1': 'Path to the validated message, version 1, as JSON.',
+    text: "Path to the message's plain-text rendering.",
+    kind: "The message's kind.",
+    secret: "This kind's secret: whatever your hook needs to post it.",
+  };
+  return [
+    `# Your own notify hook (docs/notifications.md in Kanon). \`kanon init\` wrote this stub, which fails`,
+    '# until you replace its step with your own; it never overwrites this file.',
+    'name: notify',
+    "description: Posts Kanon's notifications to your chat system, once you replace the stub's step.",
+    'inputs:',
+    ...inputs.flatMap((k) => [`  ${k}:`, `    description: ${JSON.stringify(said[k] ?? "Passed by Kanon's notify job.")}`, '    required: true']),
+    'runs:',
+    '  using: composite',
+    '  steps:',
+    '    - shell: bash',
+    '      run: |',
+    `        echo "::error file=${NOTIFY_HOOK_PATH}::${NOTIFY_HOOK_PATH} is the stub kanon init wrote: replace its step with your own hook (docs/notifications.md in Kanon)."`,
+    '        exit 1',
+    '',
+  ].join('\n');
+};
+
+/**
+ * The hook file a chat answer writes at `.github/actions/notify/action.yml` (plan 0011 §7.1):
+ * Kanon's prebuilt hook byte for byte, pinned at this release, for `slack` and `webhook`; the stub
+ * for `hook`; nothing for `none`.
+ * @param {Chat | null} chat @param {Requirements} req
+ * @returns {string | null}
+ */
+export const chatHookFile = (chat, req) => {
+  const notify = notifyOf(req);
+  if (!notify || !chat || chat === 'none') return null;
+  if (chat === 'hook') return chatHookStub(notify.hook.inputs);
+  const prebuilt = notify.prebuilt[chat];
+  return prebuilt ? readFileSync(new URL(`../${prebuilt.hook}`, import.meta.url), 'utf8') : null;
+};
+
+/**
+ * The line of a caller that maps the secret the kind secrets replace (plan 0011 decision 17).
+ * @param {NotifyRequirements} notify
+ */
+const legacyLine = (notify) => new RegExp(`^([ \\t]*)${notify.legacySecret}:[ \\t]*\\$\\{\\{\\s*secrets\\.${notify.legacySecret}\\s*\\}\\}[ \\t]*(?:#.*)?\\n?`, 'm');
+
+/**
+ * Whether a caller's text maps `DIGEST_WEBHOOK`, which no lane takes since plan 0011's N7.
+ * @param {string | null} text @param {Requirements} req
+ */
+export const mapsLegacyChat = (text, req) => {
+  const notify = notifyOf(req);
+  return Boolean(notify && text && legacyLine(notify).test(text));
+};
+
+/**
+ * A caller of a notifying lane with its `DIGEST_WEBHOOK` line swapped for the lane's kind secret
+ * (plan 0011 decision 17), or the line dropped where the caller maps that secret already. Null
+ * when it calls no notifying lane or maps no `DIGEST_WEBHOOK`.
+ * @param {string | null} text @param {Requirements} req
+ * @returns {string | null}
+ */
+export const legacyChatSwap = (text, req) => {
+  const notify = notifyOf(req);
+  if (!notify || !text) return null;
+  const kind = Object.values(notify.kinds).find((k) => k.lanes.some((l) => text.includes(callsLane(l))));
+  const m = legacyLine(notify).exec(text);
+  if (!kind || !m) return null;
+  const mapped = new RegExp(`^[ \\t]*${kind.secret}:`, 'm').test(text);
+  return text.replace(legacyLine(notify), mapped ? '' : `${m[1]}${kind.secret}: \${{ secrets.${kind.secret} }}\n`);
+};
+
+/**
+ * A notifying lane's caller with `DIGEST_WEBHOOK` mapped, its `secrets:` rewritten (plan 0011
+ * §10.1, decision 17): the lane refuses the old secret, so the caller wouldn't start. Only for a
+ * caller that calls its lane at `release`, where the secrets are the one change: a caller pinned
+ * at another release is the upgrade's to move, its secrets in the same edit as its pin, since a
+ * lane before the clean break declares no kind secret. Null when there is nothing to rewrite.
+ * @param {string | null} text @param {string} lane @param {Requirements} req @param {string} release
+ * @returns {string | null}
+ */
+export const legacyChatRewrite = (text, lane, req, release) =>
+  text && text.includes(`${callsLane(lane)}${release}`) && notifyingLanes(req).includes(lane) ? legacyChatSwap(text, req) : null;
 
 /** How to ask for a review (plan 0007 §3), said in the summary when the review lane is chosen. */
 export const REVIEW_HOW = 'To get a review, add the label `review:please` to the pull request; the Reviewer posts its verdict once CI has finished. After a verdict, push a new commit, or remove and add the label again, to ask for another look.';
@@ -1142,13 +1299,15 @@ const RELEASER_QUESTION = 'Create the optional Releaser App, so the release PR r
  * commit, whether the repository is private, whether a feature's conditional lane's condition
  * holds here, the release init runs from, the repository's secret names (null when the token
  * can't list them), the Claude credential each installed model lane's caller maps, and the jobs
- * that hold `id-token: write` that nothing accepts yet, with the default branch they run on, and
- * the deploy environments the adoption record declares.
+ * that hold `id-token: write` that nothing accepts yet, with the default branch they run on, the
+ * deploy environments the adoption record declares, and the kind of the notify hook the checkout
+ * has (null for none).
  * @typedef {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements,
  *   installed?: string[], releases?: boolean, reusable?: (identities: string[]) => Array<{ app: string, slug: string, from?: string }>,
  *   codeowners?: string[] | null, database?: string | null, runsDco?: boolean, hasCommits?: boolean, isPrivate?: boolean,
  *   met?: (lane: string) => boolean, release?: string, secrets?: Set<string> | null,
- *   claudeMapped?: ClaudeAuth[], holders?: Array<{ workflow: string, job: string }>, defaultBranch?: string, declaredEnvironments?: string[], deployCallerTaken?: boolean }} AskContext
+ *   claudeMapped?: ClaudeAuth[], holders?: Array<{ workflow: string, job: string }>, defaultBranch?: string, declaredEnvironments?: string[], deployCallerTaken?: boolean,
+ *   chatHook?: 'slack' | 'webhook' | 'custom' | null }} AskContext
  */
 
 /**
@@ -1193,6 +1352,34 @@ const askFeature = async (deps, ctx, current) => {
 export const derive = (a, ctx, g = {}) => {
   const why = a.why;
   const fixed = (/** @type {string} */ f) => why[f]?.source === 'flag' || why[f]?.source === 'asked';
+  // THE CHAT CHANNEL (plan 0011 §10): an answer only where a chosen lane posts to a chat channel.
+  // A lane a feature holds only with a notify hook (the weekly digest) comes in with any answer
+  // that writes one, and stays out with none, which installs the project digest alone (decision 12);
+  // a lane named in --lanes stays, since the person chose it by name.
+  const notifying = notifyingLanes(ctx.req);
+  const hookPath = notifyOf(ctx.req)?.hook.path;
+  if (!a.lanes.some((l) => notifying.includes(l))) {
+    if (g.chat && !a.notes.some((n) => n.startsWith('--chat'))) a.notes.push('--chat was given, and the lanes chosen post to no chat channel, so it is dropped.');
+    a.chat = null;
+    why.chat = { source: 'default', reason: 'no chosen lane posts to a chat channel' };
+  } else {
+    if (a.chat === null) {
+      const c = chatOf(ctx);
+      [a.chat, why.chat] = [c.value, c.why];
+    }
+    const hooked = (ctx.req.features ?? []).flatMap((f) => Object.entries(f.conditional ?? {})).filter(([, c]) => hookPath && c.hook === hookPath).map(([l]) => l);
+    if (a.chat === 'none' && !(why.lanes?.source === 'flag' && !g.feature)) {
+      const dropped = a.lanes.filter((l) => hooked.includes(l));
+      a.lanes = a.lanes.filter((l) => !hooked.includes(l));
+      for (const l of dropped) {
+        const line = `${l} was left out: it posts only through a notify hook at ${hookPath}, and the chat answer is none.`;
+        if (!a.notes.includes(line)) a.notes.push(line);
+      }
+    } else {
+      const f = ctx.req.features?.find((x) => x.feature === featureOf(a.lanes, ctx.req.features ?? []));
+      for (const l of Object.keys(f?.conditional ?? {})) if (hooked.includes(l) && !a.lanes.includes(l)) a.lanes.push(l);
+    }
+  }
   a.feature = ctx.req.features?.length ? featureOf(a.lanes, ctx.req.features) : 'custom';
   why.feature = why.lanes ?? { source: 'default', reason: '' };
   if (!a.lanes.includes(REVIEW_LANE)) {
@@ -1235,6 +1422,24 @@ export const derive = (a, ctx, g = {}) => {
   }
   a.consent = consentOf(a.telemetry, a.upstreamFindings);
   return a;
+};
+
+/**
+ * The chat answer the repository gives without a question (plan 0011 §10.1): the kind of the hook
+ * at `.github/actions/notify/action.yml`, read as the `notify` block reads it, Kanon's Slack or
+ * generic webhook hook, or any other as `hook`, the project's own; with no hook, `none` by default,
+ * since only an explicit answer writes a hook. A caller that still maps `DIGEST_WEBHOOK` infers
+ * nothing: the lanes take one secret per kind, through a hook (decision 17).
+ * @param {AskContext} ctx
+ * @returns {{ value: Chat, why: Why, asks: boolean }}
+ */
+export const chatOf = (ctx) => {
+  const path = notifyOf(ctx.req)?.hook.path ?? NOTIFY_HOOK_PATH;
+  if (ctx.chatHook) {
+    const name = { slack: "Kanon's Slack hook", webhook: "Kanon's generic webhook hook", custom: 'a hook of your own' }[ctx.chatHook];
+    return { value: CHAT_OF_HOOK[ctx.chatHook], why: { source: 'inferred', reason: `from ${path}, ${name}` }, asks: false };
+  }
+  return { value: 'none', why: { source: 'default', reason: 'no notify hook, and only an answer writes one' }, asks: true };
 };
 
 /** @typedef {'subscription' | 'api-key'} ClaudeAuth */
@@ -1326,6 +1531,16 @@ export const askAll = async (deps, opts, ctx) => {
   else if (opts.yes) [lanes, why.lanes] = [t.lanes, (ctx.installed ?? []).length ? { source: 'inferred', reason: 'from the lanes the repository calls' } : { source: 'default', reason: '' }];
   else [lanes, why.lanes] = [await askFeature(deps, ctx, t.lanes), asked];
 
+  // The chat channel (plan 0011 §10.1): only when a chosen lane posts to one, and no hook answers it.
+  /** @type {Chat | null} */
+  let chat = null;
+  if (lanes.some((l) => notifyingLanes(ctx.req).includes(l))) {
+    const inferred = chatOf(ctx);
+    if (g.chat) [chat, why.chat] = [g.chat, flag];
+    else if (opts.yes || !inferred.asks) [chat, why.chat] = [inferred.value, inferred.why];
+    else [chat, why.chat] = [await choose(deps, CHAT_QUESTION, CHAT_OPTIONS, 'slack', 'slack', 'none'), asked];
+  }
+
   // Q3. Private or sensitive material: recommended Yes on a private repository, No on a public one.
   /** @type {boolean | null} */
   let sensitiveData;
@@ -1394,7 +1609,7 @@ export const askAll = async (deps, opts, ctx) => {
   /** @type {Answers} */
   const a = {
     feature: 'custom', owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser,
-    reuseApps: g.reuseApps ?? null, plugin, ...sharing, reviewTrigger: null, sensitiveData, consent: null, claudeAuth, acceptedHolders, deployEnvironments, why, notes: [],
+    reuseApps: g.reuseApps ?? null, plugin, ...sharing, reviewTrigger: null, sensitiveData, consent: null, claudeAuth, acceptedHolders, deployEnvironments, chat, why, notes: [],
   };
   return derive(a, ctx, g);
 };
@@ -1422,6 +1637,11 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
   if (picked.has(2)) {
     a.lanes = await askFeature(deps, ctx, a.lanes);
     asked('lanes');
+    // Lanes that post now, with no chat answer yet: asked here, unless a hook answers it.
+    if (a.chat === null && a.lanes.some((l) => notifyingLanes(ctx.req).includes(l)) && chatOf(ctx).asks) {
+      a.chat = await choose(deps, CHAT_QUESTION, CHAT_OPTIONS, 'slack', 'slack', 'none');
+      asked('chat');
+    }
     if (ctx.releases) {
       a.releaser = await yesNo(RELEASER_QUESTION, a.releaser);
       asked('releaser');
@@ -1477,6 +1697,10 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
       // An answer it can't read keeps the list as it was, and says why.
       a.notes.push(`${/** @type {Error} */ (e).message.replace(/^--deploy-environments/, 'The deploy environments')}; kept ${a.deployEnvironments.join(', ') || DEPLOY_NONE}.`);
     }
+  }
+  if (picked.has(8) && a.lanes.some((l) => notifyingLanes(ctx.req).includes(l))) {
+    a.chat = await choose(deps, CHAT_QUESTION, CHAT_OPTIONS, 'slack', a.chat ?? 'slack', a.chat ?? 'none');
+    asked('chat');
   }
   return derive(a, ctx, g);
 };
@@ -1549,7 +1773,7 @@ export const telemetryRegisters = (published) => (published ? "registers on the 
  *   database: 'none' | 'hook', delegation: { name: string, email: string } | null, deleteDefaults: boolean, releaser: boolean,
  *   reuseApps: boolean | null, plugin: boolean, telemetry: boolean, upstreamFindings: import('../scripts/lib/upstream-findings.mjs').Value,
  *   upstreamEvidence: boolean | null, reviewTrigger: 'labelled' | null, sensitiveData: boolean | null, consent: Consent | null,
- *   claudeAuth: ClaudeAuth, acceptedHolders: AcceptedHolder[], deployEnvironments: string[], why: Record<string, Why>, notes: string[] }} Answers
+ *   claudeAuth: ClaudeAuth, acceptedHolders: AcceptedHolder[], deployEnvironments: string[], chat: Chat | null, why: Record<string, Why>, notes: string[] }} Answers
  */
 
 /** @param {string} who */
@@ -1601,6 +1825,9 @@ export const adoptionFile = (s, a, repo, today) => {
   if (a.reviewTrigger === 'labelled') choices.push('- **Review trigger:** `labelled`');
   if (a.lanes.includes('agent-overseer')) choices.push('- **Overseer:** `installed`');
   if (a.upstreamFindings && a.upstreamFindings !== UPSTREAM_DEFAULT) choices.push(`- **${UPSTREAM_LABEL}:** \`${a.upstreamFindings}\``);
+  // The chat channel (plan 0011 §10.2, K-ADOPT-1 step 10), for each answer, none among them; no
+  // bullet where no chosen lane posts, which a record without one means ("none yet").
+  if (a.chat) choices.push(`- **Chat channel:** ${CHAT_RECORD[a.chat]}`);
   // The id-token holders the person accepted (#631), in doctor's shape, so doctor finds them accepted.
   for (const h of a.acceptedHolders ?? []) choices.push(holderBullet(h.workflow, h.job, h.reason));
   if (choices.length) lines.push('## Choices', '', ...choices, '');
@@ -1970,6 +2197,10 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   if (a.delegation) files.set('docs/qa/sign-off-delegation.md', delegationFile(a.delegation, today));
   if (a.database === 'hook') files.set('docs/qa/test-database.md', TEST_DATABASE_HOOK);
   files.set(req.hook.path, hookFile(req.hook.inputs));
+  // The notify hook the chat answer names (plan 0011 §10.2): Kanon's prebuilt hook, or the stub.
+  const notifyHook = chatHookFile(a.chat, req);
+  const notify = notifyOf(req);
+  if (notifyHook !== null && notify) files.set(notify.hook.path, notifyHook);
   // The Lead writes each brief from the brief template, so it comes with the Lead's caller, and
   // one the repository has is the project's (#749).
   if (a.lanes.includes(LEAD_LANE)) files.set(BRIEF_TEMPLATE_PATH, briefTemplate());
@@ -1980,7 +2211,11 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
     // The diagnose lane follows the deploy caller `init` writes, so not where the path is the project's own.
     if (lane === DIAGNOSE_LANE && taken) continue;
     const path = callers.get(lane) ?? `.github/workflows/${lane}.yml`;
-    files.set(path, callerFile(lane, /** @type {import('./callers.mjs').Lane} */ (req.lanes[lane]), { release, ciName, defaultBranch: s.defaultBranch, path, claudeAuth: a.claudeAuth }));
+    // A notifying lane's caller at this release that still maps DIGEST_WEBHOOK has its secrets:
+    // rewritten, the one change the lane needs to start (plan 0011 decision 17).
+    const legacy = legacyChatRewrite(read(path), lane, req, release);
+    if (legacy !== null) files.set(path, legacy);
+    else files.set(path, callerFile(lane, /** @type {import('./callers.mjs').Lane} */ (req.lanes[lane]), { release, ciName, defaultBranch: s.defaultBranch, path, claudeAuth: a.claudeAuth }));
   }
   const identities = appIdentities(a, req);
   if (identities.length) files.set('.github/workflows/apps-check.yml', appsCheckFile(identities, release));
@@ -2051,10 +2286,11 @@ export const runsDco = (read, workflows) => workflows.some((p) => /^\s*-?\s*uses
 
 /**
  * Whether a file `init` plans is the project's once it exists, never rewritten: a declaration,
- * the project-setup hook, or a deploy hook (plan 0010 D6).
+ * the project-setup hook, a deploy hook (plan 0010 D6), or the notify hook (plan 0011 §7.1),
+ * whose pin the upgrade moves with the callers' (decision 18).
  * @param {string} rel @param {Requirements} req
  */
-export const projectsOwn = (rel, req) => rel.startsWith('docs/') || rel === req.hook.path || deployHookPaths(req).includes(rel);
+export const projectsOwn = (rel, req) => rel.startsWith('docs/') || rel === req.hook.path || deployHookPaths(req).includes(rel) || rel === notifyOf(req)?.hook.path;
 
 /**
  * What `init` does with a file it plans: `same`, already as it writes it; `kept`, a declaration
@@ -2067,6 +2303,7 @@ export const fileStatus = (rel, text, have, req) =>
   have === text ? 'same'
   : have !== null && projectsOwn(rel, req) ? 'kept'
   : have !== null && rel === DEPLOY_CALLER_PATH && callsDeployLane(have, req) ? 'rewritten'
+  : have !== null && legacyChatSwap(have, req) === text ? 'rewritten'
   : have !== null ? 'differs'
   : 'new';
 
@@ -2076,6 +2313,21 @@ export const fileStatus = (rel, text, have, req) =>
  * @param {Pick<Answers, 'lanes' | 'claudeAuth'>} a @param {Requirements} req
  */
 export const mappedSecrets = (a, req) => [...new Set(a.lanes.flatMap((l) => (req.lanes[l] ? callerSecrets(req.lanes[l], a.claudeAuth) : [])))];
+
+/**
+ * The message kinds the chosen lanes post, each with its secret, where the chat answer writes a
+ * hook (plan 0011 §10.2): each is a step for a person while the repository lacks its secret. With
+ * none, a kind not posted is a choice, and asks for nothing.
+ * @param {Pick<Answers, 'lanes' | 'chat'>} a @param {Requirements} req
+ * @returns {Array<{ kind: string, secret: string, lane: string }>}
+ */
+export const chatKinds = (a, req) =>
+  !a.chat || a.chat === 'none'
+    ? []
+    : Object.entries(notifyOf(req)?.kinds ?? {}).flatMap(([kind, k]) => {
+      const lane = k.lanes.find((l) => a.lanes.includes(l));
+      return lane ? [{ kind, secret: k.secret, lane }] : [];
+    });
 
 /**
  * A line of the summary (plan 0007 §4): its name, the `.answers` fields it shows (none for a line
@@ -2088,11 +2340,12 @@ export const mappedSecrets = (a, req) => [...new Set(a.lanes.flatMap((l) => (req
  * anything is written. Every answer is on a line, so nothing is silent.
  * @param {{ s: Inspection, a: Answers, req: Requirements, repo: string, release: string, read: (rel: string) => string | null,
  *   files: Map<string, string>, rows: Map<string, string>, ownerApps: Array<{ app: string, slug: string, from: string }> | null,
- *   met: (lane: string) => boolean, holders?: Array<{ workflow: string, job: string, status: string }> }} c
- *   `holders`: the jobs of the checkout's workflows that hold `id-token: write`, as doctor counts them
+ *   met: (lane: string) => boolean, holders?: Array<{ workflow: string, job: string, status: string }>, legacyCallers?: string[] }} c
+ *   `holders`: the jobs of the checkout's workflows that hold `id-token: write`, as doctor counts them;
+ *   `legacyCallers`: the callers of a notifying lane that still map `DIGEST_WEBHOOK`
  * @returns {SummaryLine[]}
  */
-export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerApps, met, holders = [] }) => {
+export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerApps, met, holders = [], legacyCallers = [] }) => {
   /** @type {SummaryLine[]} */
   const lines = [];
   const why = (/** @type {string} */ f) => a.why[f] ?? { source: /** @type {Source} */ ('default'), reason: '' };
@@ -2141,6 +2394,20 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
     : deployPathTaken(read, req)
       ? `${a.deployEnvironments.join(' then ')}: nothing written, ${DEPLOY_CALLER_PATH} is a deploy workflow of your own`
       : `${a.deployEnvironments.join(' then ')} (${a.deployEnvironments.at(-1)} is production): the deploy caller and three hook stubs`, why('deployEnvironments'));
+  // The chat channel (plan 0011 §10): only where a chosen lane posts to one.
+  const hookAt = notifyOf(req)?.hook.path ?? NOTIFY_HOOK_PATH;
+  /** @type {Record<Chat, string>} */
+  const chats = {
+    slack: `Kanon's Slack hook at ${hookAt}: one Slack incoming webhook per kind`,
+    webhook: `Kanon's generic webhook hook at ${hookAt}: one https URL per kind`,
+    hook: `your own hook: a stub at ${hookAt} that fails by name until you fill it`,
+    none: 'none: no hook, nothing posts; the daily digest runs its health job alone, and the weekly digest is left out',
+  };
+  if (!a.chat) line('Chat', ['chat'], 'none: no chosen lane posts to a chat channel', why('chat'));
+  else {
+    const legacy = legacyCallers.length ? `; ${legacyCallers.join(', ')} still map${legacyCallers.length > 1 ? '' : 's'} DIGEST_WEBHOOK, which no lane takes: posts resume only once a hook exists and the kind secrets are stored` : '';
+    line('Chat', ['chat'], `${chats[a.chat]}${legacy}`, why('chat'));
+  }
   const people = a.owner === a.maintainer && a.owner === a.stakeholder ? `Owner, Maintainer, Stakeholder: ${a.owner}` : `Owner ${a.owner}; Maintainer ${a.maintainer}; Stakeholder ${a.stakeholder}`;
   line('People', ['projectOwner', 'maintainer', 'stakeholder'], people, why('projectOwner'));
   line('Gates', ['gates'], a.gates.length ? a.gates.join('; ') : 'none yet', why('gates'));
@@ -2168,8 +2435,10 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
   const steps = [
     ...apps.filter((x) => / create$/.test(x)).map((x) => `create the ${x.split(':')[0]} App`),
     ...apps.filter((x) => /: reuse /.test(x)).map((x) => `1 key for the ${x.split(':')[0]}`),
-    ...mappedSecrets(a, req).filter((n) => n === CLAUDE_SECRETS.subscription || n === CLAUDE_SECRETS['api-key'] || n === 'DIGEST_WEBHOOK').filter((n) => !s.secrets?.has(n))
-      .map((n) => (n === 'DIGEST_WEBHOOK' ? 'the chat webhook' : n === CLAUDE_SECRETS['api-key'] ? 'the Claude API key' : 'the Claude token')),
+    ...mappedSecrets(a, req).filter((n) => n === CLAUDE_SECRETS.subscription || n === CLAUDE_SECRETS['api-key']).filter((n) => !s.secrets?.has(n))
+      .map((n) => (n === CLAUDE_SECRETS['api-key'] ? 'the Claude API key' : 'the Claude token')),
+    ...chatKinds(a, req).filter((k) => !s.secrets?.has(k.secret)).map((k) => `the ${KIND_WORDS[k.kind] ?? k.kind}'s chat secret`),
+    ...(a.chat === 'hook' ? ['fill the notify hook'] : []),
     ...(a.deployEnvironments.length && deployOf(req) && !deployPathTaken(read, req) ? ['fill the deploy hooks', `${a.deployEnvironments.length} GitHub environment(s)`] : []),
     'merge the PR',
     ...(a.lanes.includes(REVIEW_LANE) ? ['1 test PR'] : []),
@@ -2508,6 +2777,12 @@ const run = async (deps, opts, req, rep) => {
     }
   }
   const given = (/** @type {{ workflow: string, job: string }} */ h) => (opts.given.acceptHolders ?? []).find((x) => `.github/workflows/${x.workflow}` === h.workflow && x.job === h.job);
+  // THE NOTIFY HOOK (plan 0011 §10.1): its kind, as the notify block names it, answers the chat
+  // question; and the callers of a notifying lane that still map DIGEST_WEBHOOK (decision 17).
+  const notifyText = read(notifyOf(req)?.hook.path ?? NOTIFY_HOOK_PATH);
+  const chatHook = notifyOf(req) && notifyText !== null ? hookKind(notifyText) : null;
+  const legacyCallers = notifyingLanes(req).map((l) => /** @type {string} */ (callers.get(l))).filter((p) => p && mapsLegacyChat(read(p), req));
+  rep.inspection.notifyHook = chatHook;
   /** @type {AskContext} */
   const ctx = {
     login: who.login ?? ownerName,
@@ -2531,13 +2806,14 @@ const run = async (deps, opts, req, rep) => {
     defaultBranch: s.defaultBranch,
     declaredEnvironments,
     deployCallerTaken: deployPathTaken(read, req),
+    chatHook,
   };
   const a = await askAll(deps, opts, ctx);
   // THE SUMMARY (plan 0007 §4): every value, and where it came from, before anything is written.
   // Without --yes it is confirmed in one question, or changed, a group at a time, and shown again.
   const plan = () => plannedFiles({ s, a, req, release, repo, today: deps.today(), read, workflows, callers });
   for (;;) {
-    rep.summary = summaryOf({ s, a, req, repo, release, read, files: plan(), rows, ownerApps, met, holders });
+    rep.summary = summaryOf({ s, a, req, repo, release, read, files: plan(), rows, ownerApps, met, holders, legacyCallers });
     out('');
     for (const l of summaryText(rep.summary, { s, repo, release })) out(l);
     if (a.lanes.includes(REVIEW_LANE)) {
@@ -2586,6 +2862,7 @@ const run = async (deps, opts, req, rep) => {
     claudeAuth: a.claudeAuth,
     acceptedIdTokenHolders: a.acceptedHolders,
     deployEnvironments: a.deployEnvironments,
+    chat: a.chat,
   };
   // The catalogue and the features name the credential the callers map (plan 0009 §9).
   rep.catalogue = laneCatalogue(req, installed, a.claudeAuth);
@@ -2646,9 +2923,11 @@ const run = async (deps, opts, req, rep) => {
       const diff = lineDiff(have, text).filter((l) => !l.startsWith('  '));
       if (!dry) deps.writeFile(join(root, rel), text);
       wrote = true;
-      change('file', rel, `${dry ? 'Would rewrite' : 'Rewrote'} ${rel} from the declared deploy environments`);
+      // Or a notifying lane's caller at this release that still maps DIGEST_WEBHOOK (plan 0011 decision 17).
+      const from = rel === DEPLOY_CALLER_PATH ? 'from the declared deploy environments' : "mapping its lane's chat secret in place of DIGEST_WEBHOOK, which no lane takes (plan 0011 decision 17)";
+      change('file', rel, `${dry ? 'Would rewrite' : 'Rewrote'} ${rel} ${from}`);
       rep.files.push({ path: rel, status: 'rewritten', content: text, diff });
-      out(`${rel}: ${dry ? 'would rewrite it' : 'rewrote it'} from the declared deploy environments. The difference:`);
+      out(`${rel}: ${dry ? 'would rewrite it' : 'rewrote it'} ${from}. The difference:`);
       for (const l of diff) out(`    ${l}`);
       continue;
     }
@@ -2708,6 +2987,11 @@ const run = async (deps, opts, req, rep) => {
   // A caller of the deploy lane with no list is no lane: init writes none, and leaves this one.
   if (!a.deployEnvironments.length && callsDeployLane(read(DEPLOY_CALLER_PATH), req)) {
     note(`${DEPLOY_CALLER_PATH} calls the deploy lane, and no deploy environment is declared, so init left it alone: delete it, or declare the environments with --deploy-environments.`);
+  }
+  // A caller still mapping DIGEST_WEBHOOK at another release (plan 0011 decision 17): init leaves
+  // it, as it leaves any caller that differs, and says what the upgrade does with it.
+  for (const p of legacyCallers.filter((x) => rep.files.find((f) => f.path === x)?.status !== 'rewritten')) {
+    note(`${p} maps DIGEST_WEBHOOK, which no lane takes from the release that posts through a notify hook (plan 0011 decision 17): GitHub refuses the call there, so the lane wouldn't start. Moving its pin, the upgrade skill rewrites its secrets: in the same edit, mapping the lane's chat secret instead. Posts resume only once a hook exists at ${hookPathOf(req)} and the kind secrets are stored.`);
   }
   const dep = read('.github/dependabot.yml');
   if (dep && !/yedeya-labs\/kanon\*/.test(dep)) {
@@ -3109,9 +3393,26 @@ const run = async (deps, opts, req, rep) => {
       const prose = `Create an Anthropic API key in the Claude Console, in a workspace for CI alone with its own spend limit (${CLAUDE_CONSOLE_KEYS}), and store it ${OWN_TERMINAL}:`;
       step({ id: 'secret.anthropic-api-key', category: 'secret', subject: 'ANTHROPIC_API_KEY', prose, message: 'The repository lacks ANTHROPIC_API_KEY, which the chosen lanes map.', text: prose.replace(/:$/, '.'), commands: [`gh secret set ANTHROPIC_API_KEY -R ${repo}   ${OWN_TERMINAL_NOTE}`], url: CLAUDE_CONSOLE_KEYS });
     }
-    if (others.includes('DIGEST_WEBHOOK')) {
-      const prose = `Store the chat webhook the digests post to, ${OWN_TERMINAL}:`;
-      step({ id: 'secret.digest-webhook', category: 'secret', subject: 'DIGEST_WEBHOOK', prose, message: 'The repository lacks DIGEST_WEBHOOK, which the chosen lanes map.', text: prose.replace(/:$/, '.'), commands: [`gh secret set DIGEST_WEBHOOK -R ${repo}   ${OWN_TERMINAL_NOTE}`], url: secretsUrl });
+    // ONE SECRET PER MESSAGE KIND (plan 0011 §10.2): a step for each kind the chosen lanes post
+    // through the hook the chat answer writes, worded for that hook. Slack's webhook URL holds a
+    // secret Slack revokes when it finds it leaked, so it never goes on a command line.
+    const both = chatKinds(a, req).length > 1 ? ' The same value may go in each kind\'s secret, to post every kind to one place.' : '';
+    for (const k of chatKinds(a, req).filter((x) => others.includes(x.secret))) {
+      const what = KIND_WORDS[k.kind] ?? k.kind;
+      const prose =
+        a.chat === 'slack' ? `Create a Slack incoming webhook for the channel the ${what} posts to, on Slack's page, then store its URL as ${k.secret}, ${OWN_TERMINAL}.${both}`
+        : a.chat === 'webhook' ? `Store the https URL your receiver takes the ${what} at, as JSON from Kanon's generic webhook hook, as ${k.secret}, ${OWN_TERMINAL}.${both}`
+        : `Store as ${k.secret} whatever your own hook at ${hookPathOf(req)} needs to post the ${what}, ${OWN_TERMINAL}.${both}`;
+      step({
+        id: CHAT_STEPS.find((x) => x.kind === k.kind)?.id ?? `secret.chat-${k.kind}`,
+        category: 'secret',
+        subject: k.secret,
+        prose,
+        message: `The repository lacks ${k.secret}, the ${what}'s chat secret, which ${k.lane}'s caller maps: until it holds it, the ${what} is not posted.`,
+        text: prose,
+        commands: [`gh secret set ${k.secret} -R ${repo}   ${OWN_TERMINAL_NOTE}`],
+        url: a.chat === 'slack' ? SLACK_WEBHOOKS_PAGE : a.chat === 'webhook' ? `https://github.com/yedeya-labs/kanon/blob/${release}/docs/notifications.md#kanons-generic-webhook-hook` : secretsUrl,
+      });
     }
     // The QA store's coordinates (kanon#433): secrets, which the runner masks in the store jobs'
     // logs. Asked for only where the store hook exists: without one the lanes run without memory,

@@ -11,6 +11,7 @@ import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs'
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
 import { TELEMETRY_QUESTION, telemetryQuestion, telemetryRegisters, UPSTREAM_EVIDENCE_QUESTION, upstreamFindingsQuestion } from '../../cli/init.mjs';
 import { HOSTED_INGEST_URL } from '../../scripts/lib/telemetry-token.mjs';
+import { CHAT_QUESTION, chatHookStub, legacyChatRewrite } from '../../cli/init.mjs';
 import { codeownersOf, DIAGNOSE_DROPPED, CONSENT_LEVELS, CONSENT_OPTIONS, CONSENT_QUESTION, consentOf, consentQuestion, DATA_QUESTION, FEATURE_QUESTION, featureOf, REVIEW_HOW, sharingUrl, testDatabaseSignal } from '../../cli/init.mjs';
 import { parseUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
 import { SPAWNS } from './helpers/spawns.js';
@@ -1035,8 +1036,9 @@ describe('the callers kanon init writes', () => {
     const lc = laneCheck(dir);
     expect(lc.status, lc.out).toBe(0);
     expect(lc.out).toContain(`${Object.keys(REQ.lanes).length} lane caller(s) pass`);
-    // No lane takes DIGEST_WEBHOOK since plan 0011 N7 and N8; the kind secrets' steps come with N11.
+    // No lane takes DIGEST_WEBHOOK since plan 0011 N7 and N8, and no caller init writes maps it (decision 17).
     expect(r.out).not.toContain('gh secret set DIGEST_WEBHOOK');
+    for (const f of readdirSync(join(dir, '.github/workflows'))) expect(read(dir, `.github/workflows/${f}`), f).not.toContain('DIGEST_WEBHOOK');
   }, 60_000);
 });
 
@@ -1413,7 +1415,7 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(d.inspection).toMatchObject({ owner: 'acme', ownerKind: 'user', private: false, defaultBranch: 'main', rulesets: 'yes', installedLanes: [], callsRelease: false });
     expect(d.answers).toEqual({
       projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false,
-      reuseApps: null, plugin: true, telemetry: false, upstreamFindings: 'drafted', upstreamEvidence: null, feature: 'review', reviewTrigger: 'labelled', sensitiveData: null, consent: 'no', claudeAuth: 'subscription', acceptedIdTokenHolders: [], deployEnvironments: [],
+      reuseApps: null, plugin: true, telemetry: false, upstreamFindings: 'drafted', upstreamEvidence: null, feature: 'review', reviewTrigger: 'labelled', sensitiveData: null, consent: 'no', claudeAuth: 'subscription', acceptedIdTokenHolders: [], deployEnvironments: [], chat: null,
     });
     expect(d.inspection.codeowners).toBeNull();
     expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], reuse: [], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
@@ -1428,10 +1430,10 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
   // to run it in the person's own terminal, or read the value from a file.
   it("sends a real secret's gh secret set to the person's own terminal or a file, never `!` (#625)", async () => {
     const all = Object.keys(REQ.lanes).map((l) => l.slice('agent-'.length)).join(',');
-    const d = parse(await run(checkout(), fakeGitHub(), ['--yes', '--json', '--no-apps', '--lanes', all]));
-    const real = d.findings.filter((f) => ['secret.claude-code-oauth-token', 'secret.digest-webhook'].includes(f.id));
-    // No lane takes DIGEST_WEBHOOK since plan 0011 N7 and N8, so no step asks for it.
-    expect(real.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token']);
+    const d = parse(await run(checkout(), fakeGitHub(), ['--yes', '--json', '--no-apps', '--lanes', all, '--chat', 'slack']));
+    const real = d.findings.filter((f) => ['secret.claude-code-oauth-token', 'secret.chat-project-digest', 'secret.chat-weekly-digest'].includes(f.id));
+    // No lane takes DIGEST_WEBHOOK since plan 0011 N7 and N8: each chat kind's secret is a step of its own.
+    expect(real.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token', 'secret.chat-project-digest', 'secret.chat-weekly-digest']);
     for (const f of real) {
       expect(f.fix.text, f.id).toMatch(/in your own terminal/);
       expect(f.fix.text, f.id).toMatch(/never with `!` at the Claude Code prompt/);
@@ -2226,21 +2228,22 @@ describe('kanon init, a feature, three questions and one summary (plan 0007 G5)'
     expect(callers(build)).toEqual([...featureLanes('build')].sort());
     expect(b.answers.feature).toBe('build');
     expect(choices(build)).toContain('- **Feature:** `build`');
-    // Full, with neither the sweep hook nor the webhook: the three conditional lanes are left out, and the summary says so.
+    // Full, with neither the sweep hook nor a notify hook: the two conditional lanes are left out, and
+    // the summary says so; the project digest is in whatever the chat answer (plan 0011 decision 12).
     const bare = checkout();
     const f = parse(await run(bare, fakeGitHub(), ['--json', '--no-apps', '--feature', 'full']));
     expect(callers(bare)).toEqual([...featureLanes('full')].sort());
+    expect(featureLanes('full')).toContain('agent-project-digest');
     expect(f.answers.feature).toBe('full');
     expect(f.features.find((x) => x.feature === 'full')!.conditional.every((c) => !c.met)).toBe(true);
     const out = f.summary.find((l) => l.answer === 'Left out')!;
-    for (const lane of ['agent-explore', 'agent-weekly-digest', 'agent-project-digest']) expect(out.value).toContain(lane);
+    for (const lane of ['agent-explore', 'agent-weekly-digest']) expect(out.value).toContain(lane);
     expect(f.summary.find((l) => l.answer === 'Merger')!.value).toMatch(/^agent-merge is in/);
-    expect(choices(bare)).toEqual(['- **Feature:** `full`', '- **Review trigger:** `labelled`', '- **Overseer:** `installed`']);
-    // With both: all three are in, and the lanes still make up Full.
-    const both = checkout({ '.github/actions/explore-sweep/action.yml': 'runs:\n  using: composite\n  steps: []\n' });
-    // Each digest's own chat secret (plan 0011 N7 and N8).
-    const w = parse(await run(both, fakeGitHub({ secrets: new Set(['KANON_CHAT_PROJECT_DIGEST', 'KANON_CHAT_WEEKLY_DIGEST']) }), ['--json', '--no-apps', '--feature', 'full']));
-    expect(callers(both)).toEqual([...featureLanes('full'), 'agent-explore', 'agent-project-digest', 'agent-weekly-digest'].sort());
+    expect(choices(bare)).toEqual(['- **Feature:** `full`', '- **Review trigger:** `labelled`', '- **Overseer:** `installed`', '- **Chat channel:** none yet']);
+    // With both hooks: both are in, and the lanes still make up Full.
+    const both = checkout({ '.github/actions/explore-sweep/action.yml': 'runs:\n  using: composite\n  steps: []\n', '.github/actions/notify/action.yml': read(ROOT, 'actions/notify/hooks/slack.yml') });
+    const w = parse(await run(both, fakeGitHub(), ['--json', '--no-apps', '--feature', 'full']));
+    expect(callers(both)).toEqual([...featureLanes('full'), 'agent-explore', 'agent-weekly-digest'].sort());
     expect(w.answers.feature).toBe('full');
     expect(w.summary.some((l) => l.answer === 'Left out')).toBe(false);
   });
@@ -3176,5 +3179,199 @@ describe('kanon init and the deploy diagnose lane (plan 0010 D8)', () => {
     expect(existsSync(join(dir, CALLER))).toBe(false);
     expect(d.answers.lanes).toEqual(['agent-review']);
     expect(d.notes.filter((n: string) => n.startsWith(DIAGNOSE_DROPPED))).toEqual([expect.stringContaining('.github/workflows/deploy.yml is a deploy workflow of your own')]);
+  });
+});
+
+// Plan 0011 §10 (step N11): the installer's chat question, asked only when the chosen lanes post to
+// a chat channel and inferred from a notify hook the repository has; what each answer writes; one
+// person step per message kind; and the clean break from DIGEST_WEBHOOK (decision 17).
+describe('kanon init and the chat channel (plan 0011 N11)', () => {
+  const HOOK = '.github/actions/notify/action.yml';
+  const SLACK_PAGE = 'https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks';
+  const PROJECT = '.github/workflows/agent-project-digest.yml';
+  const WEEKLY = '.github/workflows/agent-weekly-digest.yml';
+  const NOTIFY = (REQ as unknown as { notify: { hook: { inputs: string[] } } }).notify;
+  const prebuilt = (name: string) => read(ROOT, `actions/notify/hooks/${name}.yml`);
+  const choices = (dir: string) => read(dir, 'docs/qa/adoption.md').split('## Choices\n\n')[1]?.split('\n\n')[0]?.split('\n') ?? [];
+  const chatSteps = (d: Doc) => d.findings.filter((f) => f.id.startsWith('secret.chat-'));
+  const jobSecrets = (dir: string, p: string) => Object.keys(Object.values(parseYaml(read(dir, p)).jobs as Record<string, { secrets?: Record<string, string> }>).find((j) => j.secrets)?.secrets ?? {});
+  const initWith = async (argv: string[], files: Record<string, string> = {}, over: Partial<State> = {}) => {
+    const dir = checkout(files);
+    const r = await run(dir, fakeGitHub(over), ['--json', '--no-apps', ...argv]);
+    expect(r.status, r.err).toBe(0);
+    return { dir, d: parse(r) };
+  };
+
+  it('asks the question only when a chosen lane posts to a chat channel: never under Review or Review + build', async () => {
+    for (const feature of ['review', 'build']) {
+      const asked: string[] = [];
+      const r = await run(checkout(), fakeGitHub(), ['--feature', feature, '--no-sensitive-data', '--consent', 'no', '--no-apps'], undefined, REQ, { ask: person({}, asked) });
+      expect(r.status, r.err).toBe(0);
+      expect(asked.some((q) => q.startsWith(CHAT_QUESTION)), feature).toBe(false);
+    }
+    const asked: string[] = [];
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub(), ['--feature', 'full', '--no-sensitive-data', '--consent', 'no', '--no-apps'], undefined, REQ, { ask: person({ [CHAT_QUESTION]: 'webhook' }, asked) });
+    expect(r.status, r.err).toBe(0);
+    const q = asked.find((x) => x.startsWith(CHAT_QUESTION))!;
+    // Its four options, Kanon's Slack hook first and recommended.
+    expect(q.split('\n').slice(1, 5).map((l) => l.replace(/:.*$/, '').trim())).toEqual(["1. Kanon's Slack hook (Recommended)", "2. Kanon's generic webhook hook", '3. My own hook', '4. None']);
+    expect(read(dir, HOOK)).toBe(prebuilt('webhook'));
+  });
+
+  it('is inferred from the notify hook the repository has, naming which, and not asked', async () => {
+    const own = 'name: notify\ndescription: ours\ninputs:\n  message-v1: { required: true }\n  text: { required: true }\n  kind: { required: true }\n  secret: { required: true }\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: ./post.sh\n';
+    for (const [file, chat, named] of [[prebuilt('slack'), 'slack', "Kanon's Slack hook"], [prebuilt('webhook'), 'webhook', "Kanon's generic webhook hook"], [own, 'hook', 'a hook of your own']] as const) {
+      const asked: string[] = [];
+      const dir = checkout({ [HOOK]: file });
+      const r = await run(dir, fakeGitHub(), ['--feature', 'full', '--no-sensitive-data', '--consent', 'no', '--no-apps', '--dry-run'], undefined, REQ, { ask: person({}, asked) });
+      expect(r.status, r.err).toBe(0);
+      expect(asked.some((q) => q.startsWith(CHAT_QUESTION)), chat).toBe(false);
+      const d = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps', '--dry-run', '--feature', 'full']));
+      expect(d.answers.chat, chat).toBe(chat);
+      expect(d.inspection.notifyHook).toBe(chat === 'hook' ? 'custom' : chat);
+      expect(d.summary.find((l) => l.answer === 'Chat'), chat).toMatchObject({ fields: ['chat'], source: 'inferred', reason: `from ${HOOK}, ${named}` });
+      // The hook is the project's: Kanon's as init writes it, or kept, never rewritten.
+      expect(read(dir, HOOK)).toBe(file);
+      expect(d.files.find((f) => f.path === HOOK)?.status).toBe(chat === 'hook' ? 'kept' : 'same');
+      expect(d.answers.lanes).toContain('agent-weekly-digest');
+    }
+  });
+
+  it('--chat slack and --chat webhook write the prebuilt hook byte for byte, pinned at the release init runs from', async () => {
+    for (const chat of ['slack', 'webhook']) {
+      const { dir, d } = await initWith(['--feature', 'full', '--chat', chat]);
+      expect(read(dir, HOOK), chat).toBe(prebuilt(chat));
+      expect(read(dir, HOOK)).toMatch(new RegExp(`^ {4}- uses: yedeya-labs/kanon/actions/notify/${chat}@${PINNED.replace(/\./g, '\\.')} `, 'm'));
+      expect(d.files.find((f) => f.path === HOOK)).toMatchObject({ status: 'new', content: prebuilt(chat) });
+      expect(d.answers).toMatchObject({ chat, feature: 'full' });
+      // A hook is written, so the weekly digest is in, and the lanes still make up Full.
+      expect(existsSync(join(dir, WEEKLY))).toBe(true);
+      expect(d.summary.find((l) => l.answer === 'Chat')).toMatchObject({ source: 'flag' });
+    }
+  });
+
+  it('--chat hook writes a stub that exits non-zero, naming its file, and that is a hook the notify job can call', async () => {
+    const { dir, d } = await initWith(['--feature', 'full', '--chat', 'hook']);
+    const stub = read(dir, HOOK);
+    expect(stub).toBe(chatHookStub(NOTIFY.hook.inputs));
+    const doc = parseYaml(stub) as { runs: { using: string; steps: Array<{ shell: string; run: string }> }; inputs: Record<string, unknown> };
+    expect(doc.runs.using).toBe('composite');
+    expect(Object.keys(doc.inputs).sort()).toEqual([...NOTIFY.hook.inputs].sort());
+    const step = spawnSync('bash', ['-c', doc.runs.steps[0]!.run], { encoding: 'utf8' });
+    expect(step.status).not.toBe(0);
+    expect(step.stdout).toContain(`::error file=${HOOK}::${HOOK} is the stub kanon init wrote`);
+    expect(d.answers.chat).toBe('hook');
+    expect(existsSync(join(dir, WEEKLY))).toBe(true);
+    expect(d.summary.find((l) => l.answer === 'Your steps')!.value).toContain('fill the notify hook');
+  });
+
+  it('--chat none writes no hook, and installs the project digest and not the weekly one', async () => {
+    const { dir, d } = await initWith(['--feature', 'full', '--chat', 'none']);
+    expect(existsSync(join(dir, HOOK))).toBe(false);
+    expect(d.files.some((f) => f.path === HOOK)).toBe(false);
+    expect(existsSync(join(dir, PROJECT))).toBe(true);
+    expect(existsSync(join(dir, WEEKLY))).toBe(false);
+    expect(d.answers).toMatchObject({ chat: 'none', feature: 'full' });
+    // The project digest's caller maps its kind's secret anyway, so a hook added later needs no change.
+    expect(jobSecrets(dir, PROJECT)).toContain('KANON_CHAT_PROJECT_DIGEST');
+    expect(chatSteps(d)).toEqual([]);
+    // Under --yes, with no hook and no flag, none: only an explicit answer writes a hook.
+    const y = await initWith(['--feature', 'full']);
+    expect(y.d.answers.chat).toBe('none');
+    expect(y.d.summary.find((l) => l.answer === 'Chat')).toMatchObject({ source: 'default' });
+    expect(existsSync(join(y.dir, HOOK))).toBe(false);
+    // A weekly digest named by --lanes stays, since the person chose it by name.
+    const named = await initWith(['--lanes', 'review,weekly-digest', '--chat', 'none']);
+    expect(named.d.answers.lanes).toEqual(['agent-review', 'agent-weekly-digest']);
+  });
+
+  it("has each notifying caller map its own kind's secret, and none map DIGEST_WEBHOOK", async () => {
+    const { dir } = await initWith(['--feature', 'full', '--chat', 'slack']);
+    expect(jobSecrets(dir, PROJECT)).toContain('KANON_CHAT_PROJECT_DIGEST');
+    expect(jobSecrets(dir, PROJECT)).not.toContain('KANON_CHAT_WEEKLY_DIGEST');
+    expect(jobSecrets(dir, WEEKLY)).toContain('KANON_CHAT_WEEKLY_DIGEST');
+    expect(jobSecrets(dir, WEEKLY)).not.toContain('KANON_CHAT_PROJECT_DIGEST');
+    for (const f of readdirSync(join(dir, '.github/workflows'))) expect(read(dir, `.github/workflows/${f}`), f).not.toContain('DIGEST_WEBHOOK');
+  });
+
+  it("leaves one person step per kind, worded for the answer, the Slack ones linking Slack's page", async () => {
+    const steps = async (chat: string, over: Partial<State> = {}) => chatSteps((await initWith(['--feature', 'full', '--chat', chat], {}, over)).d);
+    const slack = await steps('slack');
+    expect(slack.map((f) => [f.id, f.subject])).toEqual([['secret.chat-project-digest', 'KANON_CHAT_PROJECT_DIGEST'], ['secret.chat-weekly-digest', 'KANON_CHAT_WEEKLY_DIGEST']]);
+    for (const f of slack) {
+      expect(f.fix.url).toBe(SLACK_PAGE);
+      expect(f.fix.text).toMatch(/^Create a Slack incoming webhook for the channel the (daily project|weekly) digest posts to/);
+      expect(f.fix.text).toMatch(/in your own terminal/);
+      expect(f.fix.text).toMatch(/never with `!` at the Claude Code prompt/);
+      expect(f.fix.text).toMatch(/The same value may go in each kind's secret/);
+      expect(f.fix.commands).toEqual([`gh secret set ${f.subject} -R ${REPO}   # in your own terminal, never with ! at the Claude Code prompt`]);
+      expect(f.category).toBe('secret');
+      expect(f.blocking).toBe(false);
+    }
+    for (const f of await steps('webhook')) {
+      expect(f.fix.url).toBe(`https://github.com/yedeya-labs/kanon/blob/${PINNED}/docs/notifications.md#kanons-generic-webhook-hook`);
+      expect(f.fix.text).toMatch(/^Store the https URL your receiver takes the/);
+    }
+    for (const f of await steps('hook')) {
+      expect(f.fix.url).toBe(`https://github.com/${REPO}/settings/secrets/actions`);
+      expect(f.fix.text).toMatch(/whatever your own hook at \.github\/actions\/notify\/action\.yml needs/);
+    }
+    // A kind whose secret the repository holds asks for nothing.
+    expect((await steps('slack', { secrets: new Set(['KANON_CHAT_PROJECT_DIGEST']) })).map((f) => f.id)).toEqual(['secret.chat-weekly-digest']);
+    expect(read(ROOT, 'docs/notifications.md')).toMatch(/^## Kanon's generic webhook hook$/m);
+  });
+
+  it("writes the adoption record's Chat channel bullet for each answer, and none without a notifying lane", async () => {
+    const want: Record<string, string> = {
+      slack: "- **Chat channel:** Slack, through Kanon's Slack hook (one secret per kind)",
+      webhook: "- **Chat channel:** a JSON webhook, through Kanon's generic webhook hook",
+      hook: '- **Chat channel:** our own hook, .github/actions/notify',
+      none: '- **Chat channel:** none yet',
+    };
+    for (const [chat, bullet] of Object.entries(want)) {
+      const { dir } = await initWith(['--feature', 'full', '--chat', chat]);
+      expect(choices(dir).filter((l) => l.startsWith('- **Chat channel:**')), chat).toEqual([bullet]);
+    }
+    const { dir, d } = await initWith(['--feature', 'build']);
+    expect(d.answers.chat).toBeNull();
+    expect(choices(dir).some((l) => l.startsWith('- **Chat channel:**'))).toBe(false);
+  });
+
+  it('refuses --chat with lanes that post to no chat channel, and a value it does not take', () => {
+    expect(() => parseArgs(['--chat', 'teams'], REQ)).toThrow('--chat takes slack, webhook, hook or none, not "teams"');
+    expect(() => parseArgs(['--feature', 'review', '--chat', 'slack'], REQ)).toThrow(/--chat is for lanes that post to a chat channel .*--feature review has none/);
+    expect(() => parseArgs(['--lanes', 'review,implement', '--chat', 'none'], REQ)).toThrow(/--lanes review,implement has none/);
+    expect(parseArgs(['--feature', 'full', '--chat', 'webhook'], REQ).given.chat).toBe('webhook');
+  });
+
+  it('changes the answer through Change something, the weekly digest following it', async () => {
+    const dir = checkout();
+    const asked: string[] = [];
+    const r = await run(dir, fakeGitHub(), ['--feature', 'full', '--chat', 'none', '--no-sensitive-data', '--consent', 'no', '--no-apps'], undefined, REQ, { ask: changing('8', { [CHAT_QUESTION]: 'slack' }, asked) });
+    expect(r.status, r.err).toBe(0);
+    expect(asked.filter((q) => q.startsWith(CHAT_QUESTION))).toHaveLength(1);
+    expect(read(dir, HOOK)).toBe(prebuilt('slack'));
+    expect(existsSync(join(dir, WEEKLY))).toBe(true);
+  });
+
+  // Decision 17: no lane takes DIGEST_WEBHOOK, and GitHub refuses a caller that still maps it.
+  it("rewrites the secrets: of a digest's caller at this release that maps DIGEST_WEBHOOK, and says what to do with one at another", async () => {
+    const caller = (release: string) => callerFile('agent-project-digest', REQ.lanes['agent-project-digest']!, { release, ciName: 'CI', defaultBranch: 'main', path: PROJECT });
+    const legacy = (release: string) => caller(release).replace('KANON_CHAT_PROJECT_DIGEST: ${{ secrets.KANON_CHAT_PROJECT_DIGEST }}', 'DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}');
+    expect(legacy(PINNED)).toContain('DIGEST_WEBHOOK');
+    const here = await initWith(['--feature', 'full', '--dry-run'], { [PROJECT]: legacy(PINNED) });
+    const file = here.d.files.find((f) => f.path === PROJECT)!;
+    expect(file.status).toBe('rewritten');
+    expect(file.content).toBe(caller(PINNED));
+    expect(file.diff).toEqual(['-       DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}', '+       KANON_CHAT_PROJECT_DIGEST: ${{ secrets.KANON_CHAT_PROJECT_DIGEST }}']);
+    expect(here.d.summary.find((l) => l.answer === 'Chat')!.value).toMatch(/still maps DIGEST_WEBHOOK, which no lane takes: posts resume only once a hook exists and the kind secrets are stored/);
+    // The chat answer isn't inferred from the old secret: with no hook it is none.
+    expect(here.d.answers.chat).toBe('none');
+    const old = await initWith(['--feature', 'full', '--dry-run'], { [PROJECT]: legacy('v0.39.0') });
+    expect(old.d.files.find((f) => f.path === PROJECT)!.status).toBe('differs');
+    expect(old.d.notes).toContainEqual(expect.stringMatching(/^\.github\/workflows\/agent-project-digest\.yml maps DIGEST_WEBHOOK.*the upgrade skill rewrites its secrets: in the same edit/));
+    expect(legacyChatRewrite(legacy('v0.39.0'), 'agent-project-digest', REQ, PINNED)).toBeNull();
+    expect(legacyChatRewrite(legacy(PINNED), 'agent-review', REQ, PINNED)).toBeNull();
   });
 });
