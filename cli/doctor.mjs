@@ -48,6 +48,7 @@
 //
 // Node built-ins only: this runs from a Kanon checkout or through `npx`, with no install.
 
+import { Buffer } from 'node:buffer';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -67,6 +68,8 @@ import { DeclarationError, DEPLOY_HEADING, movedReferenceBullets, parseDeployDec
 import { PROBE_LINE } from '../scripts/deploy-gate.mjs';
 import { EXTRA_LABEL, readAppExtras, withExtras } from '../scripts/lib/app-extras.mjs';
 import { REFUSED_TITLE, UNPUBLISHED_JOB } from '../scripts/lib/telemetry-token.mjs';
+import { ARTIFACT_FILE, listTelemetryArtifacts, readZipEntry } from '../scripts/lib/telemetry-artifacts.mjs';
+import { LANES as TELEMETRY_LANES, TERMINAL_REASONS } from '../actions/agent-telemetry/schema.mjs';
 import { defaultEscalationFile, ESCALATION_FILE, inPipelineCode, parseEscalationFile } from '../scripts/lib/escalation-paths.mjs';
 import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
 import { renderNotice } from '../actions/agent-classify/classify-agent-result.mjs';
@@ -91,6 +94,14 @@ export const CLAUDE_KEY = 'ANTHROPIC_API_KEY';
 export const TOKEN_AGE = /** @type {const} */ ({ note: 335, year: 365 });
 /** `claude.unreachable-runs`: at least `runs` runs on the subscription within `days` days. */
 export const UNREACHABLE = /** @type {const} */ ({ runs: 2, days: 14, perCaller: 20 });
+/**
+ * `lane.turn-cap` (#1004): a lane whose runs keep ending at its turn limit. Read from the
+ * repository's own `kanon-telemetry-*` artifacts of the last `days` days, the newest `perLane` of
+ * each lane, through at most `maxPages` pages of the artifact listing. Reported when at least
+ * `runs` of them, and at least `share` of those that reached the model, ended with
+ * `terminal_reason: max_turns`.
+ */
+export const TURN_CAP = /** @type {const} */ ({ runs: 2, share: 0.25, days: 14, perLane: 20, maxPages: 10 });
 /**
  * The title GitHub stores for an annotation a workflow command (`::error title=<title>::…`) gives:
  * the runner splits the command's properties on every `,`, unescaped, and keeps only `key=value`
@@ -307,7 +318,7 @@ export const ITEMIZED = {
  * `unchecked[].check` it is listed under: a waiver of such a finding can't be called stale.
  * @type {Record<string, string>}
  */
-const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset', 'notify-secrets': 'secret', 'notify-hook': 'declaration', 'notify-runs': 'caller', 'deploy-hook': 'declaration', 'deploy-ci': 'caller', 'deploy-environments': 'deploy', 'deploy-subject': 'deploy', 'deploy-runs': 'deploy', 'deploy-retention': 'deploy', 'deploy-rulesets': 'deploy' };
+const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', 'turn-cap-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset', 'notify-secrets': 'secret', 'notify-hook': 'declaration', 'notify-runs': 'caller', 'deploy-hook': 'declaration', 'deploy-ci': 'caller', 'deploy-environments': 'deploy', 'deploy-subject': 'deploy', 'deploy-runs': 'deploy', 'deploy-retention': 'deploy', 'deploy-rulesets': 'deploy' };
 
 /**
  * The finding categories, in the order a finding is listed and fixed: the pin decides which
@@ -372,6 +383,7 @@ export const FINDINGS = {
   'telemetry.not-run': { category: 'caller', blocking: false },
   'telemetry.unpublished': { category: 'caller', blocking: false },
   'telemetry.legacy-inputs': { category: 'caller', blocking: true },
+  'lane.turn-cap': { category: 'caller', blocking: false },
   'qa-store.unmapped': { category: 'caller', blocking: false },
   'qa-store.variables': { category: 'secret', blocking: false },
   'notify.kind-unset': { category: 'secret', blocking: false },
@@ -434,6 +446,7 @@ login; the command says which one it used and whose it is.`;
 /**
  * @typedef {{
  *   gh: (args: string[], input?: string) => Promise<GhResult>,
+ *   download: (repo: string, id: number) => Promise<{ status: number | null, bytes: Buffer, stderr: string }>,
  *   git: (args: string[]) => GhResult,
  *   env: Record<string, string | undefined>,
  *   out: (line: string) => void,
@@ -477,6 +490,18 @@ export const realDeps = {
       child.on('close', (status) => done({ status, stdout, stderr }));
       child.stdin.on('error', () => {});
       child.stdin.end(input ?? '');
+    }),
+  // An artifact's zip, as bytes: `gh`'s output read as text would mangle them.
+  download: (repo, id) =>
+    new Promise((done) => {
+      const child = spawn('gh', ['api', `repos/${repo}/actions/artifacts/${id}/zip`], { stdio: ['ignore', 'pipe', 'pipe'] });
+      /** @type {Buffer[]} */
+      const chunks = [];
+      let stderr = '';
+      child.stdout.on('data', (d) => chunks.push(d));
+      child.stderr.on('data', (d) => (stderr += d));
+      child.on('error', (e) => done({ status: null, bytes: Buffer.concat(chunks), stderr: String(e.message) }));
+      child.on('close', (status) => done({ status, bytes: Buffer.concat(chunks), stderr }));
     }),
   git: (args) => {
     const r = spawnSync('git', args, { encoding: 'utf8' });
@@ -535,6 +560,37 @@ const level = (v) => (v === 'write' ? 2 : v === 'read' ? 1 : 0);
 
 /** @param {unknown} v @returns {v is Record<string, any>} */
 const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** @typedef {{ runId: number, maxTurns: number | null, numTurns: number | null, reason: string | null }} TurnRow */
+
+/**
+ * The fields `lane.turn-cap` reads from one run artifact's zip: null when the zip or its row
+ * can't be read, or the row isn't its artifact's (lane, run, attempt); `skip` for a smoke or test
+ * row, which no read counts. Only these fields are checked, not the whole schema, so a row a newer
+ * release wrote still reads.
+ * @param {Buffer} bytes @param {{ runId: number, attempt: number }} a @param {string} lane
+ * @returns {TurnRow | 'skip' | null}
+ */
+export const turnRow = (bytes, a, lane) => {
+  /** @type {any} */
+  let row;
+  try {
+    const file = readZipEntry(bytes, ARTIFACT_FILE);
+    if (!file) return null;
+    row = JSON.parse(file.toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!isMap(row) || row.row_kind !== 'run' || row.lane !== lane || row.run_id !== a.runId || row.run_attempt !== a.attempt) return null;
+  if (row.tag !== 'run') return 'skip';
+  /** @param {unknown} v */
+  const count = (v) => (v === null || v === undefined ? null : Number.isInteger(v) && Number(v) >= 0 ? Number(v) : NaN);
+  const maxTurns = count(row.max_turns);
+  const numTurns = count(row.num_turns);
+  const reason = row.terminal_reason ?? null;
+  if (Number.isNaN(maxTurns) || Number.isNaN(numTurns) || (reason !== null && !TERMINAL_REASONS.includes(reason))) return null;
+  return { runId: a.runId, maxTurns, numTurns, reason };
+};
 
 /** A semantic version's parts, for ordering; a candidate's are its release's. @param {string} v */
 const semver = (v) => (/^(?:candidate-)?v(\d+)\.(\d+)\.(\d+)$/.exec(v) ?? []).slice(1).map(Number);
@@ -2309,6 +2365,95 @@ export const diagnose = async (deps, opts) => {
           commands: [`gh run view ${id} -R ${repo}`],
         });
       }
+    }
+  }
+
+  // ── A lane whose runs keep ending at its turn limit (#1004) ─────────────────────────────────
+  // Each run of a lane writes a version-2 run row, uploaded as `kanon-telemetry-<lane>-<run>-<attempt>`,
+  // with the limit that bound it (`max_turns`), the turns it took (`num_turns`) and how it ended
+  // (`terminal_reason`). The rows stay in the repository, so doctor reads them as the dispatch sweep
+  // does (`scripts/lib/telemetry-artifacts.mjs`): this repository's own runs only, a fork's ignored.
+  // It prints run ids and counts, never a row (`K-OBS-16`). The terminal reason decides, never the
+  // turns against the limit, as in `agent-classify`: a run can finish cleanly on its last turn.
+  const turnLanes = installed
+    .map((l) => ({ lane: l, telemetry: l.replace(/^agent-/, ''), turns: /** @type {any} */ (req.lanes[l])?.turns, file: callers.filter((c) => c.lane === l).map((c) => c.file).sort()[0] ?? l }))
+    .filter((t) => isMap(t.turns) && Number.isInteger(t.turns.default) && Number.isInteger(t.turns.ceiling) && TELEMETRY_LANES.includes(t.telemetry));
+  if (turnLanes.length) {
+    const from = deps.now() - TURN_CAP.days * DAY;
+    // The listing's pages are read here, through `gh`, and handed to the shared reader, which
+    // keeps this repository's own runs. It stops a page later than the reader at most.
+    /** @type {Map<string, any>} */
+    const pages = new Map();
+    /** @type {string | null} */
+    let listError = null;
+    for (let page = 1; page <= TURN_CAP.maxPages; page += 1) {
+      const path = `repos/${repo}/actions/artifacts?per_page=100&page=${page}`;
+      const got = await deps.gh(['api', path]);
+      /** @type {any} */
+      let body = null;
+      try {
+        if (got.status === 0) body = JSON.parse(got.stdout);
+      } catch {
+        body = null;
+      }
+      if (!isMap(body) || !Array.isArray(body.artifacts)) {
+        listError = `the token can't list the repository's artifacts (${got.stderr.trim() || `exit ${got.status}`}); it needs Actions: read`;
+        break;
+      }
+      pages.set(path, body);
+      const newest = Math.max(...body.artifacts.map((/** @type {any} */ a) => Date.parse(a?.created_at)).filter(Number.isFinite));
+      if (body.artifacts.length < 100 || newest < from - 2 * 3_600_000) break;
+    }
+    /** @type {ReturnType<typeof listTelemetryArtifacts> | null} */
+    let listed = null;
+    if (listError === null) {
+      try {
+        listed = listTelemetryArtifacts({
+          repo, from, maxPages: TURN_CAP.maxPages,
+          api: (path) => {
+            if (!pages.has(path)) throw new Error(`the artifact listing passed ${TURN_CAP.maxPages} pages before reaching the window's start`);
+            return pages.get(path);
+          },
+        });
+      } catch (e) {
+        listError = `could not read the artifact listing: ${/** @type {Error} */ (e).message}`;
+      }
+    }
+    if (listed === null) unchecked.push({ check: 'turn-cap-runs', subject: repo, reason: /** @type {string} */ (listError) });
+    for (const t of listed ? turnLanes : []) {
+      const mine = /** @type {NonNullable<typeof listed>} */ (listed).artifacts
+        .filter((a) => a.kind === 'run' && a.lane === t.telemetry)
+        .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
+        .slice(0, TURN_CAP.perLane);
+      /** @type {TurnRow[]} */
+      const rows = [];
+      let unread = 0;
+      for (const a of mine) {
+        const got = await deps.download(repo, a.id);
+        const row = got.status === 0 ? turnRow(got.bytes, a, t.telemetry) : null;
+        if (row === null) unread += 1;
+        else if (row !== 'skip') rows.push(row);
+      }
+      if (unread) unchecked.push({ check: 'turn-cap-runs', subject: t.file, reason: `${unread} of its ${mine.length} telemetry artifacts in the window could not be read: a download the token can't make, which needs Actions: read, or a row doctor can't read. A run that ended at the turn limit may be missing from the count` });
+      const reached = rows.filter((r) => r.reason !== null);
+      const hit = reached.filter((r) => r.reason === 'max_turns');
+      if (hit.length < TURN_CAP.runs || hit.length < TURN_CAP.share * reached.length) continue;
+      const { default: limit, ceiling } = t.turns;
+      const shown = reached.map((r) => {
+        const cap = r.maxTurns ?? limit;
+        return `${r.numTurns ?? '?'} of ${cap} (run ${r.runId}${cap > limit ? ', raised' : ''}${r.reason === 'max_turns' ? ', at the limit' : ''})`;
+      });
+      const taken = reached.flatMap((r) => (r.numTurns === null ? [] : [r.numTurns])).sort((a, b) => a - b);
+      const mid = taken.length >> 1;
+      const median = taken.length % 2 ? taken[mid] : ((taken[mid - 1] ?? 0) + (taken[mid] ?? 0)) / 2;
+      const atCeiling = hit.filter((r) => r.maxTurns !== null && r.maxTurns >= ceiling).map((r) => r.runId);
+      const split = atCeiling.length
+        ? ` ${atCeiling.length > 1 ? 'Runs' : 'run'} ${atCeiling.join(', ')} ${atCeiling.length > 1 ? 'were' : 'was'} raised to the ceiling, ${ceiling}, and still ended at it: this work wants splitting, since no dispatch can raise it further.`
+        : '';
+      find('lane.turn-cap', t.file, `calls ${t.lane}: ${hit.length} of its ${reached.length} runs that reached the model in the last ${TURN_CAP.days} days ended at the turn limit (\`terminal_reason: max_turns\`). Turns taken, newest first: ${shown.join(', ')}${taken.length ? `; median ${median}, most ${taken[taken.length - 1]}` : ''}. The lane's limit is ${limit} turns, and its ceiling for one dispatched run ${ceiling}.${split}`, {
+        text: `Read the runs that ended at the limit. A plain re-run fails the same way. If the work is divisible, split it into parts each finishable in one run; for the implement lanes that is the default answer, and the split lane does it. If it is one change that can't be divided, dispatch that run again with max_turns at most ${ceiling} and a reason (docs/lanes.md, "The turn budget").`,
+        commands: hit.map((r) => `gh run view ${r.runId} -R ${repo}`),
+      });
     }
   }
 

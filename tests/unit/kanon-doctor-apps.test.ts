@@ -474,6 +474,7 @@ describe('kanon doctor and private Apps, read through apps-check (#417)', () => 
     const github = fakeGitHub();
     const r = await run(checkout(healthyFiles()), github, ['--json']);
     expect(r.status).toBe(EXIT.healthy);
-    expect(github.calls.some((c) => c.some((x) => x.includes('/actions/')))).toBe(false);
+    // No run of apps-check is read. The artifact listing is `lane.turn-cap`'s (#1004), not a run.
+    expect(github.calls.some((c) => c.some((x) => /\/actions\/(workflows|runs|jobs)\//.test(x)))).toBe(false);
   });
 });
