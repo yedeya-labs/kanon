@@ -162,7 +162,7 @@ describe('K-AGENT-50: no job that runs the code under test holds a write credent
     // Every spine lane is judged, the Lead's among them.
     const spineLanes = PATHS.flatMap((p) => Object.entries(read(p).jobs ?? {})
       .filter(([, j]) => j.uses === `$/.github/workflows/${SPINE}`).map(([n]) => `${basename(p)}:${n}`));
-    expect(spineLanes.sort()).toEqual(['agent-implement-revise.yml:revise', 'agent-implement.yml:implement', 'agent-lead-revise.yml:revise', 'agent-lead.yml:brief', 'agent-triage.yml:triage-fix']);
+    expect(spineLanes.sort()).toEqual(['agent-deploy-diagnose.yml:diagnose', 'agent-implement-revise.yml:revise', 'agent-implement.yml:implement', 'agent-lead-revise.yml:revise', 'agent-lead.yml:brief', 'agent-triage.yml:triage-fix']);
   });
 
   it('holds for every job but the named exceptions', () => {

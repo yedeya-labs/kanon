@@ -24,7 +24,7 @@ export const LANES = readdirSync(WORKFLOWS)
   .sort();
 
 /** The triggers each lane's caller holds (docs/lanes.md), as the event the gate sees. */
-export type Trigger = 'review' | 'issue-label' | 'issue-opened' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-merged' | 'schedule';
+export type Trigger = 'review' | 'issue-label' | 'issue-opened' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-merged' | 'schedule' | 'deploy-failed';
 export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-implement-revise.yml': ['review', 'pr-label', 'dispatch'],
   'agent-implement.yml': ['issue-label', 'dispatch'],
@@ -49,6 +49,8 @@ export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-explore-telemetry.yml': ['schedule', 'dispatch'],
   // The runtime-version trigger (kanon#423): a merged pull request, judged by who merged it.
   'agent-overseer.yml': ['schedule', 'dispatch', 'pr-target-merged'],
+  // Plan 0010 D8: a failed run of the deploy caller, judged by whoever started that run.
+  'agent-deploy-diagnose.yml': ['deploy-failed'],
 };
 
 /** The job holding the gate step, and the step's index in it. */
@@ -244,6 +246,8 @@ export const eventFor = (trigger: Trigger, actor: Actor): { name: string; payloa
       return { name: 'workflow_dispatch', payload: {}, env: { GITHUB_ACTOR: 'someone-else', GITHUB_TRIGGERING_ACTOR: actor.login } };
     case 'ci-finished':
       return { name: 'workflow_run', payload: { action: 'completed', workflow_run: { head_sha: CI_SHA, triggering_actor: user, actor: { login: 'someone-else' } }, sender: { login: 'someone-else' } }, env: {} };
+    case 'deploy-failed':
+      return { name: 'workflow_run', payload: { action: 'completed', workflow_run: { conclusion: 'failure', head_sha: CI_SHA, triggering_actor: user, actor: { login: 'someone-else' } }, sender: { login: 'someone-else' } }, env: {} };
     case 'pr-target-label':
       return { name: 'pull_request_target', payload: { action: 'labeled', sender: user }, env: {} };
     case 'pr-target-opened':

@@ -11,7 +11,7 @@ import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs'
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
 import { TELEMETRY_QUESTION, telemetryQuestion, telemetryRegisters, UPSTREAM_EVIDENCE_QUESTION, upstreamFindingsQuestion } from '../../cli/init.mjs';
 import { HOSTED_INGEST_URL } from '../../scripts/lib/telemetry-token.mjs';
-import { codeownersOf, CONSENT_LEVELS, CONSENT_OPTIONS, CONSENT_QUESTION, consentOf, consentQuestion, DATA_QUESTION, FEATURE_QUESTION, featureOf, REVIEW_HOW, sharingUrl, testDatabaseSignal } from '../../cli/init.mjs';
+import { codeownersOf, DIAGNOSE_DROPPED, CONSENT_LEVELS, CONSENT_OPTIONS, CONSENT_QUESTION, consentOf, consentQuestion, DATA_QUESTION, FEATURE_QUESTION, featureOf, REVIEW_HOW, sharingUrl, testDatabaseSignal } from '../../cli/init.mjs';
 import { parseUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { KEYS_HELP } from '../../cli/apps.mjs';
@@ -894,8 +894,10 @@ describe('the callers kanon init writes', () => {
     ...(t.prTarget ? [`pull_request_target:${[...t.prTarget].sort().join(',')}`] : []),
     ...(t.pinMoved || t.merged ? ['pull_request_target:closed'] : []),
     ...(t.issues ? [`issues:${[...t.issues].sort().join(',')}`] : []),
+    ...(t.deployRun ? ['workflow_run:completed'] : []),
     ...(t.schedule ? ['schedule'] : []),
-    `workflow_dispatch:${Object.keys(t.dispatch).sort().join(',')}`,
+    // A `deployRun` caller has no dispatch: the lane reads the failed run from the event (plan 0010 D8).
+    ...(t.deployRun ? [] : [`workflow_dispatch:${Object.keys(t.dispatch).sort().join(',')}`]),
   ];
 
   it("writes the Overseer's runtime-version trigger on its own file, on the default branch (kanon#423)", () => {
@@ -947,7 +949,8 @@ describe('the callers kanon init writes', () => {
     });
     const all = Object.keys(REQ.lanes).map((l) => l.slice('agent-'.length)).join(',');
     const github = fakeGitHub();
-    const r = await run(dir, github, ['--yes', '--lanes', all]);
+    // With environments declared, so the deploy diagnose lane's caller is written too (plan 0010 D8).
+    const r = await run(dir, github, ['--yes', '--lanes', all, '--deploy-environments', 'staging,production']);
     expect(r.status, r.err).toBe(0);
     expect(r.appsCalls[0]).toContain('author,judge');
     const lc = laneCheck(dir);
@@ -2433,7 +2436,7 @@ describe('kanon init and the Claude credential (plan 0009 A5)', () => {
       'docs/qa/capability-ledger.md': '# Capability ledger\n',
     });
     // `kanon apps`, stubbed, writes the App register that lane-check reads.
-    const d = parse(await run(dir, fakeGitHub({ secrets: new Set([KEY]) }), ['--json', '--lanes', ALL]));
+    const d = parse(await run(dir, fakeGitHub({ secrets: new Set([KEY]) }), ['--json', '--lanes', ALL, '--deploy-environments', 'staging,production']));
     expect(d.answers.claudeAuth).toBe('api-key');
     expect(claudeLine(d)).toMatchObject({ fields: ['claudeAuth'], source: 'inferred', reason: "from the repository's secrets" });
     expect(claudeLine(d)!.value).toMatch(/^API key \(ANTHROPIC_API_KEY\)/);
@@ -2966,5 +2969,51 @@ describe('kanon init and the deploy lane (plan 0010 D6)', () => {
     expect(r.status, r.err).toBe(0);
     expect(asked.filter((q) => q.startsWith("The deploy lane's environments"))).toHaveLength(1);
     expectChain(dir, ['staging', 'production']);
+  });
+});
+
+// Plan 0010 step D8: the deploy diagnose lane is opt-in, outside every feature, and `init` writes
+// its caller only when asked and only beside a deploy caller it writes, which the lane follows by
+// its name on `workflow_run`, with no dispatch.
+describe('kanon init and the deploy diagnose lane (plan 0010 D8)', () => {
+  const LANE = 'agent-deploy-diagnose';
+  const CALLER = `.github/workflows/${LANE}.yml`;
+  const initWith = async (argv: string[], files: Record<string, string> = {}) => {
+    const dir = checkout(files);
+    const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', ...argv]));
+    return { dir, d };
+  };
+
+  it('writes its caller when asked beside declared environments: workflow_run of the deploy caller by its name, no dispatch', async () => {
+    const { dir, d } = await initWith(['--lanes', 'review,deploy-diagnose', '--deploy-environments', 'staging,production']);
+    expect(d.answers.lanes).toContain(LANE);
+    const wf = parseYaml(read(dir, CALLER)) as { name: string; on: Record<string, unknown>; permissions: Record<string, string>; jobs: Record<string, { uses: string; secrets: Record<string, string>; with?: unknown }> };
+    const deployName = (parseYaml(read(dir, '.github/workflows/deploy.yml')) as { name: string }).name;
+    expect(wf.on).toEqual({ workflow_run: { workflows: [deployName], types: ['completed'] } });
+    expect(wf.permissions).toEqual(REQ.lanes[LANE]!.grant);
+    expect(wf.permissions).not.toHaveProperty('id-token');
+    expect(wf.jobs.diagnose!.uses).toBe(`yedeya-labs/kanon/.github/workflows/${LANE}.yml@${PINNED}`);
+    expect(wf.jobs.diagnose!.with).toBeUndefined();
+    expect(Object.keys(wf.jobs.diagnose!.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
+  });
+
+  it('is in no feature, so the full pipeline writes no caller for it', async () => {
+    const { dir, d } = await initWith(['--feature', 'full', '--deploy-environments', 'staging,production']);
+    expect(d.answers.lanes).not.toContain(LANE);
+    expect(existsSync(join(dir, CALLER))).toBe(false);
+  });
+
+  it('is left out, with a note, when no deploy environment is declared', async () => {
+    const { dir, d } = await initWith(['--lanes', 'review,deploy-diagnose']);
+    expect(d.answers.lanes).toEqual(['agent-review']);
+    expect(existsSync(join(dir, CALLER))).toBe(false);
+    expect(d.notes.filter((n: string) => n.startsWith(DIAGNOSE_DROPPED))).toHaveLength(1);
+  });
+
+  it("writes no caller for it where the deploy caller's path is a workflow of the project's own", async () => {
+    const own = 'name: Ship\non: push\njobs:\n  ship:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./ship.sh\n';
+    const { dir } = await initWith(['--lanes', 'review,deploy-diagnose', '--deploy-environments', 'production'], { '.github/workflows/deploy.yml': own });
+    expect(read(dir, '.github/workflows/deploy.yml')).toBe(own);
+    expect(existsSync(join(dir, CALLER))).toBe(false);
   });
 });

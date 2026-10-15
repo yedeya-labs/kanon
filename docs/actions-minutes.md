@@ -29,6 +29,7 @@ The "Its short and skipped runs" column is held to the lanes' jobs by [`tests/un
 | `agent-explore` | A daily schedule; a dispatch | A commit the QA store already holds a green sweep of | Days, and how long your sweep hook takes |
 | `agent-code-audit` | A schedule every three days; a dispatch | None to speak of | Days, and the size of the code areas it reads |
 | `agent-explore-telemetry` | A weekly schedule; a dispatch | An aggregate with no cell and no signal; no aggregate function configured, or a dispatch from a branch other than the default (a short job that says so) | Weeks |
+| `agent-deploy-diagnose` | A run of the deploy caller completing | A deploy run that didn't fail (skipped, nothing billed); a failed run that filed no issue (a short gate job) | Failed deploys |
 | `agent-triage` | An issue labelled; a dispatch | Every label other than `qa:needs-triage` (skipped, nothing billed) | Bugs filed for triage |
 | `agent-issue-backstop` | An issue opened; a dispatch | None: it runs no model, so every run is short | Issues opened |
 | `agent-lead` | A dispatch | None: it runs only when you dispatch it | Mandates you dispatch |
@@ -60,6 +61,7 @@ Measured on `yedeya-labs/kanon` over the 7 days from 2026-10-06 06:25 to 2026-10
 | `agent-explore` | none | — | — | — | — | — | not measured |
 | `agent-code-audit` | `code-audit.yml` | 7 | 0.4 | 67% | 2 | 10 | 2 |
 | `agent-explore-telemetry` | `explore-telemetry.yml` | 5.8 | 0.2 | 0% | — | 6 | 1 |
+| `agent-deploy-diagnose` | none | — | — | — | — | — | not measured |
 | `agent-triage` | `triage.yml` | 0.6 | 120 | 100% | 0 | — | 0 |
 | `agent-issue-backstop` | none | — | — | — | — | — | not measured |
 | `agent-lead` | `lead.yml` | 0.6 | 0 | — | — | — | 0 |

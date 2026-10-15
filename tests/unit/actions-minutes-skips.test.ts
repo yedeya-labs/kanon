@@ -76,6 +76,11 @@ const SKIPS: Record<string, Spec> = {
   // `reader` skips only the telemetry read; the Overseer still runs.
   'agent-overseer': { outputs: { due: ["doesn't move the agent runtime forward"], reader: null } },
   'agent-rebase': { outputs: { prs: ['finds no agent pull request in conflict'] } },
+  // Plan 0010 D8: its caller fires on every conclusion, and its gate admits a failure alone.
+  'agent-deploy-diagnose': {
+    outputs: { issues: ['a failed run that filed no issue'] },
+    skipped: ["github.event.workflow_run.conclusion == 'failure'"],
+  },
 };
 
 type Lane = { cell: string; text: string; jobs: Record<string, { if?: unknown }> };

@@ -113,6 +113,9 @@ const SPINE_CALLERS: Record<string, Perms> = {
   'agent-lead.yml': { contents: 'write', issues: 'write', 'pull-requests': 'write' },
   // The brief's reviser also reads the failed runs it is answering.
   'agent-lead-revise.yml': { contents: 'write', issues: 'write', 'pull-requests': 'write', actions: 'read' },
+  // The deploy diagnosis reads the tree and the releases, and comments on the deploy lane's issues
+  // (plan 0010 D8); the workflow token, not this one, reads the failed run.
+  'agent-deploy-diagnose.yml': { contents: 'read', issues: 'write' },
 };
 /** Minting steps outside the lanes, and why each is exempt. */
 const EXEMPT: Record<string, string> = {
