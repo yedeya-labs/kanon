@@ -14,6 +14,8 @@ import { writeStub } from './helpers/stub-bin.js';
  * WHAT COUNTS AS RUNNING SOMEONE ELSE'S CODE:
  *   • the agent: Kanon's `agent-run` block, or `claude-code-action` called directly;
  *   • a `./` action: the project's own code from the checkout (the project-setup hook);
+ *   • Kanon's `notify` block, which runs the adopter's notify hook from the checkout it makes, at
+ *     the run's commit, whatever branch it is on (plan 0011 §5, step N6);
  *   • a checkout with a `ref:`: a branch other than the triggering commit (a PR's head). The
  *     default branch by name is not one: it is merged code (the Merger's job checks it out).
  *
@@ -39,6 +41,8 @@ const holdsKey = (job: Job): boolean => KEY.test(JSON.stringify(job));
 
 const isAgent = (s: Step) => /(^|\/)actions\/agent-run(@|$)/.test(String(s.uses ?? '')) || String(s.uses ?? '').startsWith('anthropics/claude-code-action');
 const isLocal = (s: Step) => String(s.uses ?? '').startsWith('./');
+/** The `notify` block, which calls `./.github/actions/notify` inside it (plan 0011 §5). */
+const isNotify = (s: Step) => /^(?:\$\/|yedeya-labs\/kanon\/)actions\/notify(?:@|$)/.test(String(s.uses ?? ''));
 /** The default branch is merged, reviewed code: the Merger checks it out by name to run Kanon's scripts on it. */
 const DEFAULT_BRANCH = /^\$\{\{\s*github\.event\.repository\.default_branch\s*\}\}$/;
 const isRefCheckout = (s: Step) => String(s.uses ?? '').startsWith('actions/checkout@')
@@ -49,6 +53,7 @@ const runsOthersCode = (job: Job): string | undefined => {
   if (steps.some(isAgent)) return 'runs the agent';
   const local = steps.find(isLocal);
   if (local) return `runs \`${local.uses}\` from the checkout`;
+  if (steps.some(isNotify)) return 'runs the notify hook from the checkout';
   if (steps.some(isRefCheckout)) return 'checks out a ref other than the triggering commit';
   return undefined;
 };
@@ -374,6 +379,16 @@ describe('the check catches what it is for', () => {
       plain: { steps: [mint, { uses: 'actions/checkout@v7' }] },
       main: { steps: [mint, { uses: 'actions/checkout@v7', with: { ref: '${{ github.event.repository.default_branch }}' } }] },
     } } })).toEqual({ 'x.yml:hook': 'runs `./.github/actions/project-setup` from the checkout', 'x.yml:pr': 'checks out a ref other than the triggering commit' });
+  });
+
+  it('the notify block, which runs the adopter\'s hook, at Kanon\'s commit or a release (plan 0011 step N6)', () => {
+    for (const uses of ['$/actions/notify', 'yedeya-labs/kanon/actions/notify@v1.2.3']) {
+      expect(violations({ 'x.yml': { jobs: { notify: { steps: [mint, { uses, with: { secret: '${{ secrets.KANON_CHAT_PROJECT_DIGEST }}' } }] } } } }), uses)
+        .toEqual({ 'x.yml:notify': 'runs the notify hook from the checkout' });
+    }
+    expect(violations({ 'x.yml': { jobs: { notify: { steps: [{ uses: '$/actions/notify', with: { secret: '${{ secrets.KANON_CHAT_PROJECT_DIGEST }}' } }] } } } })).toEqual({});
+    // Kanon's prebuilt hooks' own actions are not the block: they run only inside the hook.
+    expect(violations({ 'x.yml': { jobs: { a: { steps: [mint, { uses: 'yedeya-labs/kanon/actions/notify/slack@v1.2.3' }] } } } })).toEqual({});
   });
 });
 

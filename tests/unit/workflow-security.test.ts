@@ -22,6 +22,9 @@ const files = [
   // The hook files `kanon init` writes into an adopter's repository (plan 0011 §7.1): they call
   // Kanon by release, and K-ADOPT-12 holds that pin as it holds any other.
   ...readdirSync('actions/notify/hooks').filter((f) => f.endsWith('.yml')).map((f) => join('actions/notify/hooks', f)),
+  // The fixture notify hook the notify block's tests run (plan 0011 step N6): an adopter's own hook,
+  // held to the same pins as a hook Kanon writes.
+  'tests/fixtures/notify-hook/.github/actions/notify/action.yml',
   // The AWS QA store's actions (plan 0004 step P9), which an adopter's hook calls by path.
   'infra/qa-store/aws/action.yml',
   'infra/qa-store/aws/maintenance/action.yml',

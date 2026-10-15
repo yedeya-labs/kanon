@@ -71,8 +71,12 @@ const files = [
 // The QA store block calls the ADOPTER's store hook (plan 0004 step P9), the first exception's
 // reason again: the adopter's code, in the checkout the block makes. It calls it from two steps,
 // a write and a read, so the entry is matched once per file, not once per step.
+//
+// The notify block calls the ADOPTER's notify hook (plan 0011 step N6, §6.1), the same reason: the
+// adopter's hook, in the adopter's checkout, which the block makes at the run's commit.
 const EXEMPT = new Set([
   'actions/qa-store/action.yml: ./.github/actions/qa-store',
+  'actions/notify/action.yml: ./.github/actions/notify',
   // The Explorer runs the project's setup and its sweep, both the adopter's hooks (plan 0004
   // step 12, decision 5), read from the checkout like every other lane's.
   '.github/workflows/explore-agent-job.yml: ./.github/actions/explore-sweep',
