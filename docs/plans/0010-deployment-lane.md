@@ -385,7 +385,7 @@ Not stated in GitHub's documentation, so D0 measured each in a sandbox repositor
 | Delete `KANON_DEPLOY_SECRET`, with the file (plan 0008 §9 step 7) | once, after vM+1 is deployed | no |
 | A deploy by hand if GitHub Actions is down | break-glass | yes |
 
-**What leaves the Owner's hands:** rendering, packaging, deploying, reading the outputs and the routine smoke, on every release of the operator's repository. So does the order plan 0008 relies on ("deploy intake first, then the lanes' release"), which now holds by construction: the store deploys when the Owner dispatches the operator's published release, and adopters' pins move to the Kanon release later.
+**What leaves the Owner's hands:** rendering, packaging, deploying, reading the outputs and the routine smoke, on every release of the operator's repository. So does the order plan 0008 relies on ("deploy intake first, then the lanes' release"), which holds by construction once Kanon cuts candidates ([plan 0009](0009-release-channels-and-api-key.md) S3): the store deploys when the Owner dispatches the operator's published release, and adopters' pins move to the Kanon release only at its promotion. Until then, merging Kanon's release PR publishes a plain `vX.Y.Z` at once, so an adopter's Dependabot can move its pin before the Owner's dispatch; that adopter's collector is red until the deploy, and recovers on its next sweep, which reaches back up to 7 days ([`docs/release.md`](../release.md#intake-first), step 2).
 
 **Kanon's repository is unchanged by the dogfood.** It has no deploy caller, declares no environment and no reference environment. Its adoption record's mechanism row for `K-SHIP-8` to `K-SHIP-10` stays "not yet installed", because Kanon deploys nothing.
 
