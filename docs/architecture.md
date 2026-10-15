@@ -54,6 +54,8 @@ A **lane** is a reusable workflow that runs one agent for one job. An adopter ca
 
 You don't install them all. `kanon init` offers three features: **Review** (the review lane alone), **Review + build** (adds the Implementer's lanes, the dispatch sweep, the issue backstop and merge reconcile) and the **full pipeline** (adds the Lead, the Merger and the audits). Four lanes run no model at all: the Merger, the reconciler, the dispatch sweep and the issue backstop.
 
+**The deploy lane** is outside the features ([lanes.md](lanes.md#the-deploy-lane)). It deploys each published release to the environments the adoption record's `## Deploy` section declares, in order, the last being production, and runs no model. `kanon init --deploy-environments staging,production` writes that section, the caller (one `release` job, then one job per environment, each needing the one before) and three hook stubs, `.github/actions/build`, `deploy` and `smoke`, which fail until the adopter fills them. A repository that declares no environment gets none of it.
+
 ## What stops them: the gates
 
 - **The membership gate.** The first step of every lane checks who caused the event: a repository member, or one of the register's Apps. Anyone else is refused before a token exists ([`K-AGENT-45`](../rulebook/03-agents.md)).

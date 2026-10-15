@@ -79,6 +79,7 @@ import { BUCKETS, milestones as runMilestones } from './milestones.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL, sends } from '../scripts/lib/upstream-findings.mjs';
 import { HOSTED_INGEST_URL } from '../scripts/lib/telemetry-token.mjs';
+import { ADOPTION_RECORD as DEPLOY_RECORD, CHAIN_LABELS, DeclarationError, DEPLOY_HEADING, LABELS as REFERENCE_LABELS, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
 /** @typedef {{ status: number | null, stdout: string, stderr: string }} GhResult */
@@ -186,6 +187,12 @@ The other values, each inferred or defaulted, as the summary shows:
   --upstream-findings <where>  where findings only Kanon can act on go: drafted (the
                          default), filed-here, or, with --telemetry, sent or
                          sent-with-evidence (docs/init.md)
+  --deploy-environments <list>  the deploy lane's environments, comma-separated, in deploy
+                         order, the last being production, e.g. preview,production, or
+                         none: writes the adoption record's ## Deploy section, the deploy
+                         caller and three hook stubs that fail until you fill them
+                         (docs/lanes.md, "The deploy lane") (default: the record's ## Deploy
+                         list, else none)
   --accept-id-token-holder <workflow>.yml#<job>=<why>
                          accept a job of your workflows that holds id-token: write, which
                          could assume the QA store's role and the telemetry writer: a bullet
@@ -351,7 +358,7 @@ export const realDeps = {
  *   releaser?: boolean, reuseApps?: boolean, plugin?: boolean, telemetry?: boolean, createApps?: boolean,
  *   upstreamFindings?: import('../scripts/lib/upstream-findings.mjs').Value,
  *   feature?: 'review' | 'build' | 'full', reviewTrigger?: 'labelled', sensitiveData?: boolean, consent?: Consent,
- *   claudeAuth?: ClaudeAuth, acceptHolders?: AcceptedHolder[],
+ *   claudeAuth?: ClaudeAuth, acceptHolders?: AcceptedHolder[], deployEnvironments?: string[],
  * }} Given
  */
 
@@ -359,7 +366,7 @@ export const realDeps = {
 const ACCEPT_FLAG = '--accept-id-token-holder';
 
 /** The flags that take a value. */
-const VALUE_FLAGS = ['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email', '--upstream-findings', '--feature', '--review-trigger', '--consent', '--claude-auth', ACCEPT_FLAG];
+const VALUE_FLAGS = ['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email', '--upstream-findings', '--feature', '--review-trigger', '--consent', '--claude-auth', '--deploy-environments', ACCEPT_FLAG];
 
 /** Pairs of flags that contradict each other, refused by name when both are given. */
 /** @type {Array<[string, string]>} */
@@ -463,6 +470,7 @@ export const parseArgs = (argv, req) => {
       if (v !== 'subscription' && v !== 'api-key') throw new Error(`--claude-auth takes subscription or api-key, not "${v}"`);
       g.claudeAuth = v;
     }
+    else if (flag === '--deploy-environments') g.deployEnvironments = parseDeployEnvironments(value());
     else if (flag === '--accept-id-token-holder') {
       const h = parseHolder(value(false));
       const holders = (g.acceptHolders ??= []);
@@ -796,6 +804,9 @@ export const inspect = async (deps, repo) => {
   const ms = await ghJson(deps, ['api', '--paginate', '--slurp', `repos/${repo}/milestones?state=all&per_page=100`]);
   if (!ms.ok) throw new Error(`could not list the milestones of ${repo} (${why(ms.r)})`);
   const secrets = await ghJson(deps, ['secret', 'list', '-R', repo, '--json', 'name']);
+  // The repository's environments (plan 0010 D6), which the adopt skill recommends the deploy
+  // environments from; null when the token can't list them.
+  const envs = await ghJson(deps, ['api', `repos/${repo}/environments?per_page=100`]);
 
   return {
     owner,
@@ -824,6 +835,8 @@ export const inspect = async (deps, repo) => {
     milestones: new Set(ms.json.map((/** @type {any} */ m) => String(m.title))),
     /** @type {Set<string> | null} null when the token can't list them */
     secrets: secrets.ok ? new Set(secrets.json.map((/** @type {any} */ s) => String(s.name))) : null,
+    /** @type {string[] | null} null when the token can't list them */
+    environments: envs.ok && Array.isArray(envs.json?.environments) ? envs.json.environments.map((/** @type {any} */ e) => String(e.name)) : null,
   };
 };
 
@@ -1015,7 +1028,10 @@ export const CONFIRM_OPTIONS = [
   { value: 'stop', label: 'Stop', does: 'Nothing is written.', names: ['s', 'n', 'no'] },
 ];
 /** The groups of the summary's lines that **Change something** offers, each asked in today's shape. */
-export const CHANGE_GROUPS = ['People', 'Lanes and Apps', 'Gates, database and delegation', 'Labels, plugin and pin', 'Data and sharing', 'Claude credential'];
+export const CHANGE_GROUPS = ['People', 'Lanes and Apps', 'Gates, database and delegation', 'Labels, plugin and pin', 'Data and sharing', 'Claude credential', 'Deploy environments'];
+
+/** The deploy environments' question, asked at the terminal only through **Change something** (plan 0010 D6). */
+export const DEPLOY_QUESTION = "The deploy lane's environments, comma-separated, in deploy order, the last being production; or none for no deploy lane";
 
 /** How to ask for a review (plan 0007 §3), said in the summary when the review lane is chosen. */
 export const REVIEW_HOW = 'To get a review, add the label `review:please` to the pull request; the Reviewer posts its verdict once CI has finished. After a verdict, push a new commit, or remove and add the label again, to ask for another look.';
@@ -1099,12 +1115,13 @@ const RELEASER_QUESTION = 'Create the optional Releaser App, so the release PR r
  * commit, whether the repository is private, whether a feature's conditional lane's condition
  * holds here, the release init runs from, the repository's secret names (null when the token
  * can't list them), the Claude credential each installed model lane's caller maps, and the jobs
- * that hold `id-token: write` that nothing accepts yet, with the default branch they run on.
+ * that hold `id-token: write` that nothing accepts yet, with the default branch they run on, and
+ * the deploy environments the adoption record declares.
  * @typedef {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements,
  *   installed?: string[], releases?: boolean, reusable?: (identities: string[]) => Array<{ app: string, slug: string, from?: string }>,
  *   codeowners?: string[] | null, database?: string | null, runsDco?: boolean, hasCommits?: boolean, isPrivate?: boolean,
  *   met?: (lane: string) => boolean, release?: string, secrets?: Set<string> | null,
- *   claudeMapped?: ClaudeAuth[], holders?: Array<{ workflow: string, job: string }>, defaultBranch?: string }} AskContext
+ *   claudeMapped?: ClaudeAuth[], holders?: Array<{ workflow: string, job: string }>, defaultBranch?: string, declaredEnvironments?: string[] }} AskContext
  */
 
 /**
@@ -1331,11 +1348,16 @@ export const askAll = async (deps, opts, ctx) => {
   // THE ID-TOKEN HOLDERS ACCEPTED (#631): only the person's own, each with its reason; none by default.
   const acceptedHolders = g.acceptHolders ?? [];
   why.acceptedIdTokenHolders = g.acceptHolders ? flag : { source: 'default', reason: 'only the person accepts one' };
+  // THE DEPLOY ENVIRONMENTS (plan 0010 D6, open-question decision 2): the adopt skill asks them;
+  // at the terminal they are the record's list unless the flag or **Change something** gives one.
+  const declared = ctx.declaredEnvironments ?? [];
+  const deployEnvironments = g.deployEnvironments ?? declared;
+  why.deployEnvironments = g.deployEnvironments ? flag : declared.length ? { source: 'inferred', reason: `from the adoption record's ${DEPLOY_HEADING}` } : { source: 'default', reason: 'none declared' };
 
   /** @type {Answers} */
   const a = {
     feature: 'custom', owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser,
-    reuseApps: g.reuseApps ?? null, plugin, ...sharing, reviewTrigger: null, sensitiveData, consent: null, claudeAuth, acceptedHolders, why, notes: [],
+    reuseApps: g.reuseApps ?? null, plugin, ...sharing, reviewTrigger: null, sensitiveData, consent: null, claudeAuth, acceptedHolders, deployEnvironments, why, notes: [],
   };
   return derive(a, ctx, g);
 };
@@ -1409,6 +1431,16 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
     a.claudeAuth = await choose(deps, CLAUDE_AUTH_QUESTION, CLAUDE_AUTH_OPTIONS, a.claudeAuth, a.claudeAuth);
     asked('claudeAuth');
   }
+  if (picked.has(7)) {
+    const answer = await deps.ask(DEPLOY_QUESTION, a.deployEnvironments.join(',') || DEPLOY_NONE);
+    try {
+      a.deployEnvironments = parseDeployEnvironments(answer);
+      asked('deployEnvironments');
+    } catch (e) {
+      // An answer it can't read keeps the list as it was, and says why.
+      a.notes.push(`${/** @type {Error} */ (e).message.replace(/^--deploy-environments/, 'The deploy environments')}; kept ${a.deployEnvironments.join(', ') || DEPLOY_NONE}.`);
+    }
+  }
   return derive(a, ctx, g);
 };
 
@@ -1480,7 +1512,7 @@ export const telemetryRegisters = (published) => (published ? "registers on the 
  *   database: 'none' | 'hook', delegation: { name: string, email: string } | null, deleteDefaults: boolean, releaser: boolean,
  *   reuseApps: boolean | null, plugin: boolean, telemetry: boolean, upstreamFindings: import('../scripts/lib/upstream-findings.mjs').Value,
  *   upstreamEvidence: boolean | null, reviewTrigger: 'labelled' | null, sensitiveData: boolean | null, consent: Consent | null,
- *   claudeAuth: ClaudeAuth, acceptedHolders: AcceptedHolder[], why: Record<string, Why>, notes: string[] }} Answers
+ *   claudeAuth: ClaudeAuth, acceptedHolders: AcceptedHolder[], deployEnvironments: string[], why: Record<string, Why>, notes: string[] }} Answers
  */
 
 /** @param {string} who */
@@ -1521,7 +1553,9 @@ export const adoptionFile = (s, a, repo, today) => {
         ? "- **Merge queue:** not known: the token can't read the organisation's plan. Without one, \"require branches to be up to date\" stays off (`K-MERGE-7`)."
         : '- **Merge queue:** not on this plan, so "require branches to be up to date" stays off and the release commit\'s full CI run catches a stale base (`K-MERGE-7`).',
   );
-  lines.push('- **Environments:** no Kanon lane needs one.', '', '## Bootstrap', '', `\`in bootstrap since ${today}\``, '');
+  // A prose bullet, not the declaration: `## Deploy` holds that (plan 0010 §4).
+  const deploying = (a.deployEnvironments ?? []).length > 0;
+  lines.push(`- **Environments:** ${deploying ? `the deploy lane deploys to the ones ${DEPLOY_HEADING} declares, each a GitHub environment.` : 'no Kanon lane needs one.'}`, '', '## Bootstrap', '', `\`in bootstrap since ${today}\``, '');
   const choices = [];
   // The feature and the review trigger (plan 0007 §6, K-LAYOUT-10): without the bullets the record
   // means `custom` and `labelled`, so `custom` writes none, and a trigger is written only beside
@@ -1543,6 +1577,8 @@ export const adoptionFile = (s, a, repo, today) => {
     `- **Private or sensitive material:** \`${data}\``,
     '',
   );
+  // The deploy lane's list, after `## Data` (plan 0010 §4, open-question decision 1).
+  if (deploying) lines.push(...deploySection(a.deployEnvironments));
   return lines.join('\n');
 };
 
@@ -1657,6 +1693,228 @@ export const callerPaths = (lanes, read, waived) => {
   return out;
 };
 
+// THE DEPLOY LANE (plan 0010 §4, step D6). It is not one of the features: a repository that
+// declares no environment has no deploy lane, and `init` writes nothing for it. The declared list
+// is `--deploy-environments`, else the adoption record's `## Deploy` list; from it `init` writes
+// the record's section (only into a record it writes), the caller, and the three hooks' stubs.
+
+/**
+ * The release's `deploy` entry (plan 0010 D4): the two workflows, their grants and the hooks.
+ * @typedef {{ workflows: { release: string, environment: string }, grants: Record<string, Record<string, string>>, hooks: Array<{ path: string, inputs: string[] }> }} DeployRequirements
+ */
+
+/** The release's deploy entry, or null for a release without the lane. @param {Requirements} req @returns {DeployRequirements | null} */
+export const deployOf = (req) => /** @type {{ deploy?: DeployRequirements }} */ (req).deploy ?? null;
+
+/** Where `init` writes the deploy lane's caller, the file name a reference deploy names. */
+export const DEPLOY_CALLER_PATH = '.github/workflows/deploy.yml';
+
+/** `--deploy-environments`' answer for no deploy lane. */
+export const DEPLOY_NONE = 'none';
+
+/** An environment name `init` writes: one the declaration's code span and the caller's YAML both hold as written. */
+const ENVIRONMENT_NAME = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * `--deploy-environments`' value: the environments, comma-separated, in deploy order, or `none`.
+ * Throws naming the problem: an empty name, a name with a character other than letters, digits,
+ * `.`, `_` and `-`, or one named twice.
+ * @param {string} v @returns {string[]}
+ */
+export const parseDeployEnvironments = (v) => {
+  if (v.trim().toLowerCase() === DEPLOY_NONE) return [];
+  const names = v.split(',').map((x) => x.trim());
+  for (const n of names) {
+    if (!n) throw new Error(`--deploy-environments takes the environments, comma-separated, in deploy order, such as preview,production, or none, not "${v}"`);
+    if (!ENVIRONMENT_NAME.test(n)) throw new Error(`--deploy-environments: "${n}" isn't an environment name init writes: use letters, digits, ".", "_" and "-"`);
+  }
+  const twice = names.find((n, i) => names.indexOf(n) !== i);
+  if (twice) throw new Error(`--deploy-environments names "${twice}" twice: each environment is one link of the chain`);
+  return names;
+};
+
+/** A YAML scalar for an environment name: plain, unless YAML would read it as something other than that string. @param {string} n */
+const envScalar = (n) => (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(n) && !/^(true|false|yes|no|on|off|y|n|null)$/i.test(n) ? n : `'${n}'`);
+
+/**
+ * The deploy lane's caller (plan 0010 §4), from the declared list: one `release` job calling
+ * `deploy-release.yml` with the list, then one `deploy-<position>` job per environment, in order,
+ * calling `deploy.yml` with its environment, its position and the release job's `build` output,
+ * each needing `release` and the one before it. Each job grants its workflow's permissions, as
+ * the release's requirements list them, and none maps a secret: the lane's one secret is an
+ * environment secret, which resolves only in the called job that sets `environment:`.
+ * @param {string[]} environments @param {Requirements} req @param {string} release
+ */
+export const deployCallerFile = (environments, req, release) => {
+  const d = deployOf(req);
+  if (!d) throw new Error("this release's requirements have no deploy entry, so it ships no deploy lane");
+  const grants = (/** @type {string} */ wf) => ['    permissions:', ...Object.entries(d.grants[wf] ?? {}).map(([k, v]) => `      ${k}: ${v}`)];
+  const out = [
+    "# The caller of Kanon's deploy lane, written by `kanon init` from the `## Deploy` section of",
+    '# docs/qa/adoption.md (docs/lanes.md, "The deploy lane"): one job per environment, in that',
+    '# order, the last being production. When you change the list, run `kanon init` again: it',
+    "# rewrites this file. To deploy a release again, dispatch this workflow at the release's tag:",
+    '#   gh workflow run deploy.yml --ref <tag> -f release=<tag>',
+    'name: Deploy',
+    '',
+    'on:',
+    '  release:',
+    '    types: [published]',
+    '  workflow_dispatch:',
+    '    inputs:',
+    '      release:',
+    `        description: ${JSON.stringify("An existing release's tag, to deploy again. Dispatch at that tag: --ref <tag>.")}`,
+    '        required: true',
+    '        type: string',
+    '',
+    'jobs:',
+    '  release:',
+    `    uses: yedeya-labs/kanon/.github/workflows/${d.workflows.release}.yml@${release}`,
+    ...grants(d.workflows.release),
+    '    with:',
+    `      environments: '${environments.join(' ')}'`,
+  ];
+  environments.forEach((e, i) => {
+    const n = i + 1;
+    out.push(
+      `  deploy-${n}:`,
+      `    name: ${envScalar(e)}`,
+      `    needs: ${n === 1 ? 'release' : `[release, deploy-${n - 1}]`}`,
+      `    uses: yedeya-labs/kanon/.github/workflows/${d.workflows.environment}.yml@${release}`,
+      ...grants(d.workflows.environment),
+      '    with:',
+      `      environment: ${envScalar(e)}`,
+      `      position: ${n}`,
+      '      build: ${{ needs.release.outputs.build }}',
+    );
+  });
+  return `${out.join('\n')}\n`;
+};
+
+/**
+ * Whether the caller's path holds a deploy workflow of the project's own, one that calls no
+ * deploy lane (#956): `init` can't write the caller there, so it writes nothing for the lane, no
+ * `## Deploy` reference naming a job nobody writes and no stub, and says why (`deploy.caller-taken`).
+ * @param {(rel: string) => string | null} read @param {Requirements} req
+ */
+export const deployPathTaken = (read, req) => {
+  const have = read(DEPLOY_CALLER_PATH);
+  return have !== null && !callsDeployLane(have, req);
+};
+
+/**
+ * The first environment name of a list `init` wouldn't write (#956): the record's spans accept
+ * any text, and a name with a space or a quote breaks the caller or the gate's list.
+ * @param {string[]} names @returns {string | undefined}
+ */
+export const unwritableEnvironment = (names) => names.find((n) => !ENVIRONMENT_NAME.test(n));
+
+/**
+ * The 1-based line of the `Environments` bullet the declaration parser read the list from (#956):
+ * the one inside `## Deploy`, in either bullet form the parser takes (`- ` or `* `), never
+ * `## Plan`'s prose bullet of the same label, outside fenced blocks; 0 when there is none.
+ * @param {string} text the adoption record
+ */
+export const deployListLine = (text) => {
+  const lines = text.split('\n');
+  const bullet = new RegExp(`^[-*] \\*\\*${CHAIN_LABELS.environments}:\\*\\*`);
+  let fence = false;
+  let inDeploy = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const l = /** @type {string} */ (lines[i]);
+    if (/^\s*(```|~~~)/.test(l)) fence = !fence;
+    if (fence) continue;
+    if (/^#{1,2} /.test(l)) inDeploy = l.trimEnd() === DEPLOY_HEADING;
+    else if (inDeploy && bullet.test(l)) return i + 1;
+  }
+  return 0;
+};
+
+/** Whether a workflow's text is a caller of the deploy lane, which `init` rewrites from the list. @param {string | null} text @param {Requirements} req */
+export const callsDeployLane = (text, req) => {
+  const d = deployOf(req);
+  return Boolean(d && text?.includes(`uses: yedeya-labs/kanon/.github/workflows/${d.workflows.release}.yml@`));
+};
+
+/** What each deploy hook does, for its stub's description (plan 0010 §7). @type {Record<string, string>} */
+const DEPLOY_HOOK_DOES = {
+  '.github/actions/build/action.yml': 'Builds what every environment deploys, from the checked-out commit, into the output directory. It runs with no credential and no secret.',
+  '.github/actions/deploy/action.yml': "Obtains the environment's cloud credential and deploys the artifact directory; with probe 'true', only tries to obtain each listed environment's credential and writes refused, obtained or unconfigured for each to $RUNNER_TEMP/kanon-deploy-probe.json.",
+  '.github/actions/smoke/action.yml': 'Checks the deployed system answers as the release expects.',
+};
+
+/** The deploy hooks' paths, from the release's requirements. @param {Requirements} req */
+export const deployHookPaths = (req) => (deployOf(req)?.hooks ?? []).map((h) => h.path);
+
+/**
+ * A deploy hook's stub (plan 0010 §7): it declares the inputs the lane passes, and its one step
+ * fails by name, so a lane run before the hook is filled stops there, saying which file to fill.
+ * `init` writes it only where no file is, and never overwrites one.
+ * @param {{ path: string, inputs: string[] }} hook
+ */
+export const deployHookStub = (hook) => {
+  const what = hook.path.split('/')[2] ?? 'deploy';
+  return [
+    `# The deploy lane's ${what} hook (docs/lanes.md, "The deploy lane"). \`kanon init\` wrote this stub,`,
+    '# which fails until you replace its step with your own; it never overwrites this file.',
+    `name: Deploy lane ${what} hook`,
+    `description: ${JSON.stringify(DEPLOY_HOOK_DOES[hook.path] ?? "Called by Kanon's deploy lane.")}`,
+    'inputs:',
+    ...hook.inputs.flatMap((k) => [`  ${k}:`, "    description: Passed by Kanon's deploy lane (docs/lanes.md).", '    default: ""']),
+    'runs:',
+    '  using: composite',
+    '  steps:',
+    '    - shell: bash',
+    '      run: |',
+    `        echo "::error file=${hook.path}::${hook.path} is the stub kanon init wrote: replace its step with your ${what} (docs/lanes.md, The deploy lane)."`,
+    '        exit 1',
+    '',
+  ].join('\n');
+};
+
+/** The section's bullets `init` writes: the list and the reference deploy. @param {string[]} environments at least one */
+export const deployBullets = (environments) => [
+  `- **${CHAIN_LABELS.environments}:** ${environments.map((e) => `\`${e}\``).join(', ')}`,
+  `- **${REFERENCE_LABELS.environment}:** \`${environments[0]}\``,
+  `- **${REFERENCE_LABELS.workflow}:** \`${DEPLOY_CALLER_PATH.split('/').pop()}\``,
+  `- **${REFERENCE_LABELS.job}:** \`${environments[0]} / deploy\``,
+];
+
+/**
+ * The adoption record's `## Deploy` section for a declared list (plan 0010 §4, open-question
+ * decisions 1 and 6): the list, and the reference deploy at its first environment, the caller's
+ * job for it as a run lists it.
+ * @param {string[]} environments at least one
+ */
+export const deploySection = (environments) => [
+  DEPLOY_HEADING,
+  '',
+  "The deploy lane's environments, in deploy order: each deploys only after the one before it succeeded on the same release, and the last is production. `kanon init` writes the deploy caller from this list; the reference deploy is the first environment's (`K-PROJ-11`).",
+  '',
+  ...deployBullets(environments),
+  '',
+];
+
+/**
+ * The jobs of the checkout's workflows that reference an environment (plan 0010 D6): what the
+ * adopt skill recommends the deploy environments from. `environment` as written, an expression
+ * included.
+ * @param {Map<string, Record<string, any>>} workflows
+ * @returns {Array<{ workflow: string, job: string, environment: string }>}
+ */
+export const environmentJobs = (workflows) => {
+  /** @type {Array<{ workflow: string, job: string, environment: string }>} */
+  const out = [];
+  for (const [workflow, wf] of workflows) {
+    for (const [job, j] of Object.entries(isMap(wf.jobs) ? wf.jobs : {})) {
+      if (!isMap(j)) continue;
+      const env = isMap(j.environment) ? j.environment.name : j.environment;
+      if (typeof env === 'string' && env.trim()) out.push({ workflow, job, environment: env.trim() });
+    }
+  }
+  return out;
+};
+
 /**
  * Every file `init` would write, by path relative to the checkout. A file it leaves to its
  * default is not here.
@@ -1668,7 +1926,9 @@ export const callerPaths = (lanes, read, waived) => {
 export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows, callers = new Map() }) => {
   /** @type {Map<string, string>} */
   const files = new Map();
-  files.set('docs/qa/adoption.md', adoptionFile(s, a, repo, today));
+  // With the caller's path taken by the project's own workflow, nothing of the lane is written (#956).
+  const taken = a.deployEnvironments.length > 0 && deployPathTaken(read, req);
+  files.set('docs/qa/adoption.md', adoptionFile(s, taken ? { ...a, deployEnvironments: [] } : a, repo, today));
   files.set('docs/qa/stack.md', stackFile(a.gates));
   if (a.delegation) files.set('docs/qa/sign-off-delegation.md', delegationFile(a.delegation, today));
   if (a.database === 'hook') files.set('docs/qa/test-database.md', TEST_DATABASE_HOOK);
@@ -1697,6 +1957,12 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   if (a.plugin && (settings === null || settings === pluginSettingsFile(release))) files.set(SETTINGS_PATH, pluginSettingsFile(release));
   // The telemetry collector's caller, only on an explicit yes (#428).
   if (a.telemetry === true) files.set(TELEMETRY_CALLER_PATH, telemetryCallerFile(release));
+  // The deploy lane's caller and its hooks' stubs, only for a declared list (plan 0010 D6).
+  const deploy = deployOf(req);
+  if (deploy && a.deployEnvironments.length && !taken) {
+    files.set(DEPLOY_CALLER_PATH, deployCallerFile(a.deployEnvironments, req, release));
+    for (const h of deploy.hooks) files.set(h.path, deployHookStub(h));
+  }
   return files;
 };
 
@@ -1745,13 +2011,25 @@ export const testDatabaseSignal = (read, list) => {
 export const runsDco = (read, workflows) => workflows.some((p) => /^\s*-?\s*uses:\s*yedeya-labs\/kanon\/actions\/dco@/m.test(read(p) ?? ''));
 
 /**
- * What `init` does with a file it plans: `same`, already as it writes it; `kept`, a declaration
- * or the project-setup hook that exists, the project's; `differs`, a workflow that exists and
- * differs; or `new`.
- * @param {string} rel @param {string} text @param {string | null} have @param {Requirements} req
- * @returns {'same' | 'kept' | 'differs' | 'new'}
+ * Whether a file `init` plans is the project's once it exists, never rewritten: a declaration,
+ * the project-setup hook, or a deploy hook (plan 0010 D6).
+ * @param {string} rel @param {Requirements} req
  */
-export const fileStatus = (rel, text, have, req) => (have === text ? 'same' : have !== null && (rel.startsWith('docs/') || rel === req.hook.path) ? 'kept' : have !== null ? 'differs' : 'new');
+export const projectsOwn = (rel, req) => rel.startsWith('docs/') || rel === req.hook.path || deployHookPaths(req).includes(rel);
+
+/**
+ * What `init` does with a file it plans: `same`, already as it writes it; `kept`, a declaration
+ * or a hook that exists, the project's; `rewritten`, the deploy lane's caller, which follows the
+ * declared list (plan 0010 D6); `differs`, any other workflow that exists and differs; or `new`.
+ * @param {string} rel @param {string} text @param {string | null} have @param {Requirements} req
+ * @returns {'same' | 'kept' | 'rewritten' | 'differs' | 'new'}
+ */
+export const fileStatus = (rel, text, have, req) =>
+  have === text ? 'same'
+  : have !== null && projectsOwn(rel, req) ? 'kept'
+  : have !== null && rel === DEPLOY_CALLER_PATH && callsDeployLane(have, req) ? 'rewritten'
+  : have !== null ? 'differs'
+  : 'new';
 
 /**
  * Every secret the chosen lanes' callers map, each once: a model lane's Claude pair as the one
@@ -1818,6 +2096,12 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
   });
   line('Apps', ['reuseApps'], apps.length ? apps.join('; ') : 'none: the lanes run as no App', why('reuseApps'));
   line('Releases', ['releaser'], a.releaser ? 'on: the Releaser App opens the release PRs' : 'off', why('releaser'));
+  // The deploy lane (plan 0010 D6): not a feature, and nothing at all without a declared list.
+  line('Deploy', ['deployEnvironments'], !a.deployEnvironments.length
+    ? 'none: no deploy lane'
+    : deployPathTaken(read, req)
+      ? `${a.deployEnvironments.join(' then ')}: nothing written, ${DEPLOY_CALLER_PATH} is a deploy workflow of your own`
+      : `${a.deployEnvironments.join(' then ')} (${a.deployEnvironments.at(-1)} is production): the deploy caller and three hook stubs`, why('deployEnvironments'));
   const people = a.owner === a.maintainer && a.owner === a.stakeholder ? `Owner, Maintainer, Stakeholder: ${a.owner}` : `Owner ${a.owner}; Maintainer ${a.maintainer}; Stakeholder ${a.stakeholder}`;
   line('People', ['projectOwner', 'maintainer', 'stakeholder'], people, why('projectOwner'));
   line('Gates', ['gates'], a.gates.length ? a.gates.join('; ') : 'none yet', why('gates'));
@@ -1839,14 +2123,15 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
   const dep = read('.github/dependabot.yml');
   line('Dependabot', [], dep === null ? 'write .github/dependabot.yml with the Kanon entry' : /yedeya-labs\/kanon\*/.test(dep) ? 'has the Kanon entry' : 'add the Kanon entry', byDefault());
   /** @type {Record<string, number>} */
-  const count = { new: 0, kept: 0, same: 0, differs: 0 };
+  const count = { new: 0, kept: 0, same: 0, differs: 0, rewritten: 0 };
   for (const [rel, text] of files) count[fileStatus(rel, text, read(rel), req)] = (count[fileStatus(rel, text, read(rel), req)] ?? 0) + 1;
-  line('Files', [], `${count.new} new, ${count.kept} kept, ${count.same} already as written, ${count.differs} differ`, inferred('from the checkout'));
+  line('Files', [], `${count.new} new, ${count.kept} kept, ${count.same} already as written, ${count.differs} differ${count.rewritten ? `, ${count.rewritten} rewritten` : ''}`, inferred('from the checkout'));
   const steps = [
     ...apps.filter((x) => / create$/.test(x)).map((x) => `create the ${x.split(':')[0]} App`),
     ...apps.filter((x) => /: reuse /.test(x)).map((x) => `1 key for the ${x.split(':')[0]}`),
     ...mappedSecrets(a, req).filter((n) => n === CLAUDE_SECRETS.subscription || n === CLAUDE_SECRETS['api-key'] || n === 'DIGEST_WEBHOOK').filter((n) => !s.secrets?.has(n))
       .map((n) => (n === 'DIGEST_WEBHOOK' ? 'the chat webhook' : n === CLAUDE_SECRETS['api-key'] ? 'the Claude API key' : 'the Claude token')),
+    ...(a.deployEnvironments.length && deployOf(req) && !deployPathTaken(read, req) ? ['fill the deploy hooks', `${a.deployEnvironments.length} GitHub environment(s)`] : []),
     'merge the PR',
     ...(a.lanes.includes(REVIEW_LANE) ? ['1 test PR'] : []),
   ];
@@ -1886,7 +2171,7 @@ export const SCHEMA = 'kanon-init/v1';
  *   catalogue: ReturnType<typeof laneCatalogue>,
  *   features: ReturnType<typeof featureCatalogue>,
  *   summary: SummaryLine[],
- *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'differs', content: string | null, diff: string[] }>,
+ *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'rewritten' | 'differs', content: string | null, diff: string[] }>,
  *   changes: Array<{ kind: string, subject: string, message: string }>,
  *   apps: { identities: string[], missing: string[], reuse: Array<{ app: string, slug: string }>, command: string | null, outcome: string, exitCode: number | null } | null,
  *   findings: Finding[],
@@ -2038,6 +2323,26 @@ const run = async (deps, opts, req, rep) => {
   const root = where.root;
   const read = (/** @type {string} */ rel) => deps.readFile(join(root, rel));
   const releases = callsRelease(read('.github/workflows/release.yml'));
+  // THE DEPLOY DECLARATION (plan 0010 D6), read through its one parser before anything else: a
+  // record whose `## Deploy` doesn't parse is the project's to fix, and a caller written beside it
+  // would follow a list nobody can read.
+  /** @type {ReturnType<typeof parseDeployDeclaration>} */
+  let declaration;
+  try {
+    declaration = parseDeployDeclaration(read(DEPLOY_RECORD) ?? '');
+  } catch (e) {
+    if (!(e instanceof DeclarationError)) throw e;
+    return stop(1, [`${e.message}. Fix the record's ${DEPLOY_HEADING} section first (docs/lanes.md, "The deploy lane"). Nothing was changed.`]);
+  }
+  const declaredEnvironments = declaration.environments;
+  const odd = unwritableEnvironment(declaredEnvironments);
+  if (odd !== undefined) {
+    const line = deployListLine(read(DEPLOY_RECORD) ?? '');
+    return stop(1, [`${DEPLOY_RECORD}:${line} declares the environment \`${odd}\`, which init can't write into the deploy caller: use letters, digits, ".", "_" and "-". Nothing was changed.`]);
+  }
+  if (opts.given.deployEnvironments?.length && !deployOf(req)) {
+    return stop(2, ["--deploy-environments needs a release of Kanon that ships the deploy lane, and this one's requirements have no deploy entry. Nothing was changed."]);
+  }
   if (opts.given.releaser && !releases) {
     return stop(2, [`${opts.releaserFlag ?? '--releaser'} is for a repository that calls Kanon's release workflow from .github/workflows/release.yml (docs/release.md), and this one doesn't. Nothing was changed.`]);
   }
@@ -2081,6 +2386,7 @@ const run = async (deps, opts, req, rep) => {
     installedLanes: installed,
     callsRelease: releases,
     codeowners: codeownersOf(read),
+    environments: s.environments,
   };
   rep.catalogue = laneCatalogue(req, installed);
   // A feature's conditional lane is in when its condition holds here (plan 0007 §2.3): the hook it
@@ -2093,7 +2399,7 @@ const run = async (deps, opts, req, rep) => {
   out('');
   out(`== ${repo}, at Kanon ${release}${dry ? ' (dry run: nothing will change)' : ''} ==`);
   out(`- ${s.kind === 'User' ? 'A personal account' : 'An organisation'}'s ${s.isPrivate ? 'private' : 'public'} repository; default branch ${s.defaultBranch}${s.hasCommits ? '' : ', with no commit yet'}.`);
-  out(`- Rulesets: ${s.rulesets}. Merge queue: ${s.mergeQueue}. Environments: not needed by any lane.`);
+  out(`- Rulesets: ${s.rulesets}. Merge queue: ${s.mergeQueue}. Environments: ${s.environments === null ? "not readable with this token" : s.environments.length ? s.environments.join(', ') : 'none'} (only the deploy lane uses them).`);
   out(`- Your token ${s.admin ? 'can' : "can't"} administer the repository.`);
   out(`- ${s.labels.size} label(s); ${s.covering.length} ruleset(s) on the default branch; secrets ${s.secrets ? `readable (${s.secrets.size})` : 'not readable with this token'}.`);
 
@@ -2133,11 +2439,21 @@ const run = async (deps, opts, req, rep) => {
   rep.inspection.appsNotLookedFor = unlisted === null ? [] : lacking.filter((i) => !(ownerApps ?? []).some((f) => f.app === i));
   out('');
   const workflows = checkoutWorkflows(deps, root);
+  rep.inspection.deployWorkflows = environmentJobs(workflows);
   // THE ID-TOKEN HOLDERS (#631), counted with doctor's own check, so that what doctor would block
   // on after the pull request is named here, before the consent question. A caller of a Kanon lane
   // pinned at any exact release is Kanon's here: doctor holds it to the release the callers pin,
   // and the person has nothing to decide about it.
-  const holders = idTokenHolders({ workflows, accepted: readHolderAcceptances(read(ADOPTION_RECORD)).accepted, pinned: (ref) => EXACT_RELEASE.test(ref), req });
+  // A job of the deploy lane's caller at an exact release holds the grant the lane's probe and
+  // deploy jobs need, as a store-coupled lane's caller does (plan 0010 §12): Kanon's, not the
+  // person's to decide.
+  const deployLane = deployOf(req);
+  const deployWorkflowFiles = deployLane ? [deployLane.workflows.release, deployLane.workflows.environment] : [];
+  const holders = idTokenHolders({ workflows, accepted: readHolderAcceptances(read(ADOPTION_RECORD)).accepted, pinned: (ref) => EXACT_RELEASE.test(ref), req }).map((h) => {
+    const m = /^yedeya-labs\/kanon\/\.github\/workflows\/([\w.-]+)\.yml@(.+)$/.exec(h.calls ?? '');
+    const kanons = m !== null && deployWorkflowFiles.includes(m[1] ?? '') && EXACT_RELEASE.test(m[2] ?? '');
+    return h.status === 'unaccepted' && kanons ? { ...h, status: /** @type {typeof h.status} */ ('kanon-lane'), reason: null } : h;
+  });
   rep.inspection.idTokenHolders = holders;
   for (const h of opts.given.acceptHolders ?? []) {
     if (!holders.some((x) => x.workflow === `.github/workflows/${h.workflow}` && x.job === h.job)) {
@@ -2166,6 +2482,7 @@ const run = async (deps, opts, req, rep) => {
     claudeMapped: callersClaudeAuth(installed, req, workflows, callers),
     holders: holders.filter((h) => h.status === 'unaccepted' && !given(h)),
     defaultBranch: s.defaultBranch,
+    declaredEnvironments,
   };
   const a = await askAll(deps, opts, ctx);
   // THE SUMMARY (plan 0007 §4): every value, and where it came from, before anything is written.
@@ -2220,6 +2537,7 @@ const run = async (deps, opts, req, rep) => {
     consent: a.consent,
     claudeAuth: a.claudeAuth,
     acceptedIdTokenHolders: a.acceptedHolders,
+    deployEnvironments: a.deployEnvironments,
   };
   // The catalogue and the features name the credential the callers map (plan 0009 §9).
   rep.catalogue = laneCatalogue(req, installed, a.claudeAuth);
@@ -2267,11 +2585,23 @@ const run = async (deps, opts, req, rep) => {
       rep.files.push({ path: rel, status: 'same', content: text, diff: [] });
       continue;
     }
-    if (have !== null && (rel.startsWith('docs/') || rel === req.hook.path)) {
-      // A declaration, or the project-setup hook, is the project's once it exists: init never
-      // rewrites one, and its content is the project's to say, so no difference is printed.
+    if (have !== null && projectsOwn(rel, req)) {
+      // A declaration, or a hook, is the project's once it exists: init never rewrites one, and
+      // its content is the project's to say, so no difference is printed.
       out(`${rel}: exists, and is the project's; left unchanged.`);
       rep.files.push({ path: rel, status: 'kept', content: null, diff: [] });
+      continue;
+    }
+    if (have !== null && fileStatus(rel, text, have, req) === 'rewritten') {
+      // The deploy lane's caller follows the declared list (plan 0010 D6): init rewrites the one
+      // it wrote, and leaves a deploy workflow of the project's own, which calls no lane, alone.
+      const diff = lineDiff(have, text).filter((l) => !l.startsWith('  '));
+      if (!dry) deps.writeFile(join(root, rel), text);
+      wrote = true;
+      change('file', rel, `${dry ? 'Would rewrite' : 'Rewrote'} ${rel} from the declared deploy environments`);
+      rep.files.push({ path: rel, status: 'rewritten', content: text, diff });
+      out(`${rel}: ${dry ? 'would rewrite it' : 'rewrote it'} from the declared deploy environments. The difference:`);
+      for (const l of diff) out(`    ${l}`);
       continue;
     }
     if (have !== null) {
@@ -2302,6 +2632,34 @@ const run = async (deps, opts, req, rep) => {
   for (const h of /** @type {typeof holders} */ (rep.inspection.idTokenHolders).filter((x) => x.status === 'unaccepted')) {
     const u = unacceptedHolder(h, s.defaultBranch, given(h)?.reason);
     step({ id: 'id-token.unaccepted', category: 'id-token', subject: u.subject, prose: `${u.message} ${u.fix.text}`, message: u.message, text: u.fix.text, commands: u.fix.commands });
+  }
+  // THE DEPLOY LANE (plan 0010 D6). A record the project already has is the project's, so a list
+  // that differs from the one it declares is a step: the bullets to write, beside the caller init
+  // wrote from the answer, so the two land in one pull request and the gate's check 3 holds.
+  const listed = (/** @type {string[]} */ l) => l.join(', ') || 'none';
+  const pathTaken = a.deployEnvironments.length > 0 && deployPathTaken(read, req);
+  if (pathTaken) {
+    const message = `${DEPLOY_CALLER_PATH} is a deploy workflow of your own, which calls no Kanon deploy lane, so init wrote nothing for the deploy lane: no caller, no hook and no ${DEPLOY_HEADING} section. The deploy environments ${listed(a.deployEnvironments)} are not installed.`;
+    const text = `Move your workflow to another file name with git mv, and update any reference deploy bullet that names it, then run kanon init again with the same flags: it writes the caller at ${DEPLOY_CALLER_PATH}, the file name its reference deploy names. Or keep your workflow, and answer none.`;
+    step({ id: 'deploy.caller-taken', category: 'deploy', subject: DEPLOY_CALLER_PATH, prose: `${message} ${text}`, message, text, commands: [] });
+  }
+  if (!pathTaken && record === 'kept' && listed(declaredEnvironments) !== listed(a.deployEnvironments)) {
+    const message = `${DEPLOY_RECORD} is the project's, and its ${DEPLOY_HEADING} section declares ${declaredEnvironments.length ? `the deploy environments ${listed(declaredEnvironments)}` : 'no deploy environment'}, not ${listed(a.deployEnvironments)}.`;
+    const text = a.deployEnvironments.length
+      ? `Write these bullets in the ${DEPLOY_HEADING} section of ${DEPLOY_RECORD} (after ## Data, where the record has no such section), in place of any environment list and reference deploy bullets it has, keeping its CI wait and fallback bullets.`
+      : `Remove the environment list from the ${DEPLOY_HEADING} section of ${DEPLOY_RECORD}, and with it the reference deploy bullets that name ${DEPLOY_CALLER_PATH.split('/').pop()}; then delete ${DEPLOY_CALLER_PATH} and the deploy hooks, unless you keep them for later.`;
+    step({ id: 'deploy.declare', category: 'deploy', subject: DEPLOY_RECORD, prose: `${message} ${text}`, message, text, commands: a.deployEnvironments.length ? deployBullets(a.deployEnvironments) : [] });
+  }
+  // A hook still as init's stub fails the lane by name: filling it is the person's.
+  const stubs = deployHookPaths(req).filter((p) => files.has(p) && ['new', 'same'].includes(rep.files.find((f) => f.path === p)?.status ?? ''));
+  if (a.deployEnvironments.length && stubs.length) {
+    const message = `${stubs.join(', ')} ${stubs.length > 1 ? 'are' : 'is'} the stub init wrote, which fails the deploy lane by name until filled.`;
+    const text = 'Replace each stub\'s step with your own build, deploy command and smoke check, keeping the inputs it declares (docs/lanes.md, "The deploy lane"), before the first release the lane deploys.';
+    step({ id: 'deploy.hooks', category: 'deploy', subject: stubs.join(', '), prose: `${message} ${text}`, message, text, commands: [], lines: [] });
+  }
+  // A caller of the deploy lane with no list is no lane: init writes none, and leaves this one.
+  if (!a.deployEnvironments.length && callsDeployLane(read(DEPLOY_CALLER_PATH), req)) {
+    note(`${DEPLOY_CALLER_PATH} calls the deploy lane, and no deploy environment is declared, so init left it alone: delete it, or declare the environments with --deploy-environments.`);
   }
   const dep = read('.github/dependabot.yml');
   if (dep && !/yedeya-labs\/kanon\*/.test(dep)) {
