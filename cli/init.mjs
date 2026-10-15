@@ -181,7 +181,7 @@ The other values, each inferred or defaulted, as the summary shows:
   --plugin               declare the kanon plugin in .claude/settings.json, pinned to this
                          release, for everyone who uses Claude Code here (the default)
   --no-plugin            don't
-  --telemetry            send this repository's agent-run and work-item rows to Kanon's
+  --telemetry            send this repository's telemetry rows to Kanon's
                          hosted telemetry store: writes the collector's caller
                          (docs/telemetry.md)
   --no-telemetry         don't (the default)

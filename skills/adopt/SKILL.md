@@ -221,7 +221,7 @@ One question sets telemetry, where upstream findings go and their evidence (`doc
 - **Options:** **Yes** (`--consent yes`): run data, and scrubbed bug evidence read by Kanon's maintainer and a third-party decision provider; telemetry on, findings `sent with evidence`. **Codes only** (`--consent codes`): run data, and Kanon bugs as codes with no text. **No** (`--consent no`): nothing leaves this repo; Kanon bugs stay drafts here.
 - **The three questions below** are asked only when the person wants what no level gives, such as **Filed here**; then pass their own flags, never beside `--consent`, which `init` refuses.
 
-### `.answers.telemetry`: send run rows to Kanon's telemetry store
+### `.answers.telemetry`: send telemetry rows to Kanon's telemetry store
 
 Off unless the person says yes. Say, in the question itself, everything the person needs to decide:
 - **What is sent:** one row per agent run, plan 0002's fixed fields (the lane, the outcome, the model, cost, tokens, durations and counts, the run, pull request and issue numbers, the Kanon release). Also one row per closed pull request, plan 0003's work-item fields (its sizes, times, outcome and the classes of its actors, with pull request and issue numbers). Once they run the deploy lane, one row per environment a release run reaches, whatever its outcome (plan 0010's deploy fields); once a lane hands its notifications to a hook, one row each time its `notify` job runs, whether the message was posted, failed or skipped (plan 0011's notify fields). No code, no text, no titles, no logins, no file paths. `docs/sharing.md` in Kanon's repository and `K-OBS-16` list every field a row may hold.
