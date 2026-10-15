@@ -94,7 +94,7 @@ A model's narrative is Kanon text by intent (it may bold a word), so it goes thr
 
 ## The library
 
-[`scripts/lib/notify-contract.mjs`](../scripts/lib/notify-contract.mjs) is the contract in code. It imports nothing, and it is used four times: by the producers, through `fit`; by the `notify` job before any hook runs, through `validate`; by [Kanon's Slack hook](#kanons-slack-hook), through `parseInline` and `linesOf`, to render Kanon text; and by the tests. [Kanon's generic webhook hook](#kanons-generic-webhook-hook) doesn't import it: it posts the message the `notify` job already validated, byte for byte.
+[`scripts/lib/notify-contract.mjs`](../scripts/lib/notify-contract.mjs) is the contract in code. It imports nothing, and it is used four times: by the producers, through `fit`; by the `notify` job before any hook runs, through `validate`; by [Kanon's Slack hook](#kanons-slack-hook), through `parseInline` and `linesOf`, to render Kanon text; and by the tests. [Kanon's generic webhook hook](#kanons-generic-webhook-hook) doesn't use it (it loads it only indirectly, through `retryAfter` from the Slack hook's `slack.mjs`): it posts the message the `notify` job already validated, byte for byte.
 
 | Export | What |
 |---|---|
