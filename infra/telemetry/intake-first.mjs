@@ -223,16 +223,22 @@ export async function storedKindsAt(ref, { cwd = process.cwd() } = {}) {
   if (batch.status !== 0) throw new Error(`git cat-file ${ref}: ${batch.stderr.toString().trim() || `exit ${batch.status}`}`);
   const dir = mkdtempSync(join(tmpdir(), 'intake-first-'));
   try {
-    // Each answer is `<oid> blob <size>\n<content>\n`; a link that leads nowhere is one line, so
-    // its module is left out, as the zip would leave it out, and an import of it fails.
+    // Each answer is a header line, then, when the header ends in a size, that many bytes and an
+    // LF (kanon#932): `<oid> blob <size>` and its content, `<oid> <type> <size>` for a link to a
+    // directory, and, for a link that leads nowhere, `dangling`, `loop`, `notdir` or `symlink`
+    // `<size>` and the name or target. Only a blob is written; any other module is left out, as
+    // the zip would leave it out, and an import of it fails. A header this doesn't know is a ref
+    // it can't read, never a guess at where the next answer begins.
     let at = 0;
     for (const p of files) {
       const eol = batch.stdout.indexOf(0x0a, at);
-      const header = batch.stdout.subarray(at, eol).toString().split(' ');
+      const line = batch.stdout.subarray(at, eol).toString();
       at = eol + 1;
-      if (header[1] !== 'blob') continue;
-      const size = Number(header[2]);
-      writeFileSync(join(dir, p.slice(FUNCTION_DIR.length + 1)), batch.stdout.subarray(at, at + size));
+      if (/ (missing|ambiguous)$/.test(line)) continue;
+      const m = /^(?:[0-9a-f]+ (\w+)|dangling|loop|notdir|symlink) (\d+)$/.exec(line);
+      if (!m) throw new Error(`git cat-file ${ref}: an answer this can't read for ${p}: ${line}`);
+      const size = Number(m[2]);
+      if (m[1] === 'blob') writeFileSync(join(dir, p.slice(FUNCTION_DIR.length + 1)), batch.stdout.subarray(at, at + size));
       at += size + 1;
     }
     const mod = await import(pathToFileURL(join(dir, 'rows.mjs')).href);
