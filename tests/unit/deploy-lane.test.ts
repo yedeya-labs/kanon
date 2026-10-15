@@ -29,7 +29,7 @@ const RELEASE = 'deploy-release.yml';
 const ENV = 'deploy.yml';
 const LANE = [RELEASE, ENV];
 
-type Step = { id?: string; name?: string; uses?: string; run?: string; if?: string; with?: Record<string, unknown>; env?: Record<string, unknown> };
+type Step = { id?: string; name?: string; uses?: string; run?: string; if?: string; 'continue-on-error'?: boolean | string; with?: Record<string, unknown>; env?: Record<string, unknown> };
 type Job = {
   name?: string; 'timeout-minutes'?: number; needs?: string | string[]; if?: string; uses?: string; environment?: unknown; permissions?: Record<string, string> | string;
   concurrency?: { group?: string; 'cancel-in-progress'?: boolean; queue?: string } | string; steps?: Step[]; secrets?: unknown; with?: Record<string, unknown>; outputs?: Record<string, string>;
@@ -121,6 +121,25 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
     if (Object.keys(check?.env ?? {}).some((k) => /^GITHUB_(TRIGGERING_)?ACTOR$/.test(k))) out.push(`${ENV}:deploy: the deploy job's own check is handed an actor instead of the runner's`);
     const at = (id: string) => (dep.steps ?? []).findIndex((s) => s.id === id);
     if (at('supersede') < 0 || at('supersede') > at('build-input') || at('supersede') > at('deploy')) out.push(`${ENV}:deploy: the Maintainer check runs after the build is read or the deploy hook runs`);
+    // A refusal stops the job (#995's review): the check itself runs unconditionally and fails the
+    // job, and no step from it up to the deploy hook runs after a failure. A status function in
+    // an `if:` (`always()`, `!cancelled()`, `failure()`) passes only when the step is also gated on
+    // an earlier gated step's success, as `build-check` is on `build-input`, which a refusal skips.
+    if (check && (check.if !== undefined || (check['continue-on-error'] !== undefined && check['continue-on-error'] !== false))) {
+      out.push(`${ENV}:deploy: the Maintainer check carries an \`if:\` or \`continue-on-error\`, so a refusal may not stop the job`);
+    }
+    if (at('supersede') >= 0 && at('deploy') > at('supersede')) {
+      const gated = new Set<string>();
+      for (const s of (dep.steps ?? []).slice(at('supersede') + 1, at('deploy') + 1)) {
+        const cond = String(s.if ?? '');
+        const statusFn = /\b(always|cancelled|failure)\s*\(\s*\)/.test(cond);
+        const onSuccessOf = [...cond.matchAll(/steps\.([A-Za-z0-9_-]+)\.(?:outcome|conclusion)\s*==\s*'success'/g)].map((m) => m[1]!);
+        const safe = !statusFn || (/&&/.test(cond) && !/\|\|/.test(cond) && onSuccessOf.some((id) => gated.has(id)));
+        if (!safe) out.push(`${ENV}:deploy:${s.id ?? s.name ?? s.uses}: can run after the Maintainer check failed (\`if: ${cond}\`)`);
+        else if (s.id) gated.add(s.id);
+        if (s['continue-on-error'] !== undefined && s['continue-on-error'] !== false) out.push(`${ENV}:deploy:${s.id ?? s.name ?? s.uses}: continues on error before the deploy hook`);
+      }
+    }
   }
   const declare = w[ENV]?.jobs.declare;
   if (declare && JSON.stringify(declare.permissions) !== '{"contents":"read"}') out.push(`${ENV}:declare: holds more than contents: read`);
@@ -386,6 +405,15 @@ describe('the deploy lane holds its shape', () => {
         steps.push(check!);
       }, /Maintainer check runs after the build is read or the deploy hook runs/);
       red((w) => { const steps = job(w, ENV, 'deploy').steps!; steps.splice(steps.findIndex((s) => s.id === 'supersede'), 1); }, /Maintainer check runs after|a re-run skips the Maintainer check/);
+    });
+    it("a refusal by the deploy job's own check that doesn't stop the job (#995's review)", () => {
+      red((w) => { step(job(w, ENV, 'deploy'), 'supersede')['continue-on-error'] = true; }, /Maintainer check carries an `if:` or `continue-on-error`/);
+      red((w) => { step(job(w, ENV, 'deploy'), 'supersede').if = 'false'; }, /Maintainer check carries an `if:` or `continue-on-error`/);
+      red((w) => { step(job(w, ENV, 'deploy'), 'deploy').if = 'always()'; }, /deploy:deploy: can run after the Maintainer check failed/);
+      red((w) => { step(job(w, ENV, 'deploy'), 'build-input').if = '!cancelled()'; }, /deploy:build-input: can run after the Maintainer check failed/);
+      red((w) => { step(job(w, ENV, 'deploy'), 'build-check').if = "always() || steps.build-input.outcome == 'success'"; }, /deploy:build-check: can run after the Maintainer check failed/);
+      // Today's `build-check` (`!cancelled() && steps.build-input.outcome == 'success'`) is no problem.
+      expect(laneProblems(load()).filter((p) => /Maintainer check failed/.test(p))).toEqual([]);
     });
     it('the probe run after a refused gate', () => {
       red((w) => { job(w, RELEASE, 'probe').if = "always() && needs.gate.outputs.fallback != 'no-environments'"; }, /can run after a refused gate|runs under the no-environments marker/);
