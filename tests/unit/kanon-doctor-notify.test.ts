@@ -266,7 +266,8 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
       expect(notifyIds(r)).toEqual([]);
     });
     it('reads a ref as K-ADOPT-12 does', () => {
-      expect(['a/b@v1', 'a/b@v1.2.3', 'a/b@1.2', `a/b/c@${SHA}`, `docker://x/y@${DIGEST}`, `docker://x/y:1@${DIGEST}`, './.github/actions/notify/post'].map(pinnedUses)).toEqual(Array(7).fill(true));
+      expect(['a/b@v1', 'a/b@v1.2.3', 'a/b@1.2', `a/b/c@${SHA}`, `docker://x/y@${DIGEST}`, `docker://x/y:1@${DIGEST}`, './.github/actions/notify/post', 'yedeya-labs/kanon/actions/notify/slack@candidate-v0.40.0'].map(pinnedUses)).toEqual(Array(8).fill(true));
+      expect(pinnedUses('a/b@candidate-main')).toBe(false);
       expect(['a/b@main', 'a/b@release/v1', 'a/b', `a/b@${SHA.slice(1)}`, 'docker://x/y:1', 'docker://x/y@sha256:abc'].map(pinnedUses)).toEqual(Array(6).fill(false));
     });
   });
@@ -335,6 +336,23 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
       expect(f.fix.commands).toEqual([`    - uses: yedeya-labs/kanon/actions/notify/webhook@${PINNED}`]);
       expect(r.status).toBe(EXIT.healthy);
       expect(r.json.releases.pins).toEqual([PINNED]);
+    });
+
+    it('accepts its own fix at a candidate pin: a hook at the callers\' candidate-vX.Y.Z is neither behind nor unpinned (K-ADOPT-12)', async () => {
+      const CANDIDATE = 'candidate-v1.0.0';
+      const f = files({ hook: prebuilt('slack', CANDIDATE) });
+      for (const p of Object.keys(f).filter((x) => x.startsWith('.github/workflows/'))) f[p] = f[p]!.replaceAll(`@${PINNED}`, `@${CANDIDATE}`);
+      const g = github();
+      g.st.releases[CANDIDATE] = REQ;
+      g.st.releases[NEXT] = nextReq();
+      const r = await run(checkout(f), g, ['--to', NEXT, '--json']);
+      expect(r.json.releases.pinned).toBe(CANDIDATE);
+      expect(notifyIds(r)).toEqual([]);
+      // Behind the candidate, the fix names it, and following the fix leaves nothing.
+      const behind = { ...f, [NOTIFY_HOOK]: prebuilt('slack', 'v0.9.0') };
+      const before = await run(checkout(behind), g, ['--to', NEXT, '--json']);
+      expect(notifyIds(before)).toEqual([`notify.hook-pin-behind ${NOTIFY_HOOK}`]);
+      expect(finding(before, 'notify.hook-pin-behind').fix.commands).toEqual([`    - uses: yedeya-labs/kanon/actions/notify/slack@${CANDIDATE}`]);
     });
 
     it('says nothing of a hook at the callers\' pin, or of an own hook', async () => {

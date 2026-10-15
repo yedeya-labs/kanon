@@ -12,8 +12,8 @@
 //
 // A MESSAGE IS VALID OR IT IS NOT POSTED. `validate` never repairs, and names the offending FIELDS
 // only, never a value: a message can hold a model's prose, and a rejection reaches a log. `fit` is
-// what repairs, and only by cutting: Kanon text refuses no character, so a draft can only break a
-// limit, and what `fit` returns always validates.
+// what repairs, and only by cutting: Kanon text refuses no character, so a draft that meets `fit`'s
+// precondition can only break a limit, and what `fit` returns from it always validates.
 //
 // THE PUBLISHED JSON SCHEMA (decision 15). `docs/notify/message-v1.schema.json` is `jsonSchema(1)`,
 // generated from `SCHEMAS` and held equal to it by `tests/library/notify-contract.test.ts`, so an
@@ -95,11 +95,14 @@ export const LIMITS = Object.freeze({
 /** A line break, which a one-line field refuses and `fit` folds into a space. */
 const LINE_BREAK = /[\r\n\u2028\u2029]/;
 /**
- * An `https://` URL with no space or control character. Its source is the JSON Schema's pattern
- * too, so it is written without flags and without anything ECMA-262 and other languages read differently.
+ * An `https://` URL with no whitespace, C0 control character or DEL: it refuses U+0000 to U+0020,
+ * U+007F, and every other character ECMA-262's `\s` matches. Its source is the JSON Schema's pattern
+ * too, so it is written without flags, and names each character it refuses rather than using `\s`,
+ * whose set differs between engines (#921). What no pattern makes portable: ECMA-262's `$` is the
+ * string's end, but some engines' `$`, Python's for one, also matches before a final `\n`.
  */
 // eslint-disable-next-line no-control-regex -- the URL refuses control characters by name
-const HTTPS = /^https:\/\/[^\s\u0000-\u001f\u007f]+$/;
+const HTTPS = /^https:\/\/[^\u0000-\u0020\u007f\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+$/;
 /** `owner/name`, as GitHub spells them. */
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
 
@@ -652,11 +655,15 @@ function shrinkSection(s, room) {
 
 /**
  * Cut a draft to the contract's limits, at line boundaries, with a visible `… N more` or
- * `… truncated` (§3.3). What producers call: since Kanon text refuses no character, the limits are
- * all a draft can break, so the result of a draft whose kind, severity and source are right always
- * validates. Sets `schema_version` to the newest version. Never repairs anything but a length or a
- * line break in a one-line field: a missing title or a wrong kind is a producer's bug, which
- * `validate` then reports.
+ * `… truncated` (§3.3). What producers call. Sets `schema_version` to the newest version.
+ *
+ * ITS PRECONDITION: the kind, severity and source are right; every required string (`title`,
+ * `summary`, each section's `body`, each field's `label` and `value`, each link's `label`) is present
+ * and non-empty; and each link's `url` is an `https://` URL that `HTTPS` accepts. Since Kanon text
+ * refuses no character, the limits are then all a draft can break, so the result of a draft that
+ * meets it always validates. Never repairs anything but a length or a line break in a one-line
+ * field: a missing title, an `http:` link or a wrong kind is a producer's bug, which `validate`
+ * then reports.
  * @param {Record<string, any>} draft
  * @returns {Record<string, any>}
  */

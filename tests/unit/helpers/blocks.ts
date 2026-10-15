@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { parse } from 'yaml';
+import { actionFiles } from './actions.js';
 import { type WorkflowStep } from './workflow-step.js';
 
 /**
@@ -22,23 +23,30 @@ export type Block = {
   runs: { using: string; steps: WorkflowStep[] };
 };
 
-/** A block's parsed `action.yml`, by name (`agent-run`, …). */
+/** A block's parsed `action.yml`, by name (`agent-run`, `notify/slack`, …). */
 export const readBlock = (name: string): Block =>
   parse(readFileSync(join(process.cwd(), 'actions', name, 'action.yml'), 'utf8')) as Block;
 
+/** An action's name: its directory under `actions/`, nested ones by their path (`notify/slack`). */
+const NAME = String.raw`[a-z0-9-]+(?:\/[a-z0-9-]+)*`;
+const SELF_REF = new RegExp(String.raw`^\$\/actions\/(${NAME})$`);
+const RELEASE_PIN = new RegExp(String.raw`^yedeya-labs\/kanon\/actions\/(${NAME})@[\w.-]+$`);
+
 /**
  * The Kanon action a `uses:` names through the self-reference, `$/actions/<name>`, or
- * undefined. A remote, a `./` path, a pinned ref or a nested path is not one.
+ * undefined. A remote, a `./` path or a pinned ref is not one.
  */
 export const selfRefOf = (uses: unknown): string | undefined =>
-  typeof uses === 'string' ? /^\$\/actions\/([a-z0-9-]+)$/.exec(uses)?.[1] : undefined;
+  typeof uses === 'string' ? SELF_REF.exec(uses)?.[1] : undefined;
 
 /**
  * Every action under `actions/`, by directory name: each directory holding an `action.yml`
- * (kanon#342). `PIPELINE` is the five a lane is built from; this is all of them.
+ * (kanon#342), a nested one by its path under `actions/` (`notify/slack`, kanon#927). `PIPELINE`
+ * is the five a lane is built from; this is all of them.
  */
-export const ACTIONS: readonly string[] = Object.freeze(readdirSync(join(process.cwd(), 'actions'))
-  .filter((d) => existsSync(join(process.cwd(), 'actions', d, 'action.yml')))
+export const ACTIONS: readonly string[] = Object.freeze(actionFiles()
+  .filter((f) => f.endsWith('.yml'))
+  .map((f) => relative('actions', dirname(f)))
   .sort());
 
 /**
@@ -47,4 +55,4 @@ export const ACTIONS: readonly string[] = Object.freeze(readdirSync(join(process
  * checks that judge a pull request use (ADR 0011). Undefined for anything else.
  */
 export const kanonActionOf = (uses: unknown): string | undefined =>
-  selfRefOf(uses) ?? (typeof uses === 'string' ? /^yedeya-labs\/kanon\/actions\/([a-z0-9-]+)@[\w.-]+$/.exec(uses)?.[1] : undefined);
+  selfRefOf(uses) ?? (typeof uses === 'string' ? RELEASE_PIN.exec(uses)?.[1] : undefined);

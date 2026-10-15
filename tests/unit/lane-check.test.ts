@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { actionFiles } from './helpers/actions.js';
 import { ROOT, SCRIPT, TRIAGE, IMPL, adopter, check, red, job, type Caller, laneCheck } from './helpers/lane-check.js';
 
 /**
@@ -105,8 +106,8 @@ describe('every copy of the App-register parser is the parser (kanon#401)', () =
   type Doc = { env?: Env; jobs?: Record<string, { env?: Env; steps?: Step[] }>; runs?: { steps?: Step[] } };
   const files = [
     ...readdirSync(join(ROOT, '.github/workflows')).filter((f) => /\.ya?ml$/.test(f)).map((f) => `.github/workflows/${f}`),
-    ...readdirSync(join(ROOT, 'actions')).flatMap((d) => [`actions/${d}/action.yml`, `actions/${d}/action.yaml`])
-      .filter((f) => existsSync(join(ROOT, f))),
+    // Every action, nested ones too (kanon#927).
+    ...actionFiles(ROOT),
   ];
   const read = files.map((file) => {
     const raw = readFileSync(join(ROOT, file), 'utf8');
@@ -123,6 +124,8 @@ describe('every copy of the App-register parser is the parser (kanon#401)', () =
   });
 
   it('finds the copies the lanes carry', () => {
+    // It reads every action, nested ones too (kanon#927), where a copy would hide as well.
+    expect(read.map((r) => r.file)).toContain('actions/notify/slack/action.yml');
     expect(read.filter((r) => r.copies.length).map((r) => r.file)).toEqual([
       '.github/workflows/agent-implement-revise.yml',
       '.github/workflows/agent-lead-revise.yml',

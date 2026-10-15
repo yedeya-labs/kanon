@@ -1,7 +1,8 @@
 import { readFileSync, readdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { actionFiles } from './helpers/actions.js';
 
 // K-PRIN-19: the security rules that can be checked by reading Kanon's own workflow files.
 // - K-AGENT-48: no `pull_request_target` workflow checks out the PR's head.
@@ -17,10 +18,7 @@ type Doc = { on?: unknown; jobs?: Record<string, Job>; runs?: { steps?: Step[] }
 const files = [
   ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => join('.github/workflows', f)),
   // Every Kanon action, nested ones too (plan 0011's `actions/notify/slack/action.yml`).
-  ...readdirSync('actions', { recursive: true, encoding: 'utf8' })
-    .filter((f) => basename(f) === 'action.yml')
-    .map((f) => join('actions', f))
-    .sort(),
+  ...actionFiles(),
   // The hook files `kanon init` writes into an adopter's repository (plan 0011 §7.1): they call
   // Kanon by release, and K-ADOPT-12 holds that pin as it holds any other.
   ...readdirSync('actions/notify/hooks').filter((f) => f.endsWith('.yml')).map((f) => join('actions/notify/hooks', f)),

@@ -134,7 +134,9 @@ export const NOTIFY_RUNS = 10;
  * Whether a `uses:` of a hook's step is pinned as `K-ADOPT-12` asks (plan 0011 §6.2, item 3): an
  * action by a version tag or a full commit SHA, never a branch; a `docker://` image by a digest,
  * never a tag alone. A local action (`./…`) is the repository's own, held by
- * `notify.hook-unreviewed` instead, so it counts as pinned here.
+ * `notify.hook-unreviewed` instead, so it counts as pinned here. An exact Kanon release, a
+ * candidate's `candidate-vX.Y.Z` included, is a tag, so the pin `notify.hook-pin-behind`'s fix
+ * writes is never unpinned.
  * @param {string} uses
  */
 export const pinnedUses = (uses) => {
@@ -142,7 +144,7 @@ export const pinnedUses = (uses) => {
   if (u.startsWith('./')) return true;
   if (u.startsWith('docker://')) return /@sha256:[0-9a-f]{64}$/.test(u);
   const ref = /^[^@\s]+@([^@\s]+)$/.exec(u)?.[1];
-  return ref !== undefined && (/^[0-9a-f]{40}$/.test(ref) || /^v?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?$/.test(ref));
+  return ref !== undefined && (/^[0-9a-f]{40}$/.test(ref) || EXACT_RELEASE.test(ref) || /^v?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?$/.test(ref));
 };
 
 /**
