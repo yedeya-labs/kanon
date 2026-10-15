@@ -7,7 +7,10 @@
 //   1. release-please's labels, `autorelease: pending` or `autorelease: tagged`; or
 //   2. an author that is the register's Releaser App (`K-LAYOUT-6`), which opens nothing else; or
 //   3. `github-actions[bot]`, which opened release PRs before a Releaser App existed, with a
-//      conventional release title, `chore(<branch>): release <version>`.
+//      conventional release title, `chore(<branch>): release <version>`, or, for a component's
+//      release, `chore(<branch>): release <component> <version>` (release-please's default title,
+//      `chore${scope}: release${component} ${version}`; a candidate's is `release candidate X.Y.Z`,
+//      plan 0009 S3).
 // The title is a supporting signal only: a person's PR with that title is not a release PR.
 
 import { slugOf } from '../lib/role-marker.mjs';
@@ -15,8 +18,8 @@ import { slugOf } from '../lib/role-marker.mjs';
 /** release-please's labels on the pull requests it opens. */
 export const RELEASE_LABELS = Object.freeze(['autorelease: pending', 'autorelease: tagged']);
 
-/** A conventional release title, `chore(<branch>): release <version>`. */
-export const RELEASE_TITLE = /^chore\([^)]+\): release v?\d+\.\d+\.\d+\S*$/;
+/** A conventional release title, `chore(<branch>): release [<component> ]<version>`. */
+export const RELEASE_TITLE = /^chore\([^)]+\): release (?:[\w.@/-]+ )?v?\d+\.\d+\.\d+\S*$/;
 
 /** The Actions token's account, which opened release PRs before the Releaser App. */
 const ACTIONS_BOT = 'github-actions';
