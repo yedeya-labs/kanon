@@ -14,8 +14,15 @@
 // outside `## Choices`, naming an App Kanon doesn't have, a permission level other than `read`
 // or `write`, no reason, or the same App and permission twice is an error naming its line.
 
-import { ADOPTION_RECORD, CHOICES_HEADING } from './deploy-declaration.mjs';
 import { fencedLines } from '../spec-lib.mjs';
+
+// The record's path and heading, as `deploy-declaration.mjs` names them, held here so this
+// module, which credential-holding runs reach (`apps-check`), imports nothing outside its
+// escalation path.
+/** The adoption record (`K-LAYOUT-10`). */
+export const ADOPTION_RECORD = 'docs/qa/adoption.md';
+/** The section the declaration sits in. */
+export const CHOICES_HEADING = '## Choices';
 
 /** The bullet's bold label, under `## Choices`. */
 export const EXTRA_LABEL = 'Extra App permission';

@@ -38,8 +38,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appJwt, loadRoles, REGISTER_PATH } from './apps.mjs';
 import { isCliEntry } from '../scripts/lib/cli-entry.mjs';
-import { readAppExtras, withExtras } from '../scripts/lib/app-extras.mjs';
-import { ADOPTION_RECORD } from '../scripts/lib/deploy-declaration.mjs';
+import { ADOPTION_RECORD, readAppExtras, withExtras } from '../scripts/lib/app-extras.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const AWK = join(ROOT, 'actions/lane-check/app-register.awk');
