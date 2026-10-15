@@ -601,10 +601,29 @@ describe('where the rows go', () => {
   const spineCalls = workflows.flatMap(({ f, doc }) => Object.values(doc.jobs)
     .filter((j) => j.uses === '$/.github/workflows/agent-lane.yml').map((j) => ({ f, with: j.with ?? {} })));
 
+  // A lane the store's schema doesn't name yet passes `lane: ""`, which the spine documents as
+  // writing the version-1 row alone, so it sends no version-2 row the store would refuse. Its name
+  // joins `LANE_ROLES` once the store's intake takes it, which ships before the release that
+  // writes it (docs/telemetry.md). Each entry names that change.
+  const NOT_YET_IN_SCHEMA: Record<string, string> = {
+    // Plan 0010 D8: the deploy diagnose lane, until kanon#966 adds `deploy-diagnose`.
+    'agent-deploy-diagnose.yml': 'kanon#966',
+  };
+
   it('every Kanon lane names a lane from the schema\'s list', () => {
     const lanes = [...finishCalls, ...spineCalls].filter((c) => c.f !== 'agent-lane.yml' && c.f !== 'lane-agent-job.yml' && c.f !== 'agent-blocks-smoke.yml');
-    expect(lanes.length).toBe(16);
-    for (const c of lanes) expect(LANES, c.f).toContain(c.with.lane);
+    expect(lanes.length).toBe(17);
+    for (const c of lanes) {
+      if (c.f in NOT_YET_IN_SCHEMA) expect(c.with.lane, c.f).toBe('');
+      else expect(LANES, c.f).toContain(c.with.lane);
+    }
+  });
+
+  it('admits a lane outside the schema only while the schema lacks it, and only as a lane that sends no version-2 row', () => {
+    for (const f of Object.keys(NOT_YET_IN_SCHEMA)) {
+      expect(LANES, f).not.toContain(f.replace(/^agent-|\.yml$/g, ''));
+      expect([...finishCalls, ...spineCalls].some((c) => c.f === f), f).toBe(true);
+    }
   });
 
   type Job = { 'timeout-minutes'?: number; steps?: (Step & { id?: string; name?: string; run?: string; 'continue-on-error'?: boolean })[] };

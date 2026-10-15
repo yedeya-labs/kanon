@@ -138,9 +138,13 @@ export const output = (name, value) => {
 
 if (isCliEntry(import.meta.url)) {
   const env = process.env;
-  const repo = String(env.GITHUB_REPOSITORY ?? '');
-  if (!repo || !env.RUN_ID || !env.RUN_ATTEMPT || !env.RUN_STARTED_AT) {
-    console.error('deploy-diagnose: GITHUB_REPOSITORY, RUN_ID, RUN_ATTEMPT and RUN_STARTED_AT must be set: the lane reads them from the workflow_run event');
+  const repo = env.GITHUB_REPOSITORY;
+  if (!repo) {
+    console.error('deploy-diagnose: GITHUB_REPOSITORY must be set; the runner sets it, and the lane never guesses a repository');
+    process.exit(2);
+  }
+  if (!env.RUN_ID || !env.RUN_ATTEMPT || !env.RUN_STARTED_AT) {
+    console.error('deploy-diagnose: RUN_ID, RUN_ATTEMPT and RUN_STARTED_AT must be set: the lane reads them from the workflow_run event');
     process.exit(2);
   }
   const url = runUrl(String(env.GITHUB_SERVER_URL || 'https://github.com'), repo, env.RUN_ID);
