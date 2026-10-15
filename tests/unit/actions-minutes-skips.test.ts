@@ -75,6 +75,9 @@ const SKIPS: Record<string, Spec> = {
   },
   // `reader` skips only the telemetry read; the Overseer still runs.
   'agent-overseer': { outputs: { due: ["doesn't move the agent runtime forward"], reader: null } },
+  // Plan 0011 N7: the gate's `post` skips the digest job, and its model, without both the hook and
+  // the kind's secret; `hook` starts the notify job, which records a skip and bills next to nothing.
+  'agent-project-digest': { outputs: { post: ['without both the notify hook and `KANON_CHAT_PROJECT_DIGEST`', 'runs only the health job'], hook: null } },
   'agent-rebase': { outputs: { prs: ['finds no agent pull request in conflict'] } },
   // Plan 0010 D8: its caller fires on every conclusion, and its gate admits a failure alone.
   'agent-deploy-diagnose': {

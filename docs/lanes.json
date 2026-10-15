@@ -182,7 +182,7 @@
       "group": "oversight",
       "does": "Posts each open project's progress to a chat channel daily, and files an issue for a lane caller that keeps failing.",
       "needs": [],
-      "cost": "A model run daily, only where the digest is posted: without `DIGEST_WEBHOOK` it runs the health job alone, with no model.",
+      "cost": "A model run daily, only where the digest is posted: without a notify hook and `KANON_CHAT_PROJECT_DIGEST` it runs the health job alone, with no model.",
       "minutes": "Not measured: Kanon's caller is new and had not run yet; it runs once a day.",
       "recommend": ["agent-lead-reconcile"],
       "when": "With the reconciler, when you have a chat channel for the developers."
@@ -283,7 +283,7 @@
       "conditional": {
         "agent-explore": { "hook": ".github/actions/explore-sweep/action.yml", "condition": "when the repository has the sweep hook you write (docs/explore-sweep.md)" },
         "agent-weekly-digest": { "secret": "DIGEST_WEBHOOK", "condition": "when the repository holds the chat channel's webhook, `DIGEST_WEBHOOK`" },
-        "agent-project-digest": { "secret": "DIGEST_WEBHOOK", "condition": "when the repository holds the chat channel's webhook, `DIGEST_WEBHOOK`" }
+        "agent-project-digest": { "secret": "KANON_CHAT_PROJECT_DIGEST", "condition": "when the repository holds the project digest's chat secret, `KANON_CHAT_PROJECT_DIGEST`" }
       },
       "leftOut": {
         "agent-explore-telemetry": "It needs a registration that sets `aggregate_invoker`, which only Kanon's operator sets after the collector's first run registers the repository (docs/telemetry.md), so nothing done at install makes it work.",

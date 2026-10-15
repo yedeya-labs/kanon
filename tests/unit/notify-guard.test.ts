@@ -18,9 +18,9 @@ import {
  *     of it into that lane;
  *   - each lane that declares a chat secret has a `notify` job and exactly one producing job;
  *   - `DIGEST_WEBHOOK` appears in no lane that has moved behind the `notify` job, nor in any caller
- *     of one (decision 17, the clean break). The two digests move in N7 and N8, which ship together,
- *     so until then each is named below with its step, and each must still hold the old secret, so
- *     a lane that moves leaves the list;
+ *     of one (decision 17, the clean break). The two digests move in N7 and N8, which ship together:
+ *     the project digest has moved (N7), and a lane still to move is named below with its step, and
+ *     must still hold the old secret, so a lane that moves leaves the list;
  *   - no `notify` job is in a workflow a `pull_request` or `pull_request_target` event starts;
  *   - no script under `scripts/` calls `fetch` on a host other than GitHub's, or reads a chat
  *     secret, but the named exceptions, each with its reason, and each still a hit;
@@ -34,7 +34,6 @@ const DOCS: Record<string, ReturnType<typeof read>> = Object.fromEntries(FILES.m
 
 /** The lanes still posting from their own job, until the step that moves each (decision 17). */
 const PENDING_LANES: Record<string, string> = {
-  'agent-project-digest.yml': 'N7',
   'agent-weekly-digest.yml': 'N8',
 };
 /** The chat secret the digests used before the contract, which no moved lane may take. */
@@ -269,16 +268,15 @@ const SOURCES = Object.fromEntries(SCRIPTS.map((f) => [f, readFileSync(f, 'utf8'
  */
 const FETCH_EXCEPTIONS: Record<string, string> = {
   'scripts/telemetry/jev.mjs: ENDPOINT': "Jev, the upstream-finding judge (plan 0006 §7): Kanon's own private job, never a lane, posts no message",
-  'scripts/project-digest.mjs: webhook': 'the project digest posts from its own job until step N7 moves it behind the notify job',
   'scripts/weekly-digest.mjs: webhook': 'the weekly digest posts from its own job until step N8 moves it behind the notify job',
 };
 /** The scripts that read a chat secret until the step that moves their lane. */
 const SECRET_EXCEPTIONS: Record<string, string> = {
-  'scripts/lib/digest-webhook.mjs: DIGEST_WEBHOOK': 'the digests\' one webhook until steps N7 and N8, which delete this file',
+  'scripts/lib/digest-webhook.mjs: DIGEST_WEBHOOK': 'the weekly digest\'s webhook until step N8, which deletes this file (the project digest stopped reading it in N7)',
 };
 /** The producers of each kind's message (§3.2), and the step that moves each still to move. */
 const PRODUCERS: Record<string, string | null> = {
-  'scripts/project-digest.mjs': 'N7',
+  'scripts/project-digest.mjs': null,
   'scripts/weekly-digest.mjs': 'N8',
   'scripts/announce-deploy.mjs': null,
 };
@@ -310,33 +308,20 @@ describe('K-OBS-19: a chat secret appears only where the guard admits it', () =>
   });
 });
 
-describe('the guard on a moved lane (the lane as N7 will leave it)', () => {
-  /** The project digest, moved: its gate reads the hook and the secret's presence, its digest publishes a message, and it has a notify job. */
-  const moved = () => {
-    const wf = structuredClone(DOCS['agent-project-digest.yml']!);
-    delete wf.on!.workflow_call!.secrets![LEGACY];
-    wf.on!.workflow_call!.secrets!.KANON_CHAT_PROJECT_DIGEST = { required: false };
-    const gate = wf.jobs!.gate!;
-    gate.steps!.push({ id: 'chat', name: 'Will anything be posted?', if: "steps.gate.outputs.member == 'true'", env: { HAS_SECRET: "${{ secrets.KANON_CHAT_PROJECT_DIGEST != '' }}" }, run: 'true' });
-    const digest = wf.jobs!.digest!;
-    digest.outputs = { 'message-artifact': '${{ steps.upload.outputs.name }}' };
-    digest.steps = (digest.steps ?? []).filter((s) => !JSON.stringify(s).includes(LEGACY));
-    wf.jobs!.notify = notifyJob('project-digest', 'digest');
-    return wf;
-  };
-  /** Kanon's smoke, as N7 leaves it: its project-digest job maps the kind's secret instead. */
-  const smoke = () => {
-    const wf = structuredClone(DOCS['agent-lanes-smoke.yml']!);
-    const secrets = wf.jobs!['project-digest']!.secrets as Record<string, string>;
-    secrets.KANON_CHAT_PROJECT_DIGEST = secrets[LEGACY]!;
-    delete secrets[LEGACY];
-    return wf;
-  };
+describe('the guard on a moved lane (the project digest, as N7 left it)', () => {
+  /** The project digest: its gate reads the hook and the secret's presence, its digest publishes a message, and it has a notify job. */
+  const moved = () => structuredClone(DOCS['agent-project-digest.yml']!);
+  /** Kanon's smoke: its project-digest job maps the kind's secret, and no DIGEST_WEBHOOK. */
+  const smoke = () => structuredClone(DOCS['agent-lanes-smoke.yml']!);
   const with_ = (wf: ReturnType<typeof moved>) => ({ ...DOCS, 'agent-project-digest.yml': wf, 'agent-lanes-smoke.yml': smoke() });
 
-  it('passes as N7 will leave it', () => {
+  it('passes as N7 left it, a lane of notify-jobs.ts\'s shape', () => {
+    expect(notifyJobsOf(moved())).toEqual(['notify']);
+    expect(notifyJobProblems(moved(), 'notify', 'project-digest')).toEqual([]);
     expect(notifyLaneProblems(with_(moved()))).toEqual([]);
     expect(chatSecretProblems(with_(moved()))).toEqual([]);
+    // The notify job the helper builds is the lane's own.
+    expect(moved().jobs!.notify).toEqual(notifyJob('project-digest', 'digest'));
   });
 
   it("fails a step in the digest job that curls the chat secret with raw text (the issue's mutation)", () => {
@@ -386,8 +371,10 @@ describe('the guard on a moved lane (the lane as N7 will leave it)', () => {
     const wf = moved();
     wf.on!.workflow_call!.secrets![LEGACY] = { required: false };
     expect(notifyLaneProblems(with_(wf))).toEqual([`agent-project-digest.yml: a moved lane still names ${LEGACY}`]);
-    // Kanon's smoke maps it into the lane today, which N7 changes in the same commit.
-    expect(notifyLaneProblems({ ...with_(moved()), 'agent-lanes-smoke.yml': DOCS['agent-lanes-smoke.yml']! }))
+    // Kanon's smoke mapped it into the lane until N7 changed it in the same commit; mapped back, it is caught.
+    const legacy = smoke();
+    (legacy.jobs!['project-digest']!.secrets as Record<string, string>)[LEGACY] = '${{ secrets.KANON_SMOKE_UNSET }}';
+    expect(notifyLaneProblems({ ...with_(moved()), 'agent-lanes-smoke.yml': legacy }))
       .toEqual([`agent-lanes-smoke.yml:project-digest: maps ${LEGACY} into agent-project-digest.yml, which no longer declares it`]);
     const caller = { ...with_(moved()), 'x-caller.yml': { on: 'workflow_dispatch', jobs: { digest: { uses: '$/.github/workflows/agent-project-digest.yml', secrets: { [LEGACY]: '${{ secrets.X }}' } } } } as ReturnType<typeof read> };
     expect(notifyLaneProblems(caller)).toEqual([`x-caller.yml:digest: maps ${LEGACY} into agent-project-digest.yml, which no longer declares it`]);

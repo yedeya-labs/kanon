@@ -21,7 +21,13 @@ const {
   membersOf,
   stopReason,
   HELD_MARKER,
+  STOPPED,
+  isStopped,
+  projectSection,
+  dryRunReport,
 } = await import('../../scripts/project-digest.mjs');
+const { validate, measure, renderText, LIMITS } = await import('../../scripts/lib/notify-contract.mjs');
+const { payload: slackPayload } = await import('../../actions/notify/slack/slack.mjs');
 const { signed } = await import('../../scripts/lib/role-marker.mjs');
 const { CONFLICT_SHORT } = await import('../../scripts/conflict-state.mjs');
 const { AGENT_LOGIN, classify: sweepClassify, LANES } = await import('../../scripts/dispatch-sweep.mjs');
@@ -226,10 +232,13 @@ describe('classifyDispatch — the classification the digest must not get wrong'
 
   it('labels a stop `scope-first bail` only when it says so', () => {
     expect(d({ comments: [c(BAIL)], ageDays: 1 }).reason).toBe('scope-first bail');
-    expect(stopReason('<!-- marker -->\n**Blocked** on <prod> & data')).toBe('stopped: “Blocked on &lt;prod&gt; &amp; data”');
+    // Kanon text (plan 0011 §3.1): `<`, `>` and `&` are characters, which each hook escapes for its
+    // system; a markup character is escaped with `literal`, so the stop's words arrive as written.
+    expect(stopReason('<!-- marker -->\n**Blocked** on <prod> & data')).toBe('stopped: “Blocked on <prod> & data”');
+    expect(stopReason('## Run `migrate` on [prod]_db')).toBe('stopped: “Run \\`migrate\\` on \\[prod]\\_db”');
     expect(stopReason('')).toBe('stopped');
     // The persona header the Implementer's comments open with (plan 0005 §3.3) is not the stop.
-    expect(stopReason('**Implementer** <!-- kanon:role=implementer -->\n\n**Blocked** on <prod> & data')).toBe('stopped: “Blocked on &lt;prod&gt; &amp; data”');
+    expect(stopReason('**Implementer** <!-- kanon:role=implementer -->\n\n**Blocked** on <prod> & data')).toBe('stopped: “Blocked on <prod> & data”');
     expect(stopReason('**The Builder (Implementer)** <!-- kanon:role=implementer -->\n\n## Waiting on the schema\nmore')).toBe('stopped: “Waiting on the schema”');
     expect(stopReason('**Implementer** <!-- kanon:role=implementer -->')).toBe('stopped');
   });
@@ -511,6 +520,13 @@ describe('renderMember', () => {
     expect(line).toContain('…');
     expect(line!.length).toBeLessThan(200);
   });
+
+  // Plan 0011 N7: one Kanon-text bullet, its number a link, its title through `literal`.
+  it('is one Kanon-text bullet, with the issue linked and its title written as it is', () => {
+    const line = renderMember(member({ title: 'Support Array<string> **now**', disposition: 'stall' }));
+    expect(line).toBe('- [#1305](https://github.com/o/r/issues/1305) Support Array<string> \\*\\*now\\*\\* — **no PR after 3d** — likely a stalled dispatch');
+    expect(line).not.toContain('\n');
+  });
 });
 
 describe('renderProject', () => {
@@ -524,7 +540,7 @@ describe('renderProject', () => {
     // The status is gone from `classifyProject`, so `renderProject` must not carry a
     // branch for it either — a dead arm here is how a deleted concept comes back.
     const out = renderProject({ ...base, status: 'starved' } as never);
-    expect(out, 'an unknown status falls through to the grey marker').toContain(':grey_question:');
+    expect(out, 'an unknown status falls through to the unknown marker').toMatch(/^\*\*Unknown status\*\*/);
     expect(out).not.toContain('lowest-numbered');
     expect(out, 'and no neighbour is named as the reason').not.toContain('#1015');
   });
@@ -567,7 +583,7 @@ describe('carried-out members (RA-2414)', () => {
     const { c, out } = render([itemA, adopted, followUp]);
     expect(c.carriedOut).toEqual([{ number: 950, url: followUp.url }]);
     expect(out).toContain('carried out: 1');
-    expect(out).toContain(`<${followUp.url}|#950>`);
+    expect(out).toContain(`[#950](${followUp.url})`);
   });
 
   it('agrees with the reconciler on WHICH members are carried out', () => {
@@ -631,7 +647,7 @@ describe('carried-out members (RA-2414)', () => {
     const out = renderProject({ number: 1, url: 'u', title: 't', proposed, briefItems, ...c });
     expect(out).toContain('does not parse');
     expect(out).toContain('no `### Issue X — …` headings');
-    expect(out).toMatch(/^:red_circle:/);
+    expect(out).toMatch(/^\*\*Never reconciled\*\*/);
     // A brief with NO decomposition section at all is unparsed too — it used to read `active`
     // on a count of 0, and the reconciler stops on it (`brief-unparseable`), so it is red now.
     // Measured: every brief in docs/projects/ parses, so no live project changes colour.
@@ -675,57 +691,120 @@ describe('carried-out members (RA-2414)', () => {
   });
 });
 
-describe('buildMessage', () => {
+describe('buildMessage: one Kanon notification (plan 0011 §3, step N7)', () => {
   const today = new Date('2026-09-02T07:35:00Z');
   const project = {
-    number: 1015, url: 'u', title: 'Decommission Authorize.net', status: 'active',
+    number: 1015, url: 'https://github.com/o/r/issues/1015', title: 'Decommission Authorize.net', status: 'active',
     proposed: 5, filed: 5, open: 4, closed: 1, members: [member()],
   };
+  const quiet = { ...project, number: 1016, members: [member({ disposition: 'building' })] };
+  type Input = Partial<Parameters<typeof buildMessage>[0]>;
+  const build = (over: Input = {}) => buildMessage({ today, narrative: '', projects: [project], repository: 'o/r', runUrl: 'https://github.com/o/r/actions/runs/7', ...over });
+  /** Everything the message says, as plain text: what a hook's `text` input gets. */
+  const text = (over: Input = {}) => renderText(build(over));
 
   it('posts the numbers when the narrative is absent — prose is the degraded path', () => {
-    const text = buildMessage({ today, narrative: '', projects: [project] });
-    expect(text).toContain('Decommission Authorize.net');
-    expect(text).toContain('1/5 done');
+    expect(text()).toContain('Decommission Authorize.net');
+    expect(text()).toContain('1/5 done');
   });
 
-  it('includes the narrative when present', () => {
-    const text = buildMessage({ today, narrative: 'One project is waiting on you.', projects: [project] });
-    expect(text).toContain('One project is waiting on you.');
+  it('includes the narrative when present, as Kanon text', () => {
+    expect(text({ narrative: 'One project is waiting on you.' })).toContain('One project is waiting on you.');
+    // The narrative keeps the subset's markup (`prose`), and nothing else.
+    expect(build({ narrative: 'One is **stopped** on a <decision>.' }).summary).toContain('One is **stopped** on a <decision>.');
   });
 
   it('does NOT screen the narrative for pending language, unlike the weekly digest', () => {
     // weekly-digest.mjs drops a narrative that mentions anything remaining (RA-166).
     // Here that language is the entire point, so it must survive.
-    const text = buildMessage({ today, narrative: '#1305 is still awaiting your decision.', projects: [project] });
-    expect(text).toContain('awaiting your decision');
+    expect(text({ narrative: '#1305 is still awaiting your decision.' })).toContain('#1305 is still awaiting your decision.');
   });
 
-  it('marks a missing narrative IN THE POST, linking the run (RA-1476)', () => {
+  it('marks a missing narrative IN THE MESSAGE, linking the run (RA-1476)', () => {
     // Every cause of a missing narrative (denied tools, a bad model id, turn or quota
     // exhaustion, an outage) used to produce the same silent, green, prose-less post.
     for (const narrative of ['', '   ', null, undefined]) {
       expect(narrativeMissing({ narrative, projects: [project] })).toBe(true);
     }
-    const text = buildMessage({ today, narrative: '', projects: [project], runUrl: 'https://gh/r/1' });
-    expect(text).toMatch(/No narrative today[^\n]*<https:\/\/gh\/r\/1\|the run>/);
-    expect(text, 'the numbers still post').toContain('1/5 done');
+    expect(build({ runUrl: 'https://gh/r/1' }).summary).toMatch(/No narrative today[^\n]*\[the run\]\(https:\/\/gh\/r\/1\)/);
+    expect(text(), 'the numbers still post').toContain('1/5 done');
   });
 
   it('adds no marker when the narrative is present, or on a no-projects day', () => {
-    expect(buildMessage({ today, narrative: 'One project is waiting on you.', projects: [project] }))
-      .not.toMatch(/No narrative today/);
+    expect(text({ narrative: 'One project is waiting on you.' })).not.toMatch(/No narrative today/);
     // Nothing to narrate: a marker every quiet day would train the reader to skip it.
     expect(narrativeMissing({ narrative: '', projects: [] })).toBe(false);
-    expect(buildMessage({ today, narrative: '', projects: [] })).not.toMatch(/No narrative today/);
+    expect(text({ projects: [] })).not.toMatch(/No narrative today/);
   });
 
   it('says so plainly when no project is open', () => {
-    expect(buildMessage({ today, narrative: '', projects: [] })).toContain('No open projects');
+    const m = build({ projects: [] });
+    expect(m.summary).toContain('No open projects');
+    expect(m.sections).toBeUndefined();
   });
 
-  it('caps the message so Slack never rejects it', () => {
+  it('is a valid project-digest message, from this run, with a section per project', () => {
+    const m = build({ projects: [project, quiet] });
+    expect(validate(m)).toEqual({ ok: true });
+    expect(m).toMatchObject({
+      schema_version: 1, kind: 'project-digest', title: 'Projects, Wed 2 Sept',
+      source: { repository: 'o/r', lane: 'project-digest', run_url: 'https://github.com/o/r/actions/runs/7' },
+    });
+    expect(m.sections.map((x: { heading: string }) => x.heading)).toEqual(['#1015 — Decommission Authorize.net', '#1016 — Decommission Authorize.net']);
+    expect(m.sections[0]).toEqual(projectSection(project));
+    // Its summary leads with the counts, so a narrative `fit` cuts never takes them with it.
+    expect(m.summary.split('\n')[0]).toBe('2 open projects, 1 stopped.');
+  });
+
+  it('is a warning when a project is stopped, and info otherwise (§3.2)', () => {
+    expect(build().severity).toBe('warning');
+    expect(build({ projects: [quiet] }).severity).toBe('info');
+    expect(build({ projects: [] }).severity).toBe('info');
+    for (const status of ['held', 'unfiled']) expect(build({ projects: [{ ...quiet, status }] }).severity, status).toBe('warning');
+    for (const disposition of STOPPED) expect(isStopped({ ...quiet, members: [member({ disposition })] }), disposition).toBe(true);
+    for (const disposition of ['building', 'authorised', 'verify', 'needs-split', 'dispatched', null]) {
+      expect(isStopped({ ...quiet, members: [member({ disposition })] }), String(disposition)).toBe(false);
+    }
+  });
+
+  it('falls back to the repository\'s runs when the run\'s URL is unknown or not https://', () => {
+    for (const runUrl of [null, 'http://ghes.example/o/r/actions/runs/1']) {
+      const m = build({ runUrl });
+      expect(m.source.run_url).toBe('https://github.com/o/r/actions');
+      expect(validate(m)).toEqual({ ok: true });
+    }
+  });
+
+  it('validates on every shape it is handed: every status and disposition, hostile titles, and a hold reason', () => {
+    const dispositions = [...STOPPED, 'building', 'authorised', 'verify', 'needs-split', 'dispatched', null];
+    const hostile = 'Array<string> **x** _y_ `z` [a](https://e) \\ <!here> &amp;';
+    const projects = ['active', 'complete', 'unfiled', 'held', 'starved'].map((status, i) => ({
+      ...project, number: i + 1, status, title: hostile, heldReason: holdReason([{ body: `- ${hostile}\n\n${HELD_MARKER}` }]),
+      carriedOut: [{ number: 9, url: 'https://github.com/o/r/issues/9' }],
+      members: dispositions.map((disposition, n) => member({ number: n + 100, title: hostile, disposition, reason: stopReason(`## ${hostile}`), unmarked: n % 2 })),
+    }));
+    for (const narrative of ['', hostile, '**unclosed and a lone * and [x](http://no)']) {
+      const m = build({ narrative, projects });
+      expect(validate(m), narrative).toEqual({ ok: true });
+    }
+  });
+
+  it('cuts to the contract\'s limits with fit, so a long day still validates', () => {
     const many = Array.from({ length: 400 }, (_, i) => ({ ...project, number: i }));
-    expect(buildMessage({ today, narrative: '', projects: many }).length).toBeLessThanOrEqual(12000);
+    const m = build({ projects: many, narrative: 'word '.repeat(600) });
+    expect(validate(m)).toEqual({ ok: true });
+    expect(measure(m).chars).toBeLessThanOrEqual(LIMITS.messageChars);
+    expect(m.sections).toHaveLength(LIMITS.sections);
+    expect(m.sections.at(-1).body).toMatch(/sections?.*left out to fit/);
+    expect(m.summary.split('\n')[0], 'the counts survive the cut').toBe('400 open projects, 400 stopped.');
+  });
+
+  it('a dry run prints the message, its plain text and the Slack hook\'s payload (§4)', () => {
+    const m = build();
+    const report = dryRunReport(m);
+    expect(report).toContain(JSON.stringify(m, null, 2));
+    expect(report).toContain(renderText(m));
+    expect(report).toContain(JSON.stringify(slackPayload(m), null, 2));
   });
 });
 
@@ -733,7 +812,7 @@ describe('a held project says WHY it is held (RA-1469)', () => {
   // `held` was the only loud status that named the state and stopped, and the one whose
   // cause is least guessable — a brief naming a nonexistent milestone, an unparseable
   // decomposition, a dependency matching nothing, or a terminal phase-5 stop. The
-  // reader should be able to tell what has to be fixed without leaving Slack.
+  // reader should be able to tell what has to be fixed without leaving the chat channel.
   const holdComment = (reason: string) => ({
     body: [
       '🛑 **The Lead is holding this project.** A tick took an action that failed…',
@@ -747,8 +826,9 @@ describe('a held project says WHY it is held (RA-1469)', () => {
   });
 
   it('reads the reason off the hold comment, not off prose', () => {
+    // Through `literal` (plan 0011 §3.1): the comment's backticks arrive as written.
     expect(holdReason([{ body: 'unrelated' }, holdComment('`file` for “Issue B” — HTTP 422: milestone not found')]))
-      .toBe('`file` for “Issue B” — HTTP 422: milestone not found');
+      .toBe('\\`file\\` for “Issue B” — HTTP 422: milestone not found');
   });
 
   it('takes the LAST marked comment, because a project can be held twice', () => {
@@ -775,8 +855,10 @@ describe('a held project says WHY it is held (RA-1469)', () => {
     expect(holdReason([{ body: renderHoldComment(['because']) }])).toBe('because');
   });
 
-  it('escapes what Slack would read as markup, and bounds the length', () => {
-    expect(holdReason([holdComment('a <b> & c')])).toBe('a &lt;b&gt; &amp; c');
+  it('escapes what Kanon text would read as markup, and bounds the length', () => {
+    // `<`, `>` and `&` are characters in Kanon text; each hook escapes them for its system.
+    expect(holdReason([holdComment('a <b> & c')])).toBe('a <b> & c');
+    expect(holdReason([holdComment('a *b* [c](https://e) _d_')])).toBe('a \\*b\\* \\[c](https://e) \\_d\\_');
     const long = holdReason([holdComment('x'.repeat(400))]);
     expect(long!.length).toBe(160);
     expect(long!.endsWith('…')).toBe(true);
@@ -787,12 +869,12 @@ describe('a held project says WHY it is held (RA-1469)', () => {
       number: 961, url: 'u', title: 't', status: 'held', proposed: 5, filed: 5, closed: 1,
       heldReason: 'HTTP 403: Resource not accessible by integration',
     };
-    expect(renderProject(p)).toContain('*held* — the tracking issue carries `needs:human`: HTTP 403');
+    expect(renderProject(p)).toContain('**held** — the tracking issue carries `needs:human`: HTTP 403');
   });
 
   it('still renders the bare line when the cause cannot be read', () => {
     const p = { number: 961, url: 'u', title: 't', status: 'held', proposed: 5, filed: 5, closed: 1 };
-    expect(renderProject(p)).toContain('*held* — the tracking issue carries `needs:human`');
+    expect(renderProject(p)).toContain('**held** — the tracking issue carries `needs:human`');
     expect(renderProject(p)).not.toContain('needs:human`:');
   });
 });
@@ -971,7 +1053,7 @@ describe('kanon#380 — an unmarked Implementer comment is named on the member l
     expect(stall).toContain('1 Implementer comment(s) carry no role marker');
     const quiet = renderMember(member({ disposition: 'dispatched', unmarked: 2 }));
     expect(quiet, 'a member the digest is otherwise silent on').toContain('2 Implementer comment(s) carry no role marker');
-    expect(quiet, 'on a line of its own').toMatch(/^ {8}:grey_question: <[^>]+> /);
+    expect(quiet, 'a bullet of its own').toMatch(/^- \[#1305\]\([^)]+\) .* — 2 Implementer comment/);
     expect(renderMember(member({ disposition: 'stall' }))).not.toContain('role marker');
   });
 });
