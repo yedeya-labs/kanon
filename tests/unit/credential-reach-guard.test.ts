@@ -72,7 +72,7 @@ describe("this tree's credential-holding runs", () => {
   });
 
   it('only the workflows that run this tree reach its code: every pinned lane caller runs its release', () => {
-    expect([...new Set(REACH.filter((r) => r.file !== 'package.json').map((r) => r.workflow))].sort()).toEqual(['agent-lanes-smoke.yml', 'apps-check.yml', 'metrics-page.yml']);
+    expect([...new Set(REACH.filter((r) => r.file !== 'package.json').map((r) => r.workflow))].sort()).toEqual(['agent-lanes-smoke.yml', 'apps-check.yml', 'metrics-page.yml', 'release-please.yml']);
   });
 
   it("a pinned lane's `uses: ./` runs this tree: the project-setup hook's `npm ci` reads package.json, which declares no install hook", () => {

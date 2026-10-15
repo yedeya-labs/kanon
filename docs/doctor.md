@@ -165,6 +165,18 @@ Some findings your repository has decided to keep. A caller whose lane's file na
 
 An accepted id-token holder is this waiver's own form for `id-token.unaccepted`: the same `## Choices`, one bullet per job, a reason, malformed and stale alike. It keeps its own shape because doctor lists every holder with its status (`.idTokenHolders[].status`), and the acceptance is what makes one `accepted`.
 
+### An App that holds more than Kanon grants
+
+A repository whose App needs a permission beyond Kanon's shared grant declares it under `## Choices` in the adoption record (`K-LAYOUT-10`, `K-AGENT-3`), one bullet per App and permission: the bold label, the App's key (`author`, `judge` or `releaser`) as one code span, the permission and its level as one code span, and then in parentheses why the App holds it, on one line:
+
+```markdown
+- **Extra App permission:** `releaser` `workflows: write` (a candidate's pin pull request moves this repository's pins in .github/workflows)
+```
+
+- **Doctor then expects it of that repository's App, and of no other's.** An App without it is `app.permission-missing`, and the finding names the record; an App that holds it is no `app.permission-extra`. A permission held and not declared is still `app.permission-extra`.
+- **`kanon apps` and `apps-check` read the same bullet,** so the App is created with it, its register rows show it, and the installation is checked against it ([`docs/apps.md`](apps.md)).
+- **A declaration in another shape is malformed, and blocks** (`declaration.malformed`): outside `## Choices`, with nothing in its parentheses, naming an App Kanon doesn't have, a level other than `read` or `write`, or one App and permission twice.
+
 ### What can't be waived
 
 Each of these is reported as before, whatever the record says, and a waiver of one is malformed:
@@ -303,7 +315,7 @@ It is the finding, whole, as it would have been listed, with the waiver's reason
 | `register.split-slug` | `app` | yes | An App's roles name more than one slug. |
 | `register.shared-slug` | `app` | yes | Two Apps name one slug. |
 | `register.other-app-slug` | `app` | yes | An `Other App` row, an App installed that isn't an agent (`K-AGENT-3`), names the slug of a role's row. The message names each such slug and the rows that name it; `lane-check` and the lanes refuse the register too. |
-| `app.permission-missing` | `app` | yes | An App holds less than the release grants it. |
+| `app.permission-missing` | `app` | yes | An App holds less than the release grants it, with any extra permission the adoption record declares for it. |
 | `app.permission-extra` | `app` | no | An App holds more than the release grants it. It blocks nothing, since each lane narrows its token, though `apps-check` fails it. |
 | `app.unused` | `app` | no | An App the App register's history on the checkout once named, and its current copy doesn't, is still installed for the owner: a per-role App left from before the two-App move, say. Its fix gives the uninstall and delete steps. |
 | `secret.missing` | `secret` | yes | A secret a lane or an App needs is not set: one a called lane takes (of its pair of Claude credentials, the one its caller maps), or one of the checked release's Apps or lanes that any workflow maps, whatever its job calls. One finding per App, or per other secret; its message names the workflows that map it. An App's fix is `kanon apps --preflight`, then the `kanon apps` line that creates the App or stores its key. The QA store's two secrets count only where the store hook exists. Against a release whose lanes pass the hook no variables ([#479](https://github.com/yedeya-labs/kanon/issues/479)), a store secret is missing even while a repository variable of the same name holds its value, and the fix copies the variable into the secret through a pipe; against v0.34.x, which still passed the variables, that case is `qa-store.variables` alone. |

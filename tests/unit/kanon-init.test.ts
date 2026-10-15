@@ -109,6 +109,10 @@ type State = {
   registers?: Record<string, string | null>;
   /** The repository's environments, by name (plan 0010 D6); unset, the token can't list them. */
   environments?: string[];
+  /** The tags on Kanon's own repository, which `init` pins from (plan 0012 decision 5, CLI-1); this tree's release by default. */
+  kanonTags: Set<string>;
+  /** What GitHub answers a tag lookup on Kanon's repository with instead, when it can't answer (CLI-1). */
+  kanonTagsFail?: string;
 };
 
 /** A fake GitHub for one repository. Every call is recorded; the mutating ones change the state. */
@@ -127,6 +131,7 @@ const fakeGitHub = (over: Partial<State> = {}) => {
     // A job on the default branch reports "Lane check" unless a case says otherwise, so the
     // ruleset may require it (#444).
     defaultWorkflows: { 'ci.yml': ciFile('v1.2.3', 'main') },
+    kanonTags: new Set([PINNED]),
     ...over,
   };
   const calls: Array<{ args: string[]; input?: string }> = [];
@@ -186,6 +191,12 @@ const fakeGitHub = (over: Partial<State> = {}) => {
     if (method !== 'GET') return no(`unexpected gh ${args.join(' ')}`);
     if (path === `repos/${REPO}`) {
       return ok({ private: st.private, default_branch: 'main', owner: { login: 'acme', type: st.kind }, permissions: { admin: st.admin }, ...st.settings });
+    }
+    const tag = /^repos\/yedeya-labs\/kanon\/git\/ref\/tags\/(.+)$/.exec(path);
+    if (tag) {
+      const name = decodeURIComponent(tag[1]!);
+      if (st.kanonTagsFail) return no(st.kanonTagsFail);
+      return st.kanonTags.has(name) ? ok(`refs/tags/${name}\n`) : no('gh: Not Found (HTTP 404)');
     }
     if (path === `repos/${REPO}/branches/main`) return st.hasCommits ? ok('main') : no('gh: Branch not found (HTTP 404)');
     if (path.startsWith(`repos/${REPO}/rulesets?`)) {
@@ -1285,7 +1296,7 @@ const tableColumn = (heading: string, which = 0): string[] => {
 const fields = (heading: string) => tableColumn(heading).map((c) => /^`([^`]+)`$/.exec(c)?.[1] ?? c);
 
 type Doc = Record<string, unknown> & {
-  schema: string; status: string; exitCode: number; dryRun: boolean;
+  schema: string; kanon: string; pin: string | null; status: string; exitCode: number; dryRun: boolean;
   inspection: Record<string, unknown>; answers: Record<string, unknown>;
   files: Array<Record<string, unknown>>; changes: Array<Record<string, unknown>>; apps: Record<string, unknown>;
   findings: Array<{ id: string; category: string; blocking: boolean; subject: string; message: string; fix: { text: string; commands: string[]; url: string | null } }>;
@@ -1536,6 +1547,71 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
 
   it('documents each status the document can carry', () => {
     expect(tableColumn('### The document').filter((c) => /^`[a-z-]+`$/.test(c) && STATUSES.includes(c.replace(/`/g, '')))).toHaveLength(STATUSES.length);
+  });
+});
+
+describe('kanon init pins the release it runs from (plan 0012 decision 5, CLI-1)', () => {
+  const CANDIDATE = `candidate-${PINNED}`;
+  /** Every Kanon reference in the files a run wrote: each `yedeya-labs/kanon/...@<ref>`, and the plugin's marketplace ref. */
+  const refsWritten = (d: Doc) =>
+    d.files
+      .filter((f) => f.status === 'new' || f.status === 'rewritten')
+      .map((f) => String(f.content))
+      .flatMap((t) => [...t.matchAll(/yedeya-labs\/kanon\/[\w./-]+@([\w.-]+)/g), ...t.matchAll(/"ref":\s*"([^"]+)"/g)].map((m) => m[1]));
+  const FULL = ['--yes', '--json', '--no-apps', '--feature', 'full', '--consent', 'yes'];
+  const lookedFor = (calls: Array<{ args: string[] }>) => calls.map((c) => c.args.find((a) => a.includes('/git/ref/tags/'))).filter(Boolean);
+  /** What the checkout holds besides git's own directory. */
+  const tree = (dir: string) => readdirSync(dir).filter((f) => f !== '.git');
+
+  it('pins vX.Y.Z when Kanon has both that tag and its candidate', async () => {
+    const r = await run(checkout(), fakeGitHub({ kanonTags: new Set([PINNED, CANDIDATE]) }), FULL);
+    expect(r.status, r.err).toBe(0);
+    const d = parse(r);
+    expect(d.pin).toBe(PINNED);
+    expect(d.kanon).toBe(PINNED);
+    const refs = refsWritten(d);
+    expect(refs.length).toBeGreaterThan(5);
+    expect(new Set(refs)).toEqual(new Set([PINNED]));
+  });
+
+  it('pins candidate-vX.Y.Z when Kanon has only that tag: every reference it writes is the candidate', async () => {
+    const dir = checkout();
+    const github = fakeGitHub({ kanonTags: new Set([CANDIDATE]) });
+    const r = await run(dir, github, FULL);
+    expect(r.status, r.err).toBe(0);
+    const d = parse(r);
+    expect(d.pin).toBe(CANDIDATE);
+    // `kanon` stays the release of the init that ran, its package.json's version.
+    expect(d.kanon).toBe(PINNED);
+    const refs = refsWritten(d);
+    expect(refs.length).toBeGreaterThan(5);
+    expect(new Set(refs)).toEqual(new Set([CANDIDATE]));
+    expect(read(dir, '.claude/settings.json')).toBe(pluginSettingsFile(CANDIDATE));
+    expect(r.err).toContain(`at Kanon ${CANDIDATE}`);
+    expect(lookedFor(github.calls)).toEqual([`repos/yedeya-labs/kanon/git/ref/tags/${PINNED}`, `repos/yedeya-labs/kanon/git/ref/tags/${CANDIDATE}`]);
+  });
+
+  it('refuses when Kanon has neither tag, naming both, and changes nothing', async () => {
+    const dir = checkout();
+    const github = fakeGitHub({ kanonTags: new Set(['v0.0.1', 'candidate-v0.0.1']) });
+    const r = await run(dir, github, ['--yes', '--json']);
+    expect(r.status).toBe(1);
+    const d = parse(r);
+    expect(d.status).toBe('error');
+    expect(d.error).toContain(`neither the tag ${PINNED} nor ${CANDIDATE}`);
+    expect(d.error).toContain('Nothing was changed.');
+    expect(r.err).toContain(`kanon init: this is Kanon ${PINNED}`);
+    expect(writes(github.calls)).toEqual([]);
+    expect(tree(dir)).toEqual([]);
+    expect(r.appsCalls).toEqual([]);
+  });
+
+  it("refuses when it can't tell whether a tag exists, rather than guess", async () => {
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub({ kanonTagsFail: 'error connecting to api.github.com' }), ['--yes', '--json']);
+    expect(r.status).toBe(1);
+    expect(parse(r).error).toContain(`could not tell whether yedeya-labs/kanon has the tag ${PINNED} (error connecting to api.github.com)`);
+    expect(tree(dir)).toEqual([]);
   });
 });
 

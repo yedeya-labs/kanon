@@ -5,7 +5,8 @@
 // repositories (ADR 0013, decision 2): the Author (Implementer, Lead, Explorer, Overseer), the
 // Judge (Reviewer, Merger) and the optional Releaser. For each App it builds a manifest holding
 // exactly the App's permissions (the `apps` block of rulebook/agent-permissions.json: the union
-// of its roles' rows, plus any broadened permission, K-ADOPT-8), opens the owner's "create App"
+// of its roles' rows, plus any broadened permission, K-ADOPT-8), plus any extra permission the
+// adoption record declares for it (K-LAYOUT-10), opens the owner's "create App"
 // page with it filled in (a personal account's or an organisation's, detected from the owner's
 // account type: plan 0005, decision 1), exchanges the one-time code for the App's id and
 // private key, stores both as Actions secrets on EVERY repository named in --repo with the
@@ -45,6 +46,7 @@ import { URL, fileURLToPath } from 'node:url';
 import { writeRegisterRow } from './app-register.mjs';
 import { describeSource, isAuthFailure, tokenFix, tokenSource, whoami } from './gh-token.mjs';
 import { actorName, bypassCommand, readCovering, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
+import { readAppExtras, withExtras } from '../scripts/lib/app-extras.mjs';
 
 export const REGISTER_PATH = 'docs/qa/agent-identities.md';
 const API = 'https://api.github.com';
@@ -319,7 +321,8 @@ export const checkoutCheck = (deps, dir, owner, repo) => {
 };
 
 /**
- * The App manifest for one of Kanon's Apps: exactly the App's permissions, private, no webhook.
+ * The App manifest for one of Kanon's Apps: exactly the App's permissions (with any extra permission
+ * the adoption record declares, which the caller has added to `spec`), private, no webhook.
  * @param {{ owner: string, repo: string, name: string, redirectUrl: string, spec: AppSpec | RoleSpec }} a
  */
 export const buildManifest = ({ owner, repo, name, redirectUrl, spec }) => {
@@ -918,6 +921,23 @@ export const apps = async (argv, overrides = {}) => {
   deps.out(`${owner} is ${account.kind === 'User' ? 'a personal account' : 'an organisation'}; its Apps are created at ${pages.newApp}.`);
   deps.out(`The App register is ${register}.`);
 
+  // The extra permissions the adoption record beside the register declares (`K-AGENT-3`): each
+  // App is created, reused and registered with them, and with nothing more.
+  const recordPath = join(dirname(register), 'adoption.md');
+  const declared = readAppExtras(existsSync(recordPath) ? readFileSync(recordPath, 'utf8') : null, Object.keys(specs));
+  if (declared.errors.length) {
+    for (const e of declared.errors) deps.err(`kanon apps: ${e}. Nothing was changed.`);
+    return 1;
+  }
+  /** @param {string} key @returns {AppSpec} */
+  const specOf = (key) => {
+    const spec = /** @type {AppSpec} */ (specs[key]);
+    const extra = declared.extras[key];
+    if (!extra) return spec;
+    deps.out(`The ${spec.app} also holds ${Object.entries(extra).map(([k, v]) => `${k}: ${v}`).join(', ')}, as ${recordPath} declares.`);
+    return { ...spec, permissions: withExtras(spec.permissions, extra) };
+  };
+
   // A reused App's ID, asked for before anything changes, with the page it is on (#623).
   const unnamed = opts.reuse.filter((r) => !r.id);
   if (unnamed.length) {
@@ -949,13 +969,13 @@ export const apps = async (argv, overrides = {}) => {
   const done = [];
   try {
     for (const key of opts.apps) {
-      const spec = /** @type {AppSpec} */ (specs[key]);
+      const spec = specOf(key);
       const r = await createApp({ owner, pages, repos, key, spec, name: opts.names[key] ?? `${owner}-${key}`.toLowerCase(), register, deps });
       warnings += r.warnings.length;
       done.push({ spec, slug: r.slug, appId: r.appId });
     }
     for (const { app: key, slug, id, file } of opts.reuse) {
-      const spec = /** @type {AppSpec} */ (specs[key]);
+      const spec = specOf(key);
       const r = await reuseApp({ owner, pages, repos, key, slug, id, file: resolve(file), spec, specs, register, deps });
       warnings += r.warnings.length;
       done.push({ spec, slug: r.slug, appId: r.appId });

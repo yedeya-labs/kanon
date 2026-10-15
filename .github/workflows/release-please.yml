@@ -29,3 +29,141 @@ jobs:
     secrets:
       RELEASER_APP_ID: ${{ secrets.RELEASER_APP_ID }}
       RELEASER_APP_PRIVATE_KEY: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
+
+  # THE PIN JOB (plan 0009 §6, its step S4): Kanon runs each candidate on itself the day it is
+  # cut. It is Kanon's, not the reusable workflow's: it moves Kanon's own pins to Kanon's own
+  # candidates, and teaches no check about Kanon. Two jobs: `candidate` says which candidate
+  # this push cut, if any, and `pins` opens the pull request.
+  #
+  # Which push cut a candidate. The reusable release workflow declares no outputs, so this caller
+  # can't read release-please's (`release_created`, `tag_name`, `sha`), and release-please has no
+  # output that says "pre-release" anyway. So `candidate` reads what the release leaves on
+  # GitHub: the version the manifest records at the pushed commit, the tag
+  # `candidate-v<version>`, and its Release. Only a push whose commit that tag names, with a
+  # Release that is a pre-release, is a candidate's creation. A plain release (`vX.Y.Z`) and
+  # every other push leave `tag` empty, and `pins` is skipped. A read that fails fails the job
+  # (K-PRIN-10), so an outage never reads as "no candidate".
+  candidate:
+    name: Find the candidate this push cut
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.find.outputs.tag }}
+    steps:
+      - name: Find the candidate this push cut
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          none() {
+            echo "No candidate: $1. Kanon's pins stay where they are." >> "$GITHUB_STEP_SUMMARY"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          version="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$REPO/contents/.release-please-manifest.json?ref=$SHA" --jq '.["."]')"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || none "the manifest's version at $SHA, '$version', is not X.Y.Z"
+          tag="candidate-v$version"
+          found="$(gh api "repos/$REPO/git/matching-refs/tags/$tag" --jq '.[].ref')"
+          grep -qx "refs/tags/$tag" <<< "$found" || none "no tag $tag"
+          commit="$(gh api "repos/$REPO/commits/$tag" --jq .sha)"
+          [[ "$commit" == "$SHA" ]] || none "$tag names $commit, not this push's $SHA"
+          pre="$(gh api "repos/$REPO/releases?per_page=30" --jq ".[] | select(.tag_name == \"$tag\") | .prerelease")"
+          [[ "$pre" == "true" ]] || none "$tag has no pre-release Release"
+          echo "Candidate $tag, cut at $SHA." >> "$GITHUB_STEP_SUMMARY"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  # Opens `ci(deps): run Kanon on candidate vX.Y.Z` as the Releaser, with the edit
+  # `scripts/move-pins.mjs` makes at the candidate's commit: every `yedeya-labs/kanon` pin under
+  # `.github/` and the plugin's `ref` in `.claude/settings.json`. The Owner merges it, and its
+  # merge starts the candidate's soak.
+  #
+  # THE END-TO-END GATE GOES HERE (plan 0012 §8.1, decision 2, its step E11; not built): Kanon's
+  # pins move only to a candidate the end-to-end harness passed. E11 adds the gate as a
+  # precondition of this job, in its `needs:` and `if:` beside `candidate`, and the steps below
+  # don't change: they take the candidate's tag alone, and open nothing when its pull request
+  # already exists, so a later trigger (the gate turning green) can run them again.
+  #
+  # The Releaser's token is minted after the edit, and is required: the pull request must be the
+  # Releaser's so CI runs on it. Its commit is made through the API with no author of its own,
+  # so GitHub signs it as the Releaser and the `dco` check exempts it, as it does the release
+  # PR's commits. It changes workflow files, so the token asks for Workflows write too.
+  pins:
+    name: Open the pin pull request
+    needs: candidate
+    if: needs.candidate.outputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # The pushed commit, which is the candidate's: a push's checkout is `github.sha`.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Move every pin to the candidate
+        env:
+          TAG: ${{ needs.candidate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          node scripts/move-pins.mjs "$TAG" > "$RUNNER_TEMP/moved"
+          git --no-pager diff --stat
+      - name: Mint the Releaser's token
+        id: releaser
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASER_APP_ID }}
+          private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+      - name: Open the pull request as the Releaser
+        id: open
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          TAG: ${{ needs.candidate.outputs.tag }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          BASE: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#candidate-v}"
+          title="ci(deps): run Kanon on candidate v$version"
+          branch="kanon/pins-$TAG"
+          files=()
+          while IFS= read -r f; do if [[ -n "$f" ]]; then files+=("$f"); fi; done < "$RUNNER_TEMP/moved"
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "Every pin already names $TAG: nothing to open." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          existing="$(gh pr list -R "$REPO" --head "$branch" --state all --json url --jq '.[0].url // empty')"
+          if [[ -n "$existing" ]]; then
+            echo "The pin pull request for $TAG already exists: $existing" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # The branch starts at the candidate's commit; one left by a failed run is reset.
+          if gh api "repos/$REPO/git/matching-refs/heads/$branch" --jq '.[].ref' | grep -qx "refs/heads/$branch"; then
+            gh api -X PATCH "repos/$REPO/git/refs/heads/$branch" -f sha="$SHA" -F force=true > /dev/null
+          else
+            gh api -X POST "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$SHA" > /dev/null
+          fi
+          for f in "${files[@]}"; do
+            jq -n --arg path "$f" --rawfile text "$f" '{path: $path, contents: ($text | @base64)}'
+          done | jq -s . > "$RUNNER_TEMP/additions.json"
+          jq -n --arg repo "$REPO" --arg branch "$branch" --arg head "$SHA" --arg headline "$title" \
+            --slurpfile additions "$RUNNER_TEMP/additions.json" \
+            '{query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+              variables: {input: {branch: {repositoryNameWithOwner: $repo, branchName: $branch}, expectedHeadOid: $head,
+                message: {headline: $headline}, fileChanges: {additions: $additions[0]}}}}' > "$RUNNER_TEMP/commit.json"
+          gh api graphql --input "$RUNNER_TEMP/commit.json" --jq .data.createCommitOnBranch.commit.oid
+          body="Moves every Kanon pin under \`.github/\`, and the plugin's \`ref\` in \`.claude/settings.json\`, to the candidate \`$TAG\`, with \`scripts/move-pins.mjs\` (plan 0009 §6, step S4). Kanon runs each candidate on itself before it is promoted; this pull request's merge starts the candidate's 72-hour soak."
+          url="$(gh pr create -R "$REPO" --base "$BASE" --head "$branch" --title "$title" --body "$body")"
+          echo "Opened $url" >> "$GITHUB_STEP_SUMMARY"

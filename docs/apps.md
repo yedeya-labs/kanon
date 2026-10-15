@@ -8,7 +8,7 @@ Step 12 of the adoption checklist (`K-ADOPT-1`) gives an owner **two GitHub Apps
 | **Judge** | Reviewer, Merger | `JUDGE_APP_ID`, `JUDGE_APP_PRIVATE_KEY` |
 | **Releaser**, optional | the release workflow alone | `RELEASER_APP_ID`, `RELEASER_APP_PRIVATE_KEY` |
 
-Each App holds exactly the union of its roles' permissions (`K-ADOPT-8`), plus the Author's one broadened permission, Commit statuses write, for the implementer status (`K-AGENT-3`). Each lane still narrows its token to what it uses (`K-AGENT-46`), and each agent still speaks as its role, through a persona header and a role marker. Each App's id and key are stored as Actions secrets (`K-AGENT-6`), and each of its roles gets a row in the App register, the rows sharing the App's slug (`K-LAYOUT-6`). Done by hand, each App means a name, the permissions one by one, turning the webhook off, a key, an installation, two secrets per repository and a row per role. `kanon apps` does all of that from a [GitHub App manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest), and leaves the Owner two clicks per App: **Create** and **Install**. The command never creates an App or a key itself; the Owner does, in GitHub's own pages (`K-AGENT-6`).
+Each App holds exactly the union of its roles' permissions (`K-ADOPT-8`), plus the Author's one broadened permission, Commit statuses write, for the implementer status (`K-AGENT-3`). A repository whose App needs more declares it in its adoption record, as an `Extra App permission` bullet under `## Choices` with its reason; `kanon apps` then builds that App's manifest and register rows with it, and `apps-check` and doctor expect it, in that repository alone ([`docs/doctor.md`](doctor.md#an-app-that-holds-more-than-kanon-grants)). Each lane still narrows its token to what it uses (`K-AGENT-46`), and each agent still speaks as its role, through a persona header and a role marker. Each App's id and key are stored as Actions secrets (`K-AGENT-6`), and each of its roles gets a row in the App register, the rows sharing the App's slug (`K-LAYOUT-6`). Done by hand, each App means a name, the permissions one by one, turning the webhook off, a key, an installation, two secrets per repository and a row per role. `kanon apps` does all of that from a [GitHub App manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest), and leaves the Owner two clicks per App: **Create** and **Install**. The command never creates an App or a key itself; the Owner does, in GitHub's own pages (`K-AGENT-6`).
 
 ## What you need
 
@@ -26,7 +26,7 @@ Kanon isn't on npm. Run the command straight from a tagged Kanon release, from t
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.39.0 kanon apps --owner <owner> --repo <repo>[,<repo>...] --apps author,judge
+npx --yes --package github:yedeya-labs/kanon#v0.40.0 kanon apps --owner <owner> --repo <repo>[,<repo>...] --apps author,judge
 ```
 
 <!-- x-release-please-end -->
@@ -47,13 +47,13 @@ kanon apps --owner <owner> --repo <new repo> --reuse author:<author slug>@<autho
 
 The command needs the ID from you because Kanon's Apps are private, and GitHub answers 404 to your token when asked for a private App by its slug (`GET /apps/<slug>`, [#623](https://github.com/yedeya-labs/kanon/issues/623)). Without it, the command stops before it changes anything and names the page to copy it from.
 
-For each App it checks the key is a key of the slug (GitHub accepts a token the key signs as that ID only if it is, and then names the App's slug, which must be the one you gave), checks the slug's App holds exactly the permissions of the App you named (`rulebook/agent-permissions.json`, as `apps-check` checks them), checks the installation covers the repository, stores the two secrets, **deletes the key file**, and writes the register rows. An ID or a key that isn't the slug's App's, a slug whose App holds other permissions (the Author's slug given as the Judge's, say: it names which App's they are), or an installation that misses the repository, stops it with nothing stored and the file kept. An organisation may instead hold the secrets once, as organisation secrets, where its plan offers them to its repositories.
+For each App it checks the key is a key of the slug (GitHub accepts a token the key signs as that ID only if it is, and then names the App's slug, which must be the one you gave), checks the slug's App holds exactly the permissions of the App you named (`rulebook/agent-permissions.json`, plus any extra permission the adoption record declares for it, as `apps-check` checks them), checks the installation covers the repository, stores the two secrets, **deletes the key file**, and writes the register rows. An ID or a key that isn't the slug's App's, a slug whose App holds other permissions (the Author's slug given as the Judge's, say: it names which App's they are), or an installation that misses the repository, stops it with nothing stored and the file kept. An organisation may instead hold the secrets once, as organisation secrets, where its plan offers them to its repositories.
 
 ## What happens, and what you click
 
 For each App, in turn:
 
-1. **The manifest.** The command builds it from the `apps` block of [`rulebook/agent-permissions.json`](../rulebook/agent-permissions.json), the machine-readable twin of [chapter 03's Apps table](../rulebook/03-agents.md): exactly the App's permissions, a private App, and no webhook. A test fails if the file and the table disagree.
+1. **The manifest.** The command builds it from the `apps` block of [`rulebook/agent-permissions.json`](../rulebook/agent-permissions.json), the machine-readable twin of [chapter 03's Apps table](../rulebook/03-agents.md): exactly the App's permissions, plus any extra permission the adoption record declares for it ([`docs/doctor.md`](doctor.md#an-app-that-holds-more-than-kanon-grants)), a private App, and no webhook. A test fails if the file and the table disagree.
 2. **You click "Create GitHub App".** Your browser opens a local page that sends the manifest to the owner's "create App" page: your personal account's or your organisation's. GitHub shows the name and the permissions; check them and click **Create GitHub App for &lt;owner&gt;**.
 3. **The key.** GitHub redirects back to the local listener with a one-time code. The command refuses a redirect whose `state` doesn't match the one it sent, then exchanges the code for the App's id and private key.
 4. **The secrets.** It sets `<APP>_APP_ID` and `<APP>_APP_PRIVATE_KEY` (for example `JUDGE_APP_ID`) on every repository named, with `gh secret set`. The key goes to `gh` on standard input, and is never written to disk, printed, or passed as an argument.
@@ -65,7 +65,7 @@ For each App, in turn:
 
 ## Checking the installations later
 
-A person's token often can't list an account's App installations, but each App can read its own. Kanon's `apps-check` workflow ([`.github/workflows/apps-check.yml`](../.github/workflows/apps-check.yml)) does that for each of the Author, the Judge and the Releaser the register lists: it mints the App's token from `<APP>_APP_ID` and `<APP>_APP_PRIVATE_KEY`, then, with [`cli/apps-check.mjs`](../cli/apps-check.mjs), fails if the App's roles name more than one slug, if the minted slug isn't the register's, if the installation doesn't cover the repository, or if its permissions differ from the App's in `rulebook/agent-permissions.json`, and warns if it covers all of the owner's repositories. Each App's job writes a summary table. It runs by hand and is not a required check.
+A person's token often can't list an account's App installations, but each App can read its own. Kanon's `apps-check` workflow ([`.github/workflows/apps-check.yml`](../.github/workflows/apps-check.yml)) does that for each of the Author, the Judge and the Releaser the register lists: it mints the App's token from `<APP>_APP_ID` and `<APP>_APP_PRIVATE_KEY`, then, with [`cli/apps-check.mjs`](../cli/apps-check.mjs), fails if the App's roles name more than one slug, if the minted slug isn't the register's, if the installation doesn't cover the repository, or if its permissions differ from the App's in `rulebook/agent-permissions.json`, plus any extra permission the adoption record declares for it, and warns if it covers all of the owner's repositories. Each App's job writes a summary table. It runs by hand and is not a required check.
 
 It is a reusable workflow. Add a thin caller, `.github/workflows/apps-check.yml`, pinned to the same **exact version** as your lanes (`K-ADOPT-11`), and map the two secrets of each App your register lists:
 
@@ -83,7 +83,7 @@ jobs:
   apps:
     permissions:
       contents: read
-    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@v0.39.0
+    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@v0.40.0
     secrets:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}

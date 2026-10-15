@@ -122,6 +122,16 @@ The deploy lane deploys your published releases to the environments your adoptio
 
 Each declared environment is a GitHub environment you create, production with its required reviewers, or the record's fallback marker where the plan has none ([`docs/lanes.md`](lanes.md#the-deploy-lane)); [`kanon doctor`](doctor.md) checks them.
 
+## The release it pins
+
+Every Kanon reference `init` writes, each caller's `uses:`, `lane-check`'s action and the plugin's marketplace ref, is pinned to **the release it runs from** ([plan 0012](plans/0012-end-to-end-tests.md) decision 5, `CLI-1`). Its version is `package.json`'s, `vX.Y.Z`, but a candidate's commit carries the version it will be promoted to, a tag that doesn't exist until then ([plan 0009](plans/0009-release-channels-and-api-key.md)). So `init` asks GitHub which tag exists on `yedeya-labs/kanon`, right after it says whose token it uses:
+
+- **`vX.Y.Z`** when that tag exists, whether or not its candidate does too: the stable release;
+- else **`candidate-vX.Y.Z`** when that tag exists: running ahead of stable, which [`kanon doctor`](doctor.md) allows and reports as `pin.candidate`;
+- else it **refuses**, naming both tags it looked for, and changes nothing (exit 1, the error document). A checkout of a commit that is neither a release nor a candidate is such a case. If GitHub can't answer whether a tag exists, other than that it doesn't, `init` refuses too rather than guess.
+
+The pin is `pin` in the JSON document, and the summary's *Pin* line; `kanon` stays the version of the `init` that ran.
+
 ## The token it needs
 
 `init` reads and writes GitHub through `gh`, with `GH_TOKEN`, `GITHUB_TOKEN` or `gh`'s own login, in that order, so a `GH_TOKEN` left in the environment is the token that counts, whoever `gh auth status` says is signed in. It says whose token it used (`token`, below, and the summary), never the token, and the adopt skill asks the person to confirm it before anything is written ([#630](https://github.com/yedeya-labs/kanon/issues/630)). What it can't do with that token it leaves as a finding, the exact step for someone whose token can: labels and milestones need Issues: write, the merge settings and the ruleset Administration: write, and the secrets' names Secrets: read (`kanon apps` writes them, with Secrets: read and write). Every permission a person's fine-grained token needs for the adopt, doctor and upgrade skills, and the reads a fine-grained token can't do on a private repository, such as `gh pr checks`, are listed in one place: [`docs/doctor.md`, "A person's fine-grained token"](doctor.md#a-persons-fine-grained-token).
@@ -149,7 +159,8 @@ Each declared environment is a GitHub environment you create, production with it
 | Field | Type | Meaning |
 |---|---|---|
 | `schema` | string | `kanon-init/v1` |
-| `kanon` | string | The release of the `init` that ran, `vX.Y.Z`: every reference it writes is pinned to it. |
+| `kanon` | string | The release of the `init` that ran, `vX.Y.Z`, its `package.json`'s version. |
+| `pin` | string | The tag every reference it writes is pinned to: `kanon` when that tag exists, else its candidate, `candidate-vX.Y.Z` ([The release it pins](#the-release-it-pins)). |
 | `status` | string | `complete`, `steps-left`, `failed` or `error`, below. |
 | `exitCode` | number | The exit code: 0, 1 or 2. |
 | `repository` | string | `<owner>/<repo>`. |
