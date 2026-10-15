@@ -37,8 +37,38 @@ import { URL } from 'node:url';
 /** The requirements file of the Kanon tree this runs from. @returns {Requirements} */
 export const loadRequirements = () => JSON.parse(readFileSync(new URL('../requirements.json', import.meta.url), 'utf8'));
 
-/** The release this Kanon tree is, `v<package.json version>`: what every file `init` writes pins. */
+/** The release this Kanon tree is, `v<package.json version>`: what `init` pins, or its candidate (`releasePin`). */
 export const kanonRelease = () => `v${JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version}`;
+
+/** Kanon's repository, which holds its release tags and every workflow a caller calls. */
+const KANON = 'yedeya-labs/kanon';
+
+/**
+ * The tag `init` pins every reference to (plan 0012 decision 5, `CLI-1`): the release this tree
+ * is, `vX.Y.Z`, when that tag exists on Kanon; else its candidate, `candidate-vX.Y.Z`, the same
+ * code before it is promoted (plan 0009), when that tag exists; else none. A tree run from a
+ * candidate's commit carries the version it will be promoted to, a tag that doesn't exist yet,
+ * so pinning `vX.Y.Z` there would write callers that call nothing. Each tag is looked for with
+ * `gh api`, as everything `init` reads from GitHub: a 404 says it is absent, and any other
+ * failure leaves it unknown, so `init` refuses rather than guess.
+ * @param {(args: string[]) => Promise<{ status: number | null, stdout: string, stderr: string }>} gh
+ * @param {string} release `vX.Y.Z`, as `kanonRelease` names it
+ * @returns {Promise<{ pin: string, refusal: null } | { pin: null, refusal: string }>}
+ */
+export const releasePin = async (gh, release) => {
+  const tags = [release, `candidate-${release}`];
+  for (const tag of tags) {
+    const r = await gh(['api', `repos/${KANON}/git/ref/tags/${encodeURIComponent(tag)}`, '--jq', '.ref']);
+    if (r.status === 0) return { pin: tag, refusal: null };
+    if (!/HTTP 404|Not Found/i.test(r.stderr)) {
+      return { pin: null, refusal: `could not tell whether ${KANON} has the tag ${tag} (${r.stderr.trim() || `exit ${r.status}`}), so it can't tell which release to pin. Nothing was changed.` };
+    }
+  }
+  return {
+    pin: null,
+    refusal: `this is Kanon ${release}, and ${KANON} has neither the tag ${tags[0]} nor ${tags[1]}, so every reference init would write would call a release that doesn't exist. Run the init of a Kanon release or candidate tag, as docs/install.md runs it. Nothing was changed.`,
+  };
+};
 
 /**
  * Each lane's caller: its `name`, its job's id, and its triggers. `dispatch` lists the
