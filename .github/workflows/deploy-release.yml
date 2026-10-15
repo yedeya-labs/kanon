@@ -21,11 +21,14 @@
 # (plan 0010 §3, decision 3).
 #
 # THE GATE (`scripts/deploy-gate.mjs gate`) holds no secret and no cloud credential, and refuses,
-# by code: a draft or missing release, or a tag that moved (`draft`, `no-release`); a commit off
-# the default branch (`not-default-branch`); a caller list that isn't the adoption record's at
-# that commit, in order (`declaration-mismatch`); and a commit whose `ci.yml` push run isn't
-# green, waited for up to the record's CI wait, 90 minutes by default (`ci-red`, `ci-timeout`;
-# `K-SHIP-8`). The job's limit is a hosted job's, 360 minutes, the CI wait's bound.
+# by code: a draft or missing release, a tag that moved, or a dispatch run at another ref than its
+# release's tag (`draft`, `no-release`); a commit off the default branch (`not-default-branch`);
+# a caller list that isn't the adoption record's at that commit, in order
+# (`declaration-mismatch`); and a commit whose `ci.yml` push run isn't green, waited for up to
+# the record's CI wait, 90 minutes by default (`ci-red`, `ci-timeout`; `K-SHIP-8`). The job's
+# limit is a hosted job's, 360 minutes. The gate never waits longer than 345 of them
+# (`CI_WAIT_CEILING` in `scripts/deploy-gate.mjs`), whatever the record declares, so a CI that
+# never finishes ends in `ci-timeout`, which is filed, not in a cancellation, which files nothing.
 #
 # THE TRUST PROBE (plan 0010 §5, decision 6). A job outside every environment, with
 # `id-token: write`, runs the adopter's deploy hook with `probe: 'true'` and the declared list.

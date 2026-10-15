@@ -10,6 +10,7 @@ import {
 } from '../../scripts/deploy-row.mjs';
 import { issueTitle, report, reportFrom } from '../../scripts/deploy-report.mjs';
 import * as collected from '../../scripts/lib/telemetry-artifacts.mjs';
+import { CI_POLL_MS, CI_WAIT_CEILING, GATE_MARGIN_MINUTES } from '../../scripts/deploy-gate.mjs';
 import { BUILD_DIR, buildArtifactName, checkBuild, listFiles, readBuild, treeDigest } from '../../scripts/deploy-build.mjs';
 
 /**
@@ -30,7 +31,7 @@ const LANE = [RELEASE, ENV];
 
 type Step = { id?: string; name?: string; uses?: string; run?: string; if?: string; with?: Record<string, unknown>; env?: Record<string, unknown> };
 type Job = {
-  name?: string; needs?: string | string[]; if?: string; uses?: string; environment?: unknown; permissions?: Record<string, string> | string;
+  name?: string; 'timeout-minutes'?: number; needs?: string | string[]; if?: string; uses?: string; environment?: unknown; permissions?: Record<string, string> | string;
   concurrency?: { group?: string; 'cancel-in-progress'?: boolean; queue?: string } | string; steps?: Step[]; secrets?: unknown; with?: Record<string, unknown>; outputs?: Record<string, string>;
 };
 type Workflow = { on?: { workflow_call?: { inputs?: Record<string, unknown>; secrets?: Record<string, unknown> } }; permissions?: unknown; jobs: Record<string, Job> };
@@ -262,6 +263,13 @@ function buildProblems(w: Record<string, Workflow>): string[] {
   if (!/deploy-build\.mjs" check$/.test(String(check?.run)) || check?.env?.DIGEST !== '${{ steps.build-input.outputs.digest }}') out.push(`${ENV}:deploy: doesn't check the build's digest`);
   if (!(idx('build-input') < idx('download') && idx('download') < idx('build-check') && idx('build-check') < deployAt) || idx('build-input') < 0) out.push(`${ENV}:deploy: the deploy hook can run before the build is checked`);
   if (ds[deployAt]?.with?.artifact !== '${{ steps.build-check.outputs.path }}') out.push(`${ENV}:deploy: the deploy hook isn't given the checked build`);
+  // The gate's CI wait ends inside its job (#912): the longest wait and the margin for the setup,
+  // checks 1 to 3 and the last poll (several polls' worth), all within the job's limit, so a CI that
+  // never finishes is refused `ci-timeout`, which is filed, never cancelled, which files nothing.
+  const limit = w[RELEASE]?.jobs.gate?.['timeout-minutes'];
+  if (typeof limit !== 'number' || CI_WAIT_CEILING + GATE_MARGIN_MINUTES > limit || GATE_MARGIN_MINUTES * 60_000 < 5 * CI_POLL_MS) {
+    out.push(`${RELEASE}:gate: its timeout-minutes (${limit}) can end the CI wait (up to ${CI_WAIT_CEILING} minutes, after the setup) in a cancellation instead of \`ci-timeout\``);
+  }
   const failed = String(dep?.outputs?.['build-failed'] ?? '');
   if (!['build-input', 'download', 'build-check'].every((id) => failed.includes(`steps.${id}.outcome == 'failure'`))) out.push(`${ENV}:deploy: a failed download or check isn't output for the record's \`build\` stage`);
   return out;
@@ -348,6 +356,11 @@ describe('the deploy lane holds its shape', () => {
       red((w) => { step(job(w, ENV, 'deploy'), 'smoke').env = { KANON_DEPLOY_SECRET: ALLOWED_SECRET }; }, /deploy\.yml:deploy:smoke: references a secret/);
       red((w) => { (job(w, RELEASE, 'probe').steps!.find((s) => s.uses === './.github/actions/deploy')!).env = { KANON_DEPLOY_SECRET: ALLOWED_SECRET }; }, /deploy-release\.yml:probe:.*references a secret/);
       red((w) => { (job(w, ENV, 'deploy') as Record<string, unknown>).env = { KANON_DEPLOY_SECRET: ALLOWED_SECRET }; }, /references a secret outside a step/);
+    });
+    it("the gate job's limit lowered under the CI wait plus its setup (#912)", () => {
+      red((w) => { job(w, RELEASE, 'gate')['timeout-minutes'] = CI_WAIT_CEILING; }, /gate: its timeout-minutes \(345\) can end the CI wait/);
+      red((w) => { job(w, RELEASE, 'gate')['timeout-minutes'] = CI_WAIT_CEILING + GATE_MARGIN_MINUTES - 1; }, /gate: its timeout-minutes/);
+      red((w) => { delete job(w, RELEASE, 'gate')['timeout-minutes']; }, /gate: its timeout-minutes \(undefined\)/);
     });
     it('the probe run under the `no-environments` marker', () => red((w) => { delete job(w, RELEASE, 'probe').if; }, /runs under the no-environments marker/));
     it("the deploy job's own Maintainer check not handed the fallback or the role, or its refusal not output", () => {
