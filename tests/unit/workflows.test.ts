@@ -321,22 +321,217 @@ describe('K-SHIP-7 the reusable release workflow', () => {
 });
 
 describe("K-SHIP-7 Kanon's release caller", () => {
-  const { wf } = load('release-please.yml');
-  const jobs = Object.values(wf.jobs);
+  const { wf, text } = load('release-please.yml');
+  type CallerJob = Job & { needs?: string; outputs?: Record<string, string>; 'timeout-minutes'?: number };
+  const jobs = wf.jobs as Record<string, CallerJob>;
+  const release = jobs.release;
+  const candidate = jobs.candidate;
+  const pins = jobs.pins;
 
   it('runs on every push to main, and nowhere else', () => {
     expect(wf.on).toEqual({ push: { branches: ['main'] } });
   });
 
-  it('calls the reusable workflow through `$/`, from its one job', () => {
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.uses).toBe('$/.github/workflows/release.yml');
-    expect(jobs[0]?.steps).toBeUndefined();
+  it('calls the reusable workflow through `$/`, and adds only the pin job (plan 0009 S4)', () => {
+    expect(Object.keys(jobs)).toEqual(['release', 'candidate', 'pins']);
+    expect(release?.uses).toBe('$/.github/workflows/release.yml');
+    expect(release?.steps).toBeUndefined();
   });
 
-  it('grants nothing at the top, and the two writes on the calling job only', () => {
+  it('grants nothing at the top, the two writes on the calling job only, and contents: read elsewhere', () => {
     expect(wf.permissions).toEqual({});
-    expect(jobs[0]?.permissions).toEqual({ contents: 'write', 'pull-requests': 'write' });
+    expect(release?.permissions).toEqual({ contents: 'write', 'pull-requests': 'write' });
+    expect(candidate?.permissions).toEqual({ contents: 'read' });
+    expect(pins?.permissions).toEqual({ contents: 'read' });
+  });
+
+  it('interpolates no expression into any run line, and bounds every job it runs', () => {
+    for (const s of stepsOf(wf)) expect(s.run ?? '').not.toContain('${{');
+    expect(candidate?.['timeout-minutes']).toBeGreaterThan(0);
+    expect(pins?.['timeout-minutes']).toBeGreaterThan(0);
+  });
+
+  // Plan 0009 S4. The reusable workflow declares no outputs, so the caller can't read
+  // release-please's; `candidate` reads the tag and Release the release left at this push's
+  // commit instead. Runs the step's own script against a stub `gh`.
+  describe('the candidate job says which candidate this push cut, and only a candidate', () => {
+    const find = candidate?.steps.find((s) => s.id === 'find');
+    const SHA = 'abc123';
+    type World = { version?: string; tags?: string[]; commit?: string; prerelease?: string; fail?: string };
+    const run = (world: World) => {
+      const dir = mkdtempSync(join(tmpdir(), 'release-candidate-'));
+      try {
+        const bin = join(dir, '.bin');
+        mkdirSync(bin);
+        const out = join(dir, 'out');
+        const summary = join(dir, 'summary');
+        writeStub(
+          join(bin, 'gh'),
+          [
+            '#!/usr/bin/env bash',
+            `[[ -n "${world.fail ?? ''}" && "$*" == *"${world.fail ?? '-'}"* ]] && { echo "HTTP 502" >&2; exit 1; }`,
+            'case "$*" in',
+            `  *contents/.release-please-manifest.json?ref=${SHA}*) echo "${world.version ?? '0.40.0'}" ;;`,
+            `  *git/matching-refs/tags/*) printf '%s\\n' ${(world.tags ?? []).map((t) => `"refs/tags/${t}"`).join(' ')} ;;`,
+            `  *commits/*) echo "${world.commit ?? SHA}" ;;`,
+            `  *releases?per_page=30*) echo "${world.prerelease ?? 'true'}" ;;`,
+            '  *) echo "unexpected: $*" >&2; exit 9 ;;',
+            'esac',
+            '',
+          ].join('\n'),
+        );
+        writeFileSync(out, '');
+        const r = spawnSync('bash', ['-c', String(find?.run)], {
+          encoding: 'utf8',
+          env: { PATH: `${bin}:${process.env.PATH}`, REPO: 'acme/widgets', SHA, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary, GH_TOKEN: 't' },
+        });
+        return { status: r.status, err: r.stderr, out: readFileSync(out, 'utf8'), summary: existsSync(summary) ? readFileSync(summary, 'utf8') : '' };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    it('runs after the release, and hands on the tag it found', () => {
+      expect(candidate?.needs).toBe('release');
+      expect(candidate?.outputs).toEqual({ tag: '${{ steps.find.outputs.tag }}' });
+      expect(find?.env).toEqual({ GH_TOKEN: '${{ github.token }}', REPO: '${{ github.repository }}', SHA: '${{ github.sha }}' });
+    });
+
+    it("finds candidate-v0.40.0 at this push's commit, a pre-release", () => {
+      const r = run({ tags: ['candidate-v0.40.0'] });
+      expect(r.status, r.err).toBe(0);
+      expect(r.out).toBe('tag=candidate-v0.40.0\n');
+    });
+
+    const none: [string, World, string][] = [
+      ['a plain release, tagged v0.40.0', { tags: ['v0.40.0'] }, 'no tag candidate-v0.40.0'],
+      ['a push with no release', { tags: [] }, 'no tag candidate-v0.40.0'],
+      ['a candidate cut by an earlier push', { tags: ['candidate-v0.40.0'], commit: 'def456' }, 'not this push'],
+      ['a candidate tag whose Release is not a pre-release', { tags: ['candidate-v0.40.0'], prerelease: 'false' }, 'no pre-release Release'],
+      ['a manifest version that is not X.Y.Z', { version: 'null' }, 'is not X.Y.Z'],
+    ];
+    for (const [name, world, why] of none) {
+      it(`finds none on ${name}`, () => {
+        const r = run(world);
+        expect(r.status, r.err).toBe(0);
+        expect(r.out).toBe('tag=\n');
+        expect(r.summary).toContain(why);
+      });
+    }
+
+    it('fails, rather than reading "no candidate", when a read fails', () => {
+      for (const fail of ['matching-refs', 'commits/', 'releases?']) {
+        const r = run({ tags: ['candidate-v0.40.0'], fail });
+        expect(r.status, fail).not.toBe(0);
+        expect(r.out, fail).not.toContain('tag=candidate');
+      }
+    });
+  });
+
+  describe('the pin job opens the pull request as the Releaser', () => {
+    const steps = pins?.steps ?? [];
+    const at = (predicate: (s: Step) => boolean) => {
+      const i = steps.findIndex(predicate);
+      if (i < 0) throw new Error(`no step matches ${predicate.toString()}`);
+      return i;
+    };
+    const move = steps.find((s) => s.run?.includes('scripts/move-pins.mjs'));
+    const mint = steps.find((s) => s.id === 'releaser');
+    const open = steps.find((s) => s.id === 'open');
+
+    it("runs only on a candidate, with a precondition's place for the end-to-end gate (plan 0012 E11)", () => {
+      expect(pins?.needs).toBe('candidate');
+      expect(pins?.if).toBe("needs.candidate.outputs.tag != ''");
+      expect(text).toContain('THE END-TO-END GATE GOES HERE');
+    });
+
+    it('moves the pins with scripts/move-pins.mjs at the pushed commit, before any token is minted', () => {
+      expect(steps[0]?.uses).toBe('actions/checkout@v7');
+      expect(steps[0]?.with).toEqual({ ref: '${{ github.sha }}', 'persist-credentials': false });
+      expect(move?.env).toEqual({ TAG: '${{ needs.candidate.outputs.tag }}' });
+      expect(move?.run).toContain('node scripts/move-pins.mjs "$TAG" > "$RUNNER_TEMP/moved"');
+      expect(at((s) => s === move)).toBeLessThan(at((s) => s === mint));
+    });
+
+    it("mints the Releaser's token, with the writes the commit and the pull request need, and Workflows write", () => {
+      expect(mint?.uses).toBe('actions/create-github-app-token@v3');
+      expect(mint?.if).toBeUndefined();
+      expect(mint?.with).toEqual({
+        'client-id': '${{ secrets.RELEASER_APP_ID }}',
+        'private-key': '${{ secrets.RELEASER_APP_PRIVATE_KEY }}',
+        'permission-contents': 'write',
+        'permission-pull-requests': 'write',
+        'permission-workflows': 'write',
+      });
+      expect(open?.env?.GH_TOKEN).toBe('${{ steps.releaser.outputs.token }}');
+      expect(at((s) => s === open)).toBe(at((s) => s === mint) + 1);
+    });
+
+    // Runs the step's own script against a stub `gh` that logs every call.
+    const opener = (moved: string[], existing = '') => {
+      const dir = mkdtempSync(join(tmpdir(), 'release-pins-'));
+      try {
+        const bin = join(dir, '.bin');
+        mkdirSync(bin);
+        const log = join(dir, 'calls');
+        writeFileSync(log, '');
+        for (const f of moved) {
+          mkdirSync(join(dir, f, '..'), { recursive: true });
+          writeFileSync(join(dir, f), `pin of ${f}\n`);
+        }
+        writeFileSync(join(dir, 'moved'), moved.map((f) => `${f}\n`).join(''));
+        writeStub(
+          join(bin, 'gh'),
+          [
+            '#!/usr/bin/env bash',
+            `echo "$*" >> "${log}"`,
+            'case "$*" in',
+            `  "pr list"*) echo "${existing}" ;;`,
+            '  *matching-refs*) echo "" ;;',
+            `  "api graphql"*) cp "$4" "${join(dir, 'commit.json')}"; echo "fff000" ;;`,
+            '  "pr create"*) echo "https://github.com/acme/widgets/pull/7" ;;',
+            'esac',
+            '',
+          ].join('\n'),
+        );
+        const r = spawnSync('bash', ['-c', String(open?.run)], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: { PATH: `${bin}:${process.env.PATH}`, TAG: 'candidate-v0.40.0', REPO: 'acme/widgets', SHA: 'abc123', BASE: 'main', RUNNER_TEMP: dir, GITHUB_STEP_SUMMARY: join(dir, 'summary'), GH_TOKEN: 't' },
+        });
+        const commit = existsSync(join(dir, 'commit.json')) ? (JSON.parse(readFileSync(join(dir, 'commit.json'), 'utf8')) as { variables: { input: Record<string, unknown> } }) : undefined;
+        return { status: r.status, err: r.stderr, calls: readFileSync(log, 'utf8').split('\n').filter(Boolean), commit };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    it("commits the moved files through the API, as the Releaser, on a branch at the candidate's commit, and opens the pull request", () => {
+      const r = opener(['.github/workflows/ci.yml', '.claude/settings.json']);
+      expect(r.status, r.err).toBe(0);
+      expect(r.calls[0]).toBe('pr list -R acme/widgets --head kanon/pins-candidate-v0.40.0 --state all --json url --jq .[0].url // empty');
+      expect(r.calls).toContain('api -X POST repos/acme/widgets/git/refs -f ref=refs/heads/kanon/pins-candidate-v0.40.0 -f sha=abc123');
+      expect(r.commit?.variables.input).toEqual({
+        branch: { repositoryNameWithOwner: 'acme/widgets', branchName: 'kanon/pins-candidate-v0.40.0' },
+        expectedHeadOid: 'abc123',
+        message: { headline: 'ci(deps): run Kanon on candidate v0.40.0' },
+        fileChanges: {
+          additions: [
+            { path: '.github/workflows/ci.yml', contents: Buffer.from('pin of .github/workflows/ci.yml\n').toString('base64') },
+            { path: '.claude/settings.json', contents: Buffer.from('pin of .claude/settings.json\n').toString('base64') },
+          ],
+        },
+      });
+      const create = r.calls.find((c) => c.startsWith('pr create'));
+      expect(create).toContain('--base main --head kanon/pins-candidate-v0.40.0 --title ci(deps): run Kanon on candidate v0.40.0 --body');
+    });
+
+    it('opens nothing when no pin moved, or when the pull request already exists', () => {
+      expect(opener([]).calls).toEqual([]);
+      const again = opener(['.github/workflows/ci.yml'], 'https://github.com/acme/widgets/pull/6');
+      expect(again.status, again.err).toBe(0);
+      expect(again.calls).toHaveLength(1);
+    });
   });
 });
 
