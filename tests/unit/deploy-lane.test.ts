@@ -122,6 +122,13 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
   if (JSON.stringify(inputs) !== '["build","environment","position"]') out.push(`${ENV}: takes ${inputs.join(', ')}, not the environment, its position and the build alone`);
   out.push(...buildProblems(w));
   if (/inputs\.role\b/.test(JSON.stringify(w[ENV] ?? {}))) out.push(`${ENV}: reads a role from its caller`);
+  // The gate's CI wait ends inside its job (#912): the longest wait and the margin for the setup,
+  // checks 1 to 3 and the last poll (several polls' worth), all within the job's limit, so a CI that
+  // never finishes is refused `ci-timeout`, which is filed, never cancelled, which files nothing.
+  const limit = w[RELEASE]?.jobs.gate?.['timeout-minutes'];
+  if (typeof limit !== 'number' || CI_WAIT_CEILING + GATE_MARGIN_MINUTES > limit || GATE_MARGIN_MINUTES * 60_000 < 5 * CI_POLL_MS) {
+    out.push(`${RELEASE}:gate: its timeout-minutes (${limit}) can end the CI wait (up to ${CI_WAIT_CEILING} minutes, after the setup) in a cancellation instead of \`ci-timeout\``);
+  }
   const probe = w[RELEASE]?.jobs.probe;
   if (probe) {
     if (probe.if !== "needs.gate.outputs.fallback != 'no-environments'") out.push(`${RELEASE}:probe: runs under the no-environments marker`);
@@ -263,13 +270,6 @@ function buildProblems(w: Record<string, Workflow>): string[] {
   if (!/deploy-build\.mjs" check$/.test(String(check?.run)) || check?.env?.DIGEST !== '${{ steps.build-input.outputs.digest }}') out.push(`${ENV}:deploy: doesn't check the build's digest`);
   if (!(idx('build-input') < idx('download') && idx('download') < idx('build-check') && idx('build-check') < deployAt) || idx('build-input') < 0) out.push(`${ENV}:deploy: the deploy hook can run before the build is checked`);
   if (ds[deployAt]?.with?.artifact !== '${{ steps.build-check.outputs.path }}') out.push(`${ENV}:deploy: the deploy hook isn't given the checked build`);
-  // The gate's CI wait ends inside its job (#912): the longest wait and the margin for the setup,
-  // checks 1 to 3 and the last poll (several polls' worth), all within the job's limit, so a CI that
-  // never finishes is refused `ci-timeout`, which is filed, never cancelled, which files nothing.
-  const limit = w[RELEASE]?.jobs.gate?.['timeout-minutes'];
-  if (typeof limit !== 'number' || CI_WAIT_CEILING + GATE_MARGIN_MINUTES > limit || GATE_MARGIN_MINUTES * 60_000 < 5 * CI_POLL_MS) {
-    out.push(`${RELEASE}:gate: its timeout-minutes (${limit}) can end the CI wait (up to ${CI_WAIT_CEILING} minutes, after the setup) in a cancellation instead of \`ci-timeout\``);
-  }
   const failed = String(dep?.outputs?.['build-failed'] ?? '');
   if (!['build-input', 'download', 'build-check'].every((id) => failed.includes(`steps.${id}.outcome == 'failure'`))) out.push(`${ENV}:deploy: a failed download or check isn't output for the record's \`build\` stage`);
   return out;
