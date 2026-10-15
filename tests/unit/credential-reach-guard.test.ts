@@ -10,7 +10,7 @@ import { credentialProblems, credentialReach as reachOf, evaluateIf, type Reach 
  *
  * Since ADR 0011's amendment of 2026-10-12 the Merger merges an Implementer pull request that
  * touches only the green zone `docs/qa/escalation-paths.md` declares. The lane callers run the
- * library at the release they pin, but `apps-check.yml`, `metrics-page.yml` and
+ * library at the release they pin, but `apps-check.yml`, `metrics-page.yml`, `promote.yml`, `release-please.yml` and
  * `agent-lanes-smoke.yml` run this tree, from `main`, holding credentials. Without this guard,
  * one new `import` from a green-zone file into a file they reach would let the Merger land code
  * into a job that holds an App's key or the store's role, and nothing would go red.
@@ -52,6 +52,10 @@ describe("this tree's credential-holding runs", () => {
       'metrics-page.yml:page scripts/metrics/health.mjs',
       'metrics-page.yml:page actions/agent-setup/agent-commits.sh',
       'agent-lanes-smoke.yml:code-audit actions/qa-store/qa-store.mjs',
+      'promote.yml:promote scripts/promote.mjs',
+      'promote.yml:promote scripts/metrics/detectors.mjs',
+      'promote.yml:promote scripts/lib/reverts.mjs',
+      'promote.yml:promote actions/agent-classify/classify-agent-result.mjs',
     ]) expect(r, hit).toContain(hit);
     // The register job reads with `contents: read` alone, and the smoke's admission jobs with a
     // read grant and no App key: neither holds a credential.
@@ -72,7 +76,7 @@ describe("this tree's credential-holding runs", () => {
   });
 
   it('only the workflows that run this tree reach its code: every pinned lane caller runs its release', () => {
-    expect([...new Set(REACH.filter((r) => r.file !== 'package.json').map((r) => r.workflow))].sort()).toEqual(['agent-lanes-smoke.yml', 'apps-check.yml', 'metrics-page.yml', 'release-please.yml']);
+    expect([...new Set(REACH.filter((r) => r.file !== 'package.json').map((r) => r.workflow))].sort()).toEqual(['agent-lanes-smoke.yml', 'apps-check.yml', 'metrics-page.yml', 'promote.yml', 'release-please.yml']);
   });
 
   it("a pinned lane's `uses: ./` runs this tree: the project-setup hook's `npm ci` reads package.json, which declares no install hook", () => {

@@ -1,0 +1,97 @@
+# The promotion (plan 0009 §3, step S5): Kanon's newest candidate, `candidate-vX.Y.Z`, becomes the
+# stable release `vX.Y.Z` on the same commit once its gates pass. Kanon's own operation, not a lane
+# and not part of the reusable release workflow: adopters' releases are untouched.
+#
+# Daily at 06:00 UTC (Owner decision 2: candidates are cut on Monday, so after the 72-hour soak
+# the earliest promotion is Thursday's run), and on dispatch:
+#   - `hold`: read and report the gates, promote nothing. The Owner holds a candidate this way,
+#     or by disabling the workflow (Owner decision 3);
+#   - `urgent` with a `reason` (plan 0009 §7): skips the soak and the six-day spacing, asks that a
+#     review run at the candidate succeeded, and writes the reason into the stable Release's
+#     notes. `urgent` without a reason is refused.
+#
+# `scripts/promote.mjs check` reads the gates with this job's read-only token and writes each
+# one's verdict and evidence to the step summary, so a held promotion says which gate held it.
+# Only when it decides to promote is the Releaser's token minted, narrowed to Contents write, and
+# `scripts/promote.mjs apply` creates the tag on the candidate's commit, publishes its Release as
+# latest and moves `v0`, as the Releaser: the one bypass actor of the `v*` tag ruleset (plan 0008
+# J6), as release.yml creates release tags and moves the major tag with the same App (#782).
+#
+# The default branch only: the lane callers whose pins and runs the gates read are the default
+# branch's.
+name: Promote
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      hold:
+        description: Read and report the gates, and promote nothing
+        type: boolean
+        default: false
+      urgent:
+        description: Skip the soak and the six-day spacing (plan 0009 §7); needs a reason
+        type: boolean
+        default: false
+      reason:
+        description: Why the promotion is urgent; goes into the stable Release's notes
+        type: string
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: kanon-promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote the newest candidate
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Reads only: the tags, the candidate's package.json and Release (`contents`), the pull
+    # requests it contains and the pin pull request (`pull-requests`), the open bugs (`issues`),
+    # the lane callers' runs and jobs (`actions`) and their failed jobs' annotations (`checks`).
+    # The writes use the Releaser's token, minted below.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+      checks: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Read the gates
+        id: gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HOLD: ${{ inputs.hold }}
+          URGENT: ${{ inputs.urgent }}
+          REASON: ${{ inputs.reason }}
+          PLAN: ${{ runner.temp }}/promotion.json
+        run: node scripts/promote.mjs check
+      # THE RELEASER'S TOKEN (plan 0005 §3.1, ADR 0013), only to promote, narrowed to Contents
+      # write: the tag, the Release and the major tag. A step `if:` can't read `secrets`, and the
+      # Releaser is required here, so a missing secret fails the mint by name.
+      - name: Mint the Releaser's token
+        id: releaser
+        if: steps.gates.outputs.decision == 'promote'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASER_APP_ID }}
+          private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Tag, publish and move the major tag
+        if: steps.gates.outputs.decision == 'promote'
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          PLAN: ${{ runner.temp }}/promotion.json
+        run: node scripts/promote.mjs apply

@@ -160,7 +160,7 @@ With the Releaser's secrets mapped, release-please pushes the release branch and
 
 ## Channels: candidates and stable
 
-Kanon releases itself weekly, and in two steps, so every release runs on Kanon before an adopter's Dependabot proposes it ([plan 0009](plans/0009-release-channels-and-api-key.md), decided by the Owner on 2026-10-12). **Partly built:** step S2 is in, so `lane-check` and [`kanon doctor`](doctor.md) accept a candidate pin as an exact version (doctor notes it, `pin.candidate`, with the latest stable release beside it), and this workflow moves the major tag only when the release's tag is a plain `vX.Y.Z`. Step S4 is in too: Kanon's pin job, below. Steps S3 and S5, which make Kanon cut candidates and promote them, are not built yet, and until then every Kanon release is tagged `vX.Y.Z` when its release PR merges, as above, and the pin job opens nothing.
+Kanon releases itself weekly, and in two steps, so every release runs on Kanon before an adopter's Dependabot proposes it ([plan 0009](plans/0009-release-channels-and-api-key.md), decided by the Owner on 2026-10-12). **Partly built:** step S2 is in, so `lane-check` and [`kanon doctor`](doctor.md) accept a candidate pin as an exact version (doctor notes it, `pin.candidate`, with the latest stable release beside it), and this workflow moves the major tag only when the release's tag is a plain `vX.Y.Z`. Step S4 is in too: Kanon's pin job, below. So is the promotion (step S5, [below](#the-promotion)), which finds nothing to promote until a candidate exists. Step S3, which makes Kanon cut candidates, is not built yet, and until then every Kanon release is tagged `vX.Y.Z` when its release PR merges, as above, the pin job opens nothing and the promotion promotes nothing.
 
 - **A release cadence.** Any project may declare one in its adoption record, `` - **Release cadence:** `weekly, Monday` `` under `## Choices` (`K-SHIP-7`, `K-LAYOUT-10`): its release PR then merges on that day, and a week's merges ship as one release. Kanon declares `weekly, Monday`. A project that declares none releases on every merge, and this workflow behaves the same either way: the cadence is when someone merges the release PR.
 - **Candidates.** Kanon's release PR, merged on the release day, tags a candidate, `candidate-vX.Y.Z`, published as a GitHub pre-release, which GitHub's latest release never names. Kanon's own callers move to it the same day (ADR 0011, decision 2).
@@ -168,6 +168,34 @@ Kanon releases itself weekly, and in two steps, so every release runs on Kanon b
 - **Stable.** A candidate is promoted once it has been Kanon's pin for at least 72 hours, with no revert of its changes, no serious bug traced to it and no unexplained red run of Kanon's lanes: the stable tag, `vX.Y.Z`, goes on the candidate's commit, its Release becomes the latest, and the major tag moves with it.
 - **What an adopter pins.** An exact version, as today (`K-ADOPT-11`): a stable `vX.Y.Z`, which its Dependabot entry proposes, or, to run ahead on purpose, a candidate. Nothing in an adopter's repository changes for the stable channel.
 - **Your own releases** are untouched: candidates and promotion are Kanon's own operation, and this workflow keeps tagging `vX.Y.Z` for you.
+
+### The promotion
+
+Kanon's own workflow, [`promote.yml`](../.github/workflows/promote.yml), runs [`scripts/promote.mjs`](../scripts/promote.mjs) daily at 06:00 UTC and on dispatch. It takes the newest candidate tag with no stable release yet and reads its gates from GitHub, never from anything self-reported:
+
+| Gate | Holds when |
+|---|---|
+| **Soak** | The pull request that moved Kanon's pins to the candidate, `ci(deps): run Kanon on candidate vX.Y.Z`, merged at least 72 hours ago, and every lane caller on the default branch still pins `candidate-vX.Y.Z` |
+| **No revert** | No pull request merged to the default branch since the candidate was cut reverts one the candidate contains, read with the revert detector the metrics run (`revertsOf`) |
+| **No serious bug** | No open issue labelled `bug` and `sev:critical` or `sev:high` names, in its `Introduced by` field, a pull request the candidate contains |
+| **No unexplained red** | Every completed run of Kanon's lane callers since the pins moved succeeded at its latest attempt (so a run re-run green passes), or failed with `agent-classify`'s notice that the model was unreachable |
+
+The pull requests a candidate contains are the squash commits, `<title> (#N)`, between the newest stable tag below it and the candidate's commit, so a candidate that was held and never promoted counts against the next one. The red gate lists each caller's runs by each red conclusion (`failure`, `timed_out`, `startup_failure`), which GitHub matches against a run's latest attempt, so a run re-run green drops out; the green runs are only counted, so a busy caller never reaches the listing's cap. A red listing GitHub truncates (more runs than were read, or its cap of 1,000 results) holds the gate, which says so, since a red run may be among those unread. The step summary shows each gate's verdict and evidence, so a held candidate says which gate held it. When every gate passes, and no stable release was published in the last six days, the workflow mints the Releaser's token, narrowed to Contents write, and:
+
+1. tags `vX.Y.Z` on the candidate's commit;
+2. publishes the Release `vX.Y.Z`, marked latest, with the candidate's notes and a line saying when, and on what evidence, it was promoted;
+3. moves the major tag (`v0`) to the same commit.
+
+It writes as the Releaser because that App is the one bypass actor of the `v*` tag ruleset (plan 0008), as the release workflow creates its tags and moves the major tag with the Releaser's token. The check itself runs with the workflow's read-only token. A run interrupted after the tag finishes the Release and the major tag on the next run, and one interrupted after the Release moves the major tag, unless a newer stable release already holds it.
+
+**It refuses**, failing the run without writing anything, when the candidate's commit carries a `package.json` version other than the tag's, when `vX.Y.Z` already names another commit, or when the candidate has no Release.
+
+**The Owner's controls** (Owner decision 3 of plan 0009):
+
+- **Hold:** dispatch with `hold`, which reports the gates and promotes nothing, or disable the workflow.
+- **Urgent** ([plan 0009 §7](plans/0009-release-channels-and-api-key.md#7-urgent-fixes)): dispatch with `urgent` and a `reason`. It skips the soak and the six-day spacing; the other three gates still apply, and a run of the review lane's caller since the pins moved must have called the review lane at the candidate's tag, as the run's own `referenced_workflows` records it (not the caller's copy at the run's head, which for `pull_request_target` is the pull request's), and run its `review` job to success (a run the filter declined reviewed nothing). The reason goes into the stable Release's notes. `urgent` without a reason is refused.
+
+A bad stable release is never deleted, since deleting a tag breaks every repository that pins it: its fix ships as the next candidate, promoted with `urgent`.
 
 ## Intake first
 
