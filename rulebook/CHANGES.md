@@ -32,6 +32,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-15.** The classifier may read the turn count in one case: a run past its turn cap is exhausted when the step that ran it failed, which is the agent action's own check, since that action fails such a step while the run still reports itself completed. [#1008](https://github.com/yedeya-labs/kanon/issues/1008), [#1012](https://github.com/yedeya-labs/kanon/pull/1012)
 
+## `K-AGENT-44`
+
+- **2026-10-15.** The Owner decided that the sign-off delegation covers only the repository's agent Apps: a commit by an App on an `Other App` row, or by the Intake App, is checked like any other bot's commit and needs a person's sign-off. The `dco` check leaves those rows' slugs out. [#998](https://github.com/yedeya-labs/kanon/issues/998)
+
 ## `K-AGENT-45`
 
 - **2026-10-14.** The Owner decided that the issue backstop admits whoever opens an issue, on `issues: opened` alone, with no permission check, since it runs no model, reads no issue text and writes only a bucket and labels. [#768](https://github.com/yedeya-labs/kanon/issues/768), [#840](https://github.com/yedeya-labs/kanon/pull/840)
@@ -134,6 +138,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-LAYOUT-6`
 
 - **2026-10-15.** The Maintainer decided that the register holds every App installed on the repository that isn't an agent, under one generic role, so an adopter can register any such App. The role is `Other App`, with one row per App, each naming an App no other row names; the readers that map a role to a login, the membership gate among them, never read those rows. [#990](https://github.com/yedeya-labs/kanon/issues/990)
+- **2026-10-15.** The Owner decided that the sign-off check reads no `Other App` row, nor the Intake row, so the sign-off delegation never covers an App that isn't an agent. [#998](https://github.com/yedeya-labs/kanon/issues/998)
 
 ## `K-LAYOUT-8`
 
