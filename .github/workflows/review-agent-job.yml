@@ -17,6 +17,11 @@ name: Review — the agent's job
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "The caller's turn budget (its lane's max_turns), passed through. Empty takes the lane's default."
+        required: false
+        type: string
+        default: ""
       explicit:
         description: Whether a member asked for this review (the filter's `explicit`).
         required: false
@@ -573,6 +578,8 @@ jobs:
         env:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
+          max-turns: ${{ inputs.max_turns }}
+          max-turns-ceiling: "140"
           prompt: |
             You are the Reviewer (Agent 3) of the QA pipeline — the generic
             code reviewer. First read docs/qa/reviewer-playbook.md and the project's
@@ -1423,6 +1430,7 @@ jobs:
         # tests/unit/agent-telemetry.test.ts.
         continue-on-error: true
         with:
+          claude-args-ran: ${{ steps.agent.outputs.claude-args }}
           arm: review agent
           agent: reviewer
           job-status: ${{ job.status }}

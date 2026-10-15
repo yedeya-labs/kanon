@@ -378,3 +378,35 @@ describe("docs/lanes.md's first-review sentence says to label a pull request whe
     expect(sentence).toMatch(/-f pr_number=/);
   });
 });
+
+/**
+ * kanon#891: docs/lanes.md's turn-budget table is each model lane's default `max_turns` and
+ * Kanon's ceiling, as the requirements read them from the lanes' `# MAX TURNS:` lines. It is the
+ * one place the numbers are written for an adopter, and the cap error points at it.
+ */
+const turnsTable = (): string => {
+  const req = loadRequirements() as unknown as { lanes: Record<string, { turns?: { default: number; ceiling: number } }>; catalogue: { lanes: Record<string, { name: string }> } };
+  const rows = Object.entries(req.lanes).filter(([, l]) => l.turns).sort(([a], [b]) => a.localeCompare(b))
+    .map(([lane, l]) => `| ${req.catalogue.lanes[lane]!.name} | \`${lane}.yml\` | ${l.turns!.default} | ${l.turns!.ceiling} |`);
+  return `\n\n| Lane | Workflow | Default \`max_turns\` | Ceiling |\n|---|---|---|---|\n${rows.join('\n')}\n\n`;
+};
+
+describe("docs/lanes.md's turn-budget table is each lane's default and ceiling (kanon#891)", () => {
+  const OPEN = '<!-- lane-turns:table -->';
+  const CLOSE = '<!-- /lane-turns:table -->';
+  const doc = read('docs/lanes.md');
+  if (process.env.KANON_WRITE_LANES_DOC && doc.includes(OPEN)) writeFileSync(join(ROOT, 'docs/lanes.md'), `${doc.slice(0, doc.indexOf(OPEN) + OPEN.length)}${turnsTable()}${doc.slice(doc.indexOf(CLOSE))}`);
+
+  it('is built from the requirements, row for row', () => {
+    expect(between(read('docs/lanes.md'), OPEN, CLOSE), "docs/lanes.md's turn-budget table is stale: rebuild it with KANON_WRITE_LANES_DOC=1 npx vitest run tests/unit/lanes-doc.test.ts").toBe(turnsTable());
+  });
+
+  it('has a row for every lane that runs a model, so the check above is not vacuous', () => {
+    expect(turnsTable().split('\n').filter((l) => l.startsWith('| ') && l.includes('`agent-')).length).toBe(17);
+    expect(turnsTable()).toContain('| `agent-lead-revise.yml` | 90 | 180 |');
+  });
+
+  it("sits under the heading the lanes' error messages name", () => {
+    expect(between(read('docs/lanes.md'), '## The turn budget\n', '## Old spellings')).toContain(OPEN);
+  });
+});

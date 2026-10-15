@@ -127,6 +127,10 @@ export const buildRequirements = (root: string) => {
     if (job) lane.callerJob = job;
     const runName = comment(text, 'CALLER RUN-NAME ENDS WITH')[0];
     if (runName) lane.callerRunNameEndsWith = runName;
+    // THE TURN BUDGET (kanon#891): the lane's default `--max-turns` and Kanon's ceiling on the
+    // `max_turns` a caller may set, from its `# MAX TURNS:` line, as `lane-check` reads them.
+    const turns = /^(\d+), at most (\d+)$/.exec(comment(text, 'MAX TURNS')[0] ?? '');
+    if (turns) lane.turns = { default: Number(turns[1]), ceiling: Number(turns[2]) };
     lanes[file.replace(/\.yml$/, '')] = lane;
   }
   const spine = parse(readFileSync(join(root, '.github/workflows/lane-agent-job.yml'), 'utf8')) as Doc;
@@ -257,7 +261,7 @@ export const buildRequirements = (root: string) => {
   };
   return {
     $comment:
-      "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. `catalogue` is the lane catalogue, and `features` the fixed sets of lanes offered in place of a choice per lane (plan 0007 §2), both copied from docs/lanes.json.",
+      "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. A lane's `turns` is its default turn budget and Kanon's ceiling on the `max_turns` input a caller may set (kanon#891); `kanon init` never writes that input. `catalogue` is the lane catalogue, and `features` the fixed sets of lanes offered in place of a choice per lane (plan 0007 §2), both copied from docs/lanes.json.",
     lanes,
     hook: { path: '.github/actions/project-setup/action.yml', inputs: hookInputs },
     identities: {

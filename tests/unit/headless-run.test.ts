@@ -49,7 +49,9 @@ describe('kanon#621: agent-run keeps every command in the foreground', () => {
 
   it('hands the action the lane\'s flags with Monitor denied after them', () => {
     const args = String(agent.with?.claude_args);
-    expect(args.startsWith('${{ inputs.claude_args }}\n')).toBe(true);
+    // The lane's flags as the turn-budget step wrote them: its own, or with the caller's
+    // `max_turns` in place (kanon#891).
+    expect(args.startsWith('${{ steps.turns.outputs.claude-args }}\n')).toBe(true);
     expect(claudeArgWords(args).slice(-2)).toEqual(['--disallowedTools', 'Monitor']);
   });
 

@@ -17,6 +17,11 @@ name: Explorer — mint, then the agent's job
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "The caller's turn budget (its lane's max_turns), passed through. Empty takes the lane's default."
+        required: false
+        type: string
+        default: ""
       tier:
         description: "The caller's `tier`, passed through: the tier to sweep."
         required: false
@@ -77,6 +82,7 @@ jobs:
     if: ${{ !cancelled() }}
     uses: $/.github/workflows/explore-agent-job.yml
     with:
+      max_turns: ${{ inputs.max_turns }}
       tier: ${{ inputs.tier }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}

@@ -17,6 +17,11 @@ name: Review — mint, then the agent's job
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "The caller's turn budget (its lane's max_turns), passed through. Empty takes the lane's default."
+        required: false
+        type: string
+        default: ""
       explicit:
         description: Whether a member asked for this review (the filter's `explicit`).
         required: false
@@ -97,6 +102,7 @@ jobs:
     if: ${{ !cancelled() }}
     uses: $/.github/workflows/review-agent-job.yml
     with:
+      max_turns: ${{ inputs.max_turns }}
       explicit: ${{ inputs.explicit }}
       head_sha: ${{ inputs.head_sha }}
       login: ${{ inputs.login }}

@@ -1,5 +1,5 @@
 {
-  "$comment": "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. `catalogue` is the lane catalogue, and `features` the fixed sets of lanes offered in place of a choice per lane (plan 0007 §2), both copied from docs/lanes.json.",
+  "$comment": "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. A lane's `turns` is its default turn budget and Kanon's ceiling on the `max_turns` input a caller may set (kanon#891); `kanon init` never writes that input. `catalogue` is the lane catalogue, and `features` the fixed sets of lanes offered in place of a choice per lane (plan 0007 §2), both copied from docs/lanes.json.",
   "lanes": {
     "agent-code-audit": {
       "identities": [
@@ -12,7 +12,12 @@
         "QA_STORE_BUCKET",
         "QA_STORE_ROLE_ARN"
       ],
-      "inputs": {},
+      "inputs": {
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 200. Empty takes the lane's default, 100. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        }
+      },
       "grant": {
         "actions": "write",
         "contents": "read",
@@ -33,7 +38,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 100,
+        "ceiling": 200
+      }
     },
     "agent-deploy-diagnose": {
       "identities": [
@@ -44,7 +53,12 @@
         "AUTHOR_APP_PRIVATE_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN"
       ],
-      "inputs": {},
+      "inputs": {
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 80. Empty takes the lane's default, 40. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        }
+      },
       "grant": {
         "actions": "read",
         "contents": "read",
@@ -57,7 +71,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 40,
+        "ceiling": 80
+      }
     },
     "agent-dispatch-sweep": {
       "identities": [
@@ -102,7 +120,12 @@
         "CLAUDE_CODE_OAUTH_TOKEN",
         "KANON_AGGREGATE_ROLE"
       ],
-      "inputs": {},
+      "inputs": {
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 80. Empty takes the lane's default, 40. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        }
+      },
       "grant": {
         "actions": "read",
         "contents": "read",
@@ -121,7 +144,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 40,
+        "ceiling": 80
+      }
     },
     "agent-explore": {
       "identities": [
@@ -138,6 +165,10 @@
         "tier": {
           "type": "string",
           "description": "The tier to sweep, as the adopter's sweep hook names them; empty sweeps every tier."
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 120. Empty takes the lane's default, 60. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -161,7 +192,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 60,
+        "ceiling": 120
+      }
     },
     "agent-implement-revise": {
       "identities": [
@@ -180,6 +215,10 @@
         "reset": {
           "type": "string",
           "description": "Clear the round cap for this run. Use when the developer has resolved the disagreement the cap escalated — that is a new instruction, not a third iteration of the same argument. Authorises exactly one revision."
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 600. Empty takes the lane's default, 300. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -200,7 +239,11 @@
         "ANTHROPIC_API_KEY"
       ],
       "callerName": "Implement (Implementer) — revise",
-      "callerJob": "revise"
+      "callerJob": "revise",
+      "turns": {
+        "default": 300,
+        "ceiling": 600
+      }
     },
     "agent-implement": {
       "identities": [
@@ -215,6 +258,10 @@
         "issue_number": {
           "type": "string",
           "description": "Issue number to implement"
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 600. Empty takes the lane's default, 300. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -233,7 +280,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 300,
+        "ceiling": 600
+      }
     },
     "agent-issue-backstop": {
       "identities": [
@@ -311,6 +362,10 @@
         "reset": {
           "type": "string",
           "description": "Clear the round cap for this run. Use when the developer has ANSWERED the brief's open decisions — that is a new mandate, not a third iteration of a disagreement. Authorises exactly one revision."
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 180. Empty takes the lane's default, 90. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -325,7 +380,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 90,
+        "ceiling": 180
+      }
     },
     "agent-lead-split": {
       "identities": [
@@ -340,6 +399,10 @@
         "issue": {
           "type": "string",
           "description": "The oversized issue to split (it must carry qa:needs-split)"
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 160. Empty takes the lane's default, 80. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -356,7 +419,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 80,
+        "ceiling": 160
+      }
     },
     "agent-lead": {
       "identities": [
@@ -375,6 +442,10 @@
         "context": {
           "type": "string",
           "description": "Issue numbers this covers, comma-separated (optional)"
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 240. Empty takes the lane's default, 120. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -389,7 +460,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 120,
+        "ceiling": 240
+      }
     },
     "agent-merge-reconcile": {
       "identities": [
@@ -404,6 +479,10 @@
         "pr_number": {
           "type": "string",
           "description": "Merged PR number to reconcile"
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 60. Empty takes the lane's default, 30. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -422,7 +501,11 @@
         "ANTHROPIC_API_KEY"
       ],
       "callerName": "Merge Reconcile (Reviewer)",
-      "callerJob": "reconcile"
+      "callerJob": "reconcile",
+      "turns": {
+        "default": 30,
+        "ceiling": 60
+      }
     },
     "agent-merge": {
       "identities": [
@@ -463,7 +546,12 @@
         "QA_STORE_BUCKET",
         "QA_STORE_ROLE_ARN"
       ],
-      "inputs": {},
+      "inputs": {
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 160. Empty takes the lane's default, 80. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        }
+      },
       "grant": {
         "actions": "write",
         "contents": "read",
@@ -485,7 +573,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 80,
+        "ceiling": 160
+      }
     },
     "agent-project-digest": {
       "identities": [],
@@ -497,6 +589,10 @@
         "dry_run": {
           "type": "string",
           "description": "'true' to print the message instead of posting it, and file nothing"
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 40. Empty takes the lane's default, 20. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -512,7 +608,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 20,
+        "ceiling": 40
+      }
     },
     "agent-rebase": {
       "identities": [
@@ -527,6 +627,10 @@
         "pr_number": {
           "type": "string",
           "description": "A single PR to consider (blank = every open PR)"
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 240. Empty takes the lane's default, 120. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -545,7 +649,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 120,
+        "ceiling": 240
+      }
     },
     "agent-review": {
       "identities": [
@@ -560,6 +668,10 @@
         "pr_number": {
           "type": "string",
           "description": "PR number to review"
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 140. Empty takes the lane's default, 70. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -583,7 +695,11 @@
         "ANTHROPIC_API_KEY"
       ],
       "callerName": "Review (Reviewer)",
-      "callerRunNameEndsWith": "${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}"
+      "callerRunNameEndsWith": "${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}",
+      "turns": {
+        "default": 70,
+        "ceiling": 140
+      }
     },
     "agent-triage": {
       "identities": [
@@ -598,6 +714,10 @@
         "issue_number": {
           "type": "string",
           "description": "Issue number to triage"
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 200. Empty takes the lane's default, 100. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -613,7 +733,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 100,
+        "ceiling": 200
+      }
     },
     "agent-verify-acs": {
       "identities": [
@@ -632,6 +756,10 @@
         "ref": {
           "type": "string",
           "description": "Tag or SHA to verify; empty for the default branch"
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 120. Empty takes the lane's default, 60. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -647,7 +775,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 60,
+        "ceiling": 120
+      }
     },
     "agent-weekly-digest": {
       "identities": [],
@@ -663,6 +795,10 @@
         "dry_run": {
           "type": "string",
           "description": "'true' to print the message instead of posting it"
+        },
+        "max_turns": {
+          "type": "string",
+          "description": "The agent's turn budget for this run, a whole number from 1 to 30. Empty takes the lane's default, 15. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         }
       },
       "grant": {
@@ -677,7 +813,11 @@
       "claude": [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "turns": {
+        "default": 15,
+        "ceiling": 30
+      }
     }
   },
   "hook": {

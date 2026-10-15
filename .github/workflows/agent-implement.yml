@@ -37,6 +37,10 @@
 # The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
 # credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
 # `agent-run` refuses both or neither, by name, before the agent starts.
+# MAX TURNS: 300, at most 600
+# The line above is read by `lane-check` and the requirements file (kanon#891): this lane's default
+# turn budget and Kanon's ceiling on the `max_turns` a caller may set. The `--max-turns` in its
+# flags is the default, and the `max-turns-ceiling` it hands `agent-run` the ceiling.
 name: Implement (Implementer)
 
 on:
@@ -46,6 +50,11 @@ on:
     inputs:
       issue_number:
         description: Issue number to implement
+        required: false
+        type: string
+        default: ""
+      max_turns:
+        description: "The agent's turn budget for this run, a whole number from 1 to 600. Empty takes the lane's default, 300. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         required: false
         type: string
         default: ""
@@ -127,6 +136,8 @@ jobs:
     if: needs.filter.outputs.member == 'true'
     uses: $/.github/workflows/agent-lane.yml
     with:
+      max-turns: ${{ inputs.max_turns }}
+      max-turns-ceiling: "600"
       agent: implementer
       role: Implementer
       lane: implement

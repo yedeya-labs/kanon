@@ -5,7 +5,8 @@
 # lane reads `steps.agent.outputs.execution_file` exactly as it did when the action was
 # a step of its own — and `steps.agent.outcome` means what it meant then: the action is the
 # last step, and the start stamp and the TTL record before it cannot fail. The user-scope step can, only when the
-# runner gives it no usable temp directory, and then the agent must not start (kanon#283).
+# runner gives it no usable temp directory, and then the agent must not start (kanon#283). So
+# can the turn-budget check, only on a caller's `max_turns` the lane refuses (kanon#891).
 #
 # NOTHING TO TAKE BACK OUT OF THE TREE (RA-2697). Lanes call this block as
 # `$/actions/agent-run`, which the runner downloads into its action cache at the
@@ -66,6 +67,20 @@ inputs:
       under it.
     required: false
     default: ""
+  max-turns:
+    description: >-
+      The caller's turn budget, the lane's `max_turns` input passed through (kanon#891). Empty
+      runs the lane's own `--max-turns`. Otherwise a whole number from 1 to `max-turns-ceiling`,
+      which replaces the lane's `--max-turns` and the `--max-budget-usd` derived from it; any
+      other value fails the block before the agent starts.
+    required: false
+    default: ""
+  max-turns-ceiling:
+    description: >-
+      Kanon's ceiling for this lane's `max-turns`, a whole number the lane fixes, never the
+      caller. Empty on a lane that takes no turn budget from its caller.
+    required: false
+    default: ""
   full-transcript:
     description: >-
       'true' prints the agent's whole transcript into the job log — `show_full_output`
@@ -78,6 +93,12 @@ outputs:
   execution_file:
     description: claude-code-action's `execution_file` output, for agent-finish.
     value: ${{ steps.agent.outputs.execution_file }}
+  claude-args:
+    description: >-
+      The flags the agent ran with: the lane's `claude_args`, with the caller's turn budget and
+      its dollar cap in place of the lane's when it set one (kanon#891). The lane hands it to
+      `agent-finish` as `claude-args-ran`, so the cost row records the cap that bound the run.
+    value: ${{ steps.turns.outputs.claude-args }}
   started-at:
     description: When the agent step was about to start (UTC, ISO 8601), for agent-finish's quality window.
     value: ${{ steps.started.outputs.at }}
@@ -106,6 +127,22 @@ runs:
       id: started
       shell: bash -e {0}
       run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+    # THE CALLER'S TURN BUDGET, CHECKED BEFORE ANYTHING ELSE THE AGENT NEEDS (kanon#891). A
+    # caller may set its lane's `max_turns`, up to the ceiling the lane fixes; above it, zero,
+    # negative or not a whole number, the block fails here, by the input's name, before any
+    # model call. Never clamped.
+    # Set, it replaces the lane's `--max-turns` and the dollar cap derived from it (`K-OBS-12`),
+    # and the agent step below runs the flags this step writes. The value reaches the script
+    # through `env:` only (`K-AGENT-45`). `turn-budget.mjs` says the rest.
+    - name: Check the turn budget the caller set
+      id: turns
+      shell: bash -e {0}
+      env:
+        CLAUDE_ARGS: ${{ inputs.claude_args }}
+        MAX_TURNS: ${{ inputs.max-turns }}
+        MAX_TURNS_CEILING: ${{ inputs.max-turns-ceiling }}
+      run: node "$GITHUB_ACTION_PATH/turn-budget.mjs"
 
     # THE TTL THIS RUN IS PINNED AT, FOR ITS TELEMETRY ROW (#546). The cache-TTL detector judges a
     # pin (did it take effect, do its runs idle past it) on the rows that ran under it, so the row
@@ -220,7 +257,7 @@ runs:
         allowed_bots: "*"
         prompt: ${{ steps.prompt.outputs.text || inputs.prompt }}
         claude_args: |
-          ${{ inputs.claude_args }}
+          ${{ steps.turns.outputs.claude-args }}
           --disallowedTools Monitor
         # The string 'true'/'false' the spine's boolean arrived as — the same value the
         # action was handed when this step sat in the spine and read the boolean itself.

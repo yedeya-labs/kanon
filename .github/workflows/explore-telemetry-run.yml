@@ -17,6 +17,11 @@ name: Explore the telemetry — mint, then the agent's job
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "The caller's turn budget (its lane's max_turns), passed through. Empty takes the lane's default."
+        required: false
+        type: string
+        default: ""
       artifact-name:
         description: The aggregate the lane's `aggregate` job uploaded, which the agent reads.
         required: false
@@ -80,6 +85,7 @@ jobs:
     if: ${{ !cancelled() }}
     uses: $/.github/workflows/explore-telemetry-agent-job.yml
     with:
+      max_turns: ${{ inputs.max_turns }}
       artifact-name: ${{ inputs.artifact-name }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}

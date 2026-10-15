@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { actionFiles } from './helpers/actions.js';
-import { ROOT, SCRIPT, TRIAGE, IMPL, adopter, check, red, job, type Caller, laneCheck } from './helpers/lane-check.js';
+import { ROOT, SCRIPT, TRIAGE, IMPL, adopter, check, red, job, type Caller, type Tree, laneCheck } from './helpers/lane-check.js';
 
 /**
  * `actions/lane-check` (plan 0001 §6): the fixture whole, Kanon's own tree, and what a calling job
@@ -61,6 +61,30 @@ laneCheck(() => {
     });
     it('refuses an input the lane does not declare', () =>
       red((t) => t.edit(TRIAGE, (d) => { job(d).with = { issue_number: '${{ inputs.issue_number }}', bogus: '${{ inputs.bogus }}' }; }), 'passes `bogus`, which the Kanon lane agent-triage does not declare'));
+  });
+
+  // kanon#891: the turn budget is the one setting a caller writes itself, a whole number up to
+  // the ceiling on the lane's `# MAX TURNS:` line (the triage lane's: 100, at most 200).
+  describe('the calling job may set its lane\'s turn budget, up to Kanon\'s ceiling', () => {
+    const withTurns = (v: unknown) => (t: Tree) => t.edit(TRIAGE, (d) => { job(d).with = { issue_number: '${{ inputs.issue_number }}', max_turns: v }; });
+    const passes = (v: unknown) => {
+      const t = adopter();
+      withTurns(v)(t);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    };
+    it('passes a number at or under the ceiling, written as a number or a string', () => {
+      passes(150);
+      passes('200');
+      passes(1);
+    });
+    it('passes its own dispatch input through, like any other', () => passes('${{ inputs.max_turns }}'));
+    it('refuses a number above the ceiling, naming the ceiling', () => {
+      red(withTurns(201), "passes `max_turns: 201`, which the Kanon lane agent-triage refuses: max_turns is 201, above Kanon's ceiling of 200 turns for this lane");
+    });
+    it.each([[0], [-5], ['ten'], [1.5], ['${{ inputs.issue_number }}']])('refuses %s, which is no whole number of turns', (v) => {
+      red(withTurns(v), 'must be a whole number of turns from 1 to 200');
+    });
   });
 });
 

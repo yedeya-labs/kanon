@@ -250,18 +250,23 @@ export const blockCallOf = (step) => provenance.get(step);
  * @returns {any[]}
  */
 /**
- * A block's value that IS one of its inputs, with an addition no scanner reads. Two today:
+ * A block's value that IS one of its inputs, with an addition no scanner reads. Three today:
  * `agent-run`'s prompt step appends the persona instruction and the headless rule to the lane's
  * prompt and changes nothing else (plan 0005 §3.3; `withPersona`, held by
  * `tests/unit/role-marker.test.ts`), so what a lane tells its agent is still read as the lane's
  * own prompt; and its action step adds `--disallowedTools Monitor` after the lane's flags, the
  * same on every lane (kanon#621, held by `tests/unit/headless-run.test.ts`), so a lane's flags are
- * still read as its own and match the ones its telemetry step records.
+ * still read as its own and match the ones its telemetry step records. Those flags are the ones
+ * its turn-budget step writes, which are the lane's own unless a caller set its `max_turns`
+ * (kanon#891, held by `tests/unit/agent-run-turn-budget.test.ts`), and `agent-finish` records
+ * them, or the lane's own when the run stopped before they were written: so both read as the
+ * lane's flags, at its default turn budget.
  * @type {Record<string, string>}
  */
 const PASSED_THROUGH = {
   'agent-run:${{ steps.prompt.outputs.text || inputs.prompt }}': 'prompt',
-  'agent-run:${{ inputs.claude_args }}\n--disallowedTools Monitor': 'claude_args',
+  'agent-run:${{ steps.turns.outputs.claude-args }}\n--disallowedTools Monitor': 'claude_args',
+  'agent-finish:${{ inputs.claude-args-ran || inputs.claude_args }}': 'claude_args',
 };
 
 export function expandLaneBlocks(steps, readAction, within = []) {

@@ -124,6 +124,21 @@ on:
         description: Passed to BOTH claude-code-action and the telemetry row, so they cannot disagree.
         required: true
         type: string
+      max-turns:
+        description: >-
+          The caller's turn budget, its lane's `max_turns` input passed through (kanon#891).
+          Empty runs the `--max-turns` in `claude_args`. `agent-run` checks it against
+          `max-turns-ceiling` before the agent starts.
+        required: false
+        type: string
+        default: ""
+      max-turns-ceiling:
+        description: >-
+          Kanon's ceiling for this lane's `max-turns`, fixed by the lane, never by its caller
+          (docs/lanes.md, "The turn budget").
+        required: false
+        type: string
+        default: ""
       timeout-minutes:
         description: >-
           Bounds a hang (RA-1336). Size at ~3x this lane's longest real run — EXCEPT where a
@@ -376,6 +391,8 @@ jobs:
       arm: ${{ inputs.arm }}
       prompt: ${{ inputs.prompt }}
       claude_args: ${{ inputs.claude_args }}
+      max-turns: ${{ inputs.max-turns }}
+      max-turns-ceiling: ${{ inputs.max-turns-ceiling }}
       timeout-minutes: ${{ inputs.timeout-minutes }}
       prompt-cache-ttl: ${{ inputs.prompt-cache-ttl }}
       full-transcript: ${{ inputs.full-transcript }}

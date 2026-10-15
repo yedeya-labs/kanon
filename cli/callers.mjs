@@ -19,7 +19,7 @@ import { URL } from 'node:url';
  * @typedef {{ type: string, description: string }} LaneInput
  * @typedef {{ identities: string[], secrets: string[], inputs: Record<string, LaneInput>, grant: Record<string, string>,
  *   reads: string[], readsWorkflows: string[], hooks: string[], qaStore?: boolean, callerName?: string, callerJob?: string, callerRunNameEndsWith?: string,
- *   optionalSecrets?: string[], optionalVariables?: string[], claude?: string[] }} Lane
+ *   optionalSecrets?: string[], optionalVariables?: string[], claude?: string[], turns?: { default: number, ceiling: number } }} Lane
  * @typedef {{ name: string, permissions: Record<string, string> }} RoleIdentity
  * @typedef {{ name: string, roles: string[], permissions: Record<string, string> }} AppIdentity
  * @typedef {{ lanes: Record<string, Lane>, hook: { path: string, inputs: string[] },

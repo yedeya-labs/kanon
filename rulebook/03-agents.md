@@ -415,7 +415,7 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Enforced by.** A unit test that fails when any agent step is missing a flag in the block, and a guard that fails when the installed CLI rejects a flag (chapter 09).
 
-**Class.** framework. Kanon fixes the values too: each lane's model, effort, turn cap and budget come from Kanon's standard lane table, which ships with Kanon's code and is the table's only home. Adopters don't edit it; a change to a value is a change to Kanon ([ADR 0005](../docs/decisions/0005-roles-and-standard-lane-settings.md) §2).
+**Class.** framework. Kanon fixes the values too: each lane's model, effort, turn cap and budget come from Kanon's standard lane table, which ships with Kanon's code and is the table's only home. Adopters don't edit it; a change to a value is a change to Kanon ([ADR 0005](../docs/decisions/0005-roles-and-standard-lane-settings.md) §2). The one exception is the turn cap: a caller may set its lane's `max_turns`, up to a ceiling Kanon fixes per lane at twice the default, and the budget is then derived from it (`K-OBS-12`). The defaults, the ceilings and when to raise rather than split are in [the lanes' "The turn budget"](../docs/lanes.md#the-turn-budget).
 
 ### `K-AGENT-38` Verdict-producing runs have no fallback model
 

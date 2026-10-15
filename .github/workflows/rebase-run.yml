@@ -13,6 +13,11 @@ name: Rebase — one PR
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "The caller's turn budget (its lane's max_turns), passed through. Empty takes the lane's default."
+        required: false
+        type: string
+        default: ""
       pr:
         description: The conflicting PR this entry resolves (one of the filter's `prs`).
         required: true
@@ -69,6 +74,7 @@ jobs:
     if: ${{ !cancelled() }}
     uses: $/.github/workflows/rebase-agent-job.yml
     with:
+      max_turns: ${{ inputs.max_turns }}
       pr: ${{ inputs.pr }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}

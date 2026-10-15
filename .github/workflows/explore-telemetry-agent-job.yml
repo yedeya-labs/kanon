@@ -16,6 +16,11 @@ name: Explore the telemetry — the agent's job
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "The caller's turn budget (its lane's max_turns), passed through. Empty takes the lane's default."
+        required: false
+        type: string
+        default: ""
       artifact-name:
         description: The aggregate the lane's `aggregate` job uploaded, which the agent reads.
         required: false
@@ -134,6 +139,8 @@ jobs:
         env:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
+          max-turns: ${{ inputs.max_turns }}
+          max-turns-ceiling: "80"
           claude-token: ${{ secrets.claude-token }}
           anthropic-api-key: ${{ secrets.anthropic-api-key }}
           github-token: ${{ steps.app-token.outputs.token }}
@@ -234,6 +241,7 @@ jobs:
         if: always()
         continue-on-error: true
         with:
+          claude-args-ran: ${{ steps.agent.outputs.claude-args }}
           arm: telemetry Explorer agent
           agent: telemetry-explorer
           job-status: ${{ job.status }}

@@ -135,7 +135,7 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
     expect(ACTIONS.map((b) => `${b}: ${[...readOutputsOf(b)].sort().join(' ') || 'nothing'}`)).toEqual([
       'agent-classify: kind retry',
       'agent-finish: kind retry',
-      'agent-run: execution_file prompt-cache-ttl started-at',
+      'agent-run: claude-args execution_file prompt-cache-ttl started-at',
       'agent-setup: kanon-error',
       'agent-telemetry: nothing',
       'dco: nothing',
@@ -230,6 +230,7 @@ describe('the blocks run their scripts from the action cache, never from the wor
       'agent-finish: $GITHUB_ACTION_PATH/agent-quality-prs.mjs',
       'agent-run: $GITHUB_ACTION_PATH/credential-check.mjs',
       'agent-run: $GITHUB_ACTION_PATH/persona-prompt.mjs',
+      'agent-run: $GITHUB_ACTION_PATH/turn-budget.mjs',
       'agent-run: $GITHUB_ACTION_PATH/user-scope.mjs',
       'agent-setup: $GITHUB_ACTION_PATH/persona.mjs',
       'agent-telemetry: ${{ github.action_path }}/agent-telemetry.mjs',

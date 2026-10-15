@@ -17,6 +17,11 @@ name: Lead split — mint, then the agent's job
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "The caller's turn budget (its lane's max_turns), passed through. Empty takes the lane's default."
+        required: false
+        type: string
+        default: ""
       issue:
         description: "The caller's `issue`, passed through: the oversized issue to split."
         required: false
@@ -73,6 +78,7 @@ jobs:
     if: ${{ !cancelled() }}
     uses: $/.github/workflows/lead-split-agent-job.yml
     with:
+      max_turns: ${{ inputs.max_turns }}
       issue: ${{ inputs.issue }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}

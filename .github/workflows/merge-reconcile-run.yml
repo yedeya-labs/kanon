@@ -17,6 +17,11 @@ name: Merge Reconcile — mint, then the agent's job
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "The caller's turn budget (its lane's max_turns), passed through. Empty takes the lane's default."
+        required: false
+        type: string
+        default: ""
       pr:
         description: The merged PR to reconcile, as the filter resolved it.
         required: false
@@ -73,6 +78,7 @@ jobs:
     if: ${{ !cancelled() }}
     uses: $/.github/workflows/merge-reconcile-agent-job.yml
     with:
+      max_turns: ${{ inputs.max_turns }}
       pr: ${{ inputs.pr }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}

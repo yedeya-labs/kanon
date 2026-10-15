@@ -27,6 +27,10 @@
 # The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
 # credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
 # `agent-run` refuses both or neither, by name, before the agent starts.
+# MAX TURNS: 20, at most 40
+# The line above is read by `lane-check` and the requirements file (kanon#891): this lane's default
+# turn budget and Kanon's ceiling on the `max_turns` a caller may set. The `--max-turns` in its
+# flags is the default, and the `max-turns-ceiling` it hands `agent-run` the ceiling.
 name: Daily project digest
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -42,6 +46,11 @@ on:
     inputs:
       dry_run:
         description: "'true' to print the message instead of posting it, and file nothing"
+        required: false
+        type: string
+        default: ""
+      max_turns:
+        description: "The agent's turn budget for this run, a whole number from 1 to 40. Empty takes the lane's default, 20. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
         required: false
         type: string
         default: ""
@@ -173,6 +182,8 @@ jobs:
         env:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
+          max-turns: ${{ inputs.max_turns }}
+          max-turns-ceiling: "40"
           claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ github.token }}
@@ -243,6 +254,7 @@ jobs:
         if: always() && steps.post.outputs.narrate == 'true'
         continue-on-error: true
         with:
+          claude-args-ran: ${{ steps.agent.outputs.claude-args }}
           arm: project-digest agent
           agent: project-digest
           job-status: ${{ job.status }}

@@ -24,6 +24,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FIXED_CALLERS, callerNameFindings, kanonVersion } from './caller-names.mjs';
 import { declarationFindings } from './declarations.mjs';
+import { checkMaxTurns } from '../agent-run/turn-budget.mjs';
 import { LEDGER, readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -467,6 +468,15 @@ for (const f of WORKFLOWS) {
       continue;
     }
     if (!declared.includes(k)) fail(f, `passes \`${k}\`, which the Kanon lane ${lane} does not declare`);
+    // THE TURN BUDGET IS THE ONE SETTING A CALLER WRITES ITSELF (kanon#891): a whole number up to
+    // the ceiling on the lane's `# MAX TURNS:` line, checked by the same rule `agent-run` applies
+    // at run time, or its own dispatch input passed through like any other.
+    if (k === 'max_turns' && declared.includes(k) && !new RegExp(`^\\$\\{\\{${SP}*inputs\\.max_turns${SP}*\\}\\}$`).test(v)) {
+      const ceiling = /at most (\d+)/.exec(marked(laneFile, '# MAX TURNS: ')[0] ?? '')?.[1] ?? '';
+      const checked = checkMaxTurns(v, ceiling);
+      if (!checked.ok) fail(f, `passes \`max_turns: ${v}\`, which the Kanon lane ${lane} refuses: ${checked.message}`);
+      continue;
+    }
     // The key is part of the pattern, as the shell's `[[ =~ ]]` had it; one that isn't a
     // pattern at all matches nothing.
     const through = (() => {
