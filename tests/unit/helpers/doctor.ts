@@ -43,6 +43,9 @@ export const registerText = (ids: string[]) => {
   return text!;
 };
 
+/** The healthy record's `## Deploy` section: the reference deploy alone, no chain (plan 0010 §4). */
+export const HEALTHY_DEPLOY = '## Deploy\n- **Reference environment:** `preview`\n- **Reference deploy workflow:** `deploy-preview.yml`\n- **Reference deploy job:** `ship`\n';
+
 /** A healthy installation of the review and code-audit lanes at PINNED, as `kanon init` writes one. */
 export const healthyFiles = (): Record<string, string> => {
   const files: Record<string, string> = {};
@@ -53,7 +56,11 @@ export const healthyFiles = (): Record<string, string> => {
   files[REQ.hook.path] = hookFile(REQ.hook.inputs);
   files['docs/qa/stack.md'] = '# Stack\n\n## Gates\n\n1. `npm test`\n';
   files['docs/qa/agent-identities.md'] = registerText(identitiesOf(LANES));
-  files['docs/qa/adoption.md'] = '# Adoption record\n\n## People\n\n| Role | Who |\n|---|---|\n| Owner | `@octo` |\n\n## Choices\n\n- **Overseer:** `not installed`\n';
+  // With a reference deploy of the project's own and no Kanon deploy chain, so doctor's
+  // `deploy.reference-undeclared` is quiet (plan 0010 §12). `## Choices` stays last, where the
+  // cases append their bullets, and the record stays 11 lines, so the line numbers they name
+  // stand: the line parsers need no blank line after a heading.
+  files['docs/qa/adoption.md'] = `# Adoption record\n## People\n| Role | Who |\n|---|---|\n| Owner | \`@octo\` |\n${HEALTHY_DEPLOY}## Choices\n- **Overseer:** \`not installed\`\n`;
   return files;
 };
 

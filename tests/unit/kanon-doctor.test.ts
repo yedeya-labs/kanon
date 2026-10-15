@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
 import { appSecrets } from '../../cli/callers.mjs';
-import { CATEGORIES, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, ITEMIZED, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
+import { CATEGORIES, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, ITEMIZED, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, UNWAIVABLE_UNDER, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { laneFiles, laneTree } from './helpers/requirements.js';
 import { checkout, clone, fakeGitHub, healthyFiles, ids, LANES, NEW_DOC, NEXT, nextRelease, permissionsOf, PINNED, put, REPO, REQ, ROOT, run, TAXONOMY, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
@@ -698,7 +698,7 @@ describe('the JSON contract (ADR 0014, docs/doctor.md)', () => {
   it('documents every finding id no waiver waives, and nothing else', () => {
     const section = doc.split('### What can\'t be waived')[1]!.split('\n## ')[0]!;
     const listed = [...new Set([...section.matchAll(/`([a-z-]+\.[a-z-]+)`/g)].map((m) => m[1]))].sort();
-    expect(listed).toEqual(Object.keys(UNWAIVABLE).sort());
+    expect(listed).toEqual([...Object.keys(UNWAIVABLE), ...Object.keys(UNWAIVABLE_UNDER)].sort());
   });
 
   it('documents every exit code', () => {

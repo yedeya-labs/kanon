@@ -355,6 +355,20 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
       expect(finding(before, 'notify.hook-pin-behind').fix.commands).toEqual([`    - uses: yedeya-labs/kanon/actions/notify/slack@${CANDIDATE}`]);
     });
 
+    it('blocks on a prebuilt hook pinned ahead of the callers, as lane-check fails it (#958), with the callers\' pin as its fix', async () => {
+      const r = await check(files({ hook: prebuilt('slack', 'v1.2.4') }));
+      expect(notifyIds(r)).toEqual([`notify.hook-pin-ahead ${NOTIFY_HOOK}`]);
+      const f = finding(r, 'notify.hook-pin-ahead');
+      expect(f.blocking).toBe(true);
+      expect(r.status).toBe(EXIT.findings);
+      expect(f.message).toContain(`at v1.2.4, ahead of the callers' ${PINNED}`);
+      expect(f.message).toMatch(/lane-check fails it/);
+      expect(f.fix.commands).toEqual([`    - uses: yedeya-labs/kanon/actions/notify/slack@${PINNED}`]);
+      // A candidate of a later release is ahead too; one of the callers' own release is level.
+      expect(notifyIds(await check(files({ hook: prebuilt('slack', 'candidate-v1.0.1') })))).toEqual([`notify.hook-pin-ahead ${NOTIFY_HOOK}`]);
+      expect(notifyIds(await check(files({ hook: prebuilt('slack', 'candidate-v1.0.0') })))).toEqual([`notify.hook-pin-behind ${NOTIFY_HOOK}`]);
+    });
+
     it('says nothing of a hook at the callers\' pin, or of an own hook', async () => {
       expect(notifyIds(await check(files({ hook: prebuilt('webhook') })))).toEqual([]);
       expect(notifyIds(await check(files({ hook: ownHook(['    - uses: acme/teams-notify@v0.9.0']) })))).toEqual([]);
@@ -414,10 +428,10 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
 
   it('says nothing of the branch exposure (decision 22): no finding id names it', () => {
     expect(Object.keys(FINDINGS).filter((id) => id.startsWith('notify.')).sort()).toEqual([
-      'notify.failing', 'notify.hook-malformed', 'notify.hook-pin-behind', 'notify.hook-unpinned', 'notify.hook-unreviewed', 'notify.hook-version-old', 'notify.kind-unset', 'notify.legacy-secret', 'notify.none',
+      'notify.failing', 'notify.hook-malformed', 'notify.hook-pin-ahead', 'notify.hook-pin-behind', 'notify.hook-unpinned', 'notify.hook-unreviewed', 'notify.hook-version-old', 'notify.kind-unset', 'notify.legacy-secret', 'notify.none',
     ]);
     expect(Object.entries(FINDINGS).filter(([id]) => id.startsWith('notify.')).map(([id, f]) => [id, f.blocking])).toEqual([
-      ['notify.hook-pin-behind', false], ['notify.kind-unset', false], ['notify.none', false], ['notify.hook-malformed', true], ['notify.hook-version-old', false], ['notify.hook-unpinned', true], ['notify.hook-unreviewed', true], ['notify.legacy-secret', true], ['notify.failing', false],
+      ['notify.hook-pin-behind', false], ['notify.hook-pin-ahead', true], ['notify.kind-unset', false], ['notify.none', false], ['notify.hook-malformed', true], ['notify.hook-version-old', false], ['notify.hook-unpinned', true], ['notify.hook-unreviewed', true], ['notify.legacy-secret', true], ['notify.failing', false],
     ]);
   });
 });
