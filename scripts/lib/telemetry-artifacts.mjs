@@ -111,7 +111,7 @@ const DAY = 86_400_000;
 /** The most a row file may inflate to; a row is about 1 KB. */
 const MAX_ROW_BYTES = 1024 * 1024;
 /** Artifact ids, which the listing is ordered by, can trail `created_at` by minutes. */
-const LISTING_SLACK = 3_600_000;
+export const LISTING_SLACK = 3_600_000;
 
 /**
  * A `COST#` sort key, `20260904T120245Z`, from epoch-ms. The same stamp `dispatch-sweep.mjs`'s

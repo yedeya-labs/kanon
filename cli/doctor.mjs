@@ -68,7 +68,7 @@ import { DeclarationError, DEPLOY_HEADING, movedReferenceBullets, parseDeployDec
 import { PROBE_LINE } from '../scripts/deploy-gate.mjs';
 import { EXTRA_LABEL, readAppExtras, withExtras } from '../scripts/lib/app-extras.mjs';
 import { REFUSED_TITLE, UNPUBLISHED_JOB } from '../scripts/lib/telemetry-token.mjs';
-import { ARTIFACT_FILE, listTelemetryArtifacts, readZipEntry } from '../scripts/lib/telemetry-artifacts.mjs';
+import { ARTIFACT_FILE, LISTING_SLACK, listTelemetryArtifacts, MAX_PAGES, readZipEntry } from '../scripts/lib/telemetry-artifacts.mjs';
 import { LANES as TELEMETRY_LANES, TERMINAL_REASONS } from '../actions/agent-telemetry/schema.mjs';
 import { defaultEscalationFile, ESCALATION_FILE, inPipelineCode, parseEscalationFile } from '../scripts/lib/escalation-paths.mjs';
 import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
@@ -97,11 +97,11 @@ export const UNREACHABLE = /** @type {const} */ ({ runs: 2, days: 14, perCaller:
 /**
  * `lane.turn-cap` (#1004): a lane whose runs keep ending at its turn limit. Read from the
  * repository's own `kanon-telemetry-*` artifacts of the last `days` days, the newest `perLane` of
- * each lane, through at most `maxPages` pages of the artifact listing. Reported when at least
- * `runs` of them, and at least `share` of those that reached the model, ended with
- * `terminal_reason: max_turns`.
+ * each lane, through at most `maxPages` pages of the artifact listing (the dispatch sweep's cap),
+ * downloading `downloads` at a time. Reported when at least `runs` of them, and at least `share`
+ * of those that reached the model, ended with `terminal_reason: max_turns`.
  */
-export const TURN_CAP = /** @type {const} */ ({ runs: 2, share: 0.25, days: 14, perLane: 20, maxPages: 10 });
+export const TURN_CAP = /** @type {const} */ ({ runs: 2, share: 0.25, days: 14, perLane: 20, maxPages: MAX_PAGES, downloads: 8 });
 /**
  * The title GitHub stores for an annotation a workflow command (`::error title=<title>::…`) gives:
  * the runner splits the command's properties on every `,`, unescaped, and keeps only `key=value`
@@ -2381,12 +2381,21 @@ export const diagnose = async (deps, opts) => {
   if (turnLanes.length) {
     const from = deps.now() - TURN_CAP.days * DAY;
     // The listing's pages are read here, through `gh`, and handed to the shared reader, which
-    // keeps this repository's own runs. It stops a page later than the reader at most.
+    // keeps this repository's own runs. The listing is newest first, and the check wants only each
+    // lane's newest `perLane` runs, so it stops at the window's start or once every lane read holds
+    // `perLane` artifacts, whichever comes first. A busy repository's CI uploads thousands of
+    // artifacts in 14 days (Kanon's own, about 5,000), so the second is the usual stop. At
+    // `maxPages` it stops anyway: a lane still short of `perLane` was read over less than the
+    // window, which a note and its message say. That is coverage, never `unchecked`.
     /** @type {Map<string, any>} */
     const pages = new Map();
     /** @type {string | null} */
     let listError = null;
-    for (let page = 1; page <= TURN_CAP.maxPages; page += 1) {
+    /** @type {ReturnType<typeof listTelemetryArtifacts>['artifacts']} */
+    let listed = [];
+    /** When the listing stopped at `maxPages` short of the window, the oldest artifact it reached. */
+    let cutoff = null;
+    for (let page = 1; ; page += 1) {
       const path = `repos/${repo}/actions/artifacts?per_page=100&page=${page}`;
       const got = await deps.gh(['api', path]);
       /** @type {any} */
@@ -2401,39 +2410,41 @@ export const diagnose = async (deps, opts) => {
         break;
       }
       pages.set(path, body);
-      const newest = Math.max(...body.artifacts.map((/** @type {any} */ a) => Date.parse(a?.created_at)).filter(Number.isFinite));
-      if (body.artifacts.length < 100 || newest < from - 2 * 3_600_000) break;
-    }
-    /** @type {ReturnType<typeof listTelemetryArtifacts> | null} */
-    let listed = null;
-    if (listError === null) {
-      try {
-        listed = listTelemetryArtifacts({
-          repo, from, maxPages: TURN_CAP.maxPages,
-          api: (path) => {
-            if (!pages.has(path)) throw new Error(`the artifact listing passed ${TURN_CAP.maxPages} pages before reaching the window's start`);
-            return pages.get(path);
-          },
-        });
-      } catch (e) {
-        listError = `could not read the artifact listing: ${/** @type {Error} */ (e).message}`;
+      // A page not read yet reads as empty, which ends the reader's listing there.
+      listed = listTelemetryArtifacts({ repo, from, maxPages: page + 1, api: (p) => pages.get(p) ?? { artifacts: [] } }).artifacts.filter((a) => a.kind === 'run');
+      const created = body.artifacts.map((/** @type {any} */ a) => Date.parse(a?.created_at)).filter(Number.isFinite);
+      if (body.artifacts.length < 100 || Math.max(...created) < from - LISTING_SLACK) break;
+      if (turnLanes.every((t) => listed.filter((a) => a.lane === t.telemetry).length >= TURN_CAP.perLane)) break;
+      if (page >= TURN_CAP.maxPages) {
+        cutoff = Math.min(...created);
+        break;
       }
     }
-    if (listed === null) unchecked.push({ check: 'turn-cap-runs', subject: repo, reason: /** @type {string} */ (listError) });
-    for (const t of listed ? turnLanes : []) {
-      const mine = /** @type {NonNullable<typeof listed>} */ (listed).artifacts
-        .filter((a) => a.kind === 'run' && a.lane === t.telemetry)
-        .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
-        .slice(0, TURN_CAP.perLane);
-      /** @type {TurnRow[]} */
-      const rows = [];
-      let unread = 0;
-      for (const a of mine) {
+    if (listError !== null) unchecked.push({ check: 'turn-cap-runs', subject: repo, reason: listError });
+    const newest = new Map((listError === null ? turnLanes : []).map((t) => [t, listed
+      .filter((a) => a.lane === t.telemetry)
+      .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
+      .slice(0, TURN_CAP.perLane)]));
+    const since = cutoff === null ? null : `${new Date(cutoff).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+    const short = since === null ? [] : [...newest].filter(([, mine]) => mine.length < TURN_CAP.perLane).map(([t]) => t.file);
+    if (short.length) notes.push(`The artifact listing reached its ${TURN_CAP.maxPages}-page cap at artifacts from ${since}, before the ${TURN_CAP.days}-day window's start, so the turn-limit check (\`lane.turn-cap\`) read ${short.join(', ')} over their runs since then, fewer than the newest ${TURN_CAP.perLane}.`);
+    // Every lane's artifacts, downloaded `downloads` at a time: one at a time, 16 lanes of 20 runs
+    // would add minutes to a run.
+    /** @type {Map<typeof turnLanes[number], (TurnRow | 'skip' | null)[]>} */
+    const read = new Map([...newest].map(([t, mine]) => [t, mine.map(() => null)]));
+    const queue = [...newest].flatMap(([t, mine]) => mine.map((a, i) => ({ t, a, i })));
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(TURN_CAP.downloads, queue.length) }, async () => {
+      while (next < queue.length) {
+        const { t, a, i } = /** @type {typeof queue[number]} */ (queue[next++]);
         const got = await deps.download(repo, a.id);
-        const row = got.status === 0 ? turnRow(got.bytes, a, t.telemetry) : null;
-        if (row === null) unread += 1;
-        else if (row !== 'skip') rows.push(row);
+        /** @type {(TurnRow | 'skip' | null)[]} */ (read.get(t))[i] = got.status === 0 ? turnRow(got.bytes, a, t.telemetry) : null;
       }
+    }));
+    for (const [t, mine] of newest) {
+      const got = /** @type {(TurnRow | 'skip' | null)[]} */ (read.get(t));
+      const rows = /** @type {TurnRow[]} */ (got.filter((r) => r !== null && r !== 'skip'));
+      const unread = got.filter((r) => r === null).length;
       if (unread) unchecked.push({ check: 'turn-cap-runs', subject: t.file, reason: `${unread} of its ${mine.length} telemetry artifacts in the window could not be read: a download the token can't make, which needs Actions: read, or a row doctor can't read. A run that ended at the turn limit may be missing from the count` });
       const reached = rows.filter((r) => r.reason !== null);
       const hit = reached.filter((r) => r.reason === 'max_turns');
@@ -2448,9 +2459,9 @@ export const diagnose = async (deps, opts) => {
       const median = taken.length % 2 ? taken[mid] : ((taken[mid - 1] ?? 0) + (taken[mid] ?? 0)) / 2;
       const atCeiling = hit.filter((r) => r.maxTurns !== null && r.maxTurns >= ceiling).map((r) => r.runId);
       const split = atCeiling.length
-        ? ` ${atCeiling.length > 1 ? 'Runs' : 'run'} ${atCeiling.join(', ')} ${atCeiling.length > 1 ? 'were' : 'was'} raised to the ceiling, ${ceiling}, and still ended at it: this work wants splitting, since no dispatch can raise it further.`
+        ? ` ${atCeiling.length > 1 ? 'Runs' : 'Run'} ${atCeiling.join(', ')} ${atCeiling.length > 1 ? 'were' : 'was'} raised to the ceiling, ${ceiling}, and still ended at it: this work wants splitting, since no dispatch can raise it further.`
         : '';
-      find('lane.turn-cap', t.file, `calls ${t.lane}: ${hit.length} of its ${reached.length} runs that reached the model in the last ${TURN_CAP.days} days ended at the turn limit (\`terminal_reason: max_turns\`). Turns taken, newest first: ${shown.join(', ')}${taken.length ? `; median ${median}, most ${taken[taken.length - 1]}` : ''}. The lane's limit is ${limit} turns, and its ceiling for one dispatched run ${ceiling}.${split}`, {
+      find('lane.turn-cap', t.file, `calls ${t.lane}: ${hit.length} of its ${reached.length} runs that reached the model ${since !== null && mine.length < TURN_CAP.perLane ? `since ${since}, where the artifact listing's cap stopped,` : `in the last ${TURN_CAP.days} days`} ended at the turn limit (\`terminal_reason: max_turns\`). Turns taken, newest first: ${shown.join(', ')}${taken.length ? `; median ${median}, most ${taken[taken.length - 1]}` : ''}. The lane's limit is ${limit} turns, and its ceiling for one dispatched run ${ceiling}.${split}`, {
         text: `Read the runs that ended at the limit. A plain re-run fails the same way. If the work is divisible, split it into parts each finishable in one run; for the implement lanes that is the default answer, and the split lane does it. If it is one change that can't be divided, dispatch that run again with max_turns at most ${ceiling} and a reason (docs/lanes.md, "The turn budget").`,
         commands: hit.map((r) => `gh run view ${r.runId} -R ${repo}`),
       });

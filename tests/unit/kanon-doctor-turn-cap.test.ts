@@ -58,7 +58,20 @@ const github = (runs: Run[]) => {
   return g;
 };
 
-const check = (runs: Run[], g = github(runs), argv: string[] = []) => run(checkout(healthyFiles()), g, ['--json', ...argv], NOW);
+/** `n` artifacts other jobs uploaded, such as CI's coverage, created evenly from `fromDays` to `toDays` ago, newest first. */
+const filler = (n: number, fromDays: number, toDays: number): FakeArtifact[] =>
+  Array.from({ length: n }, (_, i) => {
+    const created = NOW - (fromDays + ((toDays - fromDays) * i) / n) * DAY;
+    return {
+      id: 100_000 + i, name: `coverage-${i}`, created_at: new Date(created).toISOString(), expires_at: new Date(created + 90 * DAY).toISOString(),
+      workflow_run: { id: 50_000 + i, repository_id: OWN, head_repository_id: OWN }, zip: null,
+    };
+  });
+const byDate = (xs: FakeArtifact[]) => xs.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+/** The pages of the artifact listing doctor read. */
+const listings = (g: ReturnType<typeof github>) => g.calls.filter((c) => /\/actions\/artifacts\?per_page=100&page=\d+$/.test(c[1] ?? '')).length;
+
+const check = (runs: Run[],g = github(runs), argv: string[] = []) => run(checkout(healthyFiles()), g, ['--json', ...argv], NOW);
 const finding = (r: Result) => r.json.findings.find((f: { id: string }) => f.id === 'lane.turn-cap');
 const turnUnchecked = (r: Result) => r.json.unchecked.filter((u: { check: string }) => u.check === 'turn-cap-runs');
 
@@ -101,7 +114,7 @@ describe('kanon doctor on a lane whose runs keep ending at its turn limit (#1004
     expect(finding(raised).message).not.toContain('wants splitting');
     const atCeiling = await check([{ id: 905 }, { id: 904, cap: CEILING }, { id: 903, turns: 20 }]);
     expect(finding(atCeiling).message).toContain(`${CEILING} of ${CEILING} (run 904, raised, at the limit)`);
-    expect(finding(atCeiling).message).toContain(`run 904 was raised to the ceiling, ${CEILING}, and still ended at it: this work wants splitting`);
+    expect(finding(atCeiling).message).toContain(`. Run 904 was raised to the ceiling, ${CEILING}, and still ended at it: this work wants splitting`);
   });
 
   it('gives the split-or-raise fix, naming docs/lanes.md and each run that ended at the limit', async () => {
@@ -114,7 +127,7 @@ describe('kanon doctor on a lane whose runs keep ending at its turn limit (#1004
   });
 
   it('needs at least two such runs: one run at the limit is not "keep ending"', async () => {
-    expect(TURN_CAP).toEqual({ runs: 2, share: 0.25, days: 14, perLane: 20, maxPages: 10 });
+    expect(TURN_CAP).toEqual({ runs: 2, share: 0.25, days: 14, perLane: 20, maxPages: 50, downloads: 8 });
     expect(finding(await check([{ id: 905 }, { id: 904, turns: 10 }]))).toBeUndefined();
   });
 
@@ -160,6 +173,54 @@ describe('kanon doctor on a lane whose runs keep ending at its turn limit (#1004
     const mismatched = await check([{ id: 905, over: { run_id: 906 } }, { id: 904, over: { lane: 'triage' } }, { id: 903, over: { run_attempt: 2 } }, { id: 902, over: { num_turns: 'many' } }]);
     expect(finding(mismatched)).toBeUndefined();
     expect(turnUnchecked(mismatched)).toEqual([{ check: 'turn-cap-runs', subject: CALLER, reason: expect.stringContaining('4 of its 4 telemetry artifacts in the window could not be read') }]);
+  });
+
+  it('on a busy repository, stops listing once every lane it reads holds its newest 20 runs', async () => {
+    const review = Array.from({ length: 20 }, (_, i) => ({ id: 900 - i, daysAgo: 0.05 + i * 0.01, turns: i < 6 ? LIMIT : 10 }));
+    const auditCap = REQ.lanes['agent-code-audit']!.turns!.default;
+    const audit = Array.from({ length: 20 }, (_, i) => ({ id: 700 - i, lane: 'code-audit', daysAgo: 0.05 + i * 0.01, turns: 10, cap: auditCap }));
+    const g = github([...review, ...audit]);
+    // Thousands of artifacts other jobs uploaded across the window, as Kanon's own CI does.
+    g.st.artifacts = byDate([...g.st.artifacts, ...filler(6000, 0, 13)]);
+    const r = await check([], g);
+    expect(ids(r)).toEqual([`lane.turn-cap ${CALLER}`]);
+    expect(finding(r).message).toContain('6 of its 20 runs that reached the model in the last 14 days');
+    expect(listings(g)).toBeLessThanOrEqual(3);
+    expect(turnUnchecked(r)).toEqual([]);
+    expect(r.status).toBe(EXIT.healthy);
+  });
+
+  it('stops at its page cap short of the window and says what it read, a note and never unchecked', async () => {
+    const recent = [{ id: 905, daysAgo: 0.001 }, { id: 904, daysAgo: 0.002 }, { id: 903, daysAgo: 0.003 }];
+    // Past the cap: ten runs that finished, which would make 3 of 13 at the limit, under a quarter.
+    const older = Array.from({ length: 10 }, (_, i) => ({ id: 800 - i, daysAgo: 5, turns: 10 }));
+    const g = github([...recent, ...older]);
+    g.st.artifacts = byDate([...g.st.artifacts, ...filler(TURN_CAP.maxPages * 100 + 500, 0.01, 1)]);
+    const r = await check([], g);
+    expect(listings(g)).toBe(TURN_CAP.maxPages);
+    expect(turnUnchecked(r)).toEqual([]);
+    expect(r.status).toBe(EXIT.healthy);
+    expect(ids(r)).toEqual([`lane.turn-cap ${CALLER}`]);
+    expect(finding(r).message).toMatch(/3 of its 3 runs that reached the model since 2026-10-1\d \d\d:\d\d UTC, where the artifact listing's cap stopped, ended at the turn limit/);
+    const note = r.json.notes.find((n: string) => n.includes('`lane.turn-cap`'));
+    expect(note).toMatch(/reached its 50-page cap at artifacts from 2026-10-1\d \d\d:\d\d UTC, before the 14-day window's start/);
+    expect(note).toContain(`read .github/workflows/agent-code-audit.yml, ${CALLER} over their runs since then, fewer than the newest 20`);
+  });
+
+  it(`downloads the artifacts ${TURN_CAP.downloads} at a time, never one by one, and still lists the turns newest first`, async () => {
+    const g = github(Array.from({ length: 20 }, (_, i) => ({ id: 900 - i, turns: i < 6 ? LIMIT : 10 + i })));
+    const download = g.download;
+    let flying = 0;
+    let most = 0;
+    g.download = async (repo: string, id: number) => {
+      most = Math.max(most, (flying += 1));
+      await new Promise((done) => setTimeout(done, 5));
+      flying -= 1;
+      return download(repo, id);
+    };
+    const r = await check([], g);
+    expect(most).toBe(TURN_CAP.downloads);
+    expect(finding(r).message).toContain(`, 16 of ${LIMIT} (run 894), 17 of ${LIMIT} (run 893), `);
   });
 
   it('is unchecked, never a finding, when the token can\'t list the artifacts', async () => {
