@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { appRoles, apps, buildManifest, checkoutCheck, loadApps, loadRoles, ownerPages, realDeps, remoteRepo, rotationSteps } from '../../cli/apps.mjs';
+import { readAppExtras, withExtras } from '../../scripts/lib/app-extras.mjs';
 import { appsTable, grantsOf } from './helpers/roles-table.js';
 
 /**
@@ -50,6 +51,8 @@ type Git = { status: number | null; stdout: string; stderr: string };
 
 type Scenario = {
   apps?: string;
+  /** The checkout's adoption record, `docs/qa/adoption.md` (default none). */
+  adoption?: string;
   /** The repositories --repo names (default the one checkout's). */
   repoList?: string[];
   /** The owner's account type, as `GET /users/<login>` answers it (default Organization). */
@@ -139,6 +142,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
   printed = '';
   const dir = mkdtempSync(join(tmpdir(), 'kanon-apps-'));
   if (s.register !== undefined) realDeps.writeFile(join(dir, 'docs/qa/agent-identities.md'), s.register);
+  if (s.adoption !== undefined) realDeps.writeFile(join(dir, 'docs/qa/adoption.md'), s.adoption);
   let installed = false as boolean;
   const r: Run = { status: -1, output: '', manifest: null, action: '', callbackStatus: 0, gh: [], git: [], api: [], issuers: [], writes: [], opened: [], removed: [], dir };
   const keyFile = join(dir, 'judge.pem');
@@ -339,6 +343,27 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     expect(r.api).toContain('DELETE /installation/token');
     expect(r.output).toContain('Key rotation stays manual');
     rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  // `K-AGENT-3`: an extra permission the adoption record declares widens that repository's App,
+  // in its manifest and its register rows, and no other's.
+  it('creates the App with the extra permission the adoption record declares, and only then', async () => {
+    const choices = (bullet: string) => `# Adoption record\n\n## Choices\n\n${bullet}\n`;
+    const judge = loadApps().judge!.permissions as Record<string, string>;
+    const r = await run({ adoption: choices('- **Extra App permission:** `judge` `workflows: write` (this repository needs it)') });
+    expect(r.status, r.output).toBe(0);
+    expect((r.manifest as { default_permissions: Record<string, string> }).default_permissions).toEqual({ ...judge, workflows: 'write' });
+    expect(r.output).toContain('The Judge also holds workflows: write, as');
+    expect(readFileSync(join(r.dir, 'docs/qa/agent-identities.md'), 'utf8')).toMatch(/\| Reviewer \| `acme-judge` \| Read & write \| Read & write \| Read & write \| Read & write \|/);
+    rmSync(r.dir, { recursive: true, force: true });
+    const other = await run({ adoption: choices('- **Extra App permission:** `releaser` `workflows: write` (only the Releaser)') });
+    expect((other.manifest as { default_permissions: Record<string, string> }).default_permissions).toEqual(judge);
+    rmSync(other.dir, { recursive: true, force: true });
+    const bad = await run({ adoption: choices('- **Extra App permission:** `judge` `workflows: write`') });
+    expect(bad.status).toBe(1);
+    expect(bad.output).toContain('docs/qa/adoption.md:5 is not');
+    expect(bad.writes).toEqual([]);
+    rmSync(bad.dir, { recursive: true, force: true });
   });
 
   it('the private key never reaches disk, stdout, stderr or an argument', async () => {
@@ -1041,8 +1066,13 @@ describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
     text = writeRegisterRow(text, { role: 'Implementer', slug: 'kanon-implementer', permissions: roles.implementer!.permissions }).text;
     text = writeRegisterRow(text, { role: 'Explorer', slug: 'kanon-explorer', permissions: roles.explorer!.permissions }).text;
     const all = loadApps();
+    // With what Kanon's own adoption record declares beyond each App's grant (`K-AGENT-3`): the
+    // Releaser's Workflows write, for the candidate's pin pull request (plan 0009 S4).
+    const { extras, errors } = readAppExtras(readFileSync(join(ROOT, 'docs/qa/adoption.md'), 'utf8'), Object.keys(all));
+    expect(errors).toEqual([]);
+    expect(extras).toEqual({ releaser: { workflows: 'write' } });
     for (const [app, slug] of [['author', 'yedeya-labs-author'], ['judge', 'yedeya-labs-judge'], ['releaser', 'yedeya-labs-releaser']] as const) {
-      for (const role of appRoles(all[app]!)) text = writeRegisterRow(text, { role, slug, permissions: all[app]!.permissions }).text;
+      for (const role of appRoles(all[app]!)) text = writeRegisterRow(text, { role, slug, permissions: withExtras(all[app]!.permissions, extras[app]) }).text;
     }
     // The Author's Commit statuses write (`K-AGENT-3`) keeps its reason by hand, as that rule
     // asks: a marker on the Implementer row and one footnote. Nothing else differs.

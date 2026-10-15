@@ -312,6 +312,57 @@ describe('kanon doctor and private Apps, read through apps-check (#417)', () => 
     expect(r.status).toBe(EXIT.findings);
   });
 
+  // `K-AGENT-3`: an App's grant widens only where the adoption record declares it, under
+  // `## Choices`, so the shared grant stays and the repository that needs more says so.
+  describe('an extra App permission the adoption record declares', () => {
+    const declaring = (bullet: string) => {
+      const files = healthyFiles();
+      files['docs/qa/adoption.md'] = `${files['docs/qa/adoption.md']}${bullet}\n`;
+      return checkout(files);
+    };
+    const DECLARED = '- **Extra App permission:** `judge` `workflows: write` (this repository needs it)';
+    const holding = (extra: Record<string, string>) => {
+      const github = privately();
+      const holds = asReleased();
+      const judge = apps.find((id) => id === 'judge')!;
+      Object.assign(holds[judge]!, extra);
+      appsCheckRun(github, holds);
+      return github;
+    };
+
+    it('is expected where declared: an App without it is app.permission-missing, naming the record', async () => {
+      const r = await run(declaring(DECLARED), holding({}), ['--json']);
+      expect(ids(r)).toEqual(['app.permission-missing widgets-judge']);
+      expect(r.json.findings[0].message).toContain('workflows: write');
+      expect(r.json.findings[0].message).toContain('docs/qa/adoption.md declares');
+      expect(r.status).toBe(EXIT.findings);
+    });
+
+    it('is no finding where declared and held', async () => {
+      const r = await run(declaring(DECLARED), holding({ workflows: 'write' }), ['--json']);
+      expect(ids(r)).toEqual([]);
+      expect(r.status).toBe(EXIT.healthy);
+    });
+
+    it('is not asked of a repository that declares none, and an undeclared one held is still app.permission-extra (mutations)', async () => {
+      expect(ids(await run(checkout(healthyFiles()), holding({}), ['--json']))).toEqual([]);
+      expect(ids(await run(checkout(healthyFiles()), holding({ workflows: 'write' }), ['--json']))).toEqual(['app.permission-extra widgets-judge']);
+      const other = '- **Extra App permission:** `judge` `deployments: read` (another permission)';
+      expect(ids(await run(declaring(other), holding({ workflows: 'write', deployments: 'read' }), ['--json']))).toEqual(['app.permission-extra widgets-judge']);
+    });
+
+    it('is declaration.malformed outside ## Choices, for an App Kanon lacks, or with no reason', async () => {
+      for (const bad of ['- **Extra App permission:** `intake` `workflows: write` (why)', '- **Extra App permission:** `judge` `workflows: write`']) {
+        const r = await run(declaring(bad), holding({}), ['--json']);
+        expect(ids(r)).toEqual(['declaration.malformed docs/qa/adoption.md']);
+      }
+      const files = healthyFiles();
+      files['docs/qa/adoption.md'] = `${files['docs/qa/adoption.md']}\n## Data\n\n${DECLARED}\n`;
+      const r = await run(checkout(files), holding({ workflows: 'write' }), ['--json']);
+      expect(ids(r)).toEqual(['app.permission-extra widgets-judge', 'declaration.malformed docs/qa/adoption.md']);
+    });
+  });
+
   it('checks --to against what apps-check found', async () => {
     const github = privately();
     const { next, slug } = nextRelease();

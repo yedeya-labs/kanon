@@ -45,6 +45,7 @@ import { URL, fileURLToPath } from 'node:url';
 import { writeRegisterRow } from './app-register.mjs';
 import { describeSource, isAuthFailure, tokenFix, tokenSource, whoami } from './gh-token.mjs';
 import { actorName, bypassCommand, readCovering, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
+import { readAppExtras, withExtras } from '../scripts/lib/app-extras.mjs';
 
 export const REGISTER_PATH = 'docs/qa/agent-identities.md';
 const API = 'https://api.github.com';
@@ -918,6 +919,23 @@ export const apps = async (argv, overrides = {}) => {
   deps.out(`${owner} is ${account.kind === 'User' ? 'a personal account' : 'an organisation'}; its Apps are created at ${pages.newApp}.`);
   deps.out(`The App register is ${register}.`);
 
+  // The extra permissions the adoption record beside the register declares (`K-AGENT-3`): each
+  // App is created, reused and registered with them, and with nothing more.
+  const recordPath = join(dirname(register), 'adoption.md');
+  const declared = readAppExtras(existsSync(recordPath) ? readFileSync(recordPath, 'utf8') : null, Object.keys(specs));
+  if (declared.errors.length) {
+    for (const e of declared.errors) deps.err(`kanon apps: ${e}. Nothing was changed.`);
+    return 1;
+  }
+  /** @param {string} key @returns {AppSpec} */
+  const specOf = (key) => {
+    const spec = /** @type {AppSpec} */ (specs[key]);
+    const extra = declared.extras[key];
+    if (!extra) return spec;
+    deps.out(`The ${spec.app} also holds ${Object.entries(extra).map(([k, v]) => `${k}: ${v}`).join(', ')}, as ${recordPath} declares.`);
+    return { ...spec, permissions: withExtras(spec.permissions, extra) };
+  };
+
   // A reused App's ID, asked for before anything changes, with the page it is on (#623).
   const unnamed = opts.reuse.filter((r) => !r.id);
   if (unnamed.length) {
@@ -949,13 +967,13 @@ export const apps = async (argv, overrides = {}) => {
   const done = [];
   try {
     for (const key of opts.apps) {
-      const spec = /** @type {AppSpec} */ (specs[key]);
+      const spec = specOf(key);
       const r = await createApp({ owner, pages, repos, key, spec, name: opts.names[key] ?? `${owner}-${key}`.toLowerCase(), register, deps });
       warnings += r.warnings.length;
       done.push({ spec, slug: r.slug, appId: r.appId });
     }
     for (const { app: key, slug, id, file } of opts.reuse) {
-      const spec = /** @type {AppSpec} */ (specs[key]);
+      const spec = specOf(key);
       const r = await reuseApp({ owner, pages, repos, key, slug, id, file: resolve(file), spec, specs, register, deps });
       warnings += r.warnings.length;
       done.push({ spec, slug: r.slug, appId: r.appId });

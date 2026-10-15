@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { readAppExtras, withExtras } from '../../scripts/lib/app-extras.mjs';
 
 /**
  * #48, `K-AGENT-46`: every lane step that mints an App token narrows it, with
@@ -90,12 +91,15 @@ const MORE: Record<string, Perms> = {
  * Implementer's row. Every caller passes the Implementer's secrets (`implementer-status.test.ts`).
  */
 /**
- * The Releaser's mint in the release workflow (plan 0005 §3.1, decision 2), keyed
+ * The Releaser's mints, in the release workflow (plan 0005 §3.1, decision 2) and Kanon's pin job, keyed
  * `<file>#<step id>`. The Releaser runs no agent and is no row of the roles table, so its list
  * is held to the Releaser App's grant in `agent-permissions.json`'s `apps` block.
  */
 const RELEASE: Record<string, Perms> = {
   '.github/workflows/release.yml#releaser': { contents: 'write', 'pull-requests': 'write' },
+  // Kanon's pin job (plan 0009 S4): its commit moves pins in `.github/workflows`, so it also asks
+  // for Workflows write, which Kanon's adoption record declares for its Releaser (`K-AGENT-3`).
+  '.github/workflows/release-please.yml#releaser': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
 };
 const STATUS: Record<string, Perms> = {
   // Lists the open pull requests, reads a head commit and compares two heads.
@@ -239,9 +243,12 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     expect(mint, `${key} mints nothing`).toBeDefined();
     expect(requested(mint!.step.with)).toEqual(perms);
     expect(String(mint!.step.with?.['client-id'])).toContain('secrets.RELEASER_APP_ID');
-    const releaser = (JSON.parse(readFileSync(join(root, 'rulebook/agent-permissions.json'), 'utf8')) as {
+    const all = (JSON.parse(readFileSync(join(root, 'rulebook/agent-permissions.json'), 'utf8')) as {
       apps: Record<string, { permissions: Perms }>;
-    }).apps.releaser!.permissions;
+    }).apps;
+    // The shared grant, raised by what Kanon's adoption record declares for its Releaser.
+    const declared = readAppExtras(readFileSync(join(root, 'docs/qa/adoption.md'), 'utf8'), Object.keys(all)).extras.releaser;
+    const releaser = withExtras(all.releaser!.permissions as Record<string, string>, declared);
     for (const [scope, level] of Object.entries(perms)) {
       expect(releaser[scope.replace('-', '_')], `${key} asks ${scope}: ${level}`).toBe(level);
     }

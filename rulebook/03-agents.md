@@ -18,7 +18,7 @@ Every Kanon project has the same roles. A person may hold several human roles at
 | **Merger** | agent | Merge green-zone PRs through the front door; wait, recover, escalate or release; re-dispatch the Reviewer; lift a head-scoped escalation it applied itself once the head moves. | Be a ruleset bypass actor. Edit workflows. Judge correctness. Merge an escalating path or label. Use the default workflow token. Lift a label a person applied. | Contents, Issues and Pull requests write; Actions write; Checks and Commit statuses read; **no Workflows access**. |
 | **Lead** | agent | Author a brief as a PR on a manual mandate and revise it; file and dispatch the brief's issues under WIP caps once it merges; re-deliver a lost event by churning a recovery label; propose splitting an exhausted item; hold a project for a human. | Merge. Approve. Promote. Create issues from a brief before it merges. Re-label an issue already labelled. Start workflows directly. | Contents, Issues and Pull requests write; Actions read; **no Actions write, no Workflows access**. |
 | **Overseer** | agent | Read aggregates; file pipeline-improvement issues; keep one rolling audit issue; propose capability-ledger deltas; restrict another agent's authority. | Fix, merge, or close other work. Write repository files, the ledger included. Set a target on a backlog metric or propose "file less". Widen anyone's authority. File a finding only Kanon can act on in the adopter's repository. | Contents read, Issues write, Pull requests read, Actions read. |
-| **Releaser** | bot, not an agent | Open and merge its own release PRs. | Touch any file outside the release file set. | Contents and Pull requests write; a ruleset bypass limited to release PRs. |
+| **Releaser** | bot, not an agent | Open and merge its own release PRs; open a candidate's pin pull request, where the adoption record declares the Workflows write it needs (`K-AGENT-3`). | Touch any file outside the release file set, except the pins a candidate's pin pull request moves. | Contents and Pull requests write; a ruleset bypass limited to release PRs. |
 | **Intake** | App, not an agent | File a report from the running application as an issue carrying exactly one intake label. | Read, decide, run in a workflow, apply any other label, or trigger an agent. | Issues write only. |
 
 ### The Apps
@@ -34,6 +34,7 @@ The agent roles, and the Releaser, run under three GitHub Apps per owner, each r
 - **The Author and the Judge are the author and the approver** (`K-PRIN-5`). The Author never approves, and the Judge never authors.
 - **The Author's Commit statuses write is broadened beyond its roles' rows,** and recorded as such (`K-AGENT-3`): only the fixed step of the Implementer's lanes that sets the `kanon/role: implementer` status mints with it, after the agent has finished, and no agent's token holds it. The Merger requires that status on a green-zone pull request's head (`K-MERGE-4`).
 - **A step's token still fits its role's row,** not only its App's grant (`K-AGENT-46`): the Lead's token holds no Workflows, though the Author does.
+- **A repository widens one of its Apps only by declaring it** (`K-AGENT-3`): a bullet under `## Choices` in its adoption record, `` - **Extra App permission:** `<app>` `<permission>: <read | write>` (<why>) ``, names the App, the permission and the reason. `kanon apps`, `apps-check` and `kanon doctor` hold that repository's App to the grant above plus what it declares, and no other repository's; the shared grant never widens for one repository's need. Kanon declares Workflows write for its Releaser, whose candidate pin pull request moves Kanon's own pins in `.github/workflows` ([plan 0009](../docs/plans/0009-release-channels-and-api-key.md) §6).
 - **The Releaser is optional.** An adopter that makes no releases, or merges its release PRs through the front door, needs only the Author and the Judge.
 
 The agent rows' GitHub permissions have a machine-readable twin, [`agent-permissions.json`](agent-permissions.json), which [`kanon apps`](../docs/apps.md) builds each App's manifest from (`K-ADOPT-8`). It also holds the three Apps, each with its roles and its permissions. Change the tables and the file in the same commit: a test fails when they disagree, when an App's permissions differ from the union of its roles' rows plus its recorded broadening, and when a role belongs to no App or to two (`K-PRIN-2`).
@@ -62,11 +63,11 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 ### `K-AGENT-3` Keep a register of every App and record every broadened permission
 
-**Rule.** Keep one register, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), listing every GitHub App installed on the repository, agent or not, with its least-privilege permissions. When a permission is broadened, record the reason and what bounds its use in the same change.
+**Rule.** Keep one register, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), listing every GitHub App installed on the repository, agent or not, with its least-privilege permissions. When a permission is broadened, record the reason and what bounds its use in the same change. A repository's App that holds more than Kanon's shared grant records it in the adoption record, as an `Extra App permission` bullet under `## Choices` naming the App, the permission and the reason.
 
 **Why.** An App or a permission nobody can explain is indistinguishable from drift or compromise. A register without reasons tempts the next reader to "tidy" a grant that was load-bearing, or to widen one that was deliberately withheld.
 
-**Enforced by.** Prose only. App scopes live in the installation, not in any file, so the register is a claim; `K-AGENT-5` turns the parts of it the code depends on into run-time checks.
+**Enforced by.** Prose only. App scopes live in the installation, not in any file, so the register is a claim; `K-AGENT-5` turns the parts of it the code depends on into run-time checks, holding each App to Kanon's shared grant plus the extra permissions its adoption record declares.
 
 **Class.** framework
 
