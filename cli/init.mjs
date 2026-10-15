@@ -66,6 +66,7 @@ import {
   DEPLOY_CALLER_NAME,
   hookFile,
   kanonRelease,
+  releasePin,
   laneCheckFile,
   loadRequirements,
   TELEMETRY_CALLER_PATH,
@@ -2184,6 +2185,7 @@ export const SCHEMA = 'kanon-init/v1';
  * set only when it stopped before inspecting the repository, so nothing changed.
  * @typedef {{
  *   repository: string | null,
+ *   pin: string | null,
  *   token: { source: string, login: string | null } | null,
  *   dryRun: boolean,
  *   inspection: Record<string, unknown> | null,
@@ -2238,7 +2240,7 @@ export const init = async (argv, overrides = {}) => {
   const deps = wantsJson ? { ...base, out: base.err } : base;
   const { out, err } = deps;
   /** @type {Report} */
-  const rep = { repository: null, token: null, dryRun: false, inspection: null, answers: null, catalogue: [], features: [], summary: [], files: [], changes: [], apps: null, findings: [], notes: [], failures: [], error: null };
+  const rep = { repository: null, pin: null, token: null, dryRun: false, inspection: null, answers: null, catalogue: [], features: [], summary: [], files: [], changes: [], apps: null, findings: [], notes: [], failures: [], error: null };
   const emit = (/** @type {number} */ code) => {
     if (wantsJson) base.out(JSON.stringify(document(rep, code, deps.release()), null, 2));
     return code;
@@ -2295,6 +2297,7 @@ export const document = (rep, exitCode, release) => {
     kanon: release,
     status,
     exitCode,
+    pin: rep.pin,
     repository: rep.repository,
     token: rep.token,
     dryRun: rep.dryRun,
@@ -2318,7 +2321,6 @@ export const document = (rep, exitCode, release) => {
 const run = async (deps, opts, req, rep) => {
   const { out, err } = deps;
   const dry = opts.dryRun;
-  const release = deps.release();
   /** Stops before anything changed: the prose on standard error, the sentence in the report. */
   const stop = (/** @type {number} */ code, /** @type {string[]} */ lines) => {
     for (const l of lines) err(`kanon init: ${l}`);
@@ -2371,6 +2373,13 @@ const run = async (deps, opts, req, rep) => {
   out(who.line);
   rep.token = { source: who.source, login: who.login };
   if (who.refusal) return stop(1, who.refusal);
+
+  // THE PIN (plan 0012 decision 5, CLI-1): the release this tree is when Kanon has its tag, else
+  // its candidate's tag, else nothing to pin, and it stops before reading anything else.
+  const pinned = await releasePin(deps.gh, deps.release());
+  if (pinned.refusal !== null) return stop(1, [pinned.refusal]);
+  const release = pinned.pin;
+  rep.pin = release;
 
   // 1. Inspect.
   /** @type {Inspection} */
