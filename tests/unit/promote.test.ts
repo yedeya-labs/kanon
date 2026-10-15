@@ -33,6 +33,11 @@ const CANDIDATE = `candidate-v${VERSION}`;
 const STABLE = `v${VERSION}`;
 const CUT_NOTES = '## [0.41.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.40.0...candidate-v0.41.0) (2026-10-19)\n\n### Features\n\n* a ([#101](https://github.com/yedeya-labs/kanon/issues/101))\n';
 
+/** A candidate cut, held and never promoted: release-please wrote its changelog from the previous candidate tag. */
+const HELD_NOTES = '## [0.40.1](https://github.com/yedeya-labs/kanon/compare/candidate-v0.40.0...candidate-v0.40.1) (2026-10-12)\n\n### ⚠ BREAKING CHANGES\n\n* e: callers pass `x` ([#95](https://github.com/yedeya-labs/kanon/issues/95))\n';
+/** The candidate promoted as v0.40.0, whose changes v0.40.0's Release carries already. */
+const PROMOTED_NOTES = '## [0.40.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.39.0...candidate-v0.40.0) (2026-10-05)\n\n### Features\n\n* z ([#80](https://github.com/yedeya-labs/kanon/issues/80))\n';
+
 const ref = (name: string, sha: string) => ({ ref: `refs/tags/${name}`, object: { sha, type: 'commit' } });
 const commit = (sha: string, message: string, date: string) => ({ sha, commit: { message, committer: { date } } });
 const page = (path: string, n = 1) => `${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${n}`;
@@ -202,6 +207,7 @@ describe('the gates (plan 0009 §2)', () => {
       // candidate-v0.40.1 was cut, held, and never promoted: v0.40.0 is still the newest stable tag.
       [page(`repos/${REPO}/compare/v0.40.0...${SHA}`)]: { commits: [commit(ITEM_95, 'fix: e (#95)', '2026-10-08T10:00:00Z'), commit(HELD, 'chore(main): release candidate 0.40.1 (#96)', '2026-10-12T09:00:00Z'), commit(ITEM_101, 'feat: a (#101)', '2026-10-14T10:00:00Z')] },
       [page(`repos/${REPO}/compare/candidate-v0.40.1...${SHA}`)]: { commits: [commit(ITEM_101, 'feat: a (#101)', '2026-10-14T10:00:00Z')] },
+      [`repos/${REPO}/releases/tags/candidate-v0.40.1`]: { tag_name: 'candidate-v0.40.1', prerelease: true, body: HELD_NOTES },
       [page(`repos/${REPO}/issues?state=open&labels=bug`)]: [{ number: 132, labels: [{ name: 'bug' }, { name: 'sev:high' }], body: '### Introduced by\n\n#95\n' }],
     };
     const { outcome } = run(4 * DAY, { over });
@@ -265,6 +271,45 @@ describe('the gates (plan 0009 §2)', () => {
     const atCap = run(4 * DAY, { over: capped }).outcome;
     expect(verdicts(atCap).red).toBe('hold');
     expect(atCap.gates.find((g) => g.id === 'red')!.evidence).toBe(`a red run listing is truncated, so a red run may be unread: merge.yml timed_out (read ${RUN_LISTING_CAP} of ${RUN_LISTING_CAP})`);
+  });
+});
+
+describe("the stable Release's notes cover every change since the last stable release (#992)", () => {
+  /** The notes above the promotion's evidence line. */
+  const changes = (notes: string) => notes.split('\n\n---\n\n')[0];
+  const promotedRelease = { [`repos/${REPO}/releases/tags/candidate-v0.40.0`]: { tag_name: 'candidate-v0.40.0', prerelease: true, body: PROMOTED_NOTES } };
+  const held = {
+    ...promotedRelease,
+    [`repos/${REPO}/git/matching-refs/tags/candidate-v`]: [ref('candidate-v0.40.0', PREV), ref('candidate-v0.40.1', HELD), ref(CANDIDATE, SHA)],
+    [`repos/${REPO}/releases/tags/candidate-v0.40.1`]: { tag_name: 'candidate-v0.40.1', prerelease: true, body: HELD_NOTES },
+  };
+
+  it("a candidate held and superseded: the promoted one's notes, then the held one's, newest first (MUTATION: the candidate's own body alone turns this red)", () => {
+    const { outcome } = run(4 * DAY, { over: held });
+    expect(outcome.decision).toBe('promote');
+    expect(changes(outcome.plan!.notes)).toBe(`${CUT_NOTES.trimEnd()}\n\n${HELD_NOTES.trimEnd()}`);
+    expect(outcome.plan!.notes).toContain('### ⚠ BREAKING CHANGES');
+    // candidate-v0.40.0 was promoted as v0.40.0: its changes are that Release's, not this one's.
+    expect(outcome.plan!.notes).not.toContain(PROMOTED_NOTES.trimEnd());
+  });
+
+  it("a single candidate's notes are its own body, as before, not a candidate already promoted (MUTATION: dropping the newest stable tag as the lower bound turns this red)", () => {
+    const { outcome } = run(4 * DAY, { over: promotedRelease });
+    expect(changes(outcome.plan!.notes)).toBe(CUT_NOTES.trimEnd());
+    expect(outcome.plan!.notes.startsWith(`${CUT_NOTES.trimEnd()}\n\n---\n\nPromoted from \`${CANDIDATE}\` on 2026-10-23.`)).toBe(true);
+  });
+
+  it('a promotion finished after an interruption carries the same notes', () => {
+    const resumed = [ref('v0.40.0', PREV), ref(STABLE, SHA)];
+    const { outcome } = run(4 * DAY, { over: { ...held, [`repos/${REPO}/git/matching-refs/tags/v`]: resumed } });
+    expect(outcome.plan).toMatchObject({ resume: true, notes: `${CUT_NOTES.trimEnd()}\n\n${HELD_NOTES}` });
+    expect(run(4 * DAY, { over: { [`repos/${REPO}/git/matching-refs/tags/v`]: resumed } }).outcome.plan!.notes).toBe(CUT_NOTES);
+  });
+
+  it("refuses when a superseded candidate has no Release, since the notes can't cover its changes", () => {
+    const over = { ...held, [`repos/${REPO}/releases/tags/candidate-v0.40.1`]: undefined };
+    expect(() => run(4 * DAY, { over })).toThrow(Refusal);
+    expect(() => run(4 * DAY, { over })).toThrow("candidate-v0.40.1, a candidate since v0.40.0 that was never promoted, has no Release, so v0.41.0's notes can't cover its changes");
   });
 });
 

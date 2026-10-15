@@ -183,12 +183,14 @@ Kanon's own workflow, [`promote.yml`](../.github/workflows/promote.yml), runs [`
 The pull requests a candidate contains are the squash commits, `<title> (#N)`, between the newest stable tag below it and the candidate's commit, so a candidate that was held and never promoted counts against the next one. The red gate lists each caller's runs by each red conclusion (`failure`, `timed_out`, `startup_failure`), which GitHub matches against a run's latest attempt, so a run re-run green drops out; the green runs are only counted, so a busy caller never reaches the listing's cap. A red listing GitHub truncates (more runs than were read, or its cap of 1,000 results) holds the gate, which says so, since a red run may be among those unread. The step summary shows each gate's verdict and evidence, so a held candidate says which gate held it. When every gate passes, and no stable release was published in the last six days, the workflow mints the Releaser's token, narrowed to Contents write, and:
 
 1. tags `vX.Y.Z` on the candidate's commit;
-2. publishes the Release `vX.Y.Z`, marked latest, with the candidate's notes and a line saying when, and on what evidence, it was promoted;
+2. publishes the Release `vX.Y.Z`, marked latest, with the notes of every candidate since the newest stable release below it, newest first, and a line saying when, and on what evidence, it was promoted;
 3. moves the major tag (`v0`) to the same commit.
+
+Each candidate's changelog starts at the previous candidate's tag, so a candidate that was held and never promoted lists its changes, breaking ones included, only in its own pre-release. An adopter's Dependabot pull request jumps from the last stable release to the new one and never shows that pre-release. So the stable Release carries the promoted candidate's notes, then those of each candidate it superseded, back to the last stable release; with a single candidate, they are that candidate's notes alone.
 
 It writes as the Releaser because that App is the one bypass actor of the `v*` tag ruleset (plan 0008), as the release workflow creates its tags and moves the major tag with the Releaser's token. The check itself runs with the workflow's read-only token. A run interrupted after the tag finishes the Release and the major tag on the next run, and one interrupted after the Release moves the major tag, unless a newer stable release already holds it.
 
-**It refuses**, failing the run without writing anything, when the candidate's commit carries a `package.json` version other than the tag's, when `vX.Y.Z` already names another commit, or when the candidate has no Release.
+**It refuses**, failing the run without writing anything, when the candidate's commit carries a `package.json` version other than the tag's, when `vX.Y.Z` already names another commit, or when the candidate, or a candidate it superseded, has no Release.
 
 **The Owner's controls** (Owner decision 3 of plan 0009):
 
