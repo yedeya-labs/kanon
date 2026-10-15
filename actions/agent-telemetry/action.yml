@@ -142,6 +142,15 @@ inputs:
     description: The lane's `job.status` when telemetry runs (`success`, `failure` or `cancelled`).
     required: false
     default: ""
+  agent_outcome:
+    description: >-
+      The agent step's `outcome`, for a lane that runs it `continue-on-error`: its conclusion is
+      `success` even when the action failed it, so a run the action failed past its turn cap is
+      recorded as a cap hit only through this (kanon#1014). It says only whether the step failed,
+      never which stage ended the run, so it is not a stage. Empty for a lane whose agent step
+      can fail, where the `agent` stage says it.
+    required: false
+    default: ""
   job_started_at:
     description: When the lane's job started (UTC, ISO 8601), for `timed_out`.
     required: false
@@ -308,6 +317,7 @@ runs:
         TELEMETRY_STAGES: ${{ inputs.stages }}
         TELEMETRY_KANON_ERROR: ${{ inputs.kanon_error }}
         TELEMETRY_JOB_STATUS: ${{ inputs.job_status }}
+        TELEMETRY_AGENT_OUTCOME: ${{ inputs.agent_outcome }}
         TELEMETRY_JOB_STARTED_AT: ${{ inputs.job_started_at }}
         TELEMETRY_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
         TELEMETRY_PROMPT_CACHE_TTL: ${{ inputs.prompt_cache_ttl }}

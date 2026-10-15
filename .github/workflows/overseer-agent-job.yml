@@ -497,6 +497,9 @@ jobs:
           arm: Overseer agent
           agent: overseer
           job-status: ${{ job.status }}
+          # The agent step runs `continue-on-error`, so its conclusion is `success` even when the
+          # action failed it past its turn cap: the outcome says so (kanon#1014).
+          agent-outcome: ${{ steps.agent.outcome }}
           classify: "false"
           execution_file: ${{ steps.agent.outputs.execution_file }}
           claude_args: |
