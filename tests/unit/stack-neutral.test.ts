@@ -432,6 +432,7 @@ const ALLOWED: Array<{ file: string; needle: string; why: string }> = [
   { file: 'actions/lane-check/caller-names.mjs', needle: "join(root, 'package.json')", why: "Kanon's own manifest in lane-check's Kanon tree, read for the release that turns the caller-name warning into a failure: not the adopter's (#728)" },
   { file: 'cli/init.mjs', needle: "const pkg = read('package.json');", why: "`kanon init` suggests gates from what the repository holds, an npm project's scripts beside a Makefile's, Cargo's and Go's; the adopter accepts or edits the suggestion (plan 0005 §5.2)" },
   { file: 'cli/init.mjs', needle: "gates.push(s === 'test' ? 'npm test'", why: 'the same suggestion, only for a repository that has a package.json' },
+  { file: 'cli/doctor.mjs', needle: 'export const PACKAGE_INSTALL = ', why: "doctor's `notify.hook-unreviewed` refuses a notify hook whose `run:` installs packages with any package manager, npm's among nine stacks' (plan 0011 §6.2, item 2): it detects an install to fail it, and runs none" },
   { file: 'rulebook/10-adoption.md', needle: 'may have no `package.json` to hold a version', why: "K-ADOPT-11's Why for the guard row: the reason a guard is not a package" },
   { file: 'rulebook/00-principles.md', needle: 'guards need no `package.json`, package manager', why: 'states that the guards need none, and that the lane prompts read the project\'s commands from its stack document' },
 ];

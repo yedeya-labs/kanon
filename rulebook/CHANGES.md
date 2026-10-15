@@ -92,6 +92,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-06.** The Skill's pin, declared in the repository's `.claude/settings.json`, moves with the other pins, and `kanon doctor` reports one that differs from the release the callers pin. [#376](https://github.com/yedeya-labs/kanon/issues/376)
 - **2026-10-12.** The Owner decided that a reference may pin a candidate, `candidate-vX.Y.Z`, as well as a stable release, and that a candidate beside its own stable release counts as two versions. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
+- **2026-10-14.** The Owner decided that a prebuilt notify hook's pin of its Kanon action follows the callers' pin, and that a hook behind them works while it declares a contract version their release still writes. So that pin isn't counted toward the one version: it may be behind the callers', never ahead of them or on a contract version their release no longer writes. `lane-check` and `kanon doctor` both leave it out of the one version. [Plan 0011](../docs/plans/0011-notifications.md) decision 18, [#955](https://github.com/yedeya-labs/kanon/issues/955)
 
 ## `K-LAYOUT-1`
 
