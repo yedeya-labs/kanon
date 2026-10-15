@@ -342,6 +342,22 @@ describe('intake-first.mjs, against a repository', SPAWNS, () => {
     expect(r.stdout).toContain(`${Object.keys(SCHEMAS)[0]}: a row kind the release knows but does not store`);
   });
 
+  it.each([
+    ['a dangling link, git\'s dangling answer', 'nowhere.mjs'],
+    ['a link to itself, git\'s loop answer', 'a-link.mjs'],
+    ['a link out of the repository, git\'s symlink answer', '../../../../outside.mjs'],
+    ['a link through a file, git\'s notdir answer', 'rows.mjs/x'],
+    ['a link to a directory, a tree', '../../../actions/agent-telemetry'],
+  ])('reads STORED_KINDS past %s sorted before rows.mjs, each module still under its own name (kanon#932)', async (_, target) => {
+    const { dir, git } = scratch(['run', 'work_item', 'finding']);
+    symlinkSync(target, join(dir, 'infra/telemetry/function/a-link.mjs'));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'add a link that leads nowhere');
+    expect(await storedKindsAt('HEAD', { cwd: dir })).toEqual(['run', 'work_item', 'finding']);
+    const r = run(dir, '--deployed', 'v1.0.0');
+    expect(r.status, r.stderr).toBe(0);
+  });
+
   it('exits 2 when a ref\'s rows.mjs exports no STORED_KINDS, rather than guessing what it stores', () => {
     const { dir, git } = scratch(['run', 'work_item', 'finding']);
     writeFileSync(join(dir, 'infra/telemetry/function/rows.mjs'), "import { SCHEMAS } from './schema.mjs';\nexport const KINDS = Object.keys(SCHEMAS);\n");
