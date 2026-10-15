@@ -12,8 +12,9 @@
 //          stable tag on another commit, `urgent` with no reason), which a person reads.
 //   apply  writes, as the Releaser (plan 0005 §3.1, ADR 0013), the one bypass of the `v*` tag
 //          ruleset (plan 0008 J6): the tag `vX.Y.Z` on the candidate's commit, its Release, latest,
-//          with the candidate's notes and a line saying on what evidence it was promoted, and the
-//          major tag `v<major>` moved to the same commit, as release.yml moves it on a plain release.
+//          with the notes of every candidate since the last stable release (`notesOf`, newest
+//          first) and a line saying on what evidence it was promoted, and the major tag `v<major>`
+//          moved to the same commit, as release.yml moves it on a plain release.
 //
 // THE GATES are one table, `GATES`, each read from GitHub, never self-reported:
 //   soak     Kanon's callers pin the candidate, through the merged pin pull request (S4's
@@ -430,7 +431,26 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
   };
   const candidateRelease = releaseOf(candidate.name);
   if (!candidateRelease) throw new Refusal(`${candidate.name} has no Release: a candidate is tagged with its pre-release, whose notes the stable Release takes`);
-  const notesOf = () => String(candidateRelease.body ?? '');
+  // The newest stable release below the candidate: what adopters run before this one. What the
+  // candidate contains, and what its notes cover, both start there, not at the previous candidate.
+  const previous = stable.filter((t) => compareParts(t.parts, candidate.parts) < 0).sort((a, b) => compareParts(b.parts, a.parts))[0];
+  /**
+   * The stable Release's notes: the Release body of every candidate since the newest stable release
+   * below it, newest first, this one's included. release-please writes each candidate's changelog
+   * from the previous candidate tag, so a candidate held and never promoted has changes, breaking
+   * ones too, that only its own pre-release lists; an adopter's Dependabot jumps from the last
+   * stable release to this one and never reads that pre-release. A single candidate's notes are
+   * its own body, unchanged.
+   */
+  const notesOf = () => {
+    const superseded = candidates.filter((t) => compareParts(t.parts, candidate.parts) < 0 && (!previous || compareParts(t.parts, previous.parts) > 0));
+    const bodies = [String(candidateRelease.body ?? ''), ...superseded.map((t) => {
+      const release = releaseOf(t.name);
+      if (!release) throw new Refusal(`${t.name}, a candidate since ${previous ? previous.name : 'the start'} that was never promoted, has no Release, so ${tag}'s notes can't cover its changes`);
+      return String(release.body ?? '');
+    })];
+    return bodies.map((b, i) => (i < bodies.length - 1 ? b.trimEnd() : b)).join('\n\n');
+  };
 
   if (promoted) {
     // Interrupted after the tag, or after the Release: finish it, since the tag is already what
@@ -458,7 +478,6 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
 
   // From the newest STABLE release below it, not the previous candidate: a candidate held and
   // never promoted reaches adopters inside this one, so its pull requests are this one's too.
-  const previous = stable.filter((t) => compareParts(t.parts, candidate.parts) < 0).sort((a, b) => compareParts(b.parts, a.parts))[0];
   if (!previous) throw new Refusal(`no stable release before ${candidate.name}, so the pull requests it contains can't be read`);
   const contained = commitsBetween(api, repo, previous.name, candidate.sha)
     .flatMap((c) => (c.pr === null ? [] : [{ number: c.pr, sha: c.sha, mergedAt: c.date }]));
