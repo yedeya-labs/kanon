@@ -336,7 +336,8 @@ if (isCliEntry(import.meta.url)) {
       for (const m of masks(env.SECRET)) console.log(`::add-mask::${m}`);
     } else if (mode === 'prepare') {
       const { outputs, lines } = prepare(env);
-      for (const l of lines) { console.log(`::notice title=notify::${l}`); writeSummary(l); }
+      // The summary line is `finish`'s, written on every outcome.
+      for (const l of lines) console.log(`::notice title=notify::${l}`);
       writeOutputs(outputs);
     } else if (mode === 'check') {
       writeOutputs(check(env).outputs);

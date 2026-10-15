@@ -30,8 +30,8 @@
 # The checkout persists no credential. Kanon's prebuilt hooks are ordinary hooks: nothing here
 # knows them but the telemetry row's `hook` field (§7).
 #
-# THE STEPS, IN ORDER (§5.1): mask the secret, check out the hook, decide (no secret is `skipped`
-# with `no-secret`, checked first; then no artifact is `skipped` with `no-message`; neither calls
+# THE STEPS, IN THE ORDER THEY RUN (§5.1 numbers them by what they do, and says this order): mask
+# the secret first, check out the hook, decide (no secret is `skipped` with `no-secret`, checked first; then no artifact is `skipped` with `no-message`; neither calls
 # the hook), download the producer's one `message.json`, validate it and the hook's declared
 # contract version (an invalid message, or a hook declaring no version this release writes, calls
 # no hook), call the hook, then on every outcome print the line doctor reads and write and upload

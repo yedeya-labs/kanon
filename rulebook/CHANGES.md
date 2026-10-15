@@ -37,6 +37,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-07.** `lane-check` holds every job that calls a Kanon workflow, the spine `agent-lane.yml` included, to mapping each secret by name or passing none, and fails `secrets: inherit`. Releases before this one let it through on a call to the spine. [#500](https://github.com/yedeya-labs/kanon/issues/500)
 - **2026-10-14.** The Owner's plan for the deploy lane amended the rule: a Kanon workflow may read an environment secret only by a fixed name, in a job that sets `environment:`, and only where its own guard test names it, since GitHub can't pass an environment secret from a caller to a called workflow; today that is `KANON_DEPLOY_SECRET` in `deploy.yml`'s `deploy` job. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 
+## `K-AGENT-49`
+
+- **2026-10-15.** The guard counts Kanon's `notify` block, `actions/notify`, as running someone else's code, since it runs the adopter's notify hook from the checkout, so a job that runs the block and holds an App's private key fails it. [Plan 0011](../docs/plans/0011-notifications.md) N6, [#1018](https://github.com/yedeya-labs/kanon/pull/1018)
+
 ## `K-AGENT-50`
 
 - **2026-10-06.** The shared lane job turns git's `core.symlinks` off for a lane with project setup off, so the Lead's `Edit(/docs/**)` has no symlink in the tree to write through. [#327](https://github.com/yedeya-labs/kanon/issues/327)
@@ -116,7 +120,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 ## `K-OBS-19`
 
-- **2026-10-15.** The guards the rule names are built: Kanon's `notify` block, `actions/notify`, with `tests/unit/helpers/notify-jobs.ts`, `tests/unit/notify-guard.test.ts` and `tests/library/notify-block.test.ts`, and `K-AGENT-50`'s and `K-AGENT-49`'s guards admitting the `notify` job only in its exact shape. The block publishes its outcome, `posted`, `failed` or `skipped`, as an output, since a skip leaves the job green. No lane runs it until the digests move. [Plan 0011](../docs/plans/0011-notifications.md) N6, [#839](https://github.com/yedeya-labs/kanon/issues/839), [#972](https://github.com/yedeya-labs/kanon/issues/972)
+- **2026-10-15.** The guards the rule names are built: Kanon's `notify` block, `actions/notify`, with `tests/unit/helpers/notify-jobs.ts`, `tests/unit/notify-guard.test.ts` and `tests/library/notify-block.test.ts`, `K-AGENT-50`'s guard admitting the `notify` job only in its exact shape, and `K-AGENT-49`'s counting the block as running the adopter's code. The block publishes its outcome, `posted`, `failed` or `skipped`, as an output, since a skip leaves the job green. No lane runs it until the digests move. [Plan 0011](../docs/plans/0011-notifications.md) N6, [#839](https://github.com/yedeya-labs/kanon/issues/839), [#972](https://github.com/yedeya-labs/kanon/issues/972)
 
 ## `K-LAYOUT-1`
 
