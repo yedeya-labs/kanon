@@ -8,9 +8,9 @@
  * not activity volume: PR and issue counts go up whether the week was good or
  * bad, so they appear once, at the bottom, as texture.
  *
- * This is an ADDITION to the per-release announcements, not a replacement
- * — those double as deploy-failure alerting (announce-deploy.mjs). It posts to
- * the same webhook, once a week.
+ * This is an ADDITION to the per-deploy announcements, not a replacement
+ * — those are `deploy` messages (announce-deploy.mjs), on their own secret.
+ * It posts once a week, to DIGEST_WEBHOOK.
  *
  * DELIBERATELY ABSENT:
  * - **Environment vocabulary.** With CD, delivered work lands on staging
@@ -949,7 +949,7 @@ if (isCliEntry(import.meta.url)) {
     process.exit(1);
   }
   if (!webhook && !DRY_RUN) {
-    // Graceful no-op, matching announce-deploy: a missing webhook must not fail
+    // Graceful no-op, matching project-digest: a missing webhook must not fail
     // a scheduled job whose output is a nice-to-have.
     console.warn('DIGEST_WEBHOOK not set — skipping digest.');
     process.exit(0);

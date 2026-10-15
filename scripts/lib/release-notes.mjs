@@ -1,18 +1,25 @@
 // @ts-nocheck -- moved from the reference adopter's pipeline library, which doesn't type-check its scripts (plan 0001 §3; ADR 0009)
 /**
- * Pure text helpers for turning release-please release bodies into Slack mrkdwn.
+ * Pure text helpers for turning release-please release bodies into chat text. Shared:
+ * `parseSections`, `scopeOf`, `classify` and `INTERNAL_SCOPES`. Kanon text, for the deploy
+ * announcement's `deploy` message (plan 0011 step N9): `kanonBullet`, `kanonList`,
+ * `kanonMaint`. Slack mrkdwn, for the weekly digest alone until it moves behind the
+ * `notify` job too (step N8): `slackInline`, `cleanBullet`, `dropScopePrefix`.
  *
- * Extracted verbatim from announce-deploy.mjs so the weekly digest (RA-502) can
- * reuse them instead of growing a second, drifting copy — the two posts read the
- * same release bodies and must categorise them identically, or the same commit
- * gets called a Feature in one and Maintenance in the other.
+ * Extracted from announce-deploy.mjs so the weekly digest (RA-502) can reuse them
+ * instead of growing a second, drifting copy — the two posts read the same release
+ * bodies and must categorise them identically, or the same commit gets called a
+ * Feature in one and Maintenance in the other.
  *
  * PURE ONLY, deliberately: no fetch, no env, no process. That is what makes this
- * unit-testable (tests/library/release-notes.test.ts) and what kept the extraction
- * from touching announce-deploy's I/O path, which has no test coverage of its own.
+ * unit-testable (tests/library/release-notes.test.ts, announce-deploy.test.ts).
  *
- * Dependency-free (Node 20+), matching its callers.
+ * Imports nothing but Kanon's contract library (itself import-free), for `literal`:
+ * a release note's line is text nobody controls, and never enters Kanon text bare
+ * (plan 0011 §3.1).
  */
+
+import { literal } from './notify-contract.mjs';
 
 /** Inline markdown → Slack mrkdwn (bold + links) for a single bullet's prose. */
 export const slackInline = (s) =>
@@ -77,22 +84,11 @@ export function cleanBullet(raw) {
 /** Strip the scope prefix from a cleaned bullet — the digest groups BY scope, so repeating it in every line is noise. */
 export const dropScopePrefix = (cleaned) => cleaned.replace(/^[a-z0-9._/-]+:\s*/i, '');
 
-/** Headline section: deduped bullets, capped, with a "+N more" tail. */
-export function renderList(title, bullets, max = 8) {
-  if (bullets.length === 0) return '';
-  const cleaned = [...new Set(bullets.map(cleanBullet))];
-  const shown = cleaned.slice(0, max);
-  const extra = cleaned.length - shown.length;
-  return (
-    `\n*${title}*\n` +
-    shown.map((b) => `• ${b}`).join('\n') +
-    (extra > 0 ? `\n  …+${extra} more` : '') +
-    '\n'
-  );
-}
-
-/** Maintenance: roll dependency bumps into a count, list other scopes. */
-export function renderMaint(bullets) {
+/**
+ * Maintenance as its parts, each plain text: dependency bumps rolled into a count, other
+ * scopes listed. `kanonMaint` joins them into Kanon text.
+ */
+export function maintParts(bullets) {
   let deps = 0;
   let approx = false;
   const scopes = new Set();
@@ -109,5 +105,45 @@ export function renderMaint(bullets) {
   const parts = [];
   if (deps) parts.push(`${approx ? '~' : ''}${deps} dependency update${deps === 1 ? '' : 's'}`);
   if (scopes.size) parts.push(`${[...scopes].sort().join(', ')} updates`);
-  return parts.length ? `\n*Maintenance* — ${parts.join(' · ')}\n` : '';
+  return parts;
 }
+
+// ------------------------------------------------------------ Kanon text (plan 0011)
+
+/** An `https://` URL a Kanon text link can hold: no whitespace, no parenthesis, no `<>`. */
+const LINKABLE = /^https:\/\/[^\s()<>]+$/;
+
+/**
+ * A raw bullet as one line of Kanon text, `scope: prose ([#pr](url))`, read the way
+ * `cleanBullet` reads it: the scope prefix and noise refs dropped, the last `#N` ref kept
+ * as a link. The prose is a commit's subject, so it goes through `literal`; the link is
+ * kept only when its URL is `https://`.
+ */
+export function kanonBullet(raw) {
+  const refs = [];
+  let s = raw
+    .replace(/\s*\(\[([^\]]+)\]\(([^)]+)\)\)/g, (_, label, url) => {
+      refs.push({ label, url });
+      return '';
+    })
+    .trim();
+  const scope = s.match(/^\*\*(.+?):\*\*\s*/);
+  if (scope) s = s.slice(scope[0].length);
+  const pr = [...refs].reverse().find((r) => /^#\d+$/.test(r.label) && LINKABLE.test(r.url));
+  const link = pr ? ` ([${pr.label}](${pr.url}))` : '';
+  return `${scope ? `${literal(scope[1])}: ` : ''}${literal(s)}${link}`;
+}
+
+/**
+ * Raw bullets as a Kanon text body: deduped `- ` lines, capped at `max`, with a last
+ * `…and N more` line. Empty when there are none.
+ */
+export function kanonList(bullets, max = 8) {
+  const cleaned = [...new Set(bullets.map(kanonBullet))].filter((b) => b.trim() !== '');
+  const shown = cleaned.slice(0, max);
+  const extra = cleaned.length - shown.length;
+  return [...shown.map((b) => `- ${b}`), ...(extra > 0 ? [`…and ${extra} more`] : [])].join('\n');
+}
+
+/** Maintenance as one line of Kanon text, or empty: `maintParts`, each `literal`, joined. */
+export const kanonMaint = (bullets) => maintParts(bullets).map(literal).join(' · ');

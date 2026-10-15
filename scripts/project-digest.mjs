@@ -752,8 +752,8 @@ if (isCliEntry(import.meta.url)) {
     process.exit(1);
   }
   if (!webhook && !DRY_RUN) {
-    // Graceful no-op, matching announce-deploy and weekly-digest: a missing
-    // webhook must not fail a scheduled job whose output is a nice-to-have.
+    // Graceful no-op, matching weekly-digest: a missing webhook must not
+    // fail a scheduled job whose output is a nice-to-have.
     console.warn('DIGEST_WEBHOOK not set — skipping digest.');
     process.exit(0);
   }
