@@ -2532,7 +2532,7 @@ export const diagnose = async (deps, opts) => {
       deployBroken = true;
       find('deploy.declaration', ADOPTION_RECORD, `${/** @type {Error} */ (e).message}. The deploy lane's gate, \`kanon init\` and the reconciler read ${DEPLOY_HEADING} through one parser, which refuses it (plan 0010 §4).`, {
         text: `Write ${DEPLOY_HEADING} as docs/lanes.md ("The deploy lane") shows: the environments in deploy order, the CI wait, the three reference deploy bullets (all or none) and the fallback's marker, each a \`- \` bullet with its bold label and one code span:`,
-        commands: [DEPLOY_HEADING, '', '- **Environments:** `staging`, `production`', '- **Reference environment:** `staging`', '- **Reference deploy workflow:** `deploy.yml`', '- **Reference deploy job:** `staging / deploy`'],
+        commands: [DEPLOY_HEADING, '', '- **Environments:** `<first>`, `<production>`', '- **Reference environment:** `<first>`', '- **Reference deploy workflow:** `deploy.yml`', '- **Reference deploy job:** `<first> / deploy`'],
       });
     }
   }
