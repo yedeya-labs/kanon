@@ -328,6 +328,51 @@ describe('the hold under a fallback marker (plan 0010 §13, kanon#894)', () => {
       expect(deploy({ FALLBACK: '', ROLE: 'production', GITHUB_ACTOR: 'owner' }).ok).toBe(true);
       expect(deploy({ FALLBACK: 'no-reviewers', ROLE: 'pre-production', GITHUB_ACTOR: 'owner' }).ok).toBe(true);
     });
+
+    // #904: under the `no-reviewers` fallback nothing but this check holds production back (plan
+    // 0010 §13, §15). Each MUTATION named turns one of these red.
+    describe('under `no-reviewers`, the only control in front of production (#904)', () => {
+      const traced = (env: Record<string, string>, marker: string | null = 'no-reviewers') => {
+        const { api, calls } = github({ ...marked(marker), ...sup });
+        return { r: deployCheck({ GITHUB_REPOSITORY: REPO, GITHUB_EVENT_NAME: 'workflow_dispatch', ENVIRONMENT: 'production', SHA, ...env }, { api }), calls };
+      };
+
+      it("refuses a non-Maintainer's dispatch on its first attempt, by `GITHUB_ACTOR` when no re-run names anyone else, before the supersede check reads a deployment", () => {
+        const { r, calls } = traced({ FALLBACK: 'no-reviewers', ROLE: 'production', GITHUB_ACTOR: 'owner' });
+        expect(r).toEqual({ ok: false, outputs: { unauthorized: 'not-maintainer' }, title: 'Deploy production', code: 'not-maintainer', message: expect.stringMatching(/under the `no-reviewers` fallback only the Maintainer \(@maint\) may deploy production, by dispatch; this attempt was started by @owner/) });
+        // The record is read at the release's commit, and the supersede check never runs.
+        expect(calls).toEqual([`repos/${REPO}/contents/docs/qa/adoption.md?ref=${SHA}`]);
+        // A login compared case-blind, as GitHub's are.
+        expect(traced({ FALLBACK: 'no-reviewers', ROLE: 'production', GITHUB_ACTOR: 'MAINT' }).r.ok).toBe(true);
+      });
+
+      it("refuses a re-run by anyone but the Maintainer, though the Maintainer dispatched it (MUTATION: the check reading `GITHUB_ACTOR` alone turns this red)", () => {
+        const { r, calls } = traced({ FALLBACK: 'no-reviewers', ROLE: 'production', GITHUB_ACTOR: 'maint', GITHUB_TRIGGERING_ACTOR: 'owner' });
+        expect(r).toMatchObject({ ok: false, outputs: { unauthorized: 'not-maintainer' }, code: 'not-maintainer' });
+        expect(r.message).toMatch(/started by @owner/);
+        expect(calls.some((c) => c.includes('/deployments'))).toBe(false);
+      });
+
+      it("refuses production's attempt by a non-Maintainer whatever the trigger (MUTATION: the check skipped for production turns this red)", () => {
+        for (const GITHUB_EVENT_NAME of ['workflow_dispatch', 'release']) {
+          expect(traced({ GITHUB_EVENT_NAME, FALLBACK: 'no-reviewers', ROLE: 'production', GITHUB_ACTOR: 'owner' }).r.code, GITHUB_EVENT_NAME).toBe('not-maintainer');
+        }
+      });
+
+      it("refuses everyone when the record names no Maintainer", () => {
+        const { api } = github({ [`repos/${REPO}/contents/docs/qa/adoption.md?ref=${SHA}`]: RECORD(['- **Environments:** `production`', '- **Fallback:** `no-reviewers`']), ...sup });
+        const r = deployCheck({ GITHUB_REPOSITORY: REPO, GITHUB_EVENT_NAME: 'workflow_dispatch', ENVIRONMENT: 'production', SHA, FALLBACK: 'no-reviewers', ROLE: 'production', GITHUB_ACTOR: 'maint' }, { api });
+        expect(r).toMatchObject({ ok: false, code: 'not-maintainer' });
+        expect(r.message).toMatch(/none named in the adoption record/);
+      });
+
+      it("checks no actor and reads no record when no fallback is declared: the platform's reviewers gate production (MUTATION: the check applied without a marker turns this red)", () => {
+        const { r, calls } = traced({ FALLBACK: '', ROLE: 'production', GITHUB_ACTOR: 'owner', GITHUB_TRIGGERING_ACTOR: 'owner' }, null);
+        expect(r).toMatchObject({ ok: true, code: '', title: 'Deploy superseded' });
+        expect(r.outputs.unauthorized).toBeUndefined();
+        expect(calls.some((c) => c.includes('adoption.md'))).toBe(false);
+      });
+    });
   });
 
   it("reads the Maintainer's logins from the record's People table", () => {
