@@ -46,11 +46,7 @@
       "app": "Releaser",
       "optional": true,
       "roles": ["releaser"],
-      "permissions": { "contents": "write", "pull_requests": "write", "workflows": "write", "metadata": "read" },
-      "broadened": {
-        "workflows": "write",
-        "$why": "For Kanon's pin job only (plan 0009 S4, the Owner's decision of 2026-10-15): its pull request moves Kanon's own pins in .github/workflows, which GitHub refuses from an App token without Workflows write. The Releaser runs no model, so the added exposure is its key alone, and only the pin job's mint asks for it; the release workflow's mint stays at Contents and Pull requests write."
-      }
+      "permissions": { "contents": "write", "pull_requests": "write", "metadata": "read" }
     }
   }
 }

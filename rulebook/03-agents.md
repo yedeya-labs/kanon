@@ -29,11 +29,10 @@ The agent roles, and the Releaser, run under three GitHub Apps per owner, each r
 |---|---|---|
 | **Author** | Implementer, Lead, Explorer, Overseer | Contents, Issues and Pull requests write; Workflows write; Actions read; Commit statuses write (broadened, below). |
 | **Judge** | Reviewer, Merger | Contents, Issues and Pull requests write; Actions write; Checks and Commit statuses read. |
-| **Releaser**, optional | Releaser | Contents and Pull requests write; Workflows write (broadened, below); the only ruleset bypass, limited to release PRs. |
+| **Releaser**, optional | Releaser | Contents and Pull requests write; the only ruleset bypass, limited to release PRs. |
 
 - **The Author and the Judge are the author and the approver** (`K-PRIN-5`). The Author never approves, and the Judge never authors.
 - **The Author's Commit statuses write is broadened beyond its roles' rows,** and recorded as such (`K-AGENT-3`): only the fixed step of the Implementer's lanes that sets the `kanon/role: implementer` status mints with it, after the agent has finished, and no agent's token holds it. The Merger requires that status on a green-zone pull request's head (`K-MERGE-4`).
-- **The Releaser's Workflows write is broadened beyond its role's row,** and recorded as such (`K-AGENT-3`): only Kanon's pin job mints with it, whose pull request moves Kanon's own pins in `.github/workflows` to a candidate ([plan 0009](../docs/plans/0009-release-channels-and-api-key.md) §6), which GitHub refuses from an App token without it. The Releaser runs no model, so the added exposure is its key alone; the release workflow's mint stays at Contents and Pull requests write.
 - **A step's token still fits its role's row,** not only its App's grant (`K-AGENT-46`): the Lead's token holds no Workflows, though the Author does.
 - **The Releaser is optional.** An adopter that makes no releases, or merges its release PRs through the front door, needs only the Author and the Judge.
 

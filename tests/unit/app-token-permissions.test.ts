@@ -90,15 +90,12 @@ const MORE: Record<string, Perms> = {
  * Implementer's row. Every caller passes the Implementer's secrets (`implementer-status.test.ts`).
  */
 /**
- * The Releaser's mints, in the release workflow (plan 0005 §3.1, decision 2) and Kanon's pin job, keyed
+ * The Releaser's mint in the release workflow (plan 0005 §3.1, decision 2), keyed
  * `<file>#<step id>`. The Releaser runs no agent and is no row of the roles table, so its list
  * is held to the Releaser App's grant in `agent-permissions.json`'s `apps` block.
  */
 const RELEASE: Record<string, Perms> = {
   '.github/workflows/release.yml#releaser': { contents: 'write', 'pull-requests': 'write' },
-  // Kanon's pin job (plan 0009 S4): its commit moves pins in `.github/workflows`, so it alone asks
-  // for the Releaser's broadened Workflows write (`K-AGENT-3`).
-  '.github/workflows/release-please.yml#releaser': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
 };
 const STATUS: Record<string, Perms> = {
   // Lists the open pull requests, reads a head commit and compares two heads.
