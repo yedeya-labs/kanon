@@ -99,6 +99,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-14.** The deploy lane's three hooks, `.github/actions/build`, `.github/actions/deploy` and `.github/actions/smoke`, and the adoption record's `## Deploy` section, joined the fixed paths. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 - **2026-10-14.** The notify hook, `.github/actions/notify/action.yml`, joined the fixed paths. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)
 
+## `K-LAYOUT-6`
+
+- **2026-10-15.** The Maintainer decided that the register holds every App installed on the repository that isn't an agent, under one generic role, so an adopter can register any such App. The role is `Other App`, with one row per App, each naming an App no other row names; the readers that map a role to a login, the membership gate among them, never read those rows. [#990](https://github.com/yedeya-labs/kanon/issues/990)
+
 ## `K-LAYOUT-8`
 
 - **2026-10-12.** The Owner decided that `## Pipeline code` may name a single file, which covers exactly that file, as well as a directory. [#728](https://github.com/yedeya-labs/kanon/issues/728)

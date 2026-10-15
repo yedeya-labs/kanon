@@ -47,6 +47,19 @@ laneCheck(() => {
       red((t) => withPersonas(t, '<b>Builder</b>'), /agent-identities\.md:\d+: the Implementer row's persona `<b>Builder<\/b>` is malformed/));
     it('refuses a persona that is another role\'s name', () =>
       red((t) => withPersonas(t, 'Reviewer'), "the Implementer row's persona `Reviewer` is another role's name"));
+
+    // Issue #990: an App that isn't an agent has a row under the `Other App` role (K-AGENT-3).
+    const withOthers = (t: Tree, ...slugs: string[]) =>
+      t.write(REG, `${t.read(REG).trimEnd()}\n${slugs.map((s) => `| Other App | \`${s}\` | Read | Read & write | No access | No access |`).join('\n')}\n`);
+    it('[REG-1] passes a register holding several Other App rows, with no finding', () => {
+      const t = adopter();
+      withOthers(t, 'example-reporter', 'example-scanner');
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).not.toMatch(/::(error|warning|notice) file=docs\/qa\/agent-identities\.md/);
+    });
+    it('[REG-2] refuses an Other App row that names an agent App\'s slug, by both rows', () =>
+      red((t) => withOthers(t, 'example-author'), /file=docs\/qa\/agent-identities\.md,title=lane-check::docs\/qa\/agent-identities\.md:7: the Other App row names `example-author`, the App the Implementer row names \(docs\/qa\/agent-identities\.md:5\)/));
   });
 
   describe('the Dependabot entry that proposes Kanon upgrades (K-ADOPT-11)', () => {

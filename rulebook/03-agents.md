@@ -20,6 +20,7 @@ Every Kanon project has the same roles. A person may hold several human roles at
 | **Overseer** | agent | Read aggregates; file pipeline-improvement issues; keep one rolling audit issue; propose capability-ledger deltas; restrict another agent's authority. | Fix, merge, or close other work. Write repository files, the ledger included. Set a target on a backlog metric or propose "file less". Widen anyone's authority. File a finding only Kanon can act on in the adopter's repository. | Contents read, Issues write, Pull requests read, Actions read. |
 | **Releaser** | bot, not an agent | Open and merge its own release PRs. | Touch any file outside the release file set. | Contents and Pull requests write; a ruleset bypass limited to release PRs. |
 | **Intake** | App, not an agent | File a report from the running application as an issue carrying exactly one intake label. | Read, decide, run in a workflow, apply any other label, or trigger an agent. | Issues write only. |
+| **Other App** | App, not an agent | Do its own job on the repository: any App installed there that plays none of the roles above, each with its own row in the App register (`K-AGENT-3`). | Run as an agent, or be admitted by the membership gate as one (`K-AGENT-45`). Name the App of a role above on its row. | Its own least-privilege grant, recorded on its row of the App register (`K-AGENT-3`). |
 
 ### The Apps
 

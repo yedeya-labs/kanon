@@ -209,6 +209,35 @@ describe('kanon doctor and Apps no lane uses any more', () => {
   });
 });
 
+// Issue #990: an App that isn't an agent has a row under the `Other App` role (K-AGENT-3).
+describe('kanon doctor and Apps that are not agents', () => {
+  const other = (slug: string) => `| Other App | \`${slug}\` | No access | Read & write | No access | No access | No access | None |`;
+  const withOthers = (...slugs: string[]) => {
+    const files = healthyFiles();
+    // After the table's last row, above the note that follows it.
+    files['docs/qa/agent-identities.md'] = files['docs/qa/agent-identities.md']!.replace(/(\|[^\n]*\|\n)(?!\|)/, `$1${slugs.map(other).join('\n')}\n`);
+    return checkout(files);
+  };
+
+  it('[REG-1] is healthy with several Other App rows, each installed, and names none of them unused', async () => {
+    const github = fakeGitHub();
+    github.st.installations = [{ id: 41, app_slug: 'widgets-reporter', account: { login: 'acme' } }, { id: 42, app_slug: 'widgets-scanner', account: { login: 'acme' } }];
+    const r = await run(withOthers('widgets-reporter', 'widgets-scanner'), github, ['--json']);
+    expect(ids(r)).toEqual([]);
+    expect(r.status).toBe(EXIT.healthy);
+  });
+
+  it('[REG-2] reports an Other App row that names an agent App\'s slug, by both rows, and blocks', async () => {
+    const judge = `widgets-${identitiesOf(LANES).find((i) => i === 'judge')}`;
+    const r = await run(withOthers('widgets-reporter', judge), fakeGitHub(), ['--json']);
+    expect(ids(r)).toEqual(['register.other-app-slug docs/qa/agent-identities.md']);
+    expect(r.json.findings[0]).toMatchObject({ category: 'app', blocking: true });
+    expect(r.json.findings[0].message).toContain(`\`${judge}\``);
+    expect(r.json.findings[0].message).toMatch(/an Other App row and the Reviewer, Merger rows/);
+    expect(r.status).toBe(EXIT.findings);
+  });
+});
+
 // The Owner, 2026-10-07 (#440, #437): apps-check names each App's secrets literally, so on Kanon's
 // own tree doctor lists the per-role Apps' secrets as stale, and never the three Apps'.
 describe("kanon doctor on Kanon's own workflows (#440, #437)", () => {

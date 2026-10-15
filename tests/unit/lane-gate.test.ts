@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { decide, triggeringActor } from '../../scripts/lane-gate.mjs';
+import { parseAppRegister } from '../../scripts/app-register.mjs';
 import { checkCallerPin, kanonRefsOf, localCallsOf, parseWorkflowRef } from '../../scripts/caller-pin.mjs';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { IMPLEMENTER_LOGIN } from './helpers/register.js';
@@ -299,6 +300,18 @@ describe('what a member is', () => {
     expect(decide({ login: 'example-leader[bot]', association: 'MEMBER', source: 'reviewer' }, { registeredApps: register, permissionOf: noLookup }).member).toBe(false);
     // The slug, not the bare login: a user named like an App is not the App.
     expect(decide({ login: 'example-author', association: 'NONE', source: 'reviewer' }, { registeredApps: register, permissionOf: noLookup }).member).toBe(false);
+  });
+  // Issue #990: an App that isn't an agent has an `Other App` row (K-AGENT-3), and that row makes
+  // it no member, whatever the register's parser reads it as.
+  it('[REG-3] does not admit an App whose only rows are Other App rows, as it refuses one the register doesn\'t name', () => {
+    const text = ['| Role | App slug |', '|---|---|', '| Lead | `example-author` |', '| Other App | `example-reporter` |', '| Other App | `example-scanner` |', ''].join('\n');
+    const registeredApps = () => parseAppRegister(text);
+    const unnamed = decide({ login: 'example-stranger[bot]', association: 'MEMBER', source: 'reviewer' }, { registeredApps, permissionOf: noLookup });
+    expect(unnamed.member).toBe(false);
+    for (const login of ['example-reporter[bot]', 'example-scanner[bot]']) {
+      expect(decide({ login, association: 'MEMBER', source: 'reviewer' }, { registeredApps, permissionOf: noLookup }), login).toEqual(unnamed);
+    }
+    expect(decide({ login: 'example-author[bot]', association: 'NONE', source: 'reviewer' }, { registeredApps, permissionOf: noLookup }).member).toBe(true);
   });
   it('a lookup admits triage or more, and nothing less', () => {
     const lookup = (permissions: Record<string, boolean>) => () => ({ permissions, role_name: 'custom' });

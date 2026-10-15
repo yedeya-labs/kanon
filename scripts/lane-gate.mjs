@@ -2,7 +2,8 @@
 //
 // A lane starts real work only when the actor of the triggering event is a member: GitHub's
 // `author_association` of `OWNER`, `MEMBER` or `COLLABORATOR`, or one of the repository's own
-// agent Apps, `<slug>[bot]` for a slug in the App register (`K-LAYOUT-6`). On a public
+// agent Apps, `<slug>[bot]` for a slug on a role's row of the App register (`K-LAYOUT-6`),
+// never on an `Other App` row, an App that isn't an agent (`K-AGENT-3`). On a public
 // repository anyone can leave a review, and a stranger's changes-request would otherwise
 // start an agent whose App token can push, with the stranger's text as its input.
 //
@@ -83,7 +84,8 @@
 //
 // WHAT A MEMBER IS, per source of the answer:
 //   a login ending `[bot]`   only the App register decides. A bot is never a collaborator,
-//                            and an App the repository did not register is not its agent.
+//                            and an App the repository did not register, or registered as
+//                            an `Other App`, is not its agent.
 //   an association           `OWNER`, `MEMBER` or `COLLABORATOR`.
 //   a permission lookup      triage access or more. On a public repository the endpoint
 //                            answers `read` for ANY user, so read is not membership; and
@@ -248,7 +250,9 @@ export function decide(actor, { registeredApps, permissionOf }) {
   const bot = /^(.+)\[bot\]$/.exec(actor.login);
   if (bot) {
     const slug = bot[1];
-    // Since plan 0005's L4 several roles share one App's slug (§3.4): name them all.
+    // Since plan 0005's L4 several roles share one App's slug (§3.4): name them all. An App that
+    // isn't an agent has an `Other App` row (K-AGENT-3), which `parseAppRegister` leaves out of the
+    // map, so it is refused here as an App the register doesn't name ([REG-3], issue #990).
     const roles = [...registeredApps()].filter(([, s]) => s === slug).map(([r]) => r);
     const role = roles.length ? roles.join(', ') : undefined;
     return role

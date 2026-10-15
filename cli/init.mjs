@@ -80,6 +80,7 @@ import { BUCKETS, milestones as runMilestones } from './milestones.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL, sends } from '../scripts/lib/upstream-findings.mjs';
 import { HOSTED_INGEST_URL } from '../scripts/lib/telemetry-token.mjs';
+import { OTHER_APP } from '../scripts/app-register.mjs';
 import { ADOPTION_RECORD as DEPLOY_RECORD, CHAIN_LABELS, DeclarationError, DEPLOY_HEADING, LABELS as REFERENCE_LABELS, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
@@ -601,14 +602,15 @@ export const appIdentities = (a, req) => [...identitiesOf(a.lanes, req), ...(a.r
 export const callsRelease = (text) => /^\s*uses:\s*yedeya-labs\/kanon\/\.github\/workflows\/release\.yml@/m.test(text ?? '');
 
 /**
- * The roles the App register lists, with their slugs, read as `lane-check`'s reader reads it:
- * the one table outside a fence headed `| Role | App slug |`.
+ * Every row of the App register, role and slug, in order, read as `lane-check`'s reader reads it:
+ * the one table outside a fence headed `| Role | App slug |`. A row without a slug in backticks is
+ * left out.
  * @param {string | null} text
- * @returns {Map<string, string>}
+ * @returns {Array<[string, string]>}
  */
-export const registerRows = (text) => {
-  /** @type {Map<string, string>} */
-  const rows = new Map();
+const registerTable = (text) => {
+  /** @type {Array<[string, string]>} */
+  const rows = [];
   if (!text) return rows;
   let fenced = false;
   let inTable = false;
@@ -630,10 +632,26 @@ export const registerRows = (text) => {
     }
     if (/^:?-+:?$/.test(c[0] ?? '')) continue;
     const slug = /^`([a-z0-9]+(?:-[a-z0-9]+)*)`$/.exec(c[1] ?? '')?.[1];
-    if (c[0] && slug) rows.set(c[0], slug);
+    if (c[0] && slug) rows.push([c[0], slug]);
   }
   return rows;
 };
+
+/**
+ * The roles the App register lists, with their slugs: every row but the Other App rows, which
+ * may be several and are `registerOtherApps`'s (`K-AGENT-3`).
+ * @param {string | null} text
+ * @returns {Map<string, string>}
+ */
+export const registerRows = (text) => new Map(registerTable(text).filter(([role]) => role !== OTHER_APP));
+
+/**
+ * The slugs of the App register's Other App rows, the Apps installed that aren't agents
+ * (`K-AGENT-3`), in the register's order.
+ * @param {string | null} text
+ * @returns {string[]}
+ */
+export const registerOtherApps = (text) => registerTable(text).filter(([role]) => role === OTHER_APP).map(([, slug]) => slug);
 
 const OWNER_REGISTERS = `query($owner: String!, $after: String) { repositoryOwner(login: $owner) { repositories(first: 100, after: $after, ownerAffiliations: [OWNER], isFork: false, orderBy: { field: PUSHED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { name object(expression: "HEAD:${REGISTER_PATH}") { ... on Blob { text } } } } } }`;
 
