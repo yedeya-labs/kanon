@@ -201,4 +201,11 @@ describe('announce-deploy names no environment of its own (kanon#54)', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/Missing required env:.*\bSTAGE\b/);
   });
+
+  it('runs as a CLI in either mode: --advance refuses by name when notify did not post (plan 0011 N9)', () => {
+    const env = { PATH: process.env.PATH ?? '', GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'o/r', STAGE: 'staging', VERSION: '1.0.0', NOTIFY_RESULT: 'failure' };
+    const r = spawnSync(process.execPath, [join(ROOT, 'scripts/announce-deploy.mjs'), '--advance'], { cwd: tmpdir(), env, encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/--advance refuses: the notify job did not post/);
+  });
 });
