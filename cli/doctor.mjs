@@ -56,7 +56,7 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
+import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -244,6 +244,7 @@ export const UNWAIVABLE = {
   'id-token.stale-acceptance': 'it is about the adoption record itself; remove the stale acceptance instead',
   'id-token.unaccepted': `a job is accepted as an id-token holder by its own bullet, \`- **${HOLDER_LABEL}:** \`<workflow>.yml\` job \`<job>\` (<why>)\``,
   'register.shared-slug': 'one App authoring and approving its own work defeats independent review (K-LAYOUT-6)',
+  'register.other-app-slug': 'an Other App row naming an agent\'s App would re-label that App as one that isn\'t an agent (K-LAYOUT-6)',
   'caller.secrets-inherited': 'it hands the lane every secret of the repository (plan 0001 decision 7)',
   'ruleset.missing': 'without it nothing enforces review on the default branch (K-ADOPT-1 step 8)',
   'ruleset.rule-missing': 'without it nothing enforces that rule of review on the default branch (K-ADOPT-1 step 8)',
@@ -330,6 +331,7 @@ export const FINDINGS = {
   'register.missing-row': { category: 'app', blocking: true },
   'register.split-slug': { category: 'app', blocking: true },
   'register.shared-slug': { category: 'app', blocking: true },
+  'register.other-app-slug': { category: 'app', blocking: true },
   'app.permission-missing': { category: 'app', blocking: true },
   'app.permission-extra': { category: 'app', blocking: false },
   'app.unused': { category: 'app', blocking: false },
@@ -1461,7 +1463,11 @@ export const diagnose = async (deps, opts) => {
   const releaserSecrets = appSecrets('releaser');
   if (req.identities.apps.releaser && releaseCallers.some((c) => isMap(c.job.secrets) && releaserSecrets.some((n) => n in c.job.secrets))) identities.push('releaser');
   identities.sort();
-  const rows = registerRows(read(REGISTER_PATH));
+  const registerText = read(REGISTER_PATH);
+  const rows = registerRows(registerText);
+  // The Apps installed that aren't agents (K-AGENT-3): no lane runs as one, so only the slug they
+  // may not share, and the installed Apps the register still names, read them.
+  const otherApps = registerOtherApps(registerText);
   /** @type {Map<string, string>} identity → its one slug */
   const slugOf = new Map();
   /** @type {Map<string, string[]>} slug → identities */
@@ -1509,6 +1515,17 @@ export const diagnose = async (deps, opts) => {
         text: `Give each its own App, and point its roles' rows at that App's slug.`,
       });
     }
+  }
+  // An Other App row names an App no role's row names ([REG-2], issue #990): every role's, not only
+  // the lanes' in use here, as the lanes' own parser reads it.
+  const reLabelled = [...new Set(otherApps)].flatMap((slug) => {
+    const roles = [...rows].filter(([, s]) => s === slug).map(([r]) => r);
+    return roles.length ? [`\`${slug}\` on an Other App row and the ${roles.join(', ')} row${roles.length > 1 ? 's' : ''}`] : [];
+  });
+  if (reLabelled.length) {
+    find('register.other-app-slug', REGISTER_PATH, `names ${reLabelled.join(', and ')}. An Other App row is an App that isn't an agent, so it names an App no role's row names: one naming an agent's App would re-label it, and the lanes refuse the register (K-LAYOUT-6).`, {
+      text: `Remove the Other App row of an App that already has a role's row; if it is another App, write that App's own slug.`,
+    });
   }
   // GitHub shows a private App only to the App itself: GET /apps/<slug> answers 404 to a person's
   // token and the workflow's alike (#417). apps-check reads each installation with the App's own
@@ -1636,7 +1653,7 @@ export const diagnose = async (deps, opts) => {
   // App counts when the register's own history on this checkout once named it and its current
   // copy doesn't, and the owner still has an installation of it. Never blocking: deleting an App
   // is the Owner's, after a week of green runs on the new ones (L5).
-  const nowSlugs = new Set(rows.values());
+  const nowSlugs = new Set([...rows.values(), ...otherApps]);
   const history = deps.git(['-C', root, 'log', '--format=', '-p', '--', REGISTER_PATH]);
   const formerSlugs = history.status === 0
     ? [...new Set([...history.stdout.matchAll(/^[+-][ \t]*\|[^|\n]*\|[ \t]*\*{0,2}`([a-z0-9]+(?:-[a-z0-9]+)*)`/gm)].map((m) => /** @type {string} */ (m[1])))].filter((x) => !nowSlugs.has(x)).sort()

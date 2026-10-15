@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
+import { parseAppRegister, parseOtherApps } from '../../scripts/app-register.mjs';
 import { appRoles, apps, buildManifest, checkoutCheck, loadApps, loadRoles, ownerPages, realDeps, remoteRepo, rotationSteps } from '../../cli/apps.mjs';
 import { readAppExtras, withExtras } from '../../scripts/lib/app-extras.mjs';
 import { appsTable, grantsOf } from './helpers/roles-table.js';
@@ -1086,6 +1087,17 @@ describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
     const { text } = writeRegisterRow(readFileSync(OWN, 'utf8'), { role: 'Implementer', slug: 'kanon-implementer-2', permissions: loadRoles().implementer!.permissions });
     expect(text.match(/^\| Implementer \|/gm)).toHaveLength(1);
     expect(text).toContain('| Implementer | `kanon-implementer-2` |');
+  });
+
+  // Issue #990: an App that isn't an agent has an `Other App` row (K-AGENT-3), and writing a role's row leaves those alone.
+  it('writes a role\'s row beside Other App rows, and leaves each of them as it was', () => {
+    const others = ['| Other App | `acme-reporter` | No access | Read & write | No access | No access | No access | None |', '| Other App | `acme-scanner` | Read | No access | No access | No access | No access | None |'];
+    const before = `${readFileSync(OWN, 'utf8').replace(/(\| Releaser \|[^\n]*\n)/, `$1${others.join('\n')}\n`)}`;
+    const { text, diff } = writeRegisterRow(before, { role: 'Reviewer', slug: 'yedeya-labs-judge-2', permissions: loadApps().judge!.permissions });
+    for (const row of others) expect(text).toContain(`${row}\n`);
+    expect(diff.filter((l) => l.includes('Other App'))).toEqual([]);
+    expect(parseOtherApps(text)).toEqual(['acme-reporter', 'acme-scanner']);
+    expect(parseAppRegister(text).get('Reviewer')).toBe('yedeya-labs-judge-2');
   });
 
   it.each([['Reviewer', 'yedeya-labs-judge'], ['Merger', 'yedeya-labs-judge'], ['Implementer', 'yedeya-labs-author'], ['Explorer', 'yedeya-labs-author'], ['Lead', 'yedeya-labs-author'], ['Overseer', 'yedeya-labs-author'], ['Releaser', 'yedeya-labs-releaser']])('gives the lanes the %s slug', (role, slug) => {

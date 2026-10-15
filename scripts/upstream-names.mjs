@@ -31,7 +31,7 @@
 // `node:` builtins only, like every script under scripts/ (`K-SELF-8`).
 
 import { KANON_WORDS, nameContext } from '../actions/agent-telemetry/scrub.mjs';
-import { APP_REGISTER, parseAppRegister } from './app-register.mjs';
+import { APP_REGISTER, parseAppRegister, parseOtherApps } from './app-register.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { defaultBranchFile } from './lib/declarations.mjs';
 
@@ -53,8 +53,9 @@ export function upstreamNames({ repo, run }) {
     const { branch, read } = defaultBranchFile(repo, run);
     const text = read(APP_REGISTER);
     if (text === null) return { hashes: null, notes: [`the App register, ${APP_REGISTER}, doesn't exist on \`${branch}\``] };
-    const register = parseAppRegister(text, APP_REGISTER);
-    return { hashes: [...nameContext({ apps: appNameWords(register.values()) })], notes: [] };
+    // An Other App row's slug is an App's name like any role's (K-AGENT-3).
+    const slugs = [...parseAppRegister(text, APP_REGISTER).values(), ...parseOtherApps(text, APP_REGISTER)];
+    return { hashes: [...nameContext({ apps: appNameWords(slugs) })], notes: [] };
   } catch (e) {
     return { hashes: null, notes: [`the App register couldn't be read: ${String(/** @type {Error} */ (e).message).split('\n')[0]}`] };
   }

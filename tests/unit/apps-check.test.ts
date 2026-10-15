@@ -74,6 +74,16 @@ describe('registeredApps reads the register with the lanes\' reader (plan 0005 Â
     expect(() => withRegister(noSlug, (dir) => registeredApps(REG(dir), APPS, ROLES))).toThrow(/no App slug in backticks/);
   });
 
+  // Issue #990: an App that isn't an agent has a row under `Other App` (K-AGENT-3). It is none of
+  // Kanon's Apps, so apps-check, which checks Kanon's, reads past it.
+  it('[REG-1] reads a register holding several Other App rows, and lists Kanon\'s Apps from it as before', () => {
+    const rows = ['| Implementer | `o-author` |', '| Other App | `o-reporter` |', '| Lead | `o-author` |', '| Reviewer | `o-judge` |', '| **Other App** | `o-scanner` |', '| Merger | `o-judge` |'];
+    const withOthers = withRegister(table(...rows), (dir) => registeredApps(REG(dir), APPS, ROLES));
+    const without = withRegister(table(...rows.filter((r) => !r.includes('Other App'))), (dir) => registeredApps(REG(dir), APPS, ROLES));
+    expect(withOthers).toEqual(without);
+    expect(withOthers.map((a) => a.slug)).toEqual(['o-author', 'o-judge']);
+  });
+
   it('fails when the register lists none of Kanon\'s Apps', () => {
     expect(() => withRegister('# Agent identities\n\nNone installed.\n', (dir) => registeredApps(REG(dir), APPS, ROLES))).toThrow(/lists no App of Kanon's/);
   });

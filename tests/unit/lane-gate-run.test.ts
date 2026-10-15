@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { LEAD_LOGIN } from './helpers/register.js';
+import { LEAD_LOGIN, REGISTER_FIXTURE } from './helpers/register.js';
 import { PERMS, runGate, MEMBER, STRANGER, CASES, LANES, read, gateOf } from './helpers/lane-gate.js';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -46,6 +46,27 @@ describe.each(CASES.filter(([file, trigger]) => !(file === BACKSTOP && trigger =
     expect(r.outputs.member).toBe('false');
     expect(r.summary).toContain('dependabot[bot]');
     expect(r.summary).toContain('not in the App register');
+  });
+});
+
+// Issue #990: the gate step itself, reading a default branch's register that holds Other App rows.
+describe('a lane\'s gate step and an App that isn\'t an agent', () => {
+  const file = 'agent-implement.yml';
+  const register = `${REGISTER_FIXTURE.trimEnd()}\n| Other App | \`example-reporter\` | Read | Read & write | No access | No access |\n`;
+  it('[REG-3] refuses an App whose only row is an Other App row, as it refuses an App the register doesn\'t name', () => {
+    const r = runGate(file, 'dispatch', { login: 'example-reporter[bot]', association: 'NONE' }, {
+      STUB_REGISTER: register,
+      STUB_PERMS: JSON.stringify({ 'example-reporter[bot]': PERMS['a-member'] }),
+    });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('example-reporter[bot]');
+    expect(r.summary).toContain('not in the App register');
+  });
+  it('still admits the agent Apps beside it', () => {
+    const r = runGate(file, 'dispatch', { login: `${LEAD_LOGIN}[bot]`, association: 'NONE' }, { STUB_REGISTER: register });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('true');
   });
 });
 

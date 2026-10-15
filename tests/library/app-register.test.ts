@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { readVerdict } from '../../scripts/agent-quality-columns.mjs';
-import { APP_OF, ROLES, appLogin, appShape, loadAppRegister, parseAppRegister } from '../../scripts/app-register.mjs';
+import { APP_OF, OTHER_APP, ROLES, appLogin, appShape, loadAppRegister, parseAppRegister, parseOtherApps, parsePersonas } from '../../scripts/app-register.mjs';
 
 /**
  * RA-2701 (Kanon move plan P4) — the bot logins every pipeline script compares against are
@@ -133,6 +133,55 @@ describe('parseAppRegister — fails loudly', () => {
   });
   it('on a role outside the three Apps sharing a slug', () =>
     refuses(table('| Intake | `i` | x |', '| Lead | `i` | y |'), /the Lead belongs to the Author and the Intake to no App of Kanon's three/));
+});
+
+// Issue #990 (decision 22 of docs/projects/902.md): `K-AGENT-3` asks for every App installed on the
+// repository, agent or not, so an App with no role of Kanon's has a row under the `Other App` role.
+describe('parseAppRegister — Apps that are not agents (docs/qa/specs/app-register.md)', () => {
+  const AGENTS = ['| Implementer | `o-author` | x |', '| Lead | `o-author` | x |', '| Reviewer | `o-judge` | x |', '| Releaser | `o-releaser` | x |', '| Intake | `o-intake` | x |'];
+  const OTHERS = ['| Other App | `o-reporter` | x |', '| **Other App** | **`o-scanner`** | y |'];
+
+  it('[REG-1] accepts several Other App rows, each its own slug, and reads every agent role\'s row as before', () => {
+    const plain = parseAppRegister(table(...AGENTS));
+    // Interleaved, so a row is read by its role, never by where it sits.
+    const text = table(AGENTS[0]!, OTHERS[0]!, ...AGENTS.slice(1), OTHERS[1]!);
+    const withOthers = parseAppRegister(text);
+    expect(Object.fromEntries(withOthers)).toEqual(Object.fromEntries(plain));
+    expect(appShape(withOthers)).toEqual([]);
+    expect(parseOtherApps(text)).toEqual(['o-reporter', 'o-scanner']);
+    expect(parseOtherApps(table(...AGENTS))).toEqual([]);
+    expect(parsePersonas(text).size).toBe(0);
+  });
+
+  it('[REG-1] reads a register whose only rows are Other App rows', () => {
+    const text = table(...OTHERS);
+    expect(parseAppRegister(text).size).toBe(0);
+    expect(parseOtherApps(text)).toEqual(['o-reporter', 'o-scanner']);
+  });
+
+  it('names the role in the list a wrong role\'s message gives, and gives an Other App row no persona', () => {
+    expect(OTHER_APP).toBe('Other App');
+    expect(() => parseAppRegister(table('| Others | `a` | x |'), 'reg.md')).toThrow(/is not a role\. The first column is one of: .*Intake, Other App\./);
+    expect(() => parsePersonas('| Role | App slug | Persona |\n|---|---|---|\n| Other App | `a` | Bob |\n')).toThrow(/only an agent role has one/);
+  });
+
+  const refuses = (text: string, why: RegExp) => {
+    expect(() => parseAppRegister(text, 'reg.md')).toThrow(why);
+    expect(() => parseOtherApps(text, 'reg.md')).toThrow(why);
+  };
+
+  it('[REG-2] refuses an Other App row naming an agent App\'s slug, in either order, naming both rows', () => {
+    refuses(table('| Lead | `o-author` | x |', '| Other App | `o-author` | y |'), /reg\.md:4: the Other App row names `o-author`, the App the Lead row names \(reg\.md:3\)/);
+    refuses(table('| Other App | `o-judge` | x |', '| Reviewer | `o-judge` | y |'), /reg\.md:4: the Reviewer row names `o-judge`, the App the Other App row names \(reg\.md:3\)/);
+  });
+
+  it('refuses an Other App row naming the Releaser\'s or the Intake App\'s slug, or another Other App row\'s', () => {
+    refuses(table('| Releaser | `r` | x |', '| Other App | `r` | y |'), /reg\.md:4: the Other App row names `r`, the App the Releaser row names \(reg\.md:3\)/);
+    refuses(table('| Other App | `i` | x |', '| Intake | `i` | y |'), /reg\.md:4: the Intake row names `i`, the App the Other App row names \(reg\.md:3\)/);
+    refuses(table('| Other App | `a` | x |', '| Lead | `l` | x |', '| Other App | `a` | y |'), /reg\.md:5: the Other App row names `a`, the App the Other App row names \(reg\.md:3\)/);
+  });
+
+  it('refuses a malformed Other App slug, like any row\'s', () => refuses(table('| Other App | `Bad_Slug` | x |'), /reg\.md:3: the Other App row's App slug .* is malformed/));
 });
 
 describe('appLogin / loadAppRegister', () => {

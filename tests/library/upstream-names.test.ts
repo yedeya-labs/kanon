@@ -69,6 +69,14 @@ describe('upstreamNames: the register, read from the default branch, as hashes',
     expect(redact('The reviewer approved.', { nameHashes: unfiltered }).text).toBe('The [name] approved.');
   });
 
+  // Issue #990: an App that isn't an agent has an `Other App` row (K-AGENT-3). Its slug is a name too.
+  it('hashes the words of each Other App row\'s slug too', () => {
+    const reg = `${REGISTER.trimEnd()}\n| Other App | \`globex-reporter\` | |\n| Other App | \`initech-scanner\` | |\n`;
+    const { hashes, notes } = upstreamNames({ repo: 'acme/widget-shop', run: fakeRun(reg).run });
+    expect(new Set(hashes)).toEqual(new Set(['acme', 'globex', 'reporter', 'initech', 'scanner'].map(sha256)));
+    expect(notes).toEqual([]);
+  });
+
   it('reads nothing as names when the register is missing, malformed or unreadable, and says so: the lane then withholds text', () => {
     for (const reg of [null, 'throws', '# no table here\n'] as const) {
       const { hashes, notes } = upstreamNames({ repo: 'acme/widget-shop', run: fakeRun(reg).run });

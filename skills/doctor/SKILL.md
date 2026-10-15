@@ -144,6 +144,7 @@ Propose the bullet and ask for the reason; never invent one. Write it only once 
 | `register.missing-row` | agent, person | When the fix has a `kanon apps` command, the person runs it ("Running `kanon apps`") and clicks **Create** and **Install** in the browser it opens. Otherwise add the register rows the fix names. Commit `docs/qa/agent-identities.md`. |
 | `register.split-slug` | decision | Ask the person which slug is the App's, then make the register's rows for that App name only it. |
 | `register.shared-slug` | person | Each App needs its own. Ask the person which identity gets a new App; they run `kanon apps --owner <owner> --repo <repo> --apps <identity>` for it ("Running `kanon apps`"), and you commit the register rows it writes. |
+| `register.other-app-slug` | decision | Ask the person which App the slug is. If it is the role's App, remove the `Other App` row; if it is another App, write that App's own slug on the row. Commit `docs/qa/agent-identities.md`. |
 | `app.permission-missing` | person | The person widens the App's permissions on `.findings[].fix.url`, then accepts the new permissions on the App's installation. |
 | `app.permission-extra` | decision | Doesn't block. Say that `apps-check` fails it; the person may narrow it on `.findings[].fix.url`, or leave it. |
 | `app.unused` | person | Doesn't block. Once the replacing Apps have run green for a week, and no other repository's register still names it, the person uninstalls the App on `.findings[].fix.url` and deletes it on its Advanced page. |

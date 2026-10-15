@@ -31,6 +31,11 @@
 //   Apps before L4) still reads, since every reader keys on a role's own row: `appShape`
 //   reports it, and lane-check fails it by name, so a register is migrated on the adopter's
 //   pull request rather than by a lane crashing.
+// - An App that is not an agent, and has no role of Kanon's, has an `Other App` row (`OTHER_APP`,
+//   `K-AGENT-3`), and there may be several, one per App. They are the exception to "a role
+//   appears once", so they are not in the role → slug map every reader keys on: `parseOtherApps`
+//   gives their slugs. An Other App row names an App no other row names. Sharing an agent App's
+//   slug would re-label that App, and two rows naming one App say one thing twice.
 // - A table inside a fenced code block is an example and is not read.
 //
 // FAIL LOUDLY. Every one of those is a thrown error naming the register's path and line,
@@ -65,6 +70,14 @@ export const ROLES = /** @type {const} */ ([
 ]);
 
 /**
+ * The role of an App installed on the repository that is not an agent and plays none of `ROLES`
+ * (rulebook `03-agents.md`, `K-AGENT-3`). Unlike a role in `ROLES`, it may have several rows, each
+ * naming its own App, so its rows are read with `parseOtherApps`, never from the role → slug map:
+ * no reader that maps a role to a login, the membership gate among them, sees one (`[REG-3]`).
+ */
+export const OTHER_APP = 'Other App';
+
+/**
  * Which of Kanon's three Apps each role belongs to (ADR 0013, decision 2), from the `apps`
  * block of `rulebook/agent-permissions.json`, read from this Kanon tree: role name → App name.
  * A role in no App (Intake) is absent.
@@ -93,13 +106,13 @@ function cells(line) {
 const unbold = (s) => s.replace(/^(\*\*|__)(.*)\1$/, '$2').trim();
 
 /**
- * Parse a register's text into role → slug. Throws on every malformation.
+ * Read a register's text: role → slug, and the Other App rows' slugs. Throws on every malformation.
  *
  * @param {string} text the register's markdown
- * @param {string} [source] its path, for messages
- * @returns {Map<string, string>}
+ * @param {string} source its path, for messages
+ * @returns {{ roles: Map<string, string>, others: string[] }}
  */
-export function parseAppRegister(text, source = APP_REGISTER) {
+function readRegister(text, source) {
   const lines = text.split('\n');
   const fenced = fencedLines(lines);
   const where = (i) => `${source}:${i + 1}`;
@@ -121,30 +134,60 @@ export function parseAppRegister(text, source = APP_REGISTER) {
   }
 
   const roles = new Map();
+  const others = [];
   const slugs = new Map();
   for (let i = start + 2; i < lines.length && /^\s*\|/.test(lines[i]); i += 1) {
     const [rawRole = '', rawSlug = ''] = cells(lines[i]);
     const role = unbold(rawRole);
-    if (!ROLES.includes(/** @type {any} */ (role))) {
-      throw new Error(`${where(i)}: \`${rawRole}\` is not a role. The first column is one of: ${ROLES.join(', ')}.`);
+    const other = role === OTHER_APP;
+    if (!other && !ROLES.includes(/** @type {any} */ (role))) {
+      throw new Error(`${where(i)}: \`${rawRole}\` is not a role. The first column is one of: ${[...ROLES, OTHER_APP].join(', ')}.`);
     }
     const m = /^`([^`]*)`$/.exec(unbold(rawSlug));
     if (!m || !SLUG.test(m[1])) {
       throw new Error(`${where(i)}: the ${role} row's App slug \`${rawSlug}\` is malformed — write the slug GitHub derives from the App's name (lowercase letters, digits, hyphens) in backticks.`);
     }
     const slug = m[1];
-    if (roles.has(role)) throw new Error(`${where(i)}: role ${role} is listed twice (also ${where(roles.get(role).line)}). One identity per role.`);
+    if (!other && roles.has(role)) throw new Error(`${where(i)}: role ${role} is listed twice (also ${where(roles.get(role).line)}). One identity per role.`);
     const app = APP_OF[role] ?? role;
     const first = slugs.get(slug);
+    if (first && (other || first.other)) {
+      throw new Error(`${where(i)}: the ${role} row names \`${slug}\`, the App the ${first.role} row names (${where(first.line)}). An ${OTHER_APP} row is an App that isn't an agent, so it names an App no other row names: one naming an agent's App would re-label it, and two naming one App say one thing twice (K-LAYOUT-6).`);
+    }
     if (first && first.app !== app) {
       const of = (/** @type {string} */ r) => (APP_OF[r] ? `the ${APP_OF[r]}` : 'no App of Kanon\'s three');
       throw new Error(`${where(i)}: the ${role} row names \`${slug}\`, the App the ${first.role} row names (${where(first.line)}), but the ${role} belongs to ${of(role)} and the ${first.role} to ${of(first.role)}. Each of the Author, the Judge and the Releaser is its own App (plan 0005 §3.4).`);
     }
-    roles.set(role, { slug, line: i });
-    if (!first) slugs.set(slug, { app, role, line: i });
+    if (other) others.push(slug);
+    else roles.set(role, { slug, line: i });
+    if (!first) slugs.set(slug, { app, role, line: i, other });
   }
-  if (roles.size === 0) throw new Error(`${where(start)}: the App register table has no rows.`);
-  return new Map([...roles].map(([role, { slug }]) => [role, slug]));
+  if (roles.size === 0 && others.length === 0) throw new Error(`${where(start)}: the App register table has no rows.`);
+  return { roles: new Map([...roles].map(([role, { slug }]) => [role, slug])), others };
+}
+
+/**
+ * Parse a register's text into role → slug, for the roles in `ROLES`. Throws on every
+ * malformation, an Other App row's included; the Other App rows themselves are `parseOtherApps`'s.
+ *
+ * @param {string} text the register's markdown
+ * @param {string} [source] its path, for messages
+ * @returns {Map<string, string>}
+ */
+export function parseAppRegister(text, source = APP_REGISTER) {
+  return readRegister(text, source).roles;
+}
+
+/**
+ * The slugs of a register's Other App rows (`OTHER_APP`), in the register's order. Throws on every
+ * malformation `parseAppRegister` throws on.
+ *
+ * @param {string} text the register's markdown
+ * @param {string} [source] its path, for messages
+ * @returns {string[]}
+ */
+export function parseOtherApps(text, source = APP_REGISTER) {
+  return readRegister(text, source).others;
 }
 
 /**
