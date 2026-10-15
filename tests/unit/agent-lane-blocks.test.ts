@@ -142,7 +142,7 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
       'implementer-status: nothing',
       'kanon-path: path',
       'lane-check: nothing',
-      // The project digest's notify job publishes it as its job output (plan 0011 N7, kanon#972).
+      // The digests' notify jobs publish it as their job output (plan 0011 N7 and N8, kanon#972).
       'notify: outcome',
       'notify/slack: nothing',
       'notify/webhook: nothing',

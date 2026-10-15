@@ -12,7 +12,6 @@ import { describe, expect, it } from 'vitest';
 import {
   areaLabel,
   buildMessage,
-  dropRef,
   formatWeek,
   groupByArea,
   internalPhrases,
@@ -37,7 +36,19 @@ import {
   severityOf,
   shortReason,
   GATE_CANDIDATE_QUERY,
+  emit,
+  headline,
+  sectionsOf,
 } from '../../scripts/weekly-digest.mjs';
+import { LIMITS, renderText, validate } from '../../scripts/lib/notify-contract.mjs';
+import { payload } from '../../actions/notify/slack/slack.mjs';
+
+/** Where every assembled message in this file comes from. */
+const SOURCE = { repo: 'o/r', runUrl: 'https://github.com/o/r/actions/runs/1' };
+/** The message's plain text, which a hook gets as `text`: what a reader reads. */
+const textOf = (args: Omit<Parameters<typeof buildMessage>[0], 'repo' | 'runUrl'>) => renderText(buildMessage({ ...SOURCE, ...args }));
+/** A section's body, by heading. */
+const sectionBody = (m: { sections?: { heading?: string; body: string }[] }, heading: string) => m.sections?.find((s) => s.heading === heading)?.body;
 
 const bullet = (scope: string, prose: string) => `**${scope}:** ${prose}`;
 
@@ -490,15 +501,6 @@ describe('internalPhrases', () => {
   });
 });
 
-describe('dropRef', () => {
-  it('removes a trailing Slack-formatted PR link', () => {
-    expect(dropRef('add tax (<https://x/pull/12|#12>)')).toBe('add tax');
-  });
-  it('leaves a bullet with no ref untouched', () => {
-    expect(dropRef('add tax')).toBe('add tax');
-  });
-});
-
 describe('renderDelivered', () => {
   const grouped = (n: number) => ({
     areas: Array.from({ length: n }, (_, i) => ({ area: `area${i}`, items: ['x'] })),
@@ -532,6 +534,18 @@ describe('renderDelivered', () => {
     const out = renderDelivered({ areas: [], internalScopes: ['ci', 'qa', 'deps'] });
     expect(out).toContain('automated testing, dependency updates and deployment & CI behind the scenes');
   });
+
+  it("puts a commit's prose through literal: its markup arrives as written (plan 0011 §3.1)", () => {
+    const out = renderDelivered({ areas: [{ area: 'api', items: ['**urgent** fix for snake_case_name', 'Support Array<string>'] }], internalScopes: [] });
+    expect(out).toBe('- **Api** — \\*\\*urgent\\*\\* fix for snake\\_case\\_name · Support Array<string>');
+  });
+});
+
+describe('groupByArea', () => {
+  it('keeps a bullet\'s prose alone, with no scope and no pull request reference', () => {
+    const { areas } = groupByArea(['**payments:** add tax ([#12](https://x/pull/12))']);
+    expect(areas).toEqual([{ area: 'payments', items: ['add tax'] }]);
+  });
 });
 
 describe('renderProgress', () => {
@@ -542,7 +556,7 @@ describe('renderProgress', () => {
   const gate = (o: number, c: number, w = 0) => ({ title: 'Production Ready', dueOn: '2026-07-31T00:00:00Z', state: 'open', open: o, closed: c, closedThisWeek: w, completedThisWeek: false });
 
   it('renders a gate as a burndown with a denominator', () => {
-    expect(renderProgress([gate(11, 27)])).toContain('*Production Ready* — 27 of 38 done');
+    expect(renderProgress([gate(11, 27)])).toContain('**Production Ready** — 27 of 38 done');
   });
 
   it('adds the week movement only when something actually moved', () => {
@@ -552,7 +566,7 @@ describe('renderProgress', () => {
 
   it('reports a bucket as flow, never as a fraction — a bucket has no finish line', () => {
     const out = renderProgress([{ title: 'Product Backlog', dueOn: null, open: 0, closed: 0, closedThisWeek: 26, completedThisWeek: false }]);
-    expect(out).toContain('*Product Backlog* — 26 closed this week');
+    expect(out).toContain('**Product Backlog** — 26 closed this week');
     expect(out).not.toContain(' of ');
   });
 
@@ -571,7 +585,7 @@ describe('renderProgress', () => {
     const out = renderProgress([
       { title: 'AI Capabilities', dueOn: '2026-12-31T00:00:00Z', open: 1, closed: 0, closedThisWeek: 0, completedThisWeek: false },
     ]);
-    expect(out).toContain('*AI Capabilities* — 0 of 1 done');
+    expect(out).toContain('**AI Capabilities** — 0 of 1 done');
     expect(out).not.toContain('this week)_');
   });
 
@@ -597,7 +611,7 @@ describe('renderProgress', () => {
     const out = renderProgress([
       { title: 'Development Ready', dueOn: '2026-08-31T00:00:00Z', state: 'closed', open: 0, closed: 11, closedThisWeek: 4, completedThisWeek: true },
     ]);
-    expect(out).toContain('*Development Ready* — 4 closed this week');
+    expect(out).toContain('**Development Ready** — 4 closed this week');
     expect(out).not.toContain(' of ');
   });
 
@@ -605,7 +619,7 @@ describe('renderProgress', () => {
     const out = renderProgress([
       { title: 'Pilot Launch', dueOn: '2027-03-01T00:00:00Z', open: 3, closed: 7, closedThisWeek: 2, completedThisWeek: false },
     ]);
-    expect(out).toContain('*Pilot Launch* — 7 of 10 done');
+    expect(out).toContain('**Pilot Launch** — 7 of 10 done');
     expect(out).toContain('_(+2 this week)_');
   });
 
@@ -618,7 +632,7 @@ describe('renderProgress', () => {
 describe('renderCompletions', () => {
   it('celebrates a milestone that completed this week', () => {
     const out = renderCompletions([{ title: 'Development Ready', open: 0, closed: 11, closedThisWeek: 0, completedThisWeek: true }]);
-    expect(out).toContain(':tada: *Development Ready is complete* — all 11 done.');
+    expect(out).toContain('**Development Ready is complete** — all 11 done.');
   });
 
   it('stays silent for a milestone finished in an earlier week', () => {
@@ -719,7 +733,7 @@ describe('sanitiseNarrative', () => {
       });
 
       it('buildMessage passes the declaration through, so the post never carries the name', () => {
-        const text = buildMessage({
+        const text = textOf({
           weekStart: new Date('2026-08-01T00:00:00Z'), narrative: 'Card payments were deployed to uat.', milestones: [],
           grouped: { areas: [], internalScopes: [] }, stats: { prsMerged: 1, issuesClosed: 1, releases: 1 }, environment: 'uat',
         });
@@ -899,23 +913,48 @@ describe('buildMessage', () => {
     milestones: [{ title: 'Production Ready', dueOn: '2026-07-31T00:00:00Z', open: 11, closed: 27, closedThisWeek: 4, completedThisWeek: false }],
     grouped: { areas: [{ area: 'payments', items: ['tax at checkout'] }], internalScopes: [] as string[] },
     stats: { prsMerged: 54, issuesClosed: 36, releases: 23 },
+    ...SOURCE,
   };
 
-  it('assembles the post with the milestone burndown as the headline', () => {
-    const out = buildMessage({ ...base, narrative: undefined });
-    expect(out).toContain('*Week of 1 Aug*');
+  it('is a valid weekly-digest message, from this lane and run (plan 0011 §3)', () => {
+    const m = buildMessage({ ...base, narrative: 'Card payments landed.' });
+    expect(validate(m)).toEqual({ ok: true });
+    expect(m).toMatchObject({
+      schema_version: 1,
+      kind: 'weekly-digest',
+      severity: 'info',
+      title: 'Week of 1 Aug',
+      summary: 'Card payments landed.',
+      links: [{ label: 'Releases', url: 'https://github.com/o/r/releases' }],
+      source: { repository: 'o/r', lane: 'weekly-digest', run_url: 'https://github.com/o/r/actions/runs/1' },
+    });
+    expect(m.sections.map((s: { heading?: string }) => s.heading)).toEqual(['Progress', 'Gate candidates', 'Delivered', undefined]);
+  });
+
+  it("holds no chat system's syntax: no Slack link, emoji or escaping (plan 0011 N8)", () => {
+    const m = buildMessage({ ...base, narrative: 'Card payments landed.', milestones: [...base.milestones, { title: 'Beta', open: 0, closed: 3, closedThisWeek: 1, completedThisWeek: true }] });
+    const json = JSON.stringify(m);
+    expect(json).not.toMatch(/<https?:|\|#\d+>|:[a-z_]+:|&amp;|&lt;|&gt;|•/);
+  });
+
+  it('assembles the message with the milestone burndown as the headline', () => {
+    const m = buildMessage({ ...base, narrative: undefined });
+    // With no narrative, the burndown is the summary, the line a notification preview shows.
+    expect(m.summary).toBe('Production Ready: 27 of 38 done.');
+    const out = renderText(m);
+    expect(out.startsWith('Week of 1 Aug\n')).toBe(true);
     expect(out.indexOf('Production Ready')).toBeLessThan(out.indexOf('54 PRs merged'));
   });
 
   it('includes the narrative when one is supplied and degrades cleanly without it', () => {
-    expect(buildMessage({ ...base, narrative: 'Card payments landed.' })).toContain('Card payments landed.');
-    const without = buildMessage({ ...base, narrative: undefined });
+    expect(textOf({ ...base, narrative: 'Card payments landed.' })).toContain('Card payments landed.');
+    const without = textOf({ ...base, narrative: undefined });
     expect(without).toContain('Production Ready');
     expect(without).not.toContain('undefined');
   });
 
   it('never mentions an environment — with CD, "staging" means nothing to this reader', () => {
-    const out = buildMessage({ ...base, narrative: 'Shipped a lot.' });
+    const out = textOf({ ...base, narrative: 'Shipped a lot.' });
     expect(out).not.toMatch(/staging|production deploy|promoted/i);
   });
 
@@ -923,7 +962,7 @@ describe('buildMessage', () => {
   // It supplies its own narrative, so it constrains the TEMPLATE; these supply
   // the narrative a bad generation would write.
   it('screens the MODEL’S narrative, not just the template around it', () => {
-    const out = buildMessage({ ...base, narrative: 'Card payments are now live on production.' });
+    const out = textOf({ ...base, narrative: 'Card payments are now live on production.' });
     // NB: not a bare /production/i over the post — the burndown line legitimately
     // says "Production Ready". Asserting that would be the very mistake the
     // scoping test below pins.
@@ -935,29 +974,115 @@ describe('buildMessage', () => {
     // Identical to the path the workflow already supports when narrative.txt is
     // absent: a bad generation must never cost the week's burndown.
     const rejected = buildMessage({ ...base, narrative: 'Three PRs are still awaiting review.' });
-    expect(rejected).toBe(buildMessage({ ...base, narrative: undefined }));
-    expect(rejected).toContain('*Production Ready* — 27 of 38 done');
-    expect(rejected).toContain('54 PRs merged');
+    expect(rejected).toEqual(buildMessage({ ...base, narrative: undefined }));
+    expect(sectionBody(rejected, 'Progress')).toContain('**Production Ready** — 27 of 38 done');
+    expect(renderText(rejected)).toContain('54 PRs merged');
   });
 
   it('screens the narrative only — the assembled post still renders "Production Ready"', () => {
     // The check must never be applied to the whole post: the digest legitimately
     // renders the milestone title, and a naive /production/i over the assembled
     // text would blank the headline this digest exists to deliver.
-    const out = buildMessage({ ...base, narrative: 'Card payments landed, with tax at checkout.' });
+    const out = textOf({ ...base, narrative: 'Card payments landed, with tax at checkout.' });
     expect(out).toContain('Production Ready');
     expect(out).toContain('Card payments landed, with tax at checkout.');
   });
 
-  it('truncates rather than letting Slack reject an oversized payload', () => {
+  // The stakeholder rules, on the text a reader reads (plan 0011 N8): the rules the narrative is
+  // screened against hold on the whole message's plain text, which is what every hook posts or
+  // renders, and a rejected narrative reaches no part of it.
+  it("holds the stakeholder rules on the message's text: nothing pending, no environment names", () => {
+    const week = { ...base, milestones: [...base.milestones, { title: 'Beta', open: 0, closed: 3, closedThisWeek: 1, completedThisWeek: true }], gateCandidates: { ok: true, candidates: [] } };
+    for (const narrative of [undefined, 'Card payments landed, with tax at checkout.']) {
+      expect(sanitiseNarrative(textOf({ ...week, narrative })).violations, String(narrative)).toEqual([]);
+    }
+    for (const bad of ['Card payments are now live on production.', 'Three PRs are still awaiting review.', 'Shipped to staging; more is in progress.']) {
+      const out = textOf({ ...week, narrative: bad });
+      expect(out).not.toContain(bad);
+      expect(sanitiseNarrative(out).violations, bad).toEqual([]);
+    }
+    expect(sanitiseNarrative(textOf({ ...week, narrative: 'Card payments were deployed to uat.', environment: 'uat' }), { environment: 'uat' }).violations).toEqual([]);
+  });
+
+  it('cuts an oversized narrative to the contract, and still validates', () => {
     const huge = {
       ...base,
       narrative: 'x'.repeat(13000),
       grouped: { areas: [], internalScopes: [] as string[] },
     };
-    const out = buildMessage(huge);
-    expect(out.length).toBeLessThanOrEqual(12000);
-    expect(out).toContain('truncated');
+    const m = buildMessage(huge);
+    expect(validate(m)).toEqual({ ok: true });
+    expect([...m.summary].length).toBeLessThanOrEqual(LIMITS.summary);
+    expect(renderText(m)).toContain('truncated');
+  });
+});
+
+describe('headline', () => {
+  const stats = { prsMerged: 2, issuesClosed: 1, releases: 1 };
+  it('names a completed milestone first, then each roadmap burndown, at most three', () => {
+    const gate = (title: string) => ({ title, dueOn: '2027-01-01T00:00:00Z', state: 'open', open: 1, closed: 2, closedThisWeek: 0, completedThisWeek: false });
+    expect(headline([gate('A'), { title: 'Beta', open: 0, closed: 3, closedThisWeek: 0, completedThisWeek: true }, gate('B'), gate('C')], stats))
+      .toBe('Beta is complete. A: 2 of 3 done. B: 2 of 3 done.');
+  });
+  it('falls back to the counts, and puts a title through literal', () => {
+    expect(headline([], stats)).toBe('2 PRs merged · 1 issue closed · 1 release.');
+    expect(headline([{ title: '**X**', dueOn: '2027-01-01T00:00:00Z', state: 'open', open: 0, closed: 1, closedThisWeek: 0, completedThisWeek: false }], stats)).toBe('\\*\\*X\\*\\*: 1 of 1 done.');
+  });
+});
+
+describe('sectionsOf', () => {
+  it('is nothing for an empty body, and one section for a short one', () => {
+    expect(sectionsOf('H', '')).toEqual([]);
+    expect(sectionsOf('H', 'a\nb')).toEqual([{ heading: 'H', body: 'a\nb' }]);
+    expect(sectionsOf(undefined, 'a')).toEqual([{ body: 'a' }]);
+  });
+  it('continues a long body across sections at line boundaries, each within the limit', () => {
+    const body = Array.from({ length: 60 }, (_, i) => `- line ${i} ${'y'.repeat(80)}`).join('\n');
+    const out = sectionsOf('H', body);
+    expect(out.length).toBeGreaterThan(1);
+    expect(out.map((s) => s.heading)).toEqual(['H', ...Array(out.length - 1).fill('H, continued')]);
+    for (const s of out) expect([...s.body].length).toBeLessThanOrEqual(LIMITS.body);
+    expect(out.map((s) => s.body).join('\n')).toBe(body);
+  });
+});
+
+describe('emit (plan 0011 §4)', () => {
+  const message = buildMessage({
+    weekStart: new Date('2026-08-01T00:00:00Z'), narrative: 'Card payments landed.', milestones: [],
+    grouped: { areas: [], internalScopes: [] }, stats: { prsMerged: 1, issuesClosed: 1, releases: 1 }, gateCandidates: { ok: true, candidates: [] }, ...SOURCE,
+  });
+  const harness = (env: Record<string, string>) => {
+    const files: Record<string, string> = {};
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const io = { writeFile: (p: string, t: string) => { files[p] = t; }, appendFile: (p: string, t: string) => { files[p] = (files[p] ?? '') + t; } };
+    return { files, logs, errors, io, out: { log: (s: string) => logs.push(s), error: (s: string) => errors.push(s) }, env };
+  };
+
+  it('writes message.json and names it as the step output, posting nothing', () => {
+    const h = harness({ MESSAGE_PATH: '/tmp/m/message.json', GITHUB_OUTPUT: 'out' });
+    expect(emit({ message, ...h })).toBe(0);
+    expect(JSON.parse(h.files['/tmp/m/message.json']!)).toEqual(message);
+    expect(h.files.out).toBe('message=/tmp/m/message.json\n');
+  });
+
+  it("on a dry run prints the message, its text and the Slack hook's payload, and writes nothing to upload", () => {
+    const h = harness({ DRY_RUN: '1', GITHUB_OUTPUT: 'out', GITHUB_STEP_SUMMARY: 'summary' });
+    expect(emit({ message, ...h })).toBe(0);
+    expect(h.files.out).toBe('message=\n');
+    expect(Object.keys(h.files).sort()).toEqual(['out', 'summary']);
+    const shown = h.logs.join('\n');
+    expect(shown).toContain(JSON.stringify(message, null, 2));
+    expect(shown).toContain(renderText(message));
+    expect(shown).toContain(JSON.stringify(payload(message), null, 2));
+    expect(h.files.summary).toContain(renderText(message));
+  });
+
+  it('refuses an invalid message by field name, writing nothing', () => {
+    const h = harness({ GITHUB_OUTPUT: 'out' });
+    expect(emit({ message: { ...message, title: '' }, ...h })).toBe(1);
+    expect(h.errors.join()).toContain('title');
+    expect(h.files).toEqual({});
   });
 });
 
@@ -1028,39 +1153,36 @@ describe('gate candidates (RA-2399)', () => {
   describe('renderGateCandidates', () => {
     it('lists every candidate with number, title, severity and age, under the decision line', () => {
       const out = renderGateCandidates({ ok: true, candidates: gateCandidatesFrom([issue(7, 'critical', 12), issue(8, null, 1)], NOW) });
-      expect(out).toContain('*Gate candidates*');
       expect(out).toMatch(/developer’s call/);
-      expect(out).toContain('• <https://github.com/o/r/issues/7|#7> `sev:critical` Candidate 7 — opened 12 days ago');
-      expect(out).toContain('• <https://github.com/o/r/issues/8|#8> `sev:?` Candidate 8 — opened 1 day ago');
+      expect(out).toContain('- [#7](https://github.com/o/r/issues/7) `sev:critical` Candidate 7 — opened 12 days ago');
+      expect(out).toContain('- [#8](https://github.com/o/r/issues/8) `sev:?` Candidate 8 — opened 1 day ago');
     });
 
     it('says "none" when the list is empty — silence must not look like an empty queue', () => {
       const out = renderGateCandidates({ ok: true, candidates: [] });
-      expect(out).toContain('*Gate candidates*');
-      expect(out).toMatch(/^• none$/m);
+      expect(out).toMatch(/^- none$/m);
     });
 
     it('says the list is unreadable — never "none" — when the read failed', () => {
       const out = renderGateCandidates({ ok: false, reason: 'GitHub GET /repos/o/r/labels/x → 502: {"message":"Bad Gateway"}' });
-      expect(out).toContain('*Gate candidates*');
       expect(out).toContain('could not be read');
       expect(out).toContain('GitHub returned 502');
       expect(out).not.toContain('Bad Gateway'); // no raw API body in the stakeholder channel
       expect(out).toContain(GATE_CANDIDATE_QUERY);
-      expect(out).not.toMatch(/• none/);
+      expect(out).not.toMatch(/- none/);
     });
 
     it('is fail-closed: a caller that never read the list gets "unreadable", not "none"', () => {
       for (const r of [undefined, null, {}, { ok: true }]) {
         const out = renderGateCandidates(r as never);
         expect(out).toContain('could not be read');
-        expect(out).not.toMatch(/• none/);
+        expect(out).not.toMatch(/- none/);
       }
     });
 
     it('notes candidates already placed, so a shorter list is explained', () => {
       const out = renderGateCandidates({ ok: true, candidates: [], placed: 2 });
-      expect(out).toMatch(/^• none$/m);
+      expect(out).toMatch(/^- none$/m);
       expect(out).toContain('2 more already placed on a roadmap milestone');
     });
 
@@ -1069,9 +1191,23 @@ describe('gate candidates (RA-2399)', () => {
       expect(shortReason('fetch failed')).toBe('the request failed');
     });
 
-    it('escapes Slack control characters in titles', () => {
-      const rows = gateCandidatesFrom([issue(9, 'high', 0, { title: 'a <b> & c' })], NOW);
-      expect(renderGateCandidates({ ok: true, candidates: rows })).toContain('a &lt;b&gt; &amp; c');
+    // Plan 0011 N8: the escaping moved to the Slack hook. The digest writes a title as written,
+    // through `literal`, and Kanon's Slack hook escapes Slack's control characters, so a title can
+    // never form `<!channel>` there.
+    it("writes a title as written, and leaves Slack's escaping to Kanon's Slack hook", () => {
+      const rows = gateCandidatesFrom([issue(9, 'high', 0, { title: 'a <b> & **c** <!channel>' })], NOW);
+      const body = renderGateCandidates({ ok: true, candidates: rows });
+      expect(body).toContain('a <b> & \\*\\*c\\*\\* <!channel>');
+      expect(body).not.toMatch(/&amp;|&lt;|&gt;/);
+      const m = buildMessage({ weekStart: NOW, milestones: [], grouped: { areas: [], internalScopes: [] }, stats: { prsMerged: 1, issuesClosed: 1, releases: 1 }, gateCandidates: { ok: true, candidates: rows }, ...SOURCE });
+      expect(renderText(m)).toContain('a <b> & **c** <!channel>');
+      const slack = JSON.stringify(payload(m));
+      expect(slack).toContain('a &lt;b&gt; &amp;');
+      expect(slack).not.toContain('<!channel>');
+    });
+
+    it('links a candidate only by an https:// URL', () => {
+      expect(renderGateCandidates({ ok: true, candidates: [{ number: 3, url: 'http://x/3', sev: null, title: 't', ageDays: 1 }] })).toContain('- #3 `sev:?` t — opened 1 day ago');
     });
 
     it('none of its fixed prose trips the RA-1377 narrative screen', () => {
@@ -1142,36 +1278,38 @@ describe('gate candidates (RA-2399)', () => {
       milestones: [{ title: 'Production Ready', dueOn: '2026-10-31T00:00:00Z', open: 11, closed: 27, closedThisWeek: 4, completedThisWeek: false }],
       grouped: { areas: [{ area: 'payments', items: ['tax at checkout'] }], internalScopes: [] as string[] },
       stats: { prsMerged: 54, issuesClosed: 36, releases: 23 },
+      ...SOURCE,
     };
 
     it('carries the section, between Progress and Delivered', () => {
-      const out = buildMessage({ ...base, gateCandidates: { ok: true, candidates: gateCandidatesFrom([issue(7, 'high', 2)], NOW) } });
-      expect(out).toContain('#7>');
-      expect(out.indexOf('*Progress*')).toBeLessThan(out.indexOf('*Gate candidates*'));
-      expect(out.indexOf('*Gate candidates*')).toBeLessThan(out.indexOf('*Delivered*'));
+      const m = buildMessage({ ...base, gateCandidates: { ok: true, candidates: gateCandidatesFrom([issue(7, 'high', 2)], NOW) } });
+      expect(sectionBody(m, 'Gate candidates')).toContain('[#7](https://github.com/o/r/issues/7)');
+      expect(m.sections.map((s: { heading?: string }) => s.heading)).toEqual(['Progress', 'Gate candidates', 'Delivered', undefined]);
     });
 
     it('an oversized post truncates Delivered, never the candidate list', () => {
       const cand = gateCandidatesFrom(Array.from({ length: 30 }, (_, i) => issue(i + 1, 'high', i)), NOW);
-      const out = buildMessage({
+      const m = buildMessage({
         ...base,
         grouped: { areas: Array.from({ length: 6 }, (_, i) => ({ area: `a${i}`, items: ['x'.repeat(3000)] })), internalScopes: [] as string[] },
         gateCandidates: { ok: true, candidates: cand },
       });
+      expect(validate(m)).toEqual({ ok: true });
+      const out = renderText(m);
       expect(out.length).toBeLessThanOrEqual(12000);
       expect(out).toContain('truncated');
-      for (let n = 1; n <= 30; n++) expect(out).toContain(`|#${n}>`);
+      for (let n = 1; n <= 30; n++) expect(out).toContain(`#${n} (https://github.com/o/r/issues/${n})`);
       expect(out).toContain('36 issues closed');
     });
 
     it('says "unreadable" in the post when the read failed', () => {
-      const out = buildMessage({ ...base, gateCandidates: { ok: false, reason: 'boom' } });
+      const out = textOf({ ...base, gateCandidates: { ok: false, reason: 'boom' } });
       expect(out).toContain('could not be read');
     });
 
     it('a candidate title in environment vocabulary does not cost the narrative', () => {
       const cand = gateCandidatesFrom([issue(7, 'high', 2, { title: 'staging webhook is live on prod' })], NOW);
-      const out = buildMessage({ ...base, gateCandidates: { ok: true, candidates: cand } });
+      const out = textOf({ ...base, gateCandidates: { ok: true, candidates: cand } });
       expect(out).toContain('Card payments landed, with tax at checkout.');
       expect(out).toContain('staging webhook is live on prod');
     });

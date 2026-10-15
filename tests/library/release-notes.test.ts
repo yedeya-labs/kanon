@@ -1,6 +1,7 @@
 /**
  * Locks the pure release-note helpers shared by announce-deploy.mjs (Kanon text,
- * plan 0011 N9) and weekly-digest.mjs (Slack mrkdwn until N8 moves it) (RA-502).
+ * plan 0011 N9) and weekly-digest.mjs (Kanon text since N8) (RA-502). Neither writes a
+ * chat system's markup: each hook renders Kanon text for its own system.
  *
  * Both callers parse and classify with the same functions (`parseSections`,
  * `scopeOf`, `classify`): the deploy announcement and the weekly digest must
@@ -10,15 +11,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  bulletProse,
   classify,
-  cleanBullet,
-  dropScopePrefix,
   INTERNAL_SCOPES,
+  kanonBullet,
   kanonList,
   kanonMaint,
   parseSections,
   scopeOf,
-  slackInline,
 } from '../../scripts/lib/release-notes.mjs';
 
 describe('parseSections', () => {
@@ -79,38 +79,37 @@ describe('scopeOf', () => {
   });
 });
 
-describe('cleanBullet', () => {
-  it('renders `scope: prose (<url|#pr>)` and drops non-PR refs', () => {
+describe('bulletProse', () => {
+  it('is the prose alone: no scope, no refs', () => {
     const raw = '**payments:** add tax ([abc1234](https://x/commit/abc)) ([#123](https://x/pull/123))';
-    expect(cleanBullet(raw)).toBe('payments: add tax (<https://x/pull/123|#123>)');
-  });
-
-  it('keeps the LAST PR ref when several are present', () => {
-    const raw = '**a:** b ([#1](https://x/1)) ([#2](https://x/2))';
-    expect(cleanBullet(raw)).toBe('a: b (<https://x/2|#2>)');
+    expect(bulletProse(raw)).toBe('add tax');
   });
 
   it('survives a bullet with no scope and no refs', () => {
-    expect(cleanBullet('plain prose')).toBe('plain prose');
+    expect(bulletProse('plain prose')).toBe('plain prose');
   });
 
-  it('converts inline markdown to Slack mrkdwn', () => {
-    expect(cleanBullet('**a:** see **this** and [docs](https://d)')).toBe('a: see *this* and <https://d|docs>');
+  it('keeps a colon mid-sentence, since only the bold scope is a scope', () => {
+    expect(bulletProse('**note:** this has: two')).toBe('this has: two');
+  });
+
+  it("returns the prose as written, never a chat system's markup (plan 0011 N8)", () => {
+    expect(bulletProse('**a:** see **this** and [docs](https://d)')).toBe('see **this** and [docs](https://d)');
   });
 });
 
-describe('slackInline', () => {
-  it('converts bold and links, leaving other text alone', () => {
-    expect(slackInline('**b** [t](https://u) plain')).toBe('*b* <https://u|t> plain');
+describe('kanonBullet', () => {
+  it('renders `scope: prose ([#pr](url))` and drops non-PR refs', () => {
+    const raw = '**payments:** add tax ([abc1234](https://x/commit/abc)) ([#123](https://x/pull/123))';
+    expect(kanonBullet(raw)).toBe('payments: add tax ([#123](https://x/pull/123))');
   });
-});
 
-describe('dropScopePrefix', () => {
-  it('removes a leading `scope: ` so a grouped list does not repeat it', () => {
-    expect(dropScopePrefix('payments: add tax')).toBe('add tax');
+  it('keeps the LAST PR ref when several are present', () => {
+    expect(kanonBullet('**a:** b ([#1](https://x/1)) ([#2](https://x/2))')).toBe('a: b ([#2](https://x/2))');
   });
-  it('leaves prose containing a colon mid-sentence intact', () => {
-    expect(dropScopePrefix('note: this has: two')).toBe('this has: two');
+
+  it('passes the prose through literal, so its markdown arrives as written', () => {
+    expect(kanonBullet('**a:** see **this**')).toBe('a: see \\*\\*this\\*\\*');
   });
 });
 

@@ -237,7 +237,8 @@ jobs:
       smoke: agent-lanes-smoke
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
-      DIGEST_WEBHOOK: ${{ secrets.KANON_SMOKE_UNSET }}
+      # Its kind's secret, which the lane hands its notify job alone (plan 0011 N8).
+      KANON_CHAT_WEEKLY_DIGEST: ${{ secrets.KANON_SMOKE_UNSET }}
 
   explore:
     # A store-coupled lane (plan 0004 step 12). `id-token: write` is for its store jobs alone:

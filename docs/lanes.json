@@ -192,8 +192,8 @@
       "group": "oversight",
       "does": "Posts the week's burndown and deliveries in plain language to a chat channel, for a stakeholder outside the day-to-day work.",
       "needs": [],
-      "cost": "A model run weekly.",
-      "minutes": "Not measured: Kanon holds no digest webhook, so it doesn't call the lane; it runs once a week.",
+      "cost": "A model run weekly, only where the digest is posted: with no notify hook or no `KANON_CHAT_WEEKLY_DIGEST`, the gate job runs alone, with no model.",
+      "minutes": "Not measured: Kanon has no notify hook, so it doesn't call the lane; it runs once a week.",
       "recommend": [],
       "when": "When the Stakeholder is not the Owner and follows the project from outside, through a chat channel."
     },
@@ -282,7 +282,7 @@
       "lanes": ["agent-review", "agent-implement", "agent-implement-revise", "agent-triage", "agent-rebase", "agent-dispatch-sweep", "agent-issue-backstop", "agent-merge-reconcile", "agent-lead", "agent-lead-revise", "agent-lead-split", "agent-lead-reconcile", "agent-verify-acs", "agent-merge", "agent-overseer", "agent-code-audit"],
       "conditional": {
         "agent-explore": { "hook": ".github/actions/explore-sweep/action.yml", "condition": "when the repository has the sweep hook you write (docs/explore-sweep.md)" },
-        "agent-weekly-digest": { "secret": "DIGEST_WEBHOOK", "condition": "when the repository holds the chat channel's webhook, `DIGEST_WEBHOOK`" },
+        "agent-weekly-digest": { "secret": "KANON_CHAT_WEEKLY_DIGEST", "condition": "when the repository holds the weekly digest's chat secret, `KANON_CHAT_WEEKLY_DIGEST`" },
         "agent-project-digest": { "secret": "KANON_CHAT_PROJECT_DIGEST", "condition": "when the repository holds the project digest's chat secret, `KANON_CHAT_PROJECT_DIGEST`" }
       },
       "leftOut": {

@@ -1,6 +1,7 @@
 // @ts-nocheck -- moved from the reference adopter's pipeline library, which doesn't type-check its scripts (plan 0001 §3; ADR 0009)
 /**
- * Weekly dev-activity digest for the stakeholder Slack channel (RA-502).
+ * Weekly dev-activity digest for the stakeholder's chat channel (RA-502): the
+ * producer of Kanon's `weekly-digest` message (plan 0011, step N8).
  *
  * AUDIENCE: a co-founder tracking runway — someone who is not in the day-to-day
  * and is asking one question, "is the money turning into progress toward the
@@ -10,7 +11,13 @@
  *
  * This is an ADDITION to the per-deploy announcements, not a replacement
  * — those are `deploy` messages (announce-deploy.mjs), on their own secret.
- * It posts once a week, to DIGEST_WEBHOOK.
+ *
+ * IT NEVER POSTS (plan 0011 §4). It builds one message in Kanon text through
+ * `scripts/lib/notify-contract.mjs` (`fit`, then `validate`) and writes it to
+ * `message.json`, for the lane to upload. The lane's `notify` job hands it to the
+ * adopter's hook with the kind's secret, `KANON_CHAT_WEEKLY_DIGEST`; the hook does
+ * any escaping its chat system needs (Kanon's Slack hook escapes `&`, `<` and `>`).
+ * This script reads no chat secret and makes requests to GitHub's API alone.
  *
  * DELIBERATELY ABSENT:
  * - **Environment vocabulary.** With CD, delivered work lands on staging
@@ -35,15 +42,20 @@
  *   GITHUB_TOKEN=$(gh auth token) GITHUB_REPOSITORY=<owner>/<repo> \
  *   DRY_RUN=1 node scripts/weekly-digest.mjs
  *
- * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, DIGEST_WEBHOOK (lib/digest-webhook.mjs), NARRATIVE
- * (optional prose from the model step — the post degrades to numbers-only when
- * absent), WEEK_END (optional ISO date, defaults to now; for reproducible runs),
- * DRY_RUN (print instead of posting).
+ * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, NARRATIVE (optional prose from the model
+ * step — the message degrades to numbers-only when absent), WEEK_END (optional ISO
+ * date, defaults to now; for reproducible runs), DRY_RUN (print the message, its
+ * plain text and Kanon's Slack hook's payload; write nothing), MESSAGE_PATH
+ * (default `message.json`), GITHUB_SERVER_URL and GITHUB_RUN_ID (the message's run
+ * link), GITHUB_OUTPUT (`message=<path>`, empty on a dry run), GITHUB_STEP_SUMMARY
+ * (a dry run's rendering).
  */
 
-import { parseSections, scopeOf, cleanBullet, dropScopePrefix, INTERNAL_SCOPES } from './lib/release-notes.mjs';
+import { appendFileSync, writeFileSync } from 'node:fs';
+import { payload } from '../actions/notify/slack/slack.mjs';
+import { parseSections, scopeOf, bulletProse, INTERNAL_SCOPES } from './lib/release-notes.mjs';
 import { isRoadmapMilestone } from './lib/milestones.mjs';
-import { digestWebhook } from './lib/digest-webhook.mjs';
+import { LIMITS, describeErrors, fit, literal, measure, prose, renderText, validate } from './lib/notify-contract.mjs';
 import { GATE_CANDIDATE_LABEL, SEVERITY_LABELS, severityOf as severityOfLabels } from './issue-triage-defaults.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { GATE_CANDIDATE_QUERY, GATE_DECLINED_LABEL, gateCandidateDecision } from './gate-candidate-exit.mjs';
@@ -88,13 +100,6 @@ export const internalPhrases = (scopes) => [
   ...new Set(scopes.map((s) => INTERNAL_PHRASES.get(s) ?? 'internal tooling')),
 ].sort();
 
-/**
- * Strip the trailing `(<url|RA-123>)` reference cleanBullet appends. The release
- * announcement keeps it — its readers follow PR links. This reader does not, and
- * a line of URLs per item makes the section unreadable at a glance.
- */
-export const dropRef = (s) => s.replace(/\s*\(<https?:[^|]*\|[^>]*>\)\s*$/, '').trim();
-
 /** Re-exported: the definition and its reasoning live in ./lib/milestones.mjs (RA-1633). */
 export { isRoadmapMilestone };
 
@@ -104,7 +109,10 @@ export const areaLabel = (scope) =>
 
 /**
  * Group release-note bullets by product area (the commit scope), splitting off
- * internal work. Returns { areas: [{area, items}], internalScopes: [...] }.
+ * internal work. Returns { areas: [{area, items}], internalScopes: [...] }, each
+ * item a bullet's prose as plain text (`bulletProse`): no scope, since the digest
+ * groups by it, and no pull request reference, since this reader follows none and
+ * a line of URLs per item makes the section unreadable at a glance.
  *
  * Ordering is by item count then name, so the areas that actually moved lead —
  * and it is stable, which matters because an unstable order makes two adjacent
@@ -121,7 +129,7 @@ export function groupByArea(bullets) {
       continue;
     }
     if (!byScope.has(scope)) byScope.set(scope, new Set());
-    byScope.get(scope).add(dropRef(dropScopePrefix(cleanBullet(raw))));
+    byScope.get(scope).add(bulletProse(raw));
   }
   const areas = [...byScope.entries()]
     .map(([area, items]) => ({ area, items: [...items] }))
@@ -130,55 +138,56 @@ export function groupByArea(bullets) {
 }
 
 /**
- * Render the delivered-work section. AGGREGATES, never enumerates: at ~49
- * merged PRs a week a full list is unreadable, and a truncated one is worse
- * because the tail is where most of it ends up.
+ * The delivered-work section's body, in Kanon text (plan 0011 §3.1), or '' when
+ * nothing shipped. AGGREGATES, never enumerates: at ~49 merged PRs a week a full
+ * list is unreadable, and a truncated one is worse because the tail is where most
+ * of it ends up. A bullet's prose is a commit's subject, text nobody controls, so
+ * it goes through `literal`.
  */
 export function renderDelivered({ areas, internalScopes }, { maxAreas = 6, maxPerArea = 3 } = {}) {
-  if (areas.length === 0 && internalScopes.length === 0) return '';
-  let out = '\n*Delivered*\n';
+  const lines = [];
   for (const { area, items } of areas.slice(0, maxAreas)) {
-    const shown = items.slice(0, maxPerArea).join(' · ');
+    const shown = items.slice(0, maxPerArea).map(literal).join(' · ');
     const extra = items.length - Math.min(items.length, maxPerArea);
-    out += `• *${areaLabel(area)}* — ${shown}${extra > 0 ? ` _(+${extra} more)_` : ''}\n`;
+    lines.push(`- **${literal(areaLabel(area))}** — ${shown}${extra > 0 ? ` _(+${extra} more)_` : ''}`);
   }
   const hiddenAreas = areas.length - Math.min(areas.length, maxAreas);
-  if (hiddenAreas > 0) out += `• _…and ${hiddenAreas} other area${hiddenAreas === 1 ? '' : 's'}_\n`;
+  if (hiddenAreas > 0) lines.push(`- _…and ${hiddenAreas} other area${hiddenAreas === 1 ? '' : 's'}_`);
   if (internalScopes.length) {
     const phrases = internalPhrases(internalScopes);
     const list = phrases.length > 1
       ? `${phrases.slice(0, -1).join(', ')} and ${phrases.at(-1)}`
       : phrases[0];
-    out += `• _plus ${list} behind the scenes_\n`;
+    lines.push(`- _plus ${list} behind the scenes_`);
   }
-  return out;
+  return lines.join('\n');
 }
 
 /**
- * Render milestone progress. Gates get a burndown; buckets get flow (what moved
- * this week), because a bucket has no meaningful denominator — quoting one
- * would invent a finish line that doesn't exist.
+ * The milestone progress section's body, in Kanon text, or ''. Gates get a
+ * burndown; buckets get flow (what moved this week), because a bucket has no
+ * meaningful denominator — quoting one would invent a finish line that doesn't
+ * exist. A milestone's title is text nobody controls, so it goes through `literal`.
  */
 export function renderProgress(milestones) {
   const gates = milestones.filter(isRoadmapMilestone);
   const buckets = milestones.filter((m) => !isRoadmapMilestone(m) && m.closedThisWeek > 0);
-  if (!gates.length && !buckets.length) return '';
-  let out = '\n*Progress*\n';
+  const lines = [];
   for (const m of gates) {
     const total = m.open + m.closed;
     const moved = m.closedThisWeek > 0 ? ` _(+${m.closedThisWeek} this week)_` : '';
-    out += `• *${m.title}* — ${m.closed} of ${total} done${moved}\n`;
+    lines.push(`- **${literal(m.title)}** — ${m.closed} of ${total} done${moved}`);
   }
   for (const m of buckets) {
-    out += `• *${m.title}* — ${m.closedThisWeek} closed this week\n`;
+    lines.push(`- **${literal(m.title)}** — ${m.closedThisWeek} closed this week`);
   }
-  return out;
+  return lines.join('\n');
 }
 
 /**
- * The celebration. Fires only on a milestone that COMPLETED — rare by
- * construction (there are four, ever), which is what keeps it from becoming
- * wallpaper.
+ * The celebration, its own section's body in Kanon text, or ''. Fires only on a
+ * milestone that COMPLETED — rare by construction (there are four, ever), which is
+ * what keeps it from becoming wallpaper.
  *
  * "Completed" is the week a HUMAN closed the milestone (its `closed_at`), not
  * the week its last issue closed. That is deliberate — closing it is the act
@@ -186,11 +195,10 @@ export function renderProgress(milestones) {
  * never announces itself.
  */
 export function renderCompletions(milestones) {
-  const done = milestones.filter((m) => m.open === 0 && m.closed > 0 && m.completedThisWeek);
-  if (!done.length) return '';
-  return done
-    .map((m) => `\n:tada: *${m.title} is complete* — all ${m.closed} done.\n`)
-    .join('');
+  return milestones
+    .filter((m) => m.open === 0 && m.closed > 0 && m.completedThisWeek)
+    .map((m) => `**${literal(m.title)} is complete** — all ${m.closed} done.`)
+    .join('\n');
 }
 
 /**
@@ -532,8 +540,8 @@ export function gateCandidatesFrom(items, now) {
     .sort((a, b) => rank(a.sev) - rank(b.sev) || b.ageDays - a.ageDays || a.number - b.number);
 }
 
-/** Slack mrkdwn treats `&`, `<` and `>` as control characters. */
-const slackEscape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** An `https://` URL a Kanon text link can hold: no whitespace, no parenthesis, no `<>`. */
+const LINKABLE = /^https:\/\/[^\s()<>]+$/;
 
 /**
  * The failure reason, reduced to something fit for the stakeholder channel: the
@@ -546,30 +554,35 @@ export function shortReason(reason) {
 }
 
 /**
- * `result` is `{ ok: true, candidates, placed?, declined? }` or `{ ok: false, reason }`. Anything
- * else — including `undefined`, a caller that never read the list — renders as
+ * The gate-candidate section's body, in Kanon text. `result` is `{ ok: true,
+ * candidates, placed?, declined? }` or `{ ok: false, reason }`. Anything else —
+ * including `undefined`, a caller that never read the list — renders as
  * UNREADABLE, never as "none", so the section is fail-closed.
+ *
+ * A candidate's title is text nobody controls, so it goes through `literal`: an
+ * issue titled `<!channel>` or `**urgent**` arrives as written, and the hook
+ * escapes it for its chat system (Kanon's Slack hook escapes `&`, `<` and `>`).
  */
 export function renderGateCandidates(result) {
-  const out = '\n*Gate candidates*\n';
   if (!result || result.ok !== true || !Array.isArray(result.candidates)) {
     const reason = result && 'reason' in result ? shortReason(result.reason) : 'the list was not read';
-    return `${out}• :warning: The gate-candidate list could not be read this week (${reason}). ` +
-      `This is NOT an empty list — check \`${GATE_CANDIDATE_QUERY}\` by hand.\n`;
+    return `- **The gate-candidate list could not be read this week** (${literal(reason)}). ` +
+      `This is NOT an empty list — check \`${GATE_CANDIDATE_QUERY}\` by hand.`;
   }
-  let body = '_Whether any of these joins the gate milestone is the developer’s call._\n';
-  if (!result.candidates.length) body += '• none\n';
+  const lines = ['_Whether any of these joins the gate milestone is the developer’s call._'];
+  if (!result.candidates.length) lines.push('- none');
   for (const c of result.candidates) {
     const age = `opened ${c.ageDays} ${c.ageDays === 1 ? 'day' : 'days'} ago`;
-    body += `• <${c.url}|#${c.number}> \`sev:${c.sev ?? '?'}\` ${slackEscape(c.title)} — ${age}\n`;
+    const ref = LINKABLE.test(String(c.url ?? '')) ? `[#${c.number}](${c.url})` : `#${c.number}`;
+    lines.push(`- ${ref} \`sev:${c.sev ?? '?'}\` ${literal(c.title)} — ${age}`);
   }
   if (result.placed > 0) {
-    body += `_${result.placed} more already placed on a roadmap milestone — not listed._\n`;
+    lines.push(`_${result.placed} more already placed on a roadmap milestone — not listed._`);
   }
   if (result.declined > 0) {
-    body += `_${result.declined} more already declined (\`${GATE_DECLINED_LABEL}\`) — not listed._\n`;
+    lines.push(`_${result.declined} more already declined (\`${GATE_DECLINED_LABEL}\`) — not listed._`);
   }
-  return out + body;
+  return lines.join('\n');
 }
 
 /**
@@ -611,10 +624,13 @@ export async function readGateCandidates({ api, repo, now, maxPages = 10 }) {
   }
 }
 
-/** The one-line volume summary. Texture, not headline — hence last and terse. */
+/**
+ * The one-line volume summary, as plain text with no markup character. Texture,
+ * not headline — hence last and terse.
+ */
 export function renderStats({ prsMerged, issuesClosed, releases }) {
   const n = (v, s, p = `${s}s`) => `${v} ${v === 1 ? s : p}`;
-  return `\n_${n(prsMerged, 'PR')} merged · ${n(issuesClosed, 'issue')} closed · ${n(releases, 'release')}_`;
+  return `${n(prsMerged, 'PR')} merged · ${n(issuesClosed, 'issue')} closed · ${n(releases, 'release')}`;
 }
 
 /** "week of 1 Aug" — the window's start, in the reader's terms rather than ISO. */
@@ -894,39 +910,149 @@ export function sanitiseNarrative(narrative, { environment } = {}) {
   return { narrative: violations.length ? '' : text, violations };
 }
 
+/** Code points, as the contract counts them. */
+const chars = (s) => [...s].length;
+
 /**
- * Assemble the whole post. Pure, so the shape is testable without the network.
+ * A section's body as one or more sections of at most the contract's body limit,
+ * split at line boundaries, each after the first headed "<heading>, continued". So
+ * a long gate-candidate list continues rather than being cut (a single line past
+ * the limit is still cut by `fit`, visibly).
+ * @param {string | undefined} heading
+ * @param {string} body
+ */
+export function sectionsOf(heading, body) {
+  if (!body) return [];
+  const bodies = [];
+  let lines = [];
+  let used = 0;
+  for (const line of body.split('\n')) {
+    const n = chars(line) + (lines.length ? 1 : 0);
+    if (lines.length && used + n > LIMITS.body) {
+      bodies.push(lines.join('\n'));
+      lines = [];
+      used = 0;
+    }
+    used += chars(line) + (lines.length ? 1 : 0);
+    lines.push(line);
+  }
+  bodies.push(lines.join('\n'));
+  return bodies.map((b, i) => ({ ...(heading ? { heading: i === 0 ? heading : `${heading}, continued` } : {}), body: b }));
+}
+
+/** The line that ends a body this script cut. */
+const CUT = '… _truncated_';
+
+/**
+ * The summary when there is no narrative, in Kanon text: the headline is the
+ * milestone burndown, so a milestone completed this week, then each roadmap
+ * milestone's burndown, at most three; the counts only when there is neither.
+ */
+export function headline(milestones, stats) {
+  const done = milestones.filter((m) => m.open === 0 && m.closed > 0 && m.completedThisWeek)
+    .map((m) => `${literal(m.title)} is complete.`);
+  const gates = milestones.filter(isRoadmapMilestone)
+    .map((m) => `${literal(m.title)}: ${m.closed} of ${m.open + m.closed} done.`);
+  const lines = [...done, ...gates].slice(0, 3);
+  return lines.length ? lines.join(' ') : `${renderStats(stats)}.`;
+}
+
+/**
+ * Assemble the week's `weekly-digest` message (plan 0011 §3), fitted to the
+ * contract. Pure, so the shape is testable without the network. Kanon text
+ * throughout: every chat system's own markup and escaping is its hook's.
  *
  * The narrative is screened HERE rather than at the call site so the guarantee
- * is fail-closed: no caller can assemble a post that skipped the check.
+ * is fail-closed: no caller can assemble a message that skipped the check. A
+ * narrative that passes is the message's `summary` (the line a notification
+ * preview shows), through `prose`; without one, the burndown is (`headline`).
  * `gateCandidates` is optional in the type for the same reason: omitting it
  * renders the section as UNREADABLE (see `renderGateCandidates`), never drops it.
  *
+ * Over the contract's 12,000 characters, DELIVERED gives way first: it is the one
+ * section that is a summary of something reachable elsewhere (the releases),
+ * whereas a cut in the gate-candidate list would drop candidates. So the list
+ * continues across sections (`sectionsOf`), and Delivered is cut to the room the
+ * rest leaves before `fit` runs, which then has nothing left to cut but a message
+ * whose other sections are themselves past the limit.
+ *
  * @param {{weekStart: Date, narrative?: string, milestones: any[], grouped: any, stats: any,
  *          gateCandidates?: {ok: boolean, candidates?: any[], reason?: string},
- *          environment?: string | null}} args  `environment` is the declared reference
- *          environment's name (`environmentRules`), or none
+ *          environment?: string | null, repo: string, runUrl: string, server?: string}} args
+ *          `environment` is the declared reference environment's name
+ *          (`environmentRules`), or none; `repo` is `owner/name`, and `runUrl` the
+ *          run's `https://` link
+ * @returns {Record<string, any>} the message, which `validate` accepts
  */
-export function buildMessage({ weekStart, narrative, milestones, grouped, stats, gateCandidates, environment }) {
+export function buildMessage({ weekStart, narrative, milestones, grouped, stats, gateCandidates, environment, repo, runUrl, server = 'https://github.com' }) {
   const { narrative: screened } = sanitiseNarrative(narrative, { environment });
-  let text = `:bar_chart: *Week of ${formatWeek(weekStart)}*\n`;
-  if (screened) text += `\n${screened}\n`;
-  text += renderCompletions(milestones);
-  text += renderProgress(milestones);
-  text += renderGateCandidates(gateCandidates);
-  // Over Slack's limit, DELIVERED gives way first: it is the one section that is
-  // a summary of something reachable elsewhere (the releases), whereas a cut in
-  // the gate-candidate list would silently drop candidates. Only a head that is
-  // itself oversized falls back to the blunt cut.
+  const numbers = renderStats(stats);
+  const head = [
+    ...sectionsOf('Complete', renderCompletions(milestones)),
+    ...sectionsOf('Progress', renderProgress(milestones)),
+    ...sectionsOf('Gate candidates', renderGateCandidates(gateCandidates)),
+  ];
+  // Texture, last.
+  const tail = [{ body: `_${numbers}_` }];
+  const draft = (sections) => ({
+    kind: 'weekly-digest',
+    severity: 'info',
+    title: `Week of ${formatWeek(weekStart)}`,
+    summary: screened ? prose(screened) : headline(milestones, stats),
+    sections,
+    links: [{ label: 'Releases', url: `${server}/${repo}/releases` }],
+    source: { repository: repo, lane: 'weekly-digest', run_url: runUrl },
+  });
   let delivered = renderDelivered(grouped);
-  const tail = renderStats(stats);
-  const room = 11800 - text.length - tail.length;
-  if (text.length + delivered.length + tail.length > 12000 && room > 0) {
-    delivered = `${delivered.slice(0, room).replace(/\n[^\n]*$/, '')}\n… _truncated_\n`;
+  // The room the rest leaves, less the heading and a margin for the cut's line.
+  const room = Math.min(LIMITS.body, LIMITS.messageChars - measure(draft([...head, ...tail])).chars - 100);
+  if (chars(delivered) > room && room > 100) {
+    const kept = [];
+    let used = chars(CUT);
+    for (const line of delivered.split('\n')) {
+      if (used + chars(line) + 1 > room) break;
+      kept.push(line);
+      used += chars(line) + 1;
+    }
+    delivered = [...kept, CUT].join('\n');
   }
-  text += delivered + tail;
-  if (text.length > 12000) text = `${text.slice(0, 11800)}\n… _truncated_`;
-  return text;
+  return fit(draft([...head, ...sectionsOf('Delivered', delivered), ...tail]));
+}
+
+/**
+ * What the CLI does with a built message: validate it, then on a dry run print it,
+ * its plain text (what a hook gets as `text`) and Kanon's Slack hook's payload, to
+ * the log and the step summary, and write nothing; otherwise write `message.json`
+ * and name it in `GITHUB_OUTPUT` as `message`, for the lane to upload. Returns the
+ * exit code. Never posts.
+ * @param {{ message: Record<string, any>, env: Record<string, string | undefined>,
+ *   io: { writeFile: (p: string, t: string) => void, appendFile: (p: string, t: string) => void },
+ *   out: { log: (s: string) => void, error: (s: string) => void } }} args
+ */
+export function emit({ message, env, io, out }) {
+  const checked = validate(message);
+  if (!checked.ok) {
+    out.error(`The weekly digest's message is invalid: ${describeErrors(checked.errors)}`);
+    return 1;
+  }
+  const output = (value) => { if (env.GITHUB_OUTPUT) io.appendFile(env.GITHUB_OUTPUT, `message=${value}\n`); };
+  if (env.DRY_RUN) {
+    const shown = [
+      'DRY RUN: nothing is written or uploaded, and nothing is posted.',
+      '', '--- message.json ---', JSON.stringify(message, null, 2),
+      '', '--- text (what a hook gets as `text`) ---', renderText(message),
+      '', "--- Kanon's Slack hook's payload ---", JSON.stringify(payload(message), null, 2),
+    ].join('\n');
+    out.log(shown);
+    if (env.GITHUB_STEP_SUMMARY) io.appendFile(env.GITHUB_STEP_SUMMARY, `\`\`\`\n${shown}\n\`\`\`\n`);
+    output('');
+    return 0;
+  }
+  const path = env.MESSAGE_PATH || 'message.json';
+  io.writeFile(path, `${JSON.stringify(message, null, 2)}\n`);
+  output(path);
+  out.log(`Wrote the ${message.title} digest to ${path}; the notify job posts it.`);
+  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -940,20 +1066,20 @@ if (isCliEntry(import.meta.url)) {
     GITHUB_REPOSITORY: repo,
     NARRATIVE,
     WEEK_END,
-    DRY_RUN,
+    GITHUB_SERVER_URL,
+    GITHUB_RUN_ID,
   } = process.env;
-  const webhook = digestWebhook(process.env);
 
   if (!GITHUB_TOKEN || !repo) {
     console.error('Missing required env: GITHUB_TOKEN, GITHUB_REPOSITORY');
     process.exit(1);
   }
-  if (!webhook && !DRY_RUN) {
-    // Graceful no-op, matching project-digest: a missing webhook must not fail
-    // a scheduled job whose output is a nice-to-have.
-    console.warn('DIGEST_WEBHOOK not set — skipping digest.');
-    process.exit(0);
-  }
+  // Whether anything will be posted is the lane's gate's decision (plan 0011 §8):
+  // with no hook or no `KANON_CHAT_WEEKLY_DIGEST`, this job and its model never run.
+  const server = GITHUB_SERVER_URL || 'https://github.com';
+  const runUrl = GITHUB_RUN_ID && /^\d+$/.test(GITHUB_RUN_ID)
+    ? `${server}/${repo}/actions/runs/${GITHUB_RUN_ID}`
+    : `${server}/${repo}/actions`;
 
   const HEADERS = {
     Authorization: `Bearer ${GITHUB_TOKEN}`,
@@ -1054,7 +1180,7 @@ if (isCliEntry(import.meta.url)) {
     );
   }
 
-  const text = buildMessage({
+  const message = buildMessage({
     weekStart,
     narrative: NARRATIVE,
     milestones,
@@ -1062,19 +1188,17 @@ if (isCliEntry(import.meta.url)) {
     stats: { prsMerged, issuesClosed, releases: releases.length },
     gateCandidates,
     environment,
+    repo,
+    runUrl,
+    server,
   });
 
-  if (DRY_RUN) {
-    console.log(`DRY RUN — window ${window}\n--- Slack message ---\n${text}`);
-    process.exit(0);
-  }
-
-  const slack = await fetch(webhook, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+  console.log(`Window ${window}.`);
+  process.exitCode = emit({
+    message,
+    env: process.env,
+    io: { writeFile: (p, t) => writeFileSync(p, t), appendFile: (p, t) => appendFileSync(p, t) },
+    out: console,
   });
-  if (!slack.ok) throw new Error(`Slack webhook → ${slack.status}: ${await slack.text()}`);
-  console.log(`Posted the week-of-${formatWeek(weekStart)} digest to Slack.`);
 }
 /* c8 ignore stop */

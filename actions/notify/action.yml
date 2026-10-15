@@ -69,7 +69,7 @@ inputs:
 
 outputs:
   outcome:
-    description: "`posted`, `failed` or `skipped` (kanon#972). Act on `posted` only: a skip leaves the job green. The project digest's notify job publishes it (the weekly digest's will from N8); N9's wiring will read it for the step that acts only on a post."
+    description: "`posted`, `failed` or `skipped` (kanon#972). Act on `posted` only: a skip leaves the job green. The digests' notify jobs publish it; N9's wiring will read it for the step that acts only on a post."
     value: ${{ steps.finish.outputs.outcome }}
 
 runs:
