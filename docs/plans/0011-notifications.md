@@ -114,10 +114,10 @@ One JSON object, version 1. Every field is listed; any other is refused.
 
 ### 3.3 One library, used three times
 
-`scripts/lib/notify-contract.mjs`, which imports only `node:` built-ins, as `actions/agent-telemetry/schema.mjs` does:
+`scripts/lib/notify-contract.mjs`, which imports nothing, not even a `node:` built-in, so any producer, hook or test can load it on its own:
 - **`validate(message)`** returns the problems by field name and never echoes a value, because a message can hold a model's prose and a rejection reaches a log. A message is valid or it isn't posted; `validate` never repairs.
 - **`literal(s)` and `prose(s)`** make text nobody controls safe to put in Kanon text ([§3.1](#31-shape)).
-- **`fit(draft)`** is what producers call: it cuts a draft to the limits, at line boundaries, with a visible "… N more" or "… truncated" line, and folds a line break in a one-line field into a space. Since Kanon text refuses no character, the limits are all a draft can break, so a producer's output always validates. A section past the twentieth folds into a last one that names how many were left out.
+- **`fit(draft)`** is what producers call: it cuts a draft to the limits, at line boundaries, with a visible "… N more" or "… truncated" line, and folds a line break in a one-line field into a space. **Under its precondition:** kind, severity and source right; every required string (`title`, `summary`, each section's `body`, each field's `label` and `value`, each link's `label`) present and non-empty; and each link's `url` an `https://` URL. Since Kanon text refuses no character, the limits are then all a draft can break, so the output of a draft that meets the precondition always validates. A draft that doesn't meet it, a missing title or an `http:` link, is a producer's bug: `fit` doesn't repair it, and `validate` reports it ([the `fit(draft)` row of the topic doc](../notifications.md#the-library)). A section past the twentieth folds into a last one that names how many were left out.
 - **`renderText(message)`** renders the message as **plain text**, at most 12,000 characters, for a hook that posts one string: the markup is removed, the escapes resolved, and a link written `label (url)`. Plain text, not Kanon text, so a hook that posts it to a system that renders Markdown can't have a literal `#` turned into a heading.
 - **`SCHEMAS`**, `KINDS`, `SEVERITIES`, `LIMITS` and `KIND_SECRETS` (each kind's secret's name), by version.
 
