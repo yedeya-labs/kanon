@@ -17,9 +17,7 @@ import { TRIGGERS } from '../../cli/callers.mjs';
  *   - QUEUE_MAX: a skip-only run can join the group, so it keeps every pending run (`queue: max`,
  *     measured on the lane concurrency probe in kanon#551), which needs `cancel-in-progress: false`;
  *   - KEYED_OUT: the group key sends a run that would skip to a group of its own;
- *   - ONLY_RUNS: every event its caller sends runs, so no skip-only run reaches the group;
- *   - KNOWN_GAP: needs `queue: max`, in a file another change owns; it fails here once fixed, so
- *     the entry moves to QUEUE_MAX.
+ *   - ONLY_RUNS: every event its caller sends runs, so no skip-only run reaches the group.
  *
  * A new reusable workflow with a workflow-level group fails until it is classified.
  */
@@ -42,6 +40,8 @@ const QUEUE_MAX: Record<string, string> = {
   'agent-dispatch-sweep.yml': 'a re-ask from a run that skipped, or of its own caller (kanon#813)',
   'agent-verify-acs.yml': 'every label on the issue but `qa:verify`',
   'agent-deploy-diagnose.yml': 'a deploy run that succeeded, was cancelled or was skipped (plan 0010 D8)',
+  // Its runtime-version trigger is a `pull_request_target: closed` on its caller's path (kanon#833).
+  'agent-overseer.yml': 'an unmerged close of a pull request that changes the caller',
 };
 /** Each, with the clause of its group key that sends a would-be skip elsewhere. */
 const KEYED_OUT: Record<string, RegExp> = {
@@ -66,15 +66,6 @@ const ONLY_RUNS: Record<string, string> = {
   'telemetry-collect.yml': 'a schedule and a dispatch, from Kanon\'s telemetry caller',
   'lane-concurrency-probe.yml': 'the lane concurrency smoke, which only measures the group',
 };
-/**
- * The Overseer's runtime-version trigger is a `pull_request_target: closed` on its caller's
- * path, and an unmerged close joins the group only to skip. Its lane is another change's to
- * edit; this entry moves to QUEUE_MAX when it gets `queue: max`.
- */
-const KNOWN_GAP: Record<string, string> = {
-  'agent-overseer.yml': 'an unmerged close of a pull request that changes the caller',
-};
-
 const grouped = readdirSync(WF).filter((f) => /\.ya?ml$/.test(f)).filter((f) => {
   const w = read(f);
   return w.on !== undefined && 'workflow_call' in w.on && w.concurrency !== undefined;
@@ -82,7 +73,7 @@ const grouped = readdirSync(WF).filter((f) => /\.ya?ml$/.test(f)).filter((f) => 
 
 describe('kanon#552: a run that only skips never replaces a pending real one', () => {
   it('classifies every reusable workflow with a workflow-level group, once', () => {
-    const lists = [QUEUE_MAX, KEYED_OUT, ONLY_RUNS, KNOWN_GAP].map((l) => Object.keys(l));
+    const lists = [QUEUE_MAX, KEYED_OUT, ONLY_RUNS].map((l) => Object.keys(l));
     expect(lists.flat().sort()).toEqual([...grouped].sort());
     expect(new Set(lists.flat()).size).toBe(lists.flat().length);
   });
@@ -103,10 +94,6 @@ describe('kanon#552: a run that only skips never replaces a pending real one', (
     const first = Object.values(read(file).jobs)[0]!;
     if (file === 'agent-lead.yml') expect(first.if).toBe("github.event_name == 'workflow_dispatch'");
     else expect(String(first.if ?? '')).toMatch(/^github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'$/);
-  });
-
-  it.each(Object.entries(KNOWN_GAP))('%s still lacks `queue: max` (%s); move it to QUEUE_MAX once it has it', (file) => {
-    expect(read(file).concurrency!.queue).toBeUndefined();
   });
 
   // Mutations: each turns the QUEUE_MAX check red.

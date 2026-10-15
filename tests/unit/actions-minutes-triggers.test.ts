@@ -25,10 +25,11 @@ type Trigger = {
   schedule?: string;
   dispatch?: Record<string, boolean>;
   deployRun?: boolean;
+  reask?: string[];
 };
 
 /** Every key a `TRIGGERS` entry may carry. A new kind of trigger needs a phrase below first. */
-const KNOWN = new Set(['name', 'job', 'issues', 'pr', 'prTarget', 'review', 'ci', 'merged', 'pinMoved', 'schedule', 'dispatch', 'deployRun']);
+const KNOWN = new Set(['name', 'job', 'issues', 'pr', 'prTarget', 'review', 'ci', 'merged', 'pinMoved', 'schedule', 'dispatch', 'deployRun', 'reask']);
 
 const VERB: Record<string, string> = { labeled: 'labelled', opened: 'opened', closed: 'closed' };
 const verbs = (events: string[]) => events.map((e) => {
@@ -69,6 +70,8 @@ const phrases = (t: Trigger): string[] => {
   if (t.merged) out.push('a pull request merged');
   if (t.schedule) out.push(cadence(t.schedule));
   if (t.pinMoved) out.push('a merged change to its caller');
+  // kanon#833: the re-ask, a run of a lane whose runs this one recovers.
+  if (t.reask) out.push('a run of a lane it recovers completing');
   // Plan 0010 D8: a run of the deploy caller, and no dispatch with it.
   if (t.deployRun) out.push('a run of the deploy caller completing');
   else if (t.dispatch) out.push('a dispatch');

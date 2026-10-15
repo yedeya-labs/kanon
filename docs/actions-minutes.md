@@ -35,14 +35,14 @@ The "Its short and skipped runs" column is held to the lanes' jobs by [`tests/un
 | `agent-lead` | A dispatch | None: it runs only when you dispatch it | Mandates you dispatch |
 | `agent-lead-revise` | A review submitted; a pull request labelled; a dispatch | A label other than `agent:lead-revise`, or a review that doesn't request changes (skipped, nothing billed); a review or label on a pull request that isn't the Lead's brief, or a round past its cap | Change requests on briefs |
 | `agent-lead-split` | An issue labelled; a dispatch | Every label other than `qa:needs-split` (skipped, nothing billed) | Issues labelled for a split |
-| `agent-lead-reconcile` | A pull request or issue closed; an hourly schedule; a dispatch | None: it runs no model, so every run is short | Closed pull requests and issues, and hours |
+| `agent-lead-reconcile` | A pull request or issue closed; an hourly schedule; a run of a lane it recovers completing; a dispatch | None: it runs no model, so every run is short | Closed pull requests and issues, hours, and the review, revise and implement runs that re-ask it ([Schedules are best effort](lanes.md#schedules-are-best-effort)) |
 | `agent-verify-acs` | An issue labelled; a dispatch | Every label other than `qa:verify` (skipped, nothing billed) | Projects verified |
 | `agent-overseer` | A weekly schedule; a merged change to its caller; a dispatch | A merged caller change that doesn't move the agent runtime forward (a short gate job) | Weeks |
 | `agent-project-digest` | A daily schedule; a dispatch | None to speak of | Days, and open projects |
 | `agent-weekly-digest` | A weekly schedule; a dispatch | None to speak of | Weeks |
 | `agent-merge` | A review submitted; CI finishing on the default branch; an hourly schedule; a dispatch | None: it runs no model, so every run is short | Reviews, merges and hours |
 | `agent-rebase` | CI finishing on the default branch; a pull request merged; a daily schedule; a dispatch | A check that finds no agent pull request in conflict | Merges, and conflicts on agent pull requests |
-| `agent-dispatch-sweep` | A daily schedule; a dispatch | None: it runs no model, so every run is short | Days |
+| `agent-dispatch-sweep` | A daily schedule; a run of a lane it recovers completing; a dispatch | None: it runs no model, so every run is short | Days, and the implement and triage runs that re-ask it ([Schedules are best effort](lanes.md#schedules-are-best-effort)) |
 
 ## Kanon's own runs
 

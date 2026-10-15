@@ -447,7 +447,7 @@ describe('the workflow around it', () => {
   });
 
   it('serialises runs, admits only its caller\'s triggers, and bounds every job', () => {
-    expect({ ...wf.concurrency, group: realGroup(wf.concurrency.group) }).toEqual({ group: 'agent-overseer', 'cancel-in-progress': false });
+    expect({ ...wf.concurrency, group: realGroup(wf.concurrency.group) }).toEqual({ group: 'agent-overseer', 'cancel-in-progress': false, queue: 'max' });
     expect(wf.jobs.gate!.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request_target' && github.event.action == 'closed' && github.event.pull_request.merged == true)");
     for (const [name, job] of Object.entries(wf.jobs)) expect(job['timeout-minutes'], name).toBeGreaterThan(0);
   });
