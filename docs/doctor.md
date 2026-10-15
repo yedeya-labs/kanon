@@ -167,7 +167,7 @@ An accepted id-token holder is this waiver's own form for `id-token.unaccepted`:
 
 ### An App that holds more than Kanon grants
 
-A repository whose App needs a permission beyond Kanon's shared grant declares it under `## Choices` in the adoption record (`K-AGENT-3`), one bullet per App and permission: the bold label, the App's key (`author`, `judge` or `releaser`) as one code span, the permission and its level as one code span, and then in parentheses why the App holds it, on one line:
+A repository whose App needs a permission beyond Kanon's shared grant declares it under `## Choices` in the adoption record (`K-LAYOUT-10`, `K-AGENT-3`), one bullet per App and permission: the bold label, the App's key (`author`, `judge` or `releaser`) as one code span, the permission and its level as one code span, and then in parentheses why the App holds it, on one line:
 
 ```markdown
 - **Extra App permission:** `releaser` `workflows: write` (a candidate's pin pull request moves this repository's pins in .github/workflows)

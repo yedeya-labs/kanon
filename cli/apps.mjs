@@ -5,7 +5,8 @@
 // repositories (ADR 0013, decision 2): the Author (Implementer, Lead, Explorer, Overseer), the
 // Judge (Reviewer, Merger) and the optional Releaser. For each App it builds a manifest holding
 // exactly the App's permissions (the `apps` block of rulebook/agent-permissions.json: the union
-// of its roles' rows, plus any broadened permission, K-ADOPT-8), opens the owner's "create App"
+// of its roles' rows, plus any broadened permission, K-ADOPT-8), plus any extra permission the
+// adoption record declares for it (K-LAYOUT-10), opens the owner's "create App"
 // page with it filled in (a personal account's or an organisation's, detected from the owner's
 // account type: plan 0005, decision 1), exchanges the one-time code for the App's id and
 // private key, stores both as Actions secrets on EVERY repository named in --repo with the
@@ -320,7 +321,8 @@ export const checkoutCheck = (deps, dir, owner, repo) => {
 };
 
 /**
- * The App manifest for one of Kanon's Apps: exactly the App's permissions, private, no webhook.
+ * The App manifest for one of Kanon's Apps: exactly the App's permissions (with any extra permission
+ * the adoption record declares, which the caller has added to `spec`), private, no webhook.
  * @param {{ owner: string, repo: string, name: string, redirectUrl: string, spec: AppSpec | RoleSpec }} a
  */
 export const buildManifest = ({ owner, repo, name, redirectUrl, spec }) => {
