@@ -14,9 +14,14 @@ export function realGroup(group: string): string {
   return group.slice(0, -SMOKE_SUFFIX.length);
 }
 
-/** A lane's `workflow_call` inputs without `smoke`, which no caller passes; undefined when none are left. */
+/**
+ * A lane's `workflow_call` inputs without `smoke`, which no caller passes, and without `max_turns`
+ * and `reason`, the dispatch inputs that raise its turn limit for one run, which every model lane
+ * a person can dispatch takes alike (kanon#891, `tests/unit/agent-run-turn-budget.test.ts`);
+ * undefined when none are left.
+ */
 export function callerInputs<T>(inputs: Record<string, T> | undefined): Record<string, T> | undefined {
   if (!inputs || !('smoke' in inputs)) throw new Error('a lane without the `smoke` input');
-  const rest = Object.fromEntries(Object.entries(inputs).filter(([k]) => k !== 'smoke'));
+  const rest = Object.fromEntries(Object.entries(inputs).filter(([k]) => k !== 'smoke' && k !== 'max_turns' && k !== 'reason'));
   return Object.keys(rest).length ? rest : undefined;
 }

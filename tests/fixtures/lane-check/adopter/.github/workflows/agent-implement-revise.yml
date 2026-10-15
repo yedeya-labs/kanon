@@ -15,6 +15,12 @@ on:
         description: Clear the round cap for this run.
         type: boolean
         default: false
+      max_turns:
+        description: Raise the turn limit for this one run (docs/lanes.md, "The turn budget").
+        required: false
+      reason:
+        description: Why this run raises max_turns. Required when max_turns is set.
+        required: false
 
 permissions:
   contents: read
@@ -28,6 +34,8 @@ jobs:
     with:
       pr_number: ${{ inputs.pr_number }}
       reset: ${{ inputs.reset }}
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
     secrets:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}

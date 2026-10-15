@@ -33,6 +33,7 @@ Call it with `id: finish`, `if: always()` and `continue-on-error: true`, and han
 | `agent` | yes | The telemetry agent name: the row's `agent` column. |
 | `job-status` | yes | `${{ job.status }}`. |
 | `claude_args` | yes | The same flag block `agent-run` was given. |
+| `claude-args-ran` | no | `agent-run`'s `claude-args` output, the flags the agent ran with. They differ from `claude_args` when a dispatch raised the lane's turn limit with `max_turns` ([#891](https://github.com/yedeya-labs/kanon/issues/891)), and the row records them in its place. |
 | `execution_file` | no | `agent-run`'s `execution_file` output. |
 | `issue-number`, `pr-number` | no | The issue or pull request the run was for, recorded on the row. |
 | `quality-pr-label`, `started-at`, `github-token` | no | Opt-in: count the pull requests with this label that reference `issue-number` and were opened after `started-at`. |

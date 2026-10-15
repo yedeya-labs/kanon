@@ -17,6 +17,16 @@ name: Verify ACs — mint, then the agent's job
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "A turn limit raised for this one dispatched run (its lane's max_turns), passed through. Empty runs the lane's limit."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why this dispatched run raises max_turns (its lane's reason), passed through."
+        required: false
+        type: string
+        default: ""
       # WHAT THE LANE'S `criteria` JOB MEASURED (kanon#243), passed through to the agent's job.
       # The criteria run happens before this workflow starts, in a job that holds no token, so
       # the mint below runs only after every line of the code under test has.
@@ -93,6 +103,8 @@ jobs:
     if: ${{ !cancelled() }}
     uses: $/.github/workflows/verify-acs-agent-job.yml
     with:
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
       project: ${{ inputs.project }}
       sha: ${{ inputs.sha }}
       criteria: ${{ inputs.criteria }}

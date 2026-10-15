@@ -17,6 +17,16 @@ name: Lead split — the agent's job
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "A turn limit raised for this one dispatched run (its lane's max_turns), passed through. Empty runs the lane's limit."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why this dispatched run raises max_turns (its lane's reason), passed through."
+        required: false
+        type: string
+        default: ""
       issue:
         description: "The caller's `issue`, passed through: the oversized issue to split."
         required: false
@@ -181,6 +191,9 @@ jobs:
         env:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
+          max-turns: ${{ inputs.max_turns }}
+          max-turns-ceiling: "160"
+          max-turns-reason: ${{ inputs.reason }}
           claude-token: ${{ secrets.claude-token }}
           anthropic-api-key: ${{ secrets.anthropic-api-key }}
           github-token: ${{ steps.app-token.outputs.token }}
@@ -324,6 +337,7 @@ jobs:
         if: always() && steps.gate.outputs.act == 'split'
         continue-on-error: true
         with:
+          claude-args-ran: ${{ steps.agent.outputs.claude-args }}
           arm: lead split agent
           agent: lead-split
           job-status: ${{ job.status }}

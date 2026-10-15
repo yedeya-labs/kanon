@@ -20,6 +20,10 @@
 # The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
 # credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
 # `agent-run` refuses both or neither, by name, before the agent starts.
+# MAX TURNS: 15, at most 30
+# The line above is read by `lane-check` and the requirements file (kanon#891): this lane's turn
+# limit, the `--max-turns` in its flags, and Kanon's ceiling on raising it, the `max-turns-ceiling`
+# it hands `agent-run`. A person raises it only for one dispatched run, with a reason.
 name: Weekly dev digest
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -40,6 +44,16 @@ on:
         default: ""
       dry_run:
         description: "'true' to print the message instead of posting it"
+        required: false
+        type: string
+        default: ""
+      max_turns:
+        description: "Raise the turn limit for this one dispatched run, a whole number from 1 to 30 (the lane's limit is 15). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         required: false
         type: string
         default: ""
@@ -155,6 +169,9 @@ jobs:
         env:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
+          max-turns: ${{ inputs.max_turns }}
+          max-turns-ceiling: "30"
+          max-turns-reason: ${{ inputs.reason }}
           claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ github.token }}
@@ -207,6 +224,7 @@ jobs:
         if: always()
         continue-on-error: true
         with:
+          claude-args-ran: ${{ steps.agent.outputs.claude-args }}
           arm: weekly-digest agent
           agent: weekly-digest
           job-status: ${{ job.status }}

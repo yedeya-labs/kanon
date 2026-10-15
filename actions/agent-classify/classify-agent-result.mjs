@@ -76,7 +76,7 @@ const configuredModelRan = (usage, model) => {
  *   it cannot observe was not.
  * `exhausted` — the agent stopped because it reached its turn cap. A plain retry is NOT
  *   reasonable: it spends the same turns on the same work. Either the work wants
- *   splitting or this arm's `--max-turns` wants raising, and the notice names BOTH
+ *   splitting or this arm's turn cap wants raising for one re-dispatched run (`max_turns`), and the notice names BOTH
  *   because the result JSON cannot tell which — see `renderNotice` (RA-1781, RA-846).
  *
  *   NAMED FOR THE OBSERVABLE, like the two below it, and keyed on the one field that IS
@@ -357,7 +357,9 @@ export function renderNotice(kind, why, { arm = 'agent', recover = '', nonFatal 
   }
   if (kind === 'exhausted') {
     // TRUE FOR EVERY ARM THAT CAN EMIT IT, which is all of them — each sets its own
-    // `--max-turns` (60 explore … 150 implement), so each can reach this. The first cut
+    // `--max-turns` (15 weekly digest … 300 implement), so each can reach this. The remedy names
+    // the re-dispatch with `max_turns` and a `reason` (kanon#891): until it existed an adopter
+    // could not raise a cap without a Kanon release, so the advice was one they could not follow. The first cut
     // of this body asserted implement-lane facts ("no PR and no branch", "DECOMPOSE the
     // issue") and would have printed them on the Overseer and the two digests, where
     // there is no issue being built and the durable artifact is an issue or a comment.
@@ -381,9 +383,14 @@ export function renderNotice(kind, why, { arm = 'agent', recover = '', nonFatal 
         + 'Something has to change first, and which of two things depends on the arm: '
         + 'either the WORK is divisible and wants splitting into parts each finishable in '
         + 'one run (the implement lane — RA-1781, with RA-1694 as the worked example), or the '
-        + "arm's budget is genuinely too small and `--max-turns` is the thing to raise "
+        + "arm's budget is genuinely too small and its turn cap is the thing to raise "
         + '(the Overseer and the code audit both record that conclusion on this path — '
-        + `RA-846). Decide which before re-triggering.${recover ? ` Once it is done: ${recover}` : ''} (RA-1781)`,
+        + 'RA-846). So either re-dispatch this run with a higher `max_turns` and a `reason`, '
+        + "up to Kanon's ceiling for the lane, which raises the limit for that one run and the "
+        + 'dollar cap with it, or split the work (docs/lanes.md, "The turn budget"). This '
+        + "run's telemetry row shows the turns it took against its limit, and the lane's earlier "
+        + 'rows show whether its runs keep ending at the cap. '
+        + `Decide which before re-triggering.${recover ? ` Once it is done: ${recover}` : ''} (RA-1781)`,
     });
   }
   if (kind === 'failed') {

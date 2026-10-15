@@ -49,6 +49,28 @@ on:
         description: Passed to BOTH claude-code-action and the telemetry row, so they cannot disagree.
         required: true
         type: string
+      max-turns:
+        description: >-
+          A turn limit raised for this one dispatched run, its lane's `max_turns` input passed
+          through (kanon#891). Empty runs the `--max-turns` in `claude_args`. `agent-run` checks
+          it against `max-turns-ceiling`, the reason and the event before the agent starts.
+        required: false
+        type: string
+        default: ""
+      max-turns-ceiling:
+        description: >-
+          Kanon's ceiling for this lane's `max-turns`, fixed by the lane, never by its caller
+          (docs/lanes.md, "The turn budget").
+        required: false
+        type: string
+        default: ""
+      max-turns-reason:
+        description: >-
+          Why this dispatched run raises its turn limit, its lane's `reason` input passed
+          through. `agent-run` requires it when `max-turns` is set.
+        required: false
+        type: string
+        default: ""
       timeout-minutes:
         description: >-
           Bounds a hang (RA-1336). Size at ~3x this lane's longest real run — EXCEPT where a
@@ -425,6 +447,9 @@ jobs:
         with:
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ inputs.claude_args }}
+          max-turns: ${{ inputs.max-turns }}
+          max-turns-ceiling: ${{ inputs.max-turns-ceiling }}
+          max-turns-reason: ${{ inputs.max-turns-reason }}
           claude-token: ${{ secrets.claude-token }}
           anthropic-api-key: ${{ secrets.anthropic-api-key }}
           github-token: ${{ steps.app-token.outputs.token }}
@@ -484,6 +509,7 @@ jobs:
           agent: ${{ inputs.agent }}
           job-status: ${{ job.status }}
           claude_args: ${{ inputs.claude_args }}
+          claude-args-ran: ${{ steps.agent.outputs.claude-args }}
           execution_file: ${{ steps.agent.outputs.execution_file }}
           issue-number: ${{ inputs.issue-number }}
           pr-number: ${{ inputs.pr-number }}

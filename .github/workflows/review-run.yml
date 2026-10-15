@@ -17,6 +17,16 @@ name: Review — mint, then the agent's job
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "A turn limit raised for this one dispatched run (its lane's max_turns), passed through. Empty runs the lane's limit."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why this dispatched run raises max_turns (its lane's reason), passed through."
+        required: false
+        type: string
+        default: ""
       explicit:
         description: Whether a member asked for this review (the filter's `explicit`).
         required: false
@@ -97,6 +107,8 @@ jobs:
     if: ${{ !cancelled() }}
     uses: $/.github/workflows/review-agent-job.yml
     with:
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
       explicit: ${{ inputs.explicit }}
       head_sha: ${{ inputs.head_sha }}
       login: ${{ inputs.login }}

@@ -187,6 +187,12 @@ on:
         description: Clear the round cap for this run.
         type: boolean
         default: false
+      max_turns:
+        description: Raise the turn limit for this one run (docs/lanes.md, "The turn budget").
+        required: false
+      reason:
+        description: Why this run raises max_turns. Required when max_turns is set.
+        required: false
 
 permissions:
   contents: read
@@ -200,6 +206,8 @@ jobs:
     with:
       pr_number: ${{ inputs.pr_number }}
       reset: ${{ inputs.reset }}
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
     secrets:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
@@ -213,12 +221,51 @@ jobs:
   **A caller under another name still gets its runs found and its dispatches** ([#726](https://github.com/yedeya-labs/kanon/issues/726)). `lane-check` still requires the lane's file name for a caller outside Kanon's own repository; a `caller.misplaced` waiver in the adoption record is how a repository like Kanon, which hosts the lanes at those names, keeps its callers under others. Where a caller lives elsewhere, the scripts look it up on your default branch: the file at the lane's name if it calls the lane, else the file a `caller.misplaced` waiver names, else the first workflow by name that calls the lane, directly or through a reusable workflow of your own. A file only another workflow calls has no runs of its own, so a waived or lane-named file of that kind resolves to the workflow above it. That is the file whose runs they list (the review, revise and brief-revise recoveries) and that the Merger dispatches for a re-review, and the health check watches it beside every `agent-*.yml`. If no caller is found, or the default branch can't be read, they use the lane's file name as before and log why, so the recoveries keep their caps.
 - **Four callers have fixed names** ([#53](https://github.com/yedeya-labs/kanon/issues/53)). GitHub reports a called lane's checks under its caller's `name:`, and the merge gate tells its own checks, and the review event's, from the rest by that name. Name the review lane's caller `Review (Reviewer)`, the merge-reconcile lane's `Merge Reconcile (Reviewer)`, the implement-revise lane's `Implement (Implementer) — revise` and the Merger's caller `Merge (Merger)`, and give the revise and merge-reconcile callers' one job the ids `revise` and `reconcile`. Each of the four lanes says its caller's name on a `# CALLER NAME:` line, and the two racers their job's id on a `# CALLER JOB:` line, which `lane-check`, `kanon init` and doctor read. Under another name the Merger waits on itself, so `lane-check` fails a Merger caller under any other name. Under another name or job id it waits on the other three, so `lane-check` checks them too ([#728](https://github.com/yedeya-labs/kanon/issues/728)): from Kanon 0.40.0 a review, merge-reconcile or implement-revise caller under another name, an earlier release's spelling included, or a revise or merge-reconcile job under another id, is a warning that says what to rename, and from Kanon 0.41.0 it fails. Rename them before you move your pin to 0.41.0.
 - **Triggers are yours.** A reusable workflow can't declare its caller's events. The `github` context in a called workflow is the caller's, so the lane reads the triggering event exactly as it would in your own file.
-- **Inputs pass through, by name.** `with:` passes your `workflow_dispatch` inputs as `${{ inputs.<name> }}`, and nothing else. On the other triggers they arrive empty, which the lane expects. Every lane also declares `smoke`, which your caller never passes, and `lane-check` fails a caller that does: Kanon's lanes smoke sets it so that its runs take concurrency groups of their own and never queue behind, or cancel, your real runs.
+- **Inputs pass through, by name.** `with:` passes your `workflow_dispatch` inputs as `${{ inputs.<name> }}`, and nothing else. That includes a raised turn limit, `max_turns`, and its `reason`, which come only from your dispatch ("The turn budget" below). On the other triggers they arrive empty, which the lane expects. Every lane also declares `smoke`, which your caller never passes, and `lane-check` fails a caller that does: Kanon's lanes smoke sets it so that its runs take concurrency groups of their own and never queue behind, or cancel, your real runs.
 - **`permissions:` is the ceiling.** Each lane declares the permissions it needs, and a called workflow can only narrow what its caller grants. Grant at least what the lane declares, or the run fails to start.
 - **Secrets are mapped explicitly, by their fixed names** ([plan 0001 §8](plans/0001-move-the-agent-lanes.md)): the App's `AUTHOR_APP_ID` and `AUTHOR_APP_PRIVATE_KEY` (the Implementer's, the Lead's, the Explorer's and the Overseer's lanes) or `JUDGE_APP_ID` and `JUDGE_APP_PRIVATE_KEY` (the Reviewer's and the Merger's), and one Claude credential, `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, never both (plan 0005 §3.5, plan 0009 §10). The role-named secrets of earlier releases (`IMPLEMENTER_APP_ID`, `REVIEWER_APP_ID`, …) are gone: `lane-check` fails a caller that maps one, naming the secret it takes instead. Never `secrets: inherit`, which would hand every secret in your repository to Kanon's code. [`kanon apps`](apps.md) stores the two App secrets. `CLAUDE_CODE_OAUTH_TOKEN` is the token of the Claude subscription the agents run on. Make it with `claude setup-token`, signed in to that subscription, and store it yourself with `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R <owner>/<repo>` in your own terminal, pasting it when `gh` asks for it: never with `!` at the Claude Code prompt, where `gh` reads no value and stores an empty secret without a word ([#625](https://github.com/yedeya-labs/kanon/issues/625)). Or read it from a file, with `< <file>` at the end of the line, and delete the file after ([the adopt skill's "Running `gh secret set`"](../skills/adopt/SKILL.md#running-gh-secret-set)). To run the lanes on an Anthropic API key instead, billed per token, store the key the same way as `ANTHROPIC_API_KEY` and map it in place of the token: `ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}`. Each caller chooses, so the Reviewer may run on a key and the Implementer on the token.
 - **No `concurrency:`.** Each lane holds its own concurrency group. The same group on the caller would have the caller wait for itself. A run joins its lane's group before the lane's own checks can skip it, so every lane whose group a skip-only run can join keeps every pending run in order (`queue: max`), and such a run can't cancel a pending real one ([#552](https://github.com/yedeya-labs/kanon/issues/552)). Those lanes are rebase, implement-revise, Lead revise, merge reconcile, Merge, Lead reconcile, the dispatch sweep and the acceptance-criteria verifier. The rest give such runs a group of their own, or take only events that run.
 - **One version.** Every Kanon reference in your repository pins the same exact version, and Dependabot proposes upgrades (`K-ADOPT-11`). The one pin that may lag is the notify hook's call to Kanon's prebuilt Slack or webhook hook, which follows the callers' ([plan 0011](plans/0011-notifications.md) decision 18): `lane-check` passes it behind them, with a notice, while it declares a contract version their release still writes, and fails it ahead of them or on a retired version. Move it with them. Write the `cooldown` out with `yedeya-labs/kanon*` excluded: an entry with none still gets Dependabot's default of 3 days, which holds back every release made in the last 3 days, and `lane-check` fails it ([#233](https://github.com/yedeya-labs/kanon/issues/233)).
 - **An agent's commits pass your `dco` check with no hook code of yours** (`K-AGENT-44`). The lanes author each one as the lane's App, and add the `Signed-off-by:` of the person your default branch's `docs/qa/sign-off-delegation.md` names (`K-LAYOUT-14`). Recording that delegation is your decision; with none, an agent's commits fail the check ([`agent-setup`](../actions/agent-setup/README.md), [#234](https://github.com/yedeya-labs/kanon/issues/234)).
+
+## The turn budget
+
+Each lane that runs a model limits its agent's turns with `--max-turns`, and derives its dollar cap, `--max-budget-usd`, from that limit at $0.40 a turn, rounded up to the next $5 (`K-OBS-12`). The limit is Kanon's, in the table below, and you don't change it: nothing in your repository sets it ([ADR 0005](decisions/0005-roles-and-standard-lane-settings.md) §2, amended 2026-10-15). What a person may do is raise it for **one dispatched run**, when a run stopped at the limit on work that can't be divided ([#891](https://github.com/yedeya-labs/kanon/issues/891)):
+
+```sh
+gh workflow run agent-lead-revise.yml -f pr_number=123 -f max_turns=150 -f reason="one ruling touches the brief's scope, five issues and six spec clauses"
+```
+
+- **Two dispatch inputs, passed through.** Every lane in the table takes `max_turns` and `reason`, and its caller's `workflow_dispatch` declares both, optional, and passes them through: `max_turns: ${{ inputs.max_turns }}` and `reason: ${{ inputs.reason }}`. `kanon init` writes them on each such caller. `lane-check` fails a caller that writes a number for `max_turns`, or anything but its own dispatch input, and one that passes `max_turns` without `reason`. On any other event the inputs arrive empty, and the lane runs at its limit.
+- **Kanon fixes a ceiling per lane, twice its limit.** A raise moves the cost bound for one run, never removes it. The lane refuses, before any model call and with an error that names `max_turns`: a value above the ceiling, zero, a negative number or anything but a whole number; a raise with no `reason`; and a raise on a run that wasn't dispatched. Kanon never lowers a value to the ceiling for you. On the two digest lanes, whose narrative is best-effort, a refused raise leaves the digest without its narrative.
+- **The dollar cap follows.** A raised run runs with `--max-budget-usd` derived from its `max_turns` at the same rate.
+- **It is recorded.** The run's step summary says the raised limit, the lane's own, the dollar cap and the reason. Its telemetry row records the limit that bound it, `max_turns`, and so a configuration fingerprint that differs from the lane's other runs: a raised run reads as what it was.
+- **The deploy-diagnose lane can't be raised:** its caller has no dispatch, since the lane reads the failed deploy from the event.
+
+**Split or raise.** When a run stops at its turn limit, a plain re-run fails the same way, and the lane's error says so. Read the run's telemetry row first: its turn-budget line shows the turns it took against the limit, and the lane's earlier rows show whether its runs keep ending there (`terminal_reason: max_turns`). If the work is divisible, split it into parts each finishable in one run; for the implement lanes that is the default answer, and the split lane does it. If it is one change that can't be divided, such as a ruling that touches a brief's scope, several issues and its spec clauses together, re-dispatch that run with a higher `max_turns` and the reason. An adopter's ~500-line brief under its third round of revision is the worked example: the brief-revise lane stopped at its 90 turns, and the work was one ruling. Work that needs more than the ceiling wants splitting.
+
+<!-- lane-turns:table -->
+
+| Lane | Workflow | Limit | Ceiling for one dispatched run |
+|---|---|---|---|
+| Code audit | `agent-code-audit.yml` | 100 | 200 |
+| Explore (the sweep) | `agent-explore.yml` | 60 | 120 |
+| Explore the telemetry | `agent-explore-telemetry.yml` | 40 | 80 |
+| Implement | `agent-implement.yml` | 300 | 600 |
+| Implement, revise | `agent-implement-revise.yml` | 300 | 600 |
+| Lead, brief | `agent-lead.yml` | 120 | 240 |
+| Lead, revise | `agent-lead-revise.yml` | 90 | 180 |
+| Lead, split | `agent-lead-split.yml` | 80 | 160 |
+| Merge reconcile | `agent-merge-reconcile.yml` | 30 | 60 |
+| Overseer (optional) | `agent-overseer.yml` | 80 | 160 |
+| Daily project digest | `agent-project-digest.yml` | 20 | 40 |
+| Rebase (resolve a conflict) | `agent-rebase.yml` | 120 | 240 |
+| Review | `agent-review.yml` | 70 | 140 |
+| Triage and fix | `agent-triage.yml` | 100 | 200 |
+| Verify acceptance criteria | `agent-verify-acs.yml` | 60 | 120 |
+| Weekly digest | `agent-weekly-digest.yml` | 15 | 30 |
+
+<!-- /lane-turns:table -->
 
 ## Old spellings
 
@@ -675,4 +722,4 @@ It needs the Author App (the Overseer's), with `Contents: Read`, `Issues: Read &
 
 ## Checking it
 
-Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a caller that isn't at its lane's file name, a review or reconciler caller without `.github/workflows/ci.yml`, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook, or a missing sweep hook for an explore caller; on a missing stack document, or a missing capability ledger where the adoption record turns the capability watch on, or a stack document without `## Gates` or with a section twice; on a malformed test-database declaration, escalation file, exemptions file, deploy declaration (a reference-deploy bullet left under `## Choices` included) or production-promotion declaration; on an adoption record whose Overseer bullet, or its default `not installed`, the callers contradict; on a role missing from the App register, a register whose Apps' roles name two slugs or share one, or a caller that maps a role-named App secret; and on a missing Dependabot entry.
+Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a caller that isn't at its lane's file name, a review or reconciler caller without `.github/workflows/ci.yml`, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input (a number for `max_turns` included, or `max_turns` without `reason`), maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook, or a missing sweep hook for an explore caller; on a missing stack document, or a missing capability ledger where the adoption record turns the capability watch on, or a stack document without `## Gates` or with a section twice; on a malformed test-database declaration, escalation file, exemptions file, deploy declaration (a reference-deploy bullet left under `## Choices` included) or production-promotion declaration; on an adoption record whose Overseer bullet, or its default `not installed`, the callers contradict; on a role missing from the App register, a register whose Apps' roles name two slugs or share one, or a caller that maps a role-named App secret; and on a missing Dependabot entry.

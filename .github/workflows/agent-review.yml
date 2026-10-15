@@ -73,6 +73,10 @@
 # this line to): under another name the Merger waits on them. A caller under another name is a
 # `::warning` until the Kanon release `FAILS_FROM` names in `actions/lane-check/caller-names.mjs`,
 # and a failure from it.
+# MAX TURNS: 70, at most 140
+# The line above is read by `lane-check` and the requirements file (kanon#891): this lane's turn
+# limit, the `--max-turns` in its flags, and Kanon's ceiling on raising it, the `max-turns-ceiling`
+# it hands `agent-run`. A person raises it only for one dispatched run, with a reason.
 name: Review (Reviewer)
 # THE RUN RECORDS WHAT TRIGGERED IT, AT CREATION (RA-1717). A `workflow_run` run is
 # recorded against the DEFAULT branch's SHA with an empty `pull_requests`, so nothing
@@ -145,6 +149,16 @@ on:
     inputs:
       pr_number:
         description: PR number to review
+        required: false
+        type: string
+        default: ""
+      max_turns:
+        description: "Raise the turn limit for this one dispatched run, a whole number from 1 to 140 (the lane's limit is 70). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         required: false
         type: string
         default: ""
@@ -1224,6 +1238,8 @@ jobs:
       actions: read
     uses: $/.github/workflows/review-run.yml
     with:
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
       explicit: ${{ needs.filter.outputs.explicit }}
       head_sha: ${{ needs.filter.outputs.head_sha }}
       login: ${{ needs.filter.outputs.login }}

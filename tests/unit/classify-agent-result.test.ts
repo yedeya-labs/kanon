@@ -197,11 +197,11 @@ describe('classifyResult', () => {
     const n = renderNotice(c.kind, c.why, { arm: 'implementer agent' });
     expect(n.title).toMatch(/dollar cap/);
     expect(n.body).toMatch(/RE-RUN REPRODUCES THIS/);
-    expect(n.body).not.toMatch(/--max-turns/);
+    expect(n.body).not.toMatch(/--max-turns|max_turns/);
     expect(n.body).not.toMatch(/re-run is reasonable/i);
     // Non-vacuity: the turn-cap notice is unchanged.
     expect(renderNotice('exhausted', classifyResult(EXHAUSTED, OPUS_5).why, { arm: 'x' }).body)
-      .toMatch(/`--max-turns` is the thing to raise/);
+      .toMatch(/its turn cap is the thing to raise .*re-dispatch this run with a higher `max_turns` and a `reason`, up to Kanon's ceiling/);
   });
 
   it('does NOT call a run oversized just because it passed its turn count', () => {
@@ -430,8 +430,14 @@ describe('renderNotice', () => {
     // `max_turns` terminal reason, where raising the cap IS the remedy.)
     const n = renderNotice('exhausted', 'x', { arm: 'Overseer agent' });
     expect(n.body).toMatch(/splitting/);
-    expect(n.body).toMatch(/`--max-turns` is the thing to raise/);
+    expect(n.body).toMatch(/its turn cap is the thing to raise/);
     expect(n.body).toMatch(/RA-846/);
+    // kanon#891: the remedy names the input an adopter can set, its ceiling, the one doc that
+    // states both, and the telemetry that tells "raise" from "split".
+    expect(n.body).toMatch(/re-dispatch this run with a higher `max_turns` and a `reason`, up to Kanon's ceiling for the lane, which raises the limit for that one run/);
+    expect(n.body).toMatch(/or split the work/);
+    expect(n.body).toMatch(/docs\/lanes\.md, "The turn budget"/);
+    expect(n.body).toMatch(/telemetry row shows the turns it took/);
     // The consequences it cannot observe must be gone for good.
     expect(n.body).not.toMatch(/no PR and no branch/);
     expect(n.body).not.toMatch(/reviewable-sized PR/);

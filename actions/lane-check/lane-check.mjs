@@ -467,6 +467,17 @@ for (const f of WORKFLOWS) {
       continue;
     }
     if (!declared.includes(k)) fail(f, `passes \`${k}\`, which the Kanon lane ${lane} does not declare`);
+    // THE TURN LIMIT IS NEVER A STANDING SETTING (kanon#891; ADR 0005 §2, amended 2026-10-15): a
+    // person raises it for one dispatched run, so a caller passes only its own dispatch input,
+    // never a number of its own, and passes the `reason` the raise needs beside it.
+    if (k === 'max_turns' && declared.includes(k)) {
+      if (!new RegExp(`^\\$\\{\\{${SP}*inputs\\.max_turns${SP}*\\}\\}$`).test(v)) {
+        fail(f, `passes \`max_turns: ${v}\`; the turn limit is raised only for one dispatched run, never set in a caller, so pass your workflow_dispatch input through, as \`\${{ inputs.max_turns }}\`, with \`reason: \${{ inputs.reason }}\` beside it (docs/lanes.md, "The turn budget")`);
+      } else if (!Object.hasOwn(withs, 'reason')) {
+        fail(f, `passes \`max_turns\` without \`reason\`; a raised turn limit needs a reason, so pass your workflow_dispatch input through as \`reason: \${{ inputs.reason }}\` (docs/lanes.md, "The turn budget")`);
+      }
+      continue;
+    }
     // The key is part of the pattern, as the shell's `[[ =~ ]]` had it; one that isn't a
     // pattern at all matches nothing.
     const through = (() => {

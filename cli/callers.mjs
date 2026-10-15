@@ -19,7 +19,7 @@ import { URL } from 'node:url';
  * @typedef {{ type: string, description: string }} LaneInput
  * @typedef {{ identities: string[], secrets: string[], inputs: Record<string, LaneInput>, grant: Record<string, string>,
  *   reads: string[], readsWorkflows: string[], hooks: string[], qaStore?: boolean, callerName?: string, callerJob?: string, callerRunNameEndsWith?: string,
- *   optionalSecrets?: string[], optionalVariables?: string[], claude?: string[] }} Lane
+ *   optionalSecrets?: string[], optionalVariables?: string[], claude?: string[], turns?: { default: number, ceiling: number } }} Lane
  * @typedef {{ name: string, permissions: Record<string, string> }} RoleIdentity
  * @typedef {{ name: string, roles: string[], permissions: Record<string, string> }} AppIdentity
  * @typedef {{ lanes: Record<string, Lane>, hook: { path: string, inputs: string[] },
@@ -180,7 +180,10 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   if (t.prTarget) out.push('  pull_request_target:', `    types: [${t.prTarget.join(', ')}]`);
   if (t.issues) out.push('  issues:', `    types: [${t.issues.join(', ')}]`);
   if (t.schedule) out.push('  schedule:', `    - cron: "${t.schedule}"`);
-  const dispatch = Object.entries(t.dispatch);
+  // A RAISED TURN LIMIT IS A DISPATCH INPUT, NEVER A SETTING (kanon#891; ADR 0005 §2, amended
+  // 2026-10-15): a lane whose limit can be raised (`turns`) gets `max_turns` and the `reason` it
+  // needs on its dispatch, both optional, passed through, so a person raises it for one run.
+  const dispatch = [...Object.entries(t.dispatch), ...(spec.turns && !t.deployRun ? /** @type {Array<[string, boolean]>} */ ([['max_turns', false], ['reason', false]]) : [])];
   // No dispatch for a `deployRun` lane: it reads the failed run from the event.
   if (!dispatch.length) { if (!t.deployRun) out.push('  workflow_dispatch:'); }
   else {

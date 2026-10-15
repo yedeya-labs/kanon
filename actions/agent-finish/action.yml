@@ -41,6 +41,14 @@ inputs:
   claude_args:
     description: The SAME flag block agent-run was given, so the row records the configuration that ran.
     required: true
+  claude-args-ran:
+    description: >-
+      agent-run's `claude-args` output: the flags the agent ran with, which differ from
+      `claude_args` when a dispatch raised its lane's turn limit with `max_turns` (kanon#891). The row records it
+      in place of `claude_args`; empty, when agent-run stopped before writing it, the row
+      records `claude_args`.
+    required: false
+    default: ""
   execution_file:
     description: agent-run's `execution_file` output.
     required: false
@@ -224,7 +232,7 @@ runs:
         artifacts_filed: ${{ steps.quality.outputs.artifacts_filed || inputs.artifacts-filed }}
         severities: ${{ inputs.severities }}
         execution_file: ${{ inputs.execution_file }}
-        claude_args: ${{ inputs.claude_args }}
+        claude_args: ${{ inputs.claude-args-ran || inputs.claude_args }}
         lane: ${{ inputs.lane }}
         tag: ${{ inputs.tag }}
         # The lane's own stages, in its own order, then `finish`, this block's quality read.

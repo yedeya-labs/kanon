@@ -13,6 +13,16 @@ name: Rebase — one PR
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "A turn limit raised for this one dispatched run (its lane's max_turns), passed through. Empty runs the lane's limit."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why this dispatched run raises max_turns (its lane's reason), passed through."
+        required: false
+        type: string
+        default: ""
       pr:
         description: The conflicting PR this entry resolves (one of the filter's `prs`).
         required: true
@@ -69,6 +79,8 @@ jobs:
     if: ${{ !cancelled() }}
     uses: $/.github/workflows/rebase-agent-job.yml
     with:
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
       pr: ${{ inputs.pr }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}

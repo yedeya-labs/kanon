@@ -68,6 +68,10 @@
 # The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
 # credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
 # `agent-run` refuses both or neither, by name, before the agent starts.
+# MAX TURNS: 80, at most 160
+# The line above is read by `lane-check` and the requirements file (kanon#891): this lane's turn
+# limit, the `--max-turns` in its flags, and Kanon's ceiling on raising it, the `max-turns-ceiling`
+# it hands `agent-run`. A person raises it only for one dispatched run, with a reason.
 name: Lead — split
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -80,6 +84,16 @@ on:
     inputs:
       issue:
         description: The oversized issue to split (it must carry qa:needs-split)
+        required: false
+        type: string
+        default: ""
+      max_turns:
+        description: "Raise the turn limit for this one dispatched run, a whole number from 1 to 160 (the lane's limit is 80). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
         required: false
         type: string
         default: ""
@@ -150,6 +164,8 @@ jobs:
       cancel-in-progress: false
     uses: $/.github/workflows/lead-split-run.yml
     with:
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
       issue: ${{ inputs.issue }}
     secrets:
       app-id: ${{ secrets.AUTHOR_APP_ID }}

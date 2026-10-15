@@ -17,6 +17,16 @@ name: Rebase — the agent's job
 on:
   workflow_call:
     inputs:
+      max_turns:
+        description: "A turn limit raised for this one dispatched run (its lane's max_turns), passed through. Empty runs the lane's limit."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why this dispatched run raises max_turns (its lane's reason), passed through."
+        required: false
+        type: string
+        default: ""
       pr:
         description: The conflicting PR to resolve.
         required: true
@@ -192,6 +202,9 @@ jobs:
         env:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
+          max-turns: ${{ inputs.max_turns }}
+          max-turns-ceiling: "240"
+          max-turns-reason: ${{ inputs.reason }}
           prompt: |
             You are the Implementer (Agent 2) in RESOLVE-CONFLICT mode. PR
             #${{ env.PR_NUMBER }} of this repo conflicts with `main`. Until it stops
@@ -289,6 +302,7 @@ jobs:
         if: always()
         continue-on-error: true
         with:
+          claude-args-ran: ${{ steps.agent.outputs.claude-args }}
           arm: rebase lane
           # ITS OWN NAME, not `implementer`. Every lane this repo measures carries a
           # distinct one (`implementer-revise`, `lead-revise`, `merge-reconcile`), and
