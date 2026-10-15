@@ -30,7 +30,7 @@ Turns `claude-code-action`'s result file into one telemetry row (cost, turns, to
 | `execution_file` | no | The agent step's `execution_file` output. |
 | `claude_args` | no | The same flag block the agent ran with: the only source for the effort and the configuration fingerprint. |
 | `pr_number` | no | The pull request under review. Its diff size is read and stored. On a revise lane, the open items the Reviewer's latest changes-request declares are stored too, as `review_open_items` (run row version 4, [#173](https://github.com/yedeya-labs/kanon/issues/173)). |
-| `issue_number` | no | The issue the run was for. Its size, the number of acceptance criteria it states (`issue_ac_count`, run row version 4) and the lines the run committed are stored. |
+| `issue_number` | no | The issue the run was for. Its size, the number of acceptance criteria it states (`issue_ac_count`, run row version 4: each top-level bullet under an "Acceptance criteria" or "What must be true" line, or one for a label that states its criterion in prose, plus each distinct `[ID-n]` clause cited elsewhere) and the lines the run committed are stored. |
 | `outcome_label`, `artifacts_filed`, `severities` | no | The lane's own result columns. Empty adds no column. |
 | `lane` | no | Kanon's lane name (`LANES` in [`schema.mjs`](schema.mjs)). Set, the action also writes the version-2 row. |
 | `tag` | no | `run` (the default), `smoke` or `test`. Every read and aggregate keeps only `run`. |

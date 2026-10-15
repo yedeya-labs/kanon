@@ -320,6 +320,7 @@ describe('the indicators', () => {
   it('counts the deploy diagnose lane as overhead: it comments on an issue and delivers no pull request (kanon#966)', () => {
     expect(OVERHEAD_LANES).toContain('deploy-diagnose');
     expect(DELIVERY_LANES).not.toContain('deploy-diagnose');
+    expect(md([])).toMatch(/Overhead, beside cost and never inside it, and out of yield \([^)]*the deploy diagnose lane[^)]*\)/);
   });
 
   it('reads rows of every kind and tag, and counts the ones it can not use', () => {

@@ -782,8 +782,14 @@ describe('#173 — the issue\'s acceptance-criteria count', () => {
   it('reads "What must be true" too, as a list or as one sentence on its own line', () => {
     expect(issueAcCount('**What must be true:**\n- the store takes it\n- the lane names it\n\n**Evidence:** x')).toBe(2);
     expect(issueAcCount('**What must be true:** the diagnose lane\'s runs reach the store.\n\n**Evidence:** PR 965')).toBe(1);
-    // A label with nothing after it and no bullets under it states nothing.
-    expect(issueAcCount('## Acceptance criteria\n\nSee the plan.')).toBe(0);
+    // A heading with a prose paragraph under it and no bullets, as a Reviewer follow-up is
+    // written, states one criterion; a bulleted list under the same heading counts each bullet.
+    expect(issueAcCount('## Acceptance criteria\n\nSee the plan.')).toBe(1);
+    expect(issueAcCount('## What must be true\n\nThe diagnose lane\'s runs reach the store\nunder their own name.\n\n## Evidence\n\nPR 965.')).toBe(1);
+    expect(issueAcCount('## What must be true\n\n- the store takes it\n- the lane names it\n- the docs say so')).toBe(3);
+    // A label followed by nothing, or straight by another heading, states nothing.
+    expect(issueAcCount('## Acceptance criteria\n\n')).toBe(0);
+    expect(issueAcCount('## Acceptance criteria\n\n## Evidence\n\nPR 965.')).toBe(0);
     // Two regions add up.
     expect(issueAcCount('### Acceptance criteria\n- a\n\nWhat must be true\n- b\n- c')).toBe(3);
   });

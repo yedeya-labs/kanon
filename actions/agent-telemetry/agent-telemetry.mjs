@@ -252,14 +252,18 @@ const AC_START = /^\s{0,3}(?:#{1,6}\s+)?(?:\*\*|__)?\s*(?:acceptance criteri(?:a
 const AC_ITEM = /^\s{0,3}(?:[-*+]|\d+[.)])\s+/;
 /** A spec clause cited by id, `[PAY-3]`, backticked or not. */
 const CLAUSE_REF = /\[([A-Z][A-Z0-9]*-\d+)\]/g;
+/** A Markdown heading, which ends a criteria region without being a criterion. */
+const HEADING = /^\s{0,3}#{1,6}\s/;
 /** A fenced block's fence: nothing inside one is read. */
 const FENCE = /^\s{0,3}(?:```|~~~)/;
 
 /**
  * How many acceptance criteria an issue states: the top-level bullets under each line that opens
  * with "Acceptance criteria" or "What must be true", plus each distinct `[ID-n]` spec clause the
- * body cites outside those bullets. A label with no bullets under it and its own text after it
- * (`**What must be true:** the lane's runs reach the store`) is one criterion. A region ends, as
+ * body cites outside those bullets. A label with no bullets under it is one criterion when it
+ * states one in prose: its own text after it (`**What must be true:** the lane's runs reach the
+ * store`), or a paragraph under it (`## What must be true`, then a sentence), as a Reviewer
+ * follow-up is written. A label followed by nothing, or by another heading, is 0. A region ends, as
  * `acBullets`' does, at the first line that resumes prose at column zero; a fenced block is never
  * read. Null for an unread body, so unknown stays absent; an empty body is a measured 0.
  * @param {unknown} body
@@ -293,6 +297,10 @@ export function issueAcCount(body) {
     } else if (lines[i].slice(m[0].length).replace(/^[\s*_:.—–-]+/, "").trim()) {
       count += 1;
       counted.add(i);
+    } else if (j < lines.length && !HEADING.test(lines[j]) && !AC_START.test(lines[j])) {
+      // A heading followed by a prose paragraph, as a Reviewer follow-up states its one criterion.
+      count += 1;
+      counted.add(j);
     }
     i = j - 1;
   }
