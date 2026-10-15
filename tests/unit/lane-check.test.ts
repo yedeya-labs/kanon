@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -35,15 +35,16 @@ laneCheck(() => {
     // held to a pinned release, never `$/`, which would call the moved lane.
     const legacy = '      DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}\n';
     const caller = readFileSync(join(ROOT, '.github/workflows/project-digest.yml'), 'utf8');
-    let cwd = ROOT;
-    if (caller.includes(legacy)) {
+    // A copy in a temporary directory, never Kanon's own tree (kanon#330).
+    const copy = caller.includes(legacy) ? mkdtempSync(join(tmpdir(), 'kanon-self-')) : undefined;
+    if (copy) {
       expect(caller).toMatch(/uses: yedeya-labs\/kanon\/\.github\/workflows\/agent-project-digest\.yml@v\d+\.\d+\.\d+\n/);
-      cwd = mkdtempSync(join(tmpdir(), 'kanon-self-'));
       // The lane-check script too: it is how lane-check knows the tree is Kanon's (`KANON_TREE`).
-      for (const d of ['.github', 'docs', 'actions/lane-check']) cpSync(join(ROOT, d), join(cwd, d), { recursive: true });
-      writeFileSync(join(cwd, '.github/workflows/project-digest.yml'), caller.replace(legacy, '      KANON_CHAT_PROJECT_DIGEST: ${{ secrets.KANON_CHAT_PROJECT_DIGEST }}\n'));
+      for (const d of ['.github', 'docs', 'actions/lane-check']) cpSync(join(ROOT, d), join(copy, d), { recursive: true });
+      writeFileSync(join(copy, '.github/workflows/project-digest.yml'), caller.replace(legacy, '      KANON_CHAT_PROJECT_DIGEST: ${{ secrets.KANON_CHAT_PROJECT_DIGEST }}\n'));
     }
-    const r = spawnSync('bash', [SCRIPT], { cwd, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '' } });
+    const r = spawnSync('bash', [SCRIPT], { cwd: copy ?? ROOT, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '' } });
+    if (copy) rmSync(copy, { recursive: true, force: true });
     expect(r.status, r.stdout).toBe(0);
     expect(r.stdout).toContain('17 lane caller(s) pass');
     // One lane-check run over Kanon's whole tree: under a loaded full run it outlasted the 5s
