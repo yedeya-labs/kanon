@@ -108,11 +108,7 @@ jobs:
     # the rows before its span when it was shorter than the gap (kanon#315). An erasure renames it
     # too, since it sweeps nothing. The runs API carries no dispatch inputs, so the job's name is
     # where the watermark can read it without logs.
-    # WHILE THE HOSTED STORE'S URL IS UNPUBLISHED (`HOSTED_INGEST_URL` is empty), a caller that names
-    # no store of its own skips, green, and is renamed too, so no skip becomes the watermark and the
-    # first real sweep reaches back past them all (#843). Remove that clause in the pull request that
-    # sets the URL: tests/unit/telemetry-collect-lane.test.ts holds it to the constant.
-    name: ${{ inputs.erase == 'yes' && 'Erase telemetry' || inputs.url == '' && inputs.audience == '' && inputs.writer-role == '' && 'Collect telemetry rows (hosted store unpublished)' || inputs.window_minutes == '' && 'Collect telemetry rows' || 'Collect telemetry rows (window override)' }}
+    name: ${{ inputs.erase == 'yes' && 'Erase telemetry' || inputs.window_minutes == '' && 'Collect telemetry rows' || 'Collect telemetry rows (window override)' }}
     # THE DEFAULT BRANCH ONLY, AND ONLY THE CALLER'S TWO TRIGGERS: a security check, not a
     # convenience (plan 0008 §2.3). The store admits a `workflow_dispatch` token without a
     # registration's `default_ref` to compare on the first run only because this job can't start
