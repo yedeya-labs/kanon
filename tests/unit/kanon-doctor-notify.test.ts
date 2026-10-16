@@ -71,13 +71,16 @@ const files = (o: { hook?: string | null; mapped?: string[]; extra?: Record<stri
 };
 
 type RunOf = { id: number; branch?: string; status?: string; from?: string; job?: string; conclusion?: string; line?: string | null };
+/** A run of the deploy caller: a `release` run at v1.0.0, on a commit of main, unless it says otherwise; each job's log has its line. */
+type DeployRunOf = { id: number; event?: string; branch?: string; from?: string; onDefault?: boolean; jobs: Array<{ name: string; conclusion?: string; line?: string | null }> };
 /**
  * A fake GitHub with the repository's secrets, the caller's completed runs (newest first), each
  * with its notify job's log, and the organisation secrets shared with the repository (null: the
  * token can't list them). Its run listing ignores the filters, as a server that did would, so
- * doctor's own check of each run is what refuses one from another branch or repository.
+ * doctor's own check of each run is what refuses one from another branch or repository. The
+ * deploy caller's runs are `deployRuns`, with the repository's releases' tags `tags`.
  */
-const github = (o: { secrets?: Set<string> | null; runs?: RunOf[]; org?: Set<string> | null; owner?: 'User' | 'Organization'; runsRefused?: boolean } = {}) => {
+const github = (o: { secrets?: Set<string> | null; runs?: RunOf[]; org?: Set<string> | null; owner?: 'User' | 'Organization'; runsRefused?: boolean; deployRuns?: DeployRunOf[]; tags?: string[] } = {}) => {
   const g = fakeGitHub({ secrets: o.secrets === undefined ? new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), 'CLAUDE_CODE_OAUTH_TOKEN', SECRET]) : o.secrets, releases: { [NEXT]: nextReq() } });
   g.st.ownerType = o.owner ?? 'User';
   const runs = o.runs ?? [{ id: 501, line: `${NOTIFY_LINE} {"hook":"slack","kind":"project-digest","outcome":"posted"}` }];
@@ -85,6 +88,12 @@ const github = (o: { secrets?: Set<string> | null; runs?: RunOf[]; org?: Set<str
     g.st.runJobs[r.id] = [{ id: r.id * 10, name: 'digest / gate', conclusion: 'success' }, { id: r.id * 10 + 1, name: r.job ?? `digest / notify`, conclusion: r.conclusion ?? 'success' }];
     g.st.appsCheck.logs[r.id * 10 + 1] = r.line === null ? '2026-10-14T07:00:01Z posting\n' : `2026-10-14T07:00:01Z posting\n2026-10-14T07:00:02Z ${r.line ?? ''}\n`;
   }
+  const deployRuns = o.deployRuns ?? [];
+  for (const r of deployRuns) {
+    g.st.runJobs[r.id] = r.jobs.map((j, i) => ({ id: r.id * 10 + i, name: j.name, conclusion: j.conclusion ?? 'success' }));
+    r.jobs.forEach((j, i) => { g.st.appsCheck.logs[r.id * 10 + i] = j.line === null ? '2026-10-15T07:00:01Z posting\n' : `2026-10-15T07:00:01Z posting\n2026-10-15T07:00:02Z ${j.line ?? ''}\n`; });
+  }
+  const tags = new Set(o.tags ?? ['v1.0.0']);
   const inner = g.gh;
   const calls: string[] = [];
   g.gh = async (args: string[], input?: string) => {
@@ -94,6 +103,13 @@ const github = (o: { secrets?: Set<string> | null; runs?: RunOf[]; org?: Set<str
       if (o.runsRefused) return no('gh: Resource not accessible by personal access token (HTTP 403)');
       return ok({ workflow_runs: runs.map((r) => ({ id: r.id, status: r.status ?? 'completed', head_branch: r.branch ?? 'main', head_repository: { full_name: r.from ?? REPO }, html_url: `https://github.com/${REPO}/actions/runs/${r.id}`, created_at: '2026-10-14T07:00:00Z' })) });
     }
+    if (path.startsWith(`repos/${REPO}/actions/workflows/deploy.yml/runs?`)) {
+      return ok({ workflow_runs: deployRuns.map((r) => ({ id: r.id, status: 'completed', event: r.event ?? 'release', head_branch: r.branch ?? 'v1.0.0', head_sha: `sha${r.id}`, head_repository: { full_name: r.from ?? REPO }, html_url: `https://github.com/${REPO}/actions/runs/${r.id}`, created_at: '2026-10-15T07:00:00Z' })) });
+    }
+    const tag = new RegExp(`^repos/${REPO}/releases/tags/(.+)$`).exec(path);
+    if (tag) return tags.has(decodeURIComponent(tag[1]!)) ? ok({ tag_name: decodeURIComponent(tag[1]!) }) : no('gh: Not Found (HTTP 404)');
+    const compare = new RegExp(`^repos/${REPO}/compare/sha(\\d+)\\.\\.\\.main$`).exec(path);
+    if (compare) return ok({ status: 'ahead', ahead_by: 1, behind_by: deployRuns.find((r) => r.id === Number(compare[1]))?.onDefault === false ? 3 : 0 });
     if (path === `repos/${REPO}/actions/organization-secrets?per_page=100`) return o.org ? ok({ total_count: o.org.size, secrets: [...o.org].map((name) => ({ name })) }) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     return inner(args, input);
   };
@@ -494,6 +510,75 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
       expect(secretsUnchecked(blind)).toEqual([expect.objectContaining({ check: 'notify-secrets', subject: DEPLOY_CALLER_PATH })]);
       // A mapped caller whose secret the organisation shares: nothing.
       expect(notifyIds(await check(deployFiles(), github({ secrets: held(), owner: 'Organization', org: new Set([DEPLOY_SECRET]) })))).toEqual([]);
+    });
+
+    describe('notify.failing', () => {
+      const line = (outcome: string) => `${NOTIFY_LINE} {"hook":"slack","kind":"deploy","outcome":"${outcome}"}`;
+      /** A deploy run whose staging announcement posted and whose production announcement said `production`. */
+      const deployRun = (id: number, production: string, o: Partial<DeployRunOf> = {}): DeployRunOf => ({
+        id,
+        jobs: [
+          { name: 'release / gate', line: null },
+          { name: 'staging / deploy', line: null },
+          { name: 'staging / notify', line: line('posted') },
+          { name: 'production / deploy', line: null },
+          { name: 'production / notify', line: line(production), conclusion: production === 'failed' ? 'failure' : 'success' },
+        ],
+        ...o,
+      });
+      const deployOnly = (r: Result) => notifyIds(r).filter((x: string) => x.endsWith(DEPLOY_CALLER_PATH));
+
+      it('notes a failing announcement in the latest release run, read at its tag, with the run to read and re-run (#1046)', async () => {
+        const g = github({ secrets: held(DEPLOY_SECRET), deployRuns: [deployRun(901, 'failed')] });
+        const r = await check(deployFiles(), g);
+        expect(notifyIds(r)).toEqual([`notify.failing ${DEPLOY_CALLER_PATH}`]);
+        const f = finding(r, 'notify.failing');
+        expect(f.blocking).toBe(false);
+        expect(f.message).toContain('/actions/runs/901');
+        expect(f.message).toContain('production / notify');
+        expect(f.message).toContain('a release at v1.0.0');
+        expect(f.message).toContain('deploy was failed, through the slack hook');
+        expect(f.fix.commands).toEqual([`gh run view 901 -R ${REPO} --log-failed`, `gh run rerun 901 -R ${REPO} --failed`]);
+        // A deploy run's failed jobs can include a deploy job: the fix says what the re-run takes with it.
+        expect(f.fix.text).toMatch(/a failed deploy job of the run too/);
+        // The deploy caller's runs are listed at every ref, not the default branch's alone; the digest's still are.
+        expect(g.paths.filter((p) => p.includes('/deploy.yml/runs?'))).toEqual([`repos/${REPO}/actions/workflows/deploy.yml/runs?status=completed&per_page=10`]);
+        expect(g.paths.filter((p) => p.includes(`/${LANE}.yml/runs?`))).toEqual([`repos/${REPO}/actions/workflows/${LANE}.yml/runs?branch=main&status=completed&per_page=10`]);
+      });
+
+      it('counts a dispatch at a release\'s tag as a release run, and is quiet when every announcement posted or was skipped', async () => {
+        const dispatched = await check(deployFiles(), github({ secrets: held(DEPLOY_SECRET), deployRuns: [deployRun(902, 'failed', { event: 'workflow_dispatch' })] }));
+        expect(deployOnly(dispatched)).toEqual([`notify.failing ${DEPLOY_CALLER_PATH}`]);
+        expect(finding(dispatched, 'notify.failing').message).toContain('a dispatch at v1.0.0');
+        for (const outcome of ['posted', 'skipped']) {
+          expect(notifyIds(await check(deployFiles(), github({ secrets: held(DEPLOY_SECRET), deployRuns: [deployRun(903, outcome)] })))).toEqual([]);
+        }
+      });
+
+      it('reads only a run that counts, as deploy.trust-unproven does: this repository\'s, a release or a dispatch, at a release\'s tag, on a commit of the default branch', async () => {
+        const runs: DeployRunOf[] = [
+          deployRun(911, 'failed', { from: 'mallory/widgets' }),
+          deployRun(912, 'failed', { branch: 'v9.9.9' }),
+          deployRun(913, 'failed', { onDefault: false }),
+          deployRun(914, 'failed', { event: 'push', branch: 'main' }),
+          deployRun(915, 'failed', { event: 'workflow_dispatch', branch: 'main' }),
+          // A run whose announcements didn't run says nothing: the next one does.
+          { id: 916, jobs: [{ name: 'release / gate', line: null, conclusion: 'failure' }, { name: 'staging / notify', line: null, conclusion: 'skipped' }] },
+          deployRun(917, 'posted'),
+          deployRun(918, 'failed'),
+        ];
+        expect(deployOnly(await check(deployFiles(), github({ secrets: held(DEPLOY_SECRET), deployRuns: runs })))).toEqual([]);
+        // Mutation's twin: the same failed run, one that counts, first.
+        expect(deployOnly(await check(deployFiles(), github({ secrets: held(DEPLOY_SECRET), deployRuns: [deployRun(918, 'failed'), deployRun(917, 'posted')] })))).toEqual([`notify.failing ${DEPLOY_CALLER_PATH}`]);
+      });
+
+      it('is unchecked where an announcement of the latest run printed no line, and nothing failed', async () => {
+        const silent = deployRun(921, 'posted');
+        silent.jobs[4]!.line = null;
+        const r = await check(deployFiles(), github({ secrets: held(DEPLOY_SECRET), deployRuns: [silent] }));
+        expect(notifyIds(r)).toEqual([]);
+        expect(notifyUnchecked(r)).toEqual([expect.objectContaining({ check: 'notify-runs', subject: DEPLOY_CALLER_PATH, reason: expect.stringContaining(`printed no ${NOTIFY_LINE} line`) })]);
+      });
     });
 
     it("says nothing of the deploy caller against a release whose deploy.yml posts nothing", async () => {

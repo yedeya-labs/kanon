@@ -134,7 +134,7 @@ const PREBUILT_REF = /yedeya-labs\/kanon\/actions\/notify\/[a-z-]+@/;
 export const NOTIFY_LINE = 'kanon-notify/v1';
 /** The `notify` job's id in each notifying lane (plan 0011 §5.1), which names it in a caller's run. */
 export const NOTIFY_JOB = 'notify';
-/** How many of a caller's latest completed default-branch runs doctor looks through for a `notify` job that ran. */
+/** How many of a caller's latest completed runs (default-branch ones, but the deploy caller's) doctor looks through for a `notify` job that ran. */
 export const NOTIFY_RUNS = 10;
 
 /**
@@ -2468,6 +2468,24 @@ export const diagnose = async (deps, opts) => {
     }
   }
 
+  // A run of the deploy caller counts when it is this repository's own, a `release` run or a
+  // dispatch, at a release's tag (the dispatch decision), whose commit is on the default branch:
+  // its workflow, and the hook its jobs call, are the reviewed ones. It never runs on the default
+  // branch. The trust probe's line and the deploy announcements are read only from one (#1046).
+  /** @returns {Promise<boolean | string>} whether it counts, or why the token can't tell */
+  const deployRunCounts = async (/** @type {any} */ run) => {
+    const from = isMap(run?.head_repository) ? String(run.head_repository.full_name ?? '') : '';
+    if (!isMap(run) || run.status !== 'completed' || from.toLowerCase() !== repo.toLowerCase()) return false;
+    if (run.event !== 'release' && run.event !== 'workflow_dispatch') return false;
+    const tag = String(run.head_branch ?? '');
+    if (!tag || tag === s.defaultBranch) return false;
+    const release = await deps.gh(['api', `repos/${repo}/releases/tags/${encodeURIComponent(tag)}`]);
+    if (!isMap(ghJsonOf(release))) return false;
+    const compared = ghJsonOf(await deps.gh(['api', `repos/${repo}/compare/${encodeURIComponent(String(run.head_sha ?? ''))}...${encodeURIComponent(s.defaultBranch)}`]));
+    if (!isMap(compared)) return `the token can't compare ${run.html_url}'s commit with ${s.defaultBranch}`;
+    return compared.behind_by === 0;
+  };
+
   // ── Chat notifications (plan 0011 §9, step N10) ─────────────────────────────────────────────
   // Only where a workflow calls a lane that notifies at the checked release, read from its
   // requirements file's `notify` entry: none before the release that ships one, and no lane
@@ -2650,59 +2668,89 @@ export const diagnose = async (deps, opts) => {
         });
       }
     }
-    // ── `notify.failing`: the latest notify job that ran, on a completed run of the caller on the
+    // ── `notify.failing`: the latest notify jobs that ran, on a completed run of the caller on the
     // default branch, printed `outcome: posted` or `skipped` (§5.1, step 6), as apps-check's line
     // is read. A run from another branch or repository is never read, whatever the server filtered.
+    // The deploy caller runs at a release's tag, never on the default branch, so its runs are
+    // listed at every ref and read only where one counts, as the trust probe's are (#1046); each
+    // environment's call has its own notify job, and every one of the run's that ran is read.
+    const deployFiles = new Set(deployNotifyJobs.map((x) => x.file));
     for (const file of files) {
       const name = basename(file);
-      const listed = await deps.gh(['api', `repos/${repo}/actions/workflows/${name}/runs?branch=${encodeURIComponent(s.defaultBranch)}&status=completed&per_page=${NOTIFY_RUNS}`]);
+      const deploy = deployFiles.has(file);
+      const digest = notifyCallers.some((c) => c.file === file && !deployNotifyJobs.includes(c));
+      const listed = await deps.gh(['api', `repos/${repo}/actions/workflows/${name}/runs?${deploy ? '' : `branch=${encodeURIComponent(s.defaultBranch)}&`}status=completed&per_page=${NOTIFY_RUNS}`]);
       const list = ghJsonOf(listed)?.workflow_runs;
       if (!Array.isArray(list)) {
         if (!/HTTP 404|Not Found/i.test(listed.stderr)) unchecked.push({ check: 'notify-runs', subject: file, reason: `the token can't list its runs (${listed.stderr.trim() || `exit ${listed.status}`}); it needs Actions: read` });
         continue;
       }
-      /** @type {{ run: any, job: any } | null} */
+      /** @type {{ run: any, jobs: any[], tag: boolean } | null} */
       let latest = null;
-      let blind = false;
+      /** @type {string | null} */
+      let blind = null;
       for (const run of list) {
         const from = isMap(run?.head_repository) ? String(run.head_repository.full_name ?? '') : '';
-        if (!isMap(run) || run.status !== 'completed' || run.head_branch !== s.defaultBranch || from.toLowerCase() !== repo.toLowerCase()) continue;
+        if (!isMap(run) || run.status !== 'completed' || from.toLowerCase() !== repo.toLowerCase()) continue;
+        const onDefault = digest && run.head_branch === s.defaultBranch;
+        const counts = onDefault || !deploy ? onDefault : await deployRunCounts(run);
+        if (typeof counts === 'string') { blind = counts; break; }
+        if (!counts) continue;
         const jobs = ghJsonOf(await deps.gh(['api', `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`]))?.jobs;
-        if (!Array.isArray(jobs)) { blind = true; break; }
-        const job = jobs.find((j) => isMap(j) && (j.name === NOTIFY_JOB || String(j.name).endsWith(` / ${NOTIFY_JOB}`)) && (j.conclusion === 'success' || j.conclusion === 'failure'));
-        if (job) { latest = { run, job }; break; }
+        if (!Array.isArray(jobs)) { blind = `the token can't list the jobs of its runs; it needs Actions: read`; break; }
+        const ran = jobs.filter((j) => isMap(j) && (j.name === NOTIFY_JOB || String(j.name).endsWith(` / ${NOTIFY_JOB}`)) && (j.conclusion === 'success' || j.conclusion === 'failure'));
+        if (ran.length) { latest = { run, jobs: ran, tag: !onDefault }; break; }
       }
       if (blind) {
-        unchecked.push({ check: 'notify-runs', subject: file, reason: `the token can't list the jobs of its runs; it needs Actions: read` });
+        unchecked.push({ check: 'notify-runs', subject: file, reason: blind });
         continue;
       }
       if (!latest) continue;
-      const path = `repos/${repo}/actions/jobs/${latest.job.id}/logs`;
-      let log = await deps.gh(['api', '--allow-escape-sequences', path]);
-      if (log.status !== 0 && /unknown flag/.test(log.stderr)) log = await deps.gh(['api', path]);
-      if (log.status !== 0) {
-        unchecked.push({ check: 'notify-runs', subject: file, reason: `the token can't read the log of the notify job of ${latest.run.html_url}, which needs Actions: read (${log.stderr.trim() || `exit ${log.status}`})` });
-        continue;
-      }
-      /** @type {any} */
-      let said = null;
-      for (const line of log.stdout.split('\n')) {
-        const at = line.indexOf(`${NOTIFY_LINE} {`);
-        if (at === -1) continue;
-        try {
-          said = JSON.parse(line.slice(at + NOTIFY_LINE.length + 1).trim());
-        } catch {
-          said = null;
+      const { run } = latest;
+      /** @type {{ job: any, said: any } | null} */
+      let failing = null;
+      /** @type {string | null} */
+      let unread = null;
+      for (const job of latest.jobs) {
+        const which = `the notify job${latest.jobs.length > 1 ? ` \`${String(job.name)}\`` : ''} of ${run.html_url}`;
+        const path = `repos/${repo}/actions/jobs/${job.id}/logs`;
+        let log = await deps.gh(['api', '--allow-escape-sequences', path]);
+        if (log.status !== 0 && /unknown flag/.test(log.stderr)) log = await deps.gh(['api', path]);
+        if (log.status !== 0) {
+          unread ??= `the token can't read the log of ${which}, which needs Actions: read (${log.stderr.trim() || `exit ${log.status}`})`;
+          continue;
         }
+        /** @type {any} */
+        let said = null;
+        for (const line of log.stdout.split('\n')) {
+          const at = line.indexOf(`${NOTIFY_LINE} {`);
+          if (at === -1) continue;
+          try {
+            said = JSON.parse(line.slice(at + NOTIFY_LINE.length + 1).trim());
+          } catch {
+            said = null;
+          }
+        }
+        if (!isMap(said) || typeof said.outcome !== 'string') {
+          unread ??= `${which} printed no ${NOTIFY_LINE} line doctor can read`;
+          continue;
+        }
+        if (said.outcome === 'posted' || said.outcome === 'skipped') continue;
+        failing = { job, said };
+        break;
       }
-      if (!isMap(said) || typeof said.outcome !== 'string') {
-        unchecked.push({ check: 'notify-runs', subject: file, reason: `the notify job of ${latest.run.html_url} printed no ${NOTIFY_LINE} line doctor can read` });
+      if (!failing) {
+        if (unread) unchecked.push({ check: 'notify-runs', subject: file, reason: unread });
         continue;
       }
-      if (said.outcome === 'posted' || said.outcome === 'skipped') continue;
-      find('notify.failing', file, `The latest notify job on ${s.defaultBranch}, in ${latest.run.html_url} of ${String(latest.run.created_at ?? '').slice(0, 10)}, says ${said.kind ? `${String(said.kind)} was` : 'its message was'} ${String(said.outcome)}${said.hook ? `, through the ${String(said.hook)} hook` : ''}: the hook's step failed, or Kanon refused the message, so nothing was posted. The producing job stays green (K-SHIP-10).`, {
-        text: `Read the job's log for the hook's error, fix the hook or the kind's secret, then re-run the failed job, which posts the same message again (plan 0011 §5.4):`,
-        commands: [`gh run view ${latest.run.id} -R ${repo} --log-failed`, `gh run rerun ${latest.run.id} -R ${repo} --failed`],
+      const { said } = failing;
+      const date = String(run.created_at ?? '').slice(0, 10);
+      const where = latest.tag
+        ? `The latest notify job that ran at a release's tag, \`${String(failing.job.name)}\` in ${run.html_url} (${run.event === 'release' ? 'a release' : 'a dispatch'} at ${String(run.head_branch)}, ${date}),`
+        : `The latest notify job on ${s.defaultBranch}, in ${run.html_url} of ${date},`;
+      find('notify.failing', file, `${where} says ${said.kind ? `${String(said.kind)} was` : 'its message was'} ${String(said.outcome)}${said.hook ? `, through the ${String(said.hook)} hook` : ''}: the hook's step failed, or Kanon refused the message, so nothing was posted. The producing job stays green (K-SHIP-10).`, {
+        text: `Read the job's log for the hook's error, fix the hook or the kind's secret, then re-run the failed job, which posts the same message again (plan 0011 §5.4)${latest.tag ? `. Re-running the failed jobs re-runs a failed deploy job of the run too, and the jobs that need it` : ''}:`,
+        commands: [`gh run view ${run.id} -R ${repo} --log-failed`, `gh run rerun ${run.id} -R ${repo} --failed`],
       });
     }
   }
@@ -2938,18 +2986,9 @@ export const diagnose = async (deps, opts) => {
         let blind = Array.isArray(runs) || /HTTP 404|Not Found/i.test(listed.stderr) ? null : `the token can't list ${name}'s runs (${listed.stderr.trim() || `exit ${listed.status}`}); it needs Actions: read`;
         for (const run of Array.isArray(runs) ? runs : []) {
           if (blind || latest) break;
-          // A run counts when it is this repository's own, a `release` run or a dispatch, at a
-          // release's tag (the dispatch decision), whose commit is on the default branch.
-          const from = isMap(run?.head_repository) ? String(run.head_repository.full_name ?? '') : '';
-          if (!isMap(run) || run.status !== 'completed' || from.toLowerCase() !== repo.toLowerCase()) continue;
-          if (run.event !== 'release' && run.event !== 'workflow_dispatch') continue;
-          const tag = String(run.head_branch ?? '');
-          if (!tag || tag === s.defaultBranch) continue;
-          const release = await deps.gh(['api', `repos/${repo}/releases/tags/${encodeURIComponent(tag)}`]);
-          if (!isMap(ghJsonOf(release))) continue;
-          const compared = ghJsonOf(await deps.gh(['api', `repos/${repo}/compare/${encodeURIComponent(String(run.head_sha ?? ''))}...${encodeURIComponent(s.defaultBranch)}`]));
-          if (!isMap(compared)) { blind = `the token can't compare ${run.html_url}'s commit with ${s.defaultBranch}`; break; }
-          if (compared.behind_by !== 0) continue;
+          const counts = await deployRunCounts(run);
+          if (typeof counts === 'string') { blind = counts; break; }
+          if (!counts) continue;
           const jobs = ghJsonOf(await deps.gh(['api', `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`]))?.jobs;
           if (!Array.isArray(jobs)) { blind = `the token can't list the jobs of ${run.html_url}; it needs Actions: read`; break; }
           const job = jobs.find((j) => isMap(j) && (j.name === 'probe' || String(j.name).endsWith(' / probe')) && (j.conclusion === 'success' || j.conclusion === 'failure'));
