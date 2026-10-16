@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { SCHEMA as DOCTOR_SCHEMA } from '../../cli/doctor.mjs';
-import { SCHEMA as INIT_SCHEMA, UPSTREAM_EVIDENCE_QUESTION } from '../../cli/init.mjs';
+import { CHAT_QUESTION, CHAT_RECORD, SCHEMA as INIT_SCHEMA, UPSTREAM_EVIDENCE_QUESTION } from '../../cli/init.mjs';
 import { REVIEW_LABELS } from '../../scripts/lane-gate.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL } from '../../scripts/lib/upstream-findings.mjs';
 
@@ -505,6 +505,40 @@ describe('each skill is held to the kanon command it drives', () => {
     const table = rows(section(skill('upgrade').body, /^## Steps$/)!);
     expect(table.find((r) => r[2]!.includes('**Review trigger:**'))![3]).toBe('`labelled`, null');
     expect(read('rulebook/11-repository-layout.md')).toMatch(/\*\*A record without the bullets, or no record, means `custom` and `labelled`\*\*/);
+  });
+
+  // Plan 0011 §10.1 (N11, decision 11): the chat question is asked only when the chosen lanes post
+  // to a chat channel, in init's words, and inferred, not asked, when a notify hook exists.
+  it('has the adopt skill ask the chat question only with a lane that posts, in init\'s words, and infer it from a hook (plan 0011 N11)', () => {
+    const questions = section(skill('adopt').body, /^## The questions$/)!;
+    const chat = questions.split(/^(?=### )/m).find((b) => b.startsWith('### `.answers.chat`: '))!;
+    expect(chat).toMatch(/\*\*Ask it only when the chosen lanes post to a chat channel\*\*/);
+    expect(chat).toMatch(/\*\*Review\*\* and \*\*Review \+ build\*\* never see it/);
+    expect(chat).toMatch(/\*\*Don't ask it when the repository answers it already:\*\* when `\.inspection\.notifyHook` is not null/);
+    expect(chat).toContain(`"${CHAT_QUESTION}"`);
+    expect(chat).toMatch(/^- \*\*Recommended:\*\* \*\*Kanon's Slack hook\*\*/m);
+    for (const flag of ['--chat slack', '--chat webhook', '--chat hook', '--chat none']) expect(chat).toContain(`\`${flag}\``);
+    expect(chat).toMatch(/A caller that still maps `DIGEST_WEBHOOK` infers nothing/);
+  });
+
+  // Plan 0011 decisions 17 and 18 (N11): the upgrade moves a prebuilt hook's pin with the callers',
+  // and rewrites each digest caller's secrets: in the same edit as the pin move, so the lane starts.
+  it("has the upgrade skill move a prebuilt notify hook's pin with the callers', and rewrite DIGEST_WEBHOOK in the same edit (plan 0011 N11)", () => {
+    const steps = section(skill('upgrade').body, /^## Steps$/)!;
+    const hook = steps.split('\n\n').find((p) => p.includes("**A prebuilt notify hook's pin moves with the callers'**"))!;
+    expect(hook).toMatch(/moves to the target with the callers, in the same edit/);
+    expect(hook).toMatch(/never leave it behind the callers', which doctor notes as `notify\.hook-pin-behind`/);
+    const legacy = steps.split('\n\n').find((p) => p.includes('**`DIGEST_WEBHOOK` is gone'))!;
+    expect(legacy).toMatch(/\*\*in the same edit as the pin move\*\*, for each caller of `agent-project-digest` or `agent-weekly-digest` whose `secrets:` map `DIGEST_WEBHOOK`, remove that line and map the lane's kind secret in its place/);
+    expect(legacy).toContain('`KANON_CHAT_PROJECT_DIGEST: ${{ secrets.KANON_CHAT_PROJECT_DIGEST }}`');
+    expect(legacy).toContain('`KANON_CHAT_WEEKLY_DIGEST: ${{ secrets.KANON_CHAT_WEEKLY_DIGEST }}`');
+    expect(legacy).toMatch(/Never move such a caller's pin past that release without this rewrite/);
+    expect(legacy).toMatch(/\*\*posts resume only once a hook exists at `\.github\/actions\/notify\/action\.yml` and the kind secrets are stored\*\*/);
+    // Never that the old secret still works: the only sentence naming it says not to.
+    expect(legacy.split(/(?<=\.) /).filter((x) => /still works/.test(x))).toEqual(['Never say the old secret still works, and never write a secret\'s value yourself.']);
+    // The record bullet the chat answer writes, each value as init writes it.
+    const row = rows(steps).find((r) => r[1] === '`chat`')!;
+    for (const v of Object.values(CHAT_RECORD)) expect(row[2]).toContain(`\`${v}\``);
   });
 
   // An agent's shell has no terminal on standard input, where `kanon init` refuses to start

@@ -281,7 +281,13 @@ describe('requirements.json', () => {
   describe('the features (docs/lanes.json, plan 0007 §2)', () => {
     type Entry = { requires?: string[]; recommend: 'always' | string[] };
     const cat = built.catalogue as { lanes: Record<string, Entry> };
-    const lanes = built.lanes as Record<string, { identities: string[]; secrets: string[]; hooks: string[] }>;
+    // A notifying lane calls the notify hook through its `notify` job (plan 0011 §5), which the
+    // `notify` entry holds rather than the lane's `hooks`: the weekly digest is conditional on it.
+    const notify = built.notify as { hook: { path: string }; kinds: Record<string, { lanes: string[] }> };
+    const notifying = Object.values(notify.kinds).flatMap((k) => k.lanes);
+    const lanes = Object.fromEntries(
+      Object.entries(built.lanes as Record<string, { identities: string[]; secrets: string[]; hooks: string[] }>).map(([l, v]) => [l, notifying.includes(l) ? { ...v, hooks: [...v.hooks, notify.hook.path] } : v]),
+    );
     const features = built.features as Feature[];
 
     it('copies them from docs/lanes.json, and keeps them out of the catalogue', () => {
@@ -314,11 +320,14 @@ describe('requirements.json', () => {
       const [review, build, full] = features;
       expect(review!.lanes).toEqual(['agent-review']);
       expect(build!.lanes).toEqual(['agent-review', 'agent-implement', 'agent-implement-revise', 'agent-triage', 'agent-rebase', 'agent-dispatch-sweep', 'agent-issue-backstop', 'agent-merge-reconcile']);
-      expect(full!.lanes).toEqual([...build!.lanes, 'agent-lead', 'agent-lead-revise', 'agent-lead-split', 'agent-lead-reconcile', 'agent-verify-acs', 'agent-merge', 'agent-overseer', 'agent-code-audit']);
-      expect(Object.keys(full!.conditional).sort()).toEqual(['agent-explore', 'agent-project-digest', 'agent-weekly-digest']);
+      // Plan 0011 §10.2, decision 12: the project digest in Full whatever the chat answer, for its
+      // health job; the weekly digest only with a notify hook, which init writes for any answer but none.
+      expect(full!.lanes).toEqual([...build!.lanes, 'agent-lead', 'agent-lead-revise', 'agent-lead-split', 'agent-lead-reconcile', 'agent-verify-acs', 'agent-merge', 'agent-overseer', 'agent-code-audit', 'agent-project-digest']);
+      expect(Object.keys(full!.conditional).sort()).toEqual(['agent-explore', 'agent-weekly-digest']);
       expect(full!.conditional['agent-explore']).toMatchObject({ hook: '.github/actions/explore-sweep/action.yml' });
-      expect(full!.conditional['agent-weekly-digest']).toMatchObject({ secret: 'KANON_CHAT_WEEKLY_DIGEST' });
-      expect(full!.conditional['agent-project-digest']).toMatchObject({ secret: 'KANON_CHAT_PROJECT_DIGEST' });
+      expect(full!.conditional['agent-weekly-digest']).toEqual(expect.objectContaining({ hook: '.github/actions/notify/action.yml' }));
+      expect(full!.conditional['agent-weekly-digest']!.secret).toBeUndefined();
+      expect(full!.steps.join('\n')).not.toContain('DIGEST_WEBHOOK');
       expect(Object.keys(full!.leftOut ?? {})).toEqual(['agent-explore-telemetry', 'agent-deploy-diagnose']);
       expect(features.map((f) => f.apps)).toEqual([['judge'], ['author', 'judge'], ['author', 'judge']]);
     });

@@ -1469,7 +1469,8 @@
         "agent-verify-acs",
         "agent-merge",
         "agent-overseer",
-        "agent-code-audit"
+        "agent-code-audit",
+        "agent-project-digest"
       ],
       "conditional": {
         "agent-explore": {
@@ -1477,12 +1478,8 @@
           "condition": "when the repository has the sweep hook you write (docs/explore-sweep.md)"
         },
         "agent-weekly-digest": {
-          "secret": "KANON_CHAT_WEEKLY_DIGEST",
-          "condition": "when the repository holds the weekly digest's chat secret, `KANON_CHAT_WEEKLY_DIGEST`"
-        },
-        "agent-project-digest": {
-          "secret": "KANON_CHAT_PROJECT_DIGEST",
-          "condition": "when the repository holds the project digest's chat secret, `KANON_CHAT_PROJECT_DIGEST`"
+          "hook": ".github/actions/notify/action.yml",
+          "condition": "when the repository has a notify hook at `.github/actions/notify/action.yml`, which `kanon init` writes for any chat answer but none (docs/notifications.md)"
         }
       },
       "leftOut": {
@@ -1501,7 +1498,7 @@
         "the `Lane check` rule, after the merge",
         "the Author App: create it, or reuse one with a new key",
         "the sign-off delegation, your own act (`K-AGENT-44`), where the repository runs Kanon's DCO check",
-        "the chat channel's webhook, `DIGEST_WEBHOOK`, when the digests are in"
+        "each chat kind's secret, `KANON_CHAT_PROJECT_DIGEST` and, with the weekly digest, `KANON_CHAT_WEEKLY_DIGEST`, when you choose a notify hook"
       ]
     }
   ],

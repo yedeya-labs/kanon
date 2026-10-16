@@ -281,6 +281,16 @@ describe("docs/lanes.md's features table is the features of docs/lanes.json (pla
     expect(rows[0]).toContain('`agent-review`');
   });
 
+  // Plan 0011 §10.2 and decision 17: the Full pipeline holds the project digest, the weekly digest
+  // only with a notify hook, and asks for each kind's secret, never DIGEST_WEBHOOK, which no lane takes.
+  it('says the Full pipeline holds the project digest, the weekly digest with a notify hook, and the kind secrets (plan 0011 N11)', () => {
+    const full = between(read('docs/lanes.md'), OPEN, CLOSE).split('\n').find((l) => l.startsWith('| Full pipeline |'))!;
+    expect(full).not.toContain('DIGEST_WEBHOOK');
+    expect(full).toMatch(/`agent-code-audit`, `agent-project-digest`<br>/);
+    expect(full).toContain('`agent-weekly-digest`, only when the repository has a notify hook at `.github/actions/notify/action.yml`');
+    expect(full).toContain('plus `KANON_CHAT_PROJECT_DIGEST`; with a conditional lane, `KANON_CHAT_WEEKLY_DIGEST`');
+  });
+
   it("says the Overseer's left-out secret is the deprecated reader role, not its cost read's route (kanon#917)", () => {
     // Since kanon#884 the Overseer reads its rows through the store's `GET /v1/rows/self`, as
     // docs/metrics.md's "Where the rows come from" says; the reader role is read by no job.
