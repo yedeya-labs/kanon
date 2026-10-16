@@ -24,4 +24,4 @@ jobs:
       dry_run: ${{ inputs.dry_run }}
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}
+      KANON_CHAT_PROJECT_DIGEST: ${{ secrets.KANON_CHAT_PROJECT_DIGEST }}
