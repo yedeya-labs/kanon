@@ -1966,7 +1966,7 @@ export const diagnose = async (deps, opts) => {
       : `has the shape of render.mjs's ${shape}.json, which holds the telemetry register's ${shape === 'template' ? 'keys and repositories' : 'owner ARN and the store\'s cursor key'}`;
     find('telemetry.register-tracked', path, `${what}. It is tracked in ${repo}, where Kanon's lanes run: the Reviewer reads any diff that touches it, and every agent reads the checkout, so it never lives in such a repository, public or private (docs/telemetry.md, "Where the register lives").`, {
       text: `Move it out of the checkout first, to a place "Where the register lives" names, such as an untracked file under ~/kanon-private/telemetry/. Then, on a branch, run these and merge them in a pull request with no review label (review:please, agent:triage or agent:implement), so the Reviewer doesn't read the deletion's diff. Its history still holds every version: treat each key in it as paired with its repository for anyone who can read that history.`,
-      commands: [`git rm --cached -- ${quoted(path)}`, `printf '%s\\n' ${quoted(`/${path}`)} >> .gitignore`],
+      commands: [`git rm --cached -- ${quoted(path)}`, `printf '\\n%s\\n' ${quoted(`/${path}`)} >> .gitignore`],
       url: `https://github.com/${KANON_REPO}/blob/${checked}/docs/telemetry.md#where-the-register-lives`,
     });
   }

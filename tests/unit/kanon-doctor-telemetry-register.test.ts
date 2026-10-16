@@ -50,11 +50,25 @@ describe('kanon doctor on a telemetry register tracked in the checkout (#1071)',
     expect(FINDINGS['telemetry.register-tracked']).toEqual({ category: 'secret', blocking: true });
     expect(f.message).toContain('telemetry register');
     expect(f.fix.url).toContain(LIVES);
-    expect(f.fix.commands).toEqual(["git rm --cached -- 'ops/state/accounts.json'", "printf '%s\\n' '/ops/state/accounts.json' >> .gitignore"]);
+    expect(f.fix.commands).toEqual(["git rm --cached -- 'ops/state/accounts.json'", "printf '\\n%s\\n' '/ops/state/accounts.json' >> .gitignore"]);
     expect(leaks(r.out)).toEqual([]);
     const prose = await run(dir, github);
     expect(prose.out).toContain('ops/state/accounts.json');
     expect(leaks(prose.out + prose.err)).toEqual([]);
+  });
+
+  it("leaves the .gitignore's last rule whole when the fix's commands run on one with no final newline", async () => {
+    const files = healthyFiles();
+    files['ops/state/accounts.json'] = json(register);
+    files['.gitignore'] = '.env';
+    const dir = checkout(files);
+    const r = await run(dir, fakeGitHub(), ['--json']);
+    for (const command of r.json.findings[0].fix.commands) {
+      const ran = spawnSync('sh', ['-c', command], { cwd: dir, encoding: 'utf8' });
+      expect(ran.status, ran.stderr).toBe(0);
+    }
+    const ignored = spawnSync('git', ['-C', dir, 'check-ignore', '--no-index', '--', '.env', 'ops/state/accounts.json'], { encoding: 'utf8' });
+    expect(ignored.stdout.split('\n').filter(Boolean)).toEqual(['.env', 'ops/state/accounts.json']);
   });
 
   it("does not flag Kanon's register.example.json, whose owner ARN is still a placeholder", async () => {
