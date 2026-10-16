@@ -5,10 +5,10 @@
 //
 // TWO WAYS IN (plan 0008 §3.6, §9, step J5). From vM the Explorer calls the function's token URL
 // with a fresh GitHub OIDC token for the store's audience (`token`, below, through
-// `scripts/lib/telemetry-token.mjs`), and holds no AWS credential. The SigV4 way, signed with an
-// invoker role's credentials, stays for the overlap: Kanon's metrics page (`page`) reads through
-// it until it moves in a pull request of its own after vM's deploy (J7), and the release after vM
-// removes it (J9).
+// `scripts/lib/telemetry-token.mjs`), and holds no AWS credential, and so, since J7 (plan 0008 §9
+// step 4a), does Kanon's metrics page (`page`). The SigV4 way, signed with an invoker role's
+// credentials, stays for the overlap, for a caller below vM, until the release after vM removes
+// it (J9).
 //
 // WHAT LEAVES THIS STEP IS WHAT THE FUNCTION MAY PUBLISH, AND NOTHING ELSE. The function answers
 // only `cross_adopter` cells (at least three non-declaring adopters each), the `own` cells of
@@ -42,8 +42,9 @@
 // page` asks the same function for its page view (`?view=page`), the declaring adopters' work-item
 // indicators, checks it as strictly (`checkPage`: exactly the page view's keys, codes, dates,
 // versions and numbers, no text, a threshold of three, one adopter per entry) and writes
-// $OUT/page.json, which the page job renders (`.github/scripts/metrics-page.mjs`). It signs with
-// SigV4 until J7 moves the metrics page to the token (plan 0008 §9 step 4a).
+// $OUT/page.json, which the page job renders (`.github/scripts/metrics-page.mjs`). It reads on the
+// hosted store's token URL (plan 0008 §9 step 4a, J7), which admits `metrics-page.yml` at Kanon's
+// default branch for the page view alone (§2.2's exception, `page_reader`).
 //
 // `node:` built-ins only, like every script under scripts/ (`K-SELF-8`).
 
@@ -377,7 +378,7 @@ if (isCliEntry(import.meta.url)) {
   }
   if (process.argv[2] === 'page') {
     try {
-      const p = await readAggregate({ url: env.KANON_AGGREGATE_URL ?? '', env, view: 'page' });
+      const p = await readAggregateToken({ env, view: 'page' });
       mkdirSync(out, { recursive: true });
       writeFileSync(join(out, PAGE_FILE), `${JSON.stringify(p, null, 2)}\n`);
       const line = `Page view computed ${p.computed_at}: the own figures of ${p.own.length} declaring adopter(s), each one adopter's.`;

@@ -350,7 +350,6 @@ export const COLLECTOR_CHECK_ENV = {
   ERASE: '${{ inputs.erase }}',
   REGISTER: '${{ inputs.register }}',
 };
-const CREDENTIALS = /^aws-actions\/configure-aws-credentials@v\d+(\.\d+){0,2}$/;
 const only = (o: object | undefined, keys: string[]) => Object.keys(o ?? {}).every((k) => keys.includes(k));
 
 /**
@@ -377,7 +376,6 @@ export function isCollectorJob(file: string | undefined, name: string, j: Job): 
 /** The telemetry Explorer's read job (plan 0004 step 14), the one holder that calls the aggregate function. */
 export const AGGREGATE_FILE = 'agent-explore-telemetry.yml';
 export const AGGREGATE_JOB = 'aggregate';
-const AGGREGATE_MASK_RUN = 'node "$KANON/scripts/aggregate-mask.mjs"';
 /** The Explorer's read on the token URL (plan 0008 §3.6, step J5). */
 const AGGREGATE_TOKEN_RUN = 'node "$KANON/scripts/aggregate-read.mjs" token';
 /** What the token read is handed, exactly: a self-hosted store's two variables by name, and its output directory. */
@@ -386,12 +384,6 @@ export const AGGREGATE_TOKEN_ENV = {
   KANON_TELEMETRY_AUDIENCE: '${{ vars.KANON_TELEMETRY_AUDIENCE }}',
   OUT: '${{ runner.temp }}/aggregate',
 };
-/** What the masking step reads: the URL variable and the role secret, by name (kanon#433: never `toJSON(vars)`). */
-const AGGREGATE_MASK_ENV = { URL: '${{ vars.KANON_AGGREGATE_URL }}', ROLE: '${{ secrets.KANON_AGGREGATE_ROLE }}' };
-/** The role the credentials step assumes: the lane's secret, mapped by name in its caller (kanon#471). */
-const AGGREGATE_ROLE = '${{ secrets.KANON_AGGREGATE_ROLE }}';
-/** What the read step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
-export const AGGREGATE_READ_ENV = ['KANON_AGGREGATE_URL', 'OUT'];
 const UPLOAD = /^actions\/upload-artifact@v\d+$/;
 const TEMP_PATH = /^\$\{\{\s*runner\.temp\s*\}\}(?:\/(?!\.\.?(?:\/|$))[\w.-]+)+$/;
 
@@ -427,42 +419,33 @@ function isTempUpload(upload: Record<string, unknown>): boolean {
 
 /** The public metrics page's refresh (plan 0003 M7, kanon#661), the other holder that calls the aggregate function. */
 export const METRICS_PAGE_FILE = 'metrics-page.yml';
+/** The page's read on the token URL (plan 0008 §9 step 4a, J7): the page view, through a fresh OIDC token. */
 const METRICS_PAGE_READ_RUN = 'node "$KANON/scripts/aggregate-read.mjs" page';
+/** What the page's read is handed, exactly: its output directory and nothing else, so it reads Kanon's hosted store. */
+export const METRICS_PAGE_READ_ENV = { OUT: '${{ runner.temp }}/aggregate' };
 
 /**
- * The metrics page's `aggregate` job (plan 0003 M7, kanon#661): `aggregate` in
- * `metrics-page.yml`, in the SigV4 shape the telemetry Explorer's read job had before plan 0008
- * J5, but reading the function's page view (`aggregate-read.mjs page`): Kanon's path, the mask,
- * the invoker role's credentials, the read and the upload. It keeps that shape until it moves to
- * the token in a pull request of its own after vM's deploy (plan 0008 §9 step 4a, J7). The page
- * itself is rendered and proposed by another job of the workflow, which holds no `id-token`.
+ * The metrics page's `aggregate` job (plan 0003 M7, kanon#661; plan 0008 §9 step 4a, J7):
+ * `aggregate` in `metrics-page.yml`, and only in exactly this shape: Kanon's path; the read of
+ * the function's page view on the token URL (`aggregate-read.mjs page`), handed exactly
+ * `METRICS_PAGE_READ_ENV`, so it reads Kanon's hosted store and no other; and the upload of the
+ * answer from the runner's temp directory. No AWS credentials step, no role and no mask step: the
+ * token is minted and masked inside the read. The store admits the page's token by §2.2's
+ * exception (`workflow_ref` is `metrics-page.yml` at the registration's default branch, and the
+ * registration sets `page_reader`), for the page view alone; the shape is what keeps the set to
+ * this job. The page itself is rendered and proposed by another job of the workflow, which holds
+ * no `id-token`.
  */
 export function isMetricsPageJob(file: string | undefined, name: string, j: Job): boolean {
-  return file === METRICS_PAGE_FILE && name === AGGREGATE_JOB && isAggregateShape(j, METRICS_PAGE_READ_RUN);
-}
-
-/**
- * A job that reads the aggregate function through SigV4 and nothing else: Kanon's path, the mask,
- * the invoker role's credentials, the read script as `readRun` runs it, and the upload of its answer.
- */
-function isAggregateShape(j: Job, readRun: string): boolean {
-  if (!only(j, STORE_JOB_KEYS)) return false;
+  if (file !== METRICS_PAGE_FILE || name !== AGGREGATE_JOB || !only(j, STORE_JOB_KEYS)) return false;
   if (JSON.stringify(j.permissions) !== JSON.stringify({ 'id-token': 'write' })) return false;
   const steps = (j.steps ?? []) as Array<Record<string, unknown>>;
-  if (steps.length !== 5) return false;
-  const [path, mask, creds, read, upload] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
-  const w = (upload.with ?? {}) as Record<string, unknown>;
+  if (steps.length !== 3) return false;
+  const [path, read, upload] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
   return only(path, ['uses']) && path.uses === '$/actions/kanon-path'
-    && only(mask, ['name', 'env', 'run']) && String(mask.run).trim() === AGGREGATE_MASK_RUN
-    && JSON.stringify(mask.env) === JSON.stringify(AGGREGATE_MASK_ENV)
-    && only(creds, ['uses', 'with']) && CREDENTIALS.test(String(creds.uses))
-    && only(creds.with as object, ['role-to-assume', 'aws-region', 'role-session-name'])
-    && (creds.with as Record<string, unknown>)['role-to-assume'] === AGGREGATE_ROLE
-    && only(read, ['name', 'id', 'env', 'run']) && String(read.run).trim() === readRun
-    && only(read.env as object, AGGREGATE_READ_ENV)
-    && only(upload, ['name', 'id', 'uses', 'with']) && UPLOAD.test(String(upload.uses))
-    && only(w, ['name', 'path', 'retention-days', 'if-no-files-found'])
-    && typeof w.path === 'string' && TEMP_PATH.test(w.path.trim());
+    && only(read, ['name', 'id', 'env', 'run']) && String(read.run).trim() === METRICS_PAGE_READ_RUN
+    && JSON.stringify(read.env) === JSON.stringify(METRICS_PAGE_READ_ENV)
+    && isTempUpload(upload);
 }
 
 /** The Overseer's telemetry read job (kanon#470; plan 0008 §3.5, step J5), the one holder that reads its own rows from the telemetry store. */

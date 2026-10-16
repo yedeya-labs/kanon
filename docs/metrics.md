@@ -200,7 +200,7 @@ Plan 0003 M7 ([#661](https://github.com/yedeya-labs/kanon/issues/661)), §6 opti
 
 **How it is refreshed.** `.github/workflows/metrics-page.yml`, weekly on Monday at 07:15 UTC or by dispatch, on the default branch:
 
-1. its `aggregate` job assumes the aggregate-invoker role and reads the function's [page view](telemetry.md#the-page-view) with `scripts/aggregate-read.mjs page`, which refuses anything but the view's keys, codes, dates, versions and numbers;
+1. its `aggregate` job reads the function's [page view](telemetry.md#the-page-view) on the hosted store's token URL with `scripts/aggregate-read.mjs page`, with a fresh GitHub OIDC token and no AWS credential (plan 0008 §9 step 4a; the store admits it by [the metrics page's exception](telemetry.md#the-token-url-plan-0008-j4), for the page view alone), and refuses anything but the view's keys, codes, dates, versions and numbers;
 2. its `page` job reads Kanon's health with `scripts/telemetry/kanon-health.mjs --json` and renders the page with `.github/scripts/metrics-page.mjs`;
 3. when the page changed, it commits it as the Author App, with the delegate's sign-off, to the branch `kanon/metrics-page` and opens a pull request (or updates the open one). The Owner reads the figures and merges it; nothing is published before the merge.
 

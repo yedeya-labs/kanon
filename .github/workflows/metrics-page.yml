@@ -9,12 +9,17 @@
 #
 # TWO JOBS, SO THE STORE'S CREDENTIALS NEVER MEET THE APP'S KEY.
 #
-# 1. `aggregate` holds `id-token: write` and nothing else, and assumes the aggregate-invoker role
-#    (`KANON_AGGREGATE_ROLE`, as the telemetry Explorer does) to ask the store's aggregate
-#    function for its page view: one signed GET of `?view=page`, checked by
-#    `scripts/aggregate-read.mjs page` as strictly as the Explorer's read, so nothing but codes,
-#    dates, versions and numbers reaches the artifact. The id-token guard holds the job to
-#    exactly these steps (`tests/unit/helpers/store-jobs.ts`, `isMetricsPageJob`).
+# 1. `aggregate` holds `id-token: write` and nothing else, and no AWS credential: it asks the
+#    store's aggregate function for its page view on the token URL (plan 0008 §9 step 4a, J7),
+#    with a fresh GitHub OIDC token for the store's audience, minted and masked inside
+#    `scripts/aggregate-read.mjs page` and never written. The read is one GET of `?view=page`,
+#    checked as strictly as the Explorer's, so nothing but codes, dates, versions and numbers
+#    reaches the artifact. It is handed no variable, so it reads Kanon's hosted store. The store
+#    admits the token by plan 0008 §2.2's one exception: this workflow runs from Kanon's default
+#    branch, not a release tag, so its `workflow_ref` is `metrics-page.yml` at the registration's
+#    `default_ref`, and Kanon's registration sets `page_reader`; that admits the page view alone.
+#    The id-token guard holds the job to exactly these steps (`tests/unit/helpers/store-jobs.ts`,
+#    `isMetricsPageJob`).
 # 2. `page` holds no `id-token`. It reads Kanon's health from Kanon's issues with the default
 #    token, renders the page with `.github/scripts/metrics-page.mjs`, which refuses a page whose
 #    figures lack the "Measured on Kanon's own projects" heading or fall below their minimum
@@ -26,8 +31,9 @@
 # The role the App's token is held to (`tests/unit/app-token-permissions.test.ts`): the
 # Implementer's row grants `contents` and `pull-requests` write, the two the mint asks for.
 #
-# The default branch only: the invoker role trusts the default branch's ref alone, so a
-# dispatch elsewhere is skipped rather than turned red at the credentials step.
+# The default branch only: the store admits the page's token at the registration's default branch
+# alone (`ref` and `workflow_ref`), so a dispatch elsewhere is skipped rather than turned red at
+# the read.
 name: Metrics page
 
 on:
@@ -53,25 +59,11 @@ jobs:
       id-token: write
     steps:
       - uses: $/actions/kanon-path
-      # MASKED FIRST (kanon#433): every later step's header then prints `***` for the URL and the
-      # account id. The role's ARN is a secret, masked already. This step's own `env:` is printed
-      # before it runs, so the URL appears here, once.
-      - name: Mask the aggregate function's URL and the account id
-        env:
-          URL: ${{ vars.KANON_AGGREGATE_URL }}
-          ROLE: ${{ secrets.KANON_AGGREGATE_ROLE }}
-        run: node "$KANON/scripts/aggregate-mask.mjs"
-      # The STS call goes to Frankfurt, where the hosted store lives: the account's region policy
-      # denies every other region.
-      - uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.KANON_AGGREGATE_ROLE }}
-          aws-region: eu-central-1
-          role-session-name: kanon-metrics-page
+      # A FRESH OIDC TOKEN, masked before anything prints, sent to the hosted store's token URL and
+      # never written (plan 0008 §2.1, §3.6). A refusal is red, named by the store's code.
       - name: Read the page view
         id: read
         env:
-          KANON_AGGREGATE_URL: ${{ vars.KANON_AGGREGATE_URL }}
           OUT: ${{ runner.temp }}/aggregate
         run: node "$KANON/scripts/aggregate-read.mjs" page
       # One day: the page job reads it within the run.

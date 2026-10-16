@@ -263,28 +263,39 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
   });
 
   // Plan 0003 M7 (kanon#661): the metrics page's read job is a holder only in its exact shape,
-  // reading the page view, and the job that proposes the page never holds the token.
-  it("the metrics page's read job loses its exemption for anything beside its five steps, and its page job may not hold id-token", () => {
+  // reading the page view, and the job that proposes the page never holds the token. Plan 0008 §9
+  // step 4a (J7): that shape is the token read, with no AWS credential and no role.
+  it("the metrics page's read job loses its exemption for anything beside its three token steps, and its page job may not hold id-token", () => {
     const red = ["metrics-page.yml: job aggregate holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may"];
-    const steps = (w: Record<string, Workflow>) => job(w, 'metrics-page.yml', 'aggregate').steps as Array<{ run?: string; uses?: string; env: Record<string, string> }>;
+    const explorer = "agent-explore-telemetry.yml: job aggregate holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may";
+    const page = (w: Record<string, Workflow>) => job(w, 'metrics-page.yml', 'aggregate');
+    const steps = (w: Record<string, Workflow>) => page(w).steps as Array<{ name?: string; id?: string; run?: string; uses?: string; with?: Record<string, string>; env?: Record<string, string> }>;
     expect(mutate(() => {})).toEqual([]);
-    expect(mutate((w) => { steps(w)[3]!.run = 'node "$KANON/scripts/aggregate-read.mjs"'; })).toEqual(red);
-    expect(mutate((w) => { steps(w)[3]!.run = 'node "$KANON/scripts/aggregate-read.mjs" page && cat "$OUT/page.json"'; })).toEqual(red);
-    expect(mutate((w) => { steps(w)[3]!.env.NODE_OPTIONS = '-r x'; })).toEqual(red);
+    // The shape before J7, the SigV4 read: the mask, the invoker role's credentials, then the read.
+    expect(mutate((w) => {
+      steps(w).splice(1, 0,
+        { name: "Mask the aggregate function's URL and the account id", env: { URL: '${{ vars.KANON_AGGREGATE_URL }}', ROLE: '${{ secrets.KANON_AGGREGATE_ROLE }}' }, run: 'node "$KANON/scripts/aggregate-mask.mjs"' },
+        { uses: 'aws-actions/configure-aws-credentials@v6', with: { 'role-to-assume': '${{ secrets.KANON_AGGREGATE_ROLE }}', 'aws-region': 'eu-central-1', 'role-session-name': 'kanon-metrics-page' } });
+      steps(w)[3]!.env = { KANON_AGGREGATE_URL: '${{ vars.KANON_AGGREGATE_URL }}', OUT: '${{ runner.temp }}/aggregate' };
+    })).toEqual(red);
+    expect(mutate((w) => { steps(w).splice(1, 0, { uses: 'aws-actions/configure-aws-credentials@v6', with: { 'role-to-assume': '${{ secrets.KANON_AGGREGATE_ROLE }}', 'aws-region': 'eu-central-1' } }); })).toEqual(red);
+    expect(mutate((w) => { steps(w)[1]!.env!.KANON_AGGREGATE_URL = '${{ vars.KANON_AGGREGATE_URL }}'; })).toEqual(red);
+    // A self-hosted store's variables would send the page's token elsewhere: it reads Kanon's hosted store alone.
+    expect(mutate((w) => { steps(w)[1]!.env = { KANON_AGGREGATE_TOKEN_URL: '${{ vars.KANON_AGGREGATE_TOKEN_URL }}', KANON_TELEMETRY_AUDIENCE: '${{ vars.KANON_TELEMETRY_AUDIENCE }}', OUT: '${{ runner.temp }}/aggregate' }; })).toEqual(red);
+    expect(mutate((w) => { steps(w)[1]!.run = 'node "$KANON/scripts/aggregate-read.mjs" token'; })).toEqual(red);
+    expect(mutate((w) => { steps(w)[1]!.run = 'node "$KANON/scripts/aggregate-read.mjs" page && cat "$OUT/page.json"'; })).toEqual(red);
+    expect(mutate((w) => { steps(w)[1]!.env!.NODE_OPTIONS = '-r x'; })).toEqual(red);
+    expect(mutate((w) => { steps(w)[2]!.with!.path = '${{ github.workspace }}/page.json'; })).toEqual(red);
     expect(mutate((w) => { steps(w).push({ run: 'echo hi', env: {} }); })).toEqual(red);
-    expect(mutate((w) => { (job(w, 'metrics-page.yml', 'aggregate') as Record<string, unknown>).env = { NODE_OPTIONS: '-r x' }; })).toEqual(red);
-    expect(mutate((w) => grant(job(w, 'metrics-page.yml', 'page'))))
-      .toEqual(["metrics-page.yml: job page holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may"]);
+    expect(mutate((w) => { (page(w) as Record<string, unknown>).env = { NODE_OPTIONS: '-r x' }; })).toEqual(red);
+    expect(mutate((w) => { page(w).permissions = { 'id-token': 'write', contents: 'read' }; })).toEqual(red);
+    expect(mutate((w) => grant(job(w, 'metrics-page.yml', 'page')))).toEqual(["metrics-page.yml: job page holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may"]);
     // The Explorer's read job, reading the page view, is neither holder (its callers then name it too).
     expect(mutate((w) => { (job(w, 'agent-explore-telemetry.yml', 'aggregate').steps as Array<{ run?: string }>)[1]!.run = 'node "$KANON/scripts/aggregate-read.mjs" page'; }))
-      .toContain("agent-explore-telemetry.yml: job aggregate holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may");
-    // Plan 0008 J5: the Explorer's job is on the token, and the metrics page's SigV4 shape, with
-    // the Explorer's own read, is not the Explorer's any more.
-    expect(mutate((w) => {
-      const sigv4 = structuredClone(job(w, 'metrics-page.yml', 'aggregate'));
-      (sigv4.steps as Array<{ run?: string }>)[3]!.run = 'node "$KANON/scripts/aggregate-read.mjs"';
-      w['agent-explore-telemetry.yml']!.jobs.aggregate = sigv4;
-    })).toContain("agent-explore-telemetry.yml: job aggregate holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may");
+      .toContain(explorer);
+    // Each shape is held to its own file: the page's job in the Explorer's file, or the Explorer's in the page's, is neither.
+    expect(mutate((w) => { w['agent-explore-telemetry.yml']!.jobs.aggregate = structuredClone(page(w)); })).toContain(explorer);
+    expect(mutate((w) => { w['metrics-page.yml']!.jobs.aggregate = structuredClone(job(w, 'agent-explore-telemetry.yml', 'aggregate')); })).toEqual(red);
   });
 
   // Plan 0008 §2.2, step J5: the store admits a token by the workflow file it was minted in, not by

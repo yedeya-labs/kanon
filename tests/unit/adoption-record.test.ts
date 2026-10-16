@@ -421,10 +421,11 @@ describe("Kanon's own brief template (K-LAYOUT-11, #1064)", () => {
 /**
  * Since plan 0008's J5 the telemetry read jobs request an OIDC token for the hosted store's
  * audience and send it to the store's token URL; they assume no cloud role. Their record entries
- * say what they do now (#1064), while a job that still assumes a role, the metrics page's, says so.
+ * say what they do now (#1064). Since J7 (§9 step 4a) the metrics page's read job does too, so no
+ * job of Kanon's assumes a role any more.
  */
 describe("the record's id-token holders say how each one reads (#1064)", () => {
-  type Step = { env?: Record<string, unknown>; with?: Record<string, unknown> };
+  type Step = { env?: Record<string, unknown>; with?: Record<string, unknown>; run?: unknown };
   const jobs = () => {
     const out: Array<{ key: string; holds: boolean; steps: Step[] }> = [];
     const dir = join(ROOT, '.github/workflows');
@@ -438,16 +439,18 @@ describe("the record's id-token holders say how each one reads (#1064)", () => {
     return out;
   };
   // A gate job reads the URL too, to tell whether the store is configured, but holds no grant.
-  const readsTokenUrl = (j: { holds: boolean; steps: Step[] }) => j.holds && j.steps.some((s) => Object.keys(s.env ?? {}).some((k) => /_TOKEN_URL$/.test(k)));
+  // The metrics page's read names no URL variable: it reads Kanon's hosted store alone (J7).
+  const readsTokenUrl = (j: { holds: boolean; steps: Step[] }) => j.holds && j.steps.some((s) => Object.keys(s.env ?? {}).some((k) => /_TOKEN_URL$/.test(k))
+    || String(s.run ?? '').trim() === 'node "$KANON/scripts/aggregate-read.mjs" page');
   const assumesRole = (steps: Step[]) => steps.some((s) => 'role-to-assume' in (s.with ?? {}));
   const accepted = async () => {
     const { readHolderAcceptances } = await import('../../cli/doctor.mjs');
     return readHolderAcceptances(readFileSync(RECORD, 'utf8')).accepted as Map<string, string>;
   };
 
-  it("finds Kanon's two token-URL read jobs, so the check below is not vacuous", () => {
+  it("finds Kanon's three token-URL read jobs, so the check below is not vacuous", () => {
     expect(jobs().filter((j) => readsTokenUrl(j)).map((j) => j.key).sort())
-      .toEqual(['agent-explore-telemetry.yml#aggregate', 'agent-overseer.yml#telemetry']);
+      .toEqual(['agent-explore-telemetry.yml#aggregate', 'agent-overseer.yml#telemetry', 'metrics-page.yml#aggregate']);
   });
 
   it('says a job that reads through a token URL requests an OIDC token for the audience and calls it, and assumes no role', async () => {
@@ -461,10 +464,9 @@ describe("the record's id-token holders say how each one reads (#1064)", () => {
     }
   });
 
-  it('says a job that assumes a cloud role assumes it: the metrics page still does (plan 0008 §9 step 4a)', async () => {
+  it('finds no job that assumes a cloud role: the metrics page moved to the token too (plan 0008 §9 step 4a)', async () => {
     const record = await accepted();
-    const roleJobs = jobs().filter((j) => assumesRole(j.steps)).map((j) => j.key);
-    expect(roleJobs).toContain('metrics-page.yml#aggregate');
-    for (const key of roleJobs.filter((k) => record.has(k))) expect(record.get(key), key).toMatch(/\brole\b/);
+    expect(jobs().filter((j) => assumesRole(j.steps)).map((j) => j.key)).toEqual([]);
+    expect(record.get('metrics-page.yml#aggregate') ?? '').not.toMatch(/invoker role/);
   });
 });
