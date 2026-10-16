@@ -63,7 +63,7 @@ Every AWS command here is the Owner's to run. Agents run none (§5).
 
 ## Where the register lives
 
-The register, `register.json`, pairs each adopter's opaque key with its repository, which is the one pairing the key exists to hide (plan 0002 §5). **It never lives in a repository where Kanon's lanes run, public or private.** A private repository is no safer than a public one. If the register is tracked there, a pull request that touches it sends the keys and the pairing to the Reviewer's model, and the lanes' agents can read any file in their checkout. Watch for this if you're an operator who is also an adopter: your private operations repository is the natural home for the register, and it's also where you install Kanon.
+The register, `register.json`, pairs each adopter's opaque key with its repository, which is the one pairing the key exists to hide (plan 0002 §5). **It never lives in a repository where Kanon's lanes run, public or private.** A private repository is no safer than a public one. If the register is tracked there, a pull request that touches it sends the keys and the pairing to the Reviewer's model, and the lanes' agents can read any file in their checkout. Watch for this if you're an operator who is also an adopter: your private operations repository is the natural home for the register, and it's also where you install Kanon. `kanon doctor` checks it there: a tracked file with the register's shape, or `render.mjs`'s output, whatever its name, is `telemetry.register-tracked`, which blocks and names the file's path alone ([`docs/doctor.md`](doctor.md#the-finding-ids)).
 
 Keep it in one of these, and render from there:
 
