@@ -318,7 +318,7 @@ export const ITEMIZED = {
  * `unchecked[].check` it is listed under: a waiver of such a finding can't be called stale.
  * @type {Record<string, string>}
  */
-const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', 'turn-cap-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset', 'notify-secrets': 'secret', 'notify-hook': 'declaration', 'notify-runs': 'caller', 'deploy-hook': 'declaration', 'deploy-ci': 'caller', 'deploy-environments': 'deploy', 'deploy-subject': 'deploy', 'deploy-runs': 'deploy', 'deploy-retention': 'deploy', 'deploy-rulesets': 'deploy' };
+const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', 'turn-cap-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset', 'notify-secrets': 'secret', 'notify-hook': 'declaration', 'notify-runs': 'caller', 'deploy-hook': 'declaration', 'deploy-ci': 'caller', 'deploy-environments': 'deploy', 'deploy-subject': 'deploy', 'deploy-runs': 'deploy', 'deploy-retention': 'deploy', 'deploy-rulesets': 'deploy', 'deploy-secrets': 'deploy' };
 
 /**
  * The finding categories, in the order a finding is listed and fixed: the pin decides which
@@ -416,6 +416,7 @@ export const FINDINGS = {
   'deploy.trust-unproven': { category: 'deploy', blocking: true },
   'deploy.artifact-retention': { category: 'deploy', blocking: false },
   'deploy.secret-repository': { category: 'deploy', blocking: false },
+  'deploy.secret-organization': { category: 'deploy', blocking: false },
   'deploy.tag-ruleset': { category: 'deploy', blocking: false },
   'id-token.unaccepted': { category: 'id-token', blocking: true },
   'id-token.stale-acceptance': { category: 'id-token', blocking: false },
@@ -2506,6 +2507,17 @@ export const diagnose = async (deps, opts) => {
   // The deploy lane's caller notifies too (plan 0011 N9): each job calling the lane's
   // per-environment workflow, at a release whose `deploy.yml` has a `notify` job, which
   // requirements.json's `notify.kinds` lists by its file name. Its kind's secret is optional there.
+  // The organisation's secrets shared with the repository, by name, listed once on the first
+  // check that asks, which only an organisation's repository does: null where the token can't
+  // list them. `notify.kind-unset` and `deploy.secret-organization` read them.
+  /** @type {Promise<Set<string> | null> | null} */
+  let orgListed = null;
+  const orgSecrets = () =>
+    (orgListed ??= (async () => {
+      const r = await deps.gh(['api', `repos/${repo}/actions/organization-secrets?per_page=100`]);
+      const list = ghJsonOf(r)?.secrets;
+      return Array.isArray(list) ? new Set(list.map((/** @type {any} */ x) => String(x?.name ?? '').toUpperCase())) : null;
+    })());
   const deployNotifyJobs = notify
     ? [...workflows].flatMap(([file, wf]) => Object.values(isMap(wf.jobs) ? wf.jobs : {}).filter(isMap).flatMap((job) => {
       const lane = kanonCall(job.uses)?.workflow ?? '';
@@ -2626,14 +2638,6 @@ export const diagnose = async (deps, opts) => {
       // ── `notify.kind-unset`: each notifying caller's kind secret is held (decision 3), else a
       // note. An organisation's secret shared with the repository counts, where the token can
       // list them; where it can't, the check is unchecked, never a finding.
-      /** @type {Promise<Set<string> | null> | null} */
-      let orgListed = null;
-      const orgSecrets = () =>
-        (orgListed ??= (async () => {
-          const r = await deps.gh(['api', `repos/${repo}/actions/organization-secrets?per_page=100`]);
-          const list = ghJsonOf(r)?.secrets;
-          return Array.isArray(list) ? new Set(list.map((/** @type {any} */ x) => String(x?.name ?? '').toUpperCase())) : null;
-        })());
       const seen = new Set();
       for (const c of notifyCallers) {
         const kind = /** @type {string} */ (kindOf(c.lane));
@@ -3040,6 +3044,22 @@ export const diagnose = async (deps, opts) => {
           find('deploy.secret-repository', name, `is a repository secret: the deploy caller maps ${name} by name, which GitHub resolves in each deploy job from the environment first, then the repository, so a declared environment that holds no ${name} hands the deploy hook this one, which every workflow on every branch can read (plan 0010 §7, §15.1). Keep it an environment secret only.`, {
             text: `Move it into each environment that needs it, then delete the repository secret:`,
             commands: [...chain.map((e) => `gh secret set ${name} --env ${e} -R ${repo}`), `gh secret delete ${name} -R ${repo}`],
+          });
+        }
+      }
+      // ── `deploy.secret-organization` (a note, kanon#1051): after the repository's, GitHub
+      // resolves the name from the organisation's secrets shared with the repository, which
+      // every workflow of every repository they are shared with can read. Noted whether or not
+      // the repository holds one too: `deploy.secret-repository`'s fix deletes that one.
+      const deploySecrets = own && s.kind === 'Organization' ? deployEnvironmentSecrets(req) : [];
+      const org = deploySecrets.length ? await orgSecrets() : null;
+      for (const name of deploySecrets) {
+        if (org === null) unchecked.push({ check: 'deploy-secrets', subject: name, reason: `the token can't list the organisation secrets of ${s.owner} shared with ${repo}, so doctor can't tell whether an organisation secret of ${s.owner} shared with it is named ${name}, which a deploy job whose environment holds none would hand the deploy hook; it needs Secrets: read` });
+        else if (org.has(name)) {
+          find('deploy.secret-organization', name, `is an organisation secret of ${s.owner} shared with ${repo}: the deploy caller maps ${name} by name, which GitHub resolves in each deploy job from the environment first, then the repository, then the organisation, so a declared environment that holds no ${name} hands the deploy hook this one, which every workflow on every branch of every repository it is shared with can read (plan 0010 §7, §15.1). Keep it an environment secret only.`, {
+            text: `Move it into each environment that needs it, then stop sharing ${s.owner}'s ${name} with ${repo}: on the organisation's Actions secrets page, narrow its repository access to the repositories that need it, or delete it if none does.`,
+            commands: chain.map((e) => `gh secret set ${name} --env ${e} -R ${repo}`),
+            url: `https://github.com/organizations/${s.owner}/settings/secrets/actions`,
           });
         }
       }
