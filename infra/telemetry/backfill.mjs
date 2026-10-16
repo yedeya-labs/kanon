@@ -21,9 +21,9 @@
 // counts of PRs closed come from GitHub's own listing, not from the step, so the check is
 // independent of the derivation it checks.
 //
-// `--apply` sends the rows through the ingest function as the backfill role, 25 to a `POST`,
-// naming the adopter's key; the stack must be deployed with `render.mjs --backfill`, and the
-// function stores work-item rows only from that role. A re-sent row overwrites itself (its key is
+// `--apply` sends the rows through the ingest function as the backfill role, 25 to a direct
+// invocation of its `backfill` alias, naming the adopter's key; the stack must be deployed with
+// `EnableBackfill=true` (plan 0008 §9, J9), and the function stores work-item rows only from it. A re-sent row overwrites itself (its key is
 // the PR number), so a re-run, or a span that overlaps the collector's, is harmless. The
 // repository and the key are arguments and are never printed.
 
@@ -33,7 +33,7 @@ import { isReleasePr } from '../../scripts/metrics/release.mjs';
 import { ghAsync, workItemStep } from '../../scripts/telemetry-work-items.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 import { send, sendFailure } from './import.mjs';
-import { aws, post } from './verify.mjs';
+import { aws } from './verify.mjs';
 
 const REPOSITORY = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -145,7 +145,7 @@ if (isCliEntry(import.meta.url)) {
   }
   let sent;
   try {
-    sent = await send(rows, /** @type {string} */ (values.key), { aws, post, profile: values.profile, role: 'backfill' });
+    sent = await send(rows, /** @type {string} */ (values.key), { aws, profile: values.profile, role: 'backfill' });
   } catch (e) {
     console.log(sendFailure(e, /** @type {string} */ (values.key)));
     process.exit(1);
