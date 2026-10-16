@@ -27,7 +27,7 @@ You need Node 24, Claude Code, `gh` signed in as a repository admin, and a CI wo
 <!-- x-release-please-start-version -->
 
 ```sh
-claude plugin marketplace add yedeya-labs/kanon#v0.40.0
+claude plugin marketplace add yedeya-labs/kanon#v0.41.0
 claude plugin install kanon@kanon
 ```
 

@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.41.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.40.0...candidate-v0.41.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deploy:** a repository with a deploy caller re-runs `kanon init` (or adds `KANON_DEPLOY_SECRET: ${{ secrets.KANON_DEPLOY_SECRET }}` under each deploy-<n> job's `secrets:`) when it moves to this release; until then doctor's deploy.caller-mismatch blocks, and the deploy hook reads the secret empty. Keep KANON_DEPLOY_SECRET an environment secret only.
+
+### Features
+
+* **deploy:** each environment announces its deploy, or its failure, through the notify job (plan 0011 N9) ([#1037](https://github.com/yedeya-labs/kanon/issues/1037)) ([7612f72](https://github.com/yedeya-labs/kanon/commit/7612f72fbb57235ace63c62a22686bfa95749dc5))
+* **doctor:** report a lane whose runs keep ending at its turn limit ([#1013](https://github.com/yedeya-labs/kanon/issues/1013)) ([c6dbca2](https://github.com/yedeya-labs/kanon/commit/c6dbca2141bcedbaaf2edf4a2654a978cb503099))
+* **init:** ask which hook posts the digests, and write it (plan 0011 N11) ([#1032](https://github.com/yedeya-labs/kanon/issues/1032)) ([6f417e9](https://github.com/yedeya-labs/kanon/commit/6f417e9405a6fa86f0e668ce518faf138db4c1b7))
+* **init:** the deploy caller maps KANON_CHAT_DEPLOY, init leaves secret.chat-deploy, and the re-ask names the callers the repository has (plan 0011 N9) ([#1045](https://github.com/yedeya-labs/kanon/issues/1045)) ([22c7bf1](https://github.com/yedeya-labs/kanon/commit/22c7bf139a1b9390206f24452df4d41f7e6f7920))
+* **lanes:** a person may raise a lane's turn limit for one dispatched run, within a Kanon ceiling ([#1001](https://github.com/yedeya-labs/kanon/issues/1001)) ([df5bc37](https://github.com/yedeya-labs/kanon/commit/df5bc37d4455e406c55ae12314eef97e5f4bc22a))
+* **lanes:** kanon init writes the sweeps' re-ask, and the Overseer keeps every pending run ([#1021](https://github.com/yedeya-labs/kanon/issues/1021)) ([1333b54](https://github.com/yedeya-labs/kanon/commit/1333b545b3109d566a549bbb5d7b7f0017d2e4ba))
+* **notify:** the notify block and its guards, with the delivery outcome as an output (plan 0011 N6) ([#1018](https://github.com/yedeya-labs/kanon/issues/1018)) ([a4e344a](https://github.com/yedeya-labs/kanon/commit/a4e344ab5d79e4dff2b06e6ad077bbaa8768851d))
+* **project-digest:** the project digest posts through the notify job (plan 0011 N7) ([#1025](https://github.com/yedeya-labs/kanon/issues/1025)) ([c275b71](https://github.com/yedeya-labs/kanon/commit/c275b71cf3cc45b9b297327b99322d550289dd7f))
+* **register:** let the App register hold Apps that aren't agents ([#996](https://github.com/yedeya-labs/kanon/issues/996)) ([2662009](https://github.com/yedeya-labs/kanon/commit/2662009745d2e951b6415962bc1844165d807f85))
+* **release:** Kanon's release configuration cuts candidates (plan 0009 S3) ([#1016](https://github.com/yedeya-labs/kanon/issues/1016)) ([90276f4](https://github.com/yedeya-labs/kanon/commit/90276f41259537823361cb7e24eae4ee64252599))
+* **release:** promote a candidate to stable once its four gates pass (plan 0009 S5) ([#978](https://github.com/yedeya-labs/kanon/issues/978)) ([11d56f4](https://github.com/yedeya-labs/kanon/commit/11d56f4f800179d530561c54ffe86d9758faffcc))
+* **release:** the pin job opens `ci(deps): run Kanon on candidate vX.Y.Z` as the Releaser ([#991](https://github.com/yedeya-labs/kanon/issues/991)) ([779c484](https://github.com/yedeya-labs/kanon/commit/779c48461bbe1cad41688d6451dec08e21f4b3fd))
+* **telemetry:** name the diagnose lane, deploy-diagnose, and add run row version 4's two counts ([#1017](https://github.com/yedeya-labs/kanon/issues/1017)) ([702b687](https://github.com/yedeya-labs/kanon/commit/702b68706e474ee5db045c3c919112abbb2739bc))
+* **telemetry:** publish the hosted store's token URLs (plan 0008 step 3b) ([#1055](https://github.com/yedeya-labs/kanon/issues/1055)) ([30d270e](https://github.com/yedeya-labs/kanon/commit/30d270ee6fb56aba61f6909083a1a1ed47133633))
+* **weekly-digest:** the weekly digest posts only through its notify job (plan 0011 N8) ([#1026](https://github.com/yedeya-labs/kanon/issues/1026)) ([b186597](https://github.com/yedeya-labs/kanon/commit/b1865976f6a6e787290d2bc9f89705da2a29b184))
+
+
+### Bug Fixes
+
+* **adoption:** accept the deploy lane's and the metrics page's id-token holders ([#1060](https://github.com/yedeya-labs/kanon/issues/1060)) ([6d26c76](https://github.com/yedeya-labs/kanon/commit/6d26c76122f8c40493c706e0867856622f5be7cd))
+* **classify:** give a run the action failed past its turn cap the turn-cap notice ([#1042](https://github.com/yedeya-labs/kanon/issues/1042)) ([6030a87](https://github.com/yedeya-labs/kanon/commit/6030a87fb39a95b93e52b0cec3a0119118e5a2a1))
+* **dco:** give an App that isn't an agent no delegated sign-off ([#1034](https://github.com/yedeya-labs/kanon/issues/1034)) ([a7de395](https://github.com/yedeya-labs/kanon/commit/a7de3958d4c1c574beb14fb300d6c4e4c7f08722))
+* **deploy:** declare KANON_DEPLOY_SECRET in deploy.yml and map it from the deploy caller ([#1050](https://github.com/yedeya-labs/kanon/issues/1050)) ([949d759](https://github.com/yedeya-labs/kanon/commit/949d7598e4e357957fe0169fae0dab82c5cf8f18))
+* **doctor:** notify.failing reads the deploy caller's runs at a release's tag ([#1047](https://github.com/yedeya-labs/kanon/issues/1047)) ([7391c07](https://github.com/yedeya-labs/kanon/commit/7391c07c2e2f6d154c8f9a3911fad6b3b3024946))
+* **init:** pin the release it runs from, vX.Y.Z or its candidate, and refuse when neither tag exists ([#994](https://github.com/yedeya-labs/kanon/issues/994)) ([79d6dea](https://github.com/yedeya-labs/kanon/commit/79d6deaa6fdb54af1fcd501f68fb3e61b360a39c))
+* **init:** the telemetry question and the adopt skill name the deploy and notify rows too ([#993](https://github.com/yedeya-labs/kanon/issues/993)) ([9fce7c1](https://github.com/yedeya-labs/kanon/commit/9fce7c17ac7fb9c46f4bdd554aeba9293379197e))
+* **lane-check:** refuse a default on a caller's max_turns or reason dispatch input ([#1041](https://github.com/yedeya-labs/kanon/issues/1041)) ([6060c02](https://github.com/yedeya-labs/kanon/commit/6060c02a85a8cf77660d9eff9909fcd199c67786))
+* **metrics:** declare the delivery lanes, so a new schema lane is never a delivery lane by default ([#1024](https://github.com/yedeya-labs/kanon/issues/1024)) ([d61b295](https://github.com/yedeya-labs/kanon/commit/d61b295a9ba04c51e7b883448b324177d5e40e9d))
+* notify hook headers name the upgrade skill, the weekly gate checks out the hook alone, and an intro sentence no longer hides criteria bullets ([#1043](https://github.com/yedeya-labs/kanon/issues/1043)) ([028c584](https://github.com/yedeya-labs/kanon/commit/028c5840da4ab14555299581163f4e581df64bb5))
+* **promote:** a stable Release's notes cover every candidate since the last stable release ([#1005](https://github.com/yedeya-labs/kanon/issues/1005)) ([e332447](https://github.com/yedeya-labs/kanon/commit/e332447ec34f46d0e731e92b11b2d52040200381))
+* **release:** a promotion never moves the major tag or latest back to an older release ([#1030](https://github.com/yedeya-labs/kanon/issues/1030)) ([849b49f](https://github.com/yedeya-labs/kanon/commit/849b49fa7a4dde54e19356d766a5e351255d42b8))
+* **release:** hold an interrupted promotion on a hold dispatch ([#1059](https://github.com/yedeya-labs/kanon/issues/1059)) ([a180f2f](https://github.com/yedeya-labs/kanon/commit/a180f2f2ac014980f632c5f8db699fb37b56bcf8))
+* **telemetry:** record a run the action fails past its turn cap as max_turns ([#1012](https://github.com/yedeya-labs/kanon/issues/1012)) ([48e576d](https://github.com/yedeya-labs/kanon/commit/48e576db777c8dde1a3b8179251626402276efe2))
+* **telemetry:** record a turn-cap overshoot on a continue-on-error agent lane ([#1031](https://github.com/yedeya-labs/kanon/issues/1031)) ([1f24553](https://github.com/yedeya-labs/kanon/commit/1f24553ae9a8c1c654b01d8807ef6828057fd32d))
+
+
+### Documentation
+
+* **deploy:** record the deploy lane's release and rehearsal, and point the store's deploy at it ([#1011](https://github.com/yedeya-labs/kanon/issues/1011)) ([0b16961](https://github.com/yedeya-labs/kanon/commit/0b169613dffe530dfe38c5aa8028e36667e97377))
+* **plans:** size plan 0012's harness for a nightly overlapping a candidate's run ([#1000](https://github.com/yedeya-labs/kanon/issues/1000)) ([ce35423](https://github.com/yedeya-labs/kanon/commit/ce354238163a8794782b12790aeb4c2bbd89c4b7))
+* **security:** state the notify job's chat-secret exposure under Accepted exposures ([#999](https://github.com/yedeya-labs/kanon/issues/999)) ([43f8bfa](https://github.com/yedeya-labs/kanon/commit/43f8bfaaf1cdbfa5f2ab19c4505998bfa9e5459e))
+* **telemetry:** tidy the collector's unpublished-skip comments and record the 0.40.2 backport ([#1061](https://github.com/yedeya-labs/kanon/issues/1061)) ([017eaac](https://github.com/yedeya-labs/kanon/commit/017eaac996046eaad03da3ade55379c250735595))
+* the digests' secrets at Kanon's pin, the dco delegation's reach, and three release wording fixes ([#1040](https://github.com/yedeya-labs/kanon/issues/1040)) ([47b9f6f](https://github.com/yedeya-labs/kanon/commit/47b9f6f79344eb01701439284df80e47515422c3))
+
+
+### Tests
+
+* **deploy:** prove the production job's Maintainer check under the no-reviewers fallback, with mutations ([#995](https://github.com/yedeya-labs/kanon/issues/995)) ([655b061](https://github.com/yedeya-labs/kanon/commit/655b0614837dbffd8c70fa196e2342279fd4865c))
+
+
+### CI
+
+* **deps:** run Kanon on v0.40.2, with the collector on the token path ([#1063](https://github.com/yedeya-labs/kanon/issues/1063)) ([7bc02be](https://github.com/yedeya-labs/kanon/commit/7bc02be020953e68d52173b83ac29cfc0e4b6dba))
+
 ## [0.40.0](https://github.com/yedeya-labs/kanon/compare/v0.39.0...v0.40.0) (2026-10-15)
 
 
