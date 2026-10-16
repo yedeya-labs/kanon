@@ -16,6 +16,8 @@ The block has no `if:` of its own, because the right gate depends on the lane. G
   uses: yedeya-labs/kanon/actions/agent-classify@v0.40.0
   with:
     arm: review agent
+    claude-args: ${{ steps.agent.outputs.claude-args }}
+    agent-outcome: ${{ steps.agent.outcome }}
 ```
 
 <!-- x-release-please-end -->
@@ -25,6 +27,8 @@ The block has no `if:` of its own, because the right gate depends on the lane. G
 | `arm` | yes | A human name for the lane, used in the annotation. |
 | `recover` | no | The command that recovers the run, printed where a re-run is the advice. |
 | `non-fatal` | no | `"true"` for an agent step whose failure leaves the job green. The annotation is then a warning. |
+| `claude-args` | no | The flags the agent ran with: `agent-run`'s `claude-args` output. Only `--max-turns` is read. |
+| `agent-outcome` | no | The agent step's `outcome`. With `claude-args`, a run `claude-code-action` failed past its `--max-turns` gets the turn-cap notice. Without them it gets the clean-finish notice, since its result says `completed` (#1015). |
 
 | Output | Meaning |
 |---|---|

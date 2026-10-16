@@ -1,4 +1,4 @@
-# Kanon's Slack hook (plan 0011 §7.1). `kanon init --chat slack` writes this file, as it is, to
+# Kanon's Slack hook (plan 0011 §7.1). `kanon init --chat slack` writes this file to
 # `.github/actions/notify/action.yml`, the one thing a notifying lane's `notify` job calls (§6.1).
 #
 # Each kind's message reaches it with that kind's secret and no other (`KANON_CHAT_PROJECT_DIGEST`,
@@ -6,9 +6,9 @@
 # the same URL in all three if one channel takes everything. A kind whose secret is unset is not
 # posted. See docs/notifications.md in Kanon.
 #
-# Its one step is Kanon's Slack action at the release `init` ran from. `kanon upgrade` moves this
-# pin with your callers' (decision 18). Edit the step and it is your own hook: Kanon then counts it
-# as `custom`.
+# Its one step is Kanon's Slack action at the release `init` ran from (the candidate's tag on a
+# candidate pin). The upgrade skill moves this pin with your callers' (decision 18). Edit the step
+# and it is your own hook: Kanon then counts it as `custom`.
 name: notify
 description: Posts Kanon's notifications to Slack, through Kanon's Slack hook.
 

@@ -1358,6 +1358,14 @@ const RELEASER_QUESTION = 'Create the optional Releaser App, so the release PR r
  */
 
 /**
+ * The deploy environments that announce through the chat answer (plan 0011 N9): the declared ones,
+ * none where the deploy caller's path holds the project's own workflow (`deploy.caller-taken`),
+ * since `init` then writes no deploy caller to map the announcement's secret.
+ * @param {string[]} environments @param {AskContext} ctx
+ */
+const announcing = (environments, ctx) => (ctx.deployCallerTaken ? [] : environments);
+
+/**
  * Q1's terms here: the recommended feature, the one the lanes the repository calls make up, else
  * Review; what Enter and `--yes` take, that same feature, or `custom` for lanes no feature makes
  * up, and Review when it calls none; and each feature's lanes, with the conditional ones whose
@@ -1405,7 +1413,7 @@ export const derive = (a, ctx, g = {}) => {
   // that writes one, and stays out with none, which installs the project digest alone (decision 12);
   // a lane named in --lanes stays, since the person chose it by name.
   const hookPath = notifyOf(ctx.req)?.hook.path;
-  if (!postsToChat(a.lanes, a.deployEnvironments ?? [], ctx.req)) {
+  if (!postsToChat(a.lanes, announcing(a.deployEnvironments ?? [], ctx), ctx.req)) {
     if (g.chat && !a.notes.some((n) => n.startsWith('--chat'))) a.notes.push('--chat was given, and the lanes chosen post to no chat channel, so it is dropped.');
     a.chat = null;
     why.chat = { source: 'default', reason: 'no chosen lane posts to a chat channel' };
@@ -1582,11 +1590,12 @@ export const askAll = async (deps, opts, ctx) => {
   // posts to one, and no hook answers it.
   /** @type {Chat | null} */
   let chat = null;
-  if (postsToChat(lanes, g.deployEnvironments ?? ctx.declaredEnvironments ?? [], ctx.req)) {
+  const announces = announcing(g.deployEnvironments ?? ctx.declaredEnvironments ?? [], ctx);
+  if (postsToChat(lanes, announces, ctx.req)) {
     const inferred = chatOf(ctx);
     if (g.chat) [chat, why.chat] = [g.chat, flag];
     else if (opts.yes || !inferred.asks) [chat, why.chat] = [inferred.value, inferred.why];
-    else [chat, why.chat] = [await choose(deps, chatQuestion(lanes, g.deployEnvironments ?? ctx.declaredEnvironments ?? [], ctx.req), CHAT_OPTIONS, 'slack', 'slack', 'none'), asked];
+    else [chat, why.chat] = [await choose(deps, chatQuestion(lanes, announces, ctx.req), CHAT_OPTIONS, 'slack', 'slack', 'none'), asked];
   }
 
   // Q3. Private or sensitive material: recommended Yes on a private repository, No on a public one.
@@ -1686,8 +1695,8 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
     a.lanes = await askFeature(deps, ctx, a.lanes);
     asked('lanes');
     // Lanes that post now, with no chat answer yet: asked here, unless a hook answers it.
-    if (a.chat === null && postsToChat(a.lanes, a.deployEnvironments, ctx.req) && chatOf(ctx).asks) {
-      a.chat = await choose(deps, chatQuestion(a.lanes, a.deployEnvironments, ctx.req), CHAT_OPTIONS, 'slack', 'slack', 'none');
+    if (a.chat === null && postsToChat(a.lanes, announcing(a.deployEnvironments, ctx), ctx.req) && chatOf(ctx).asks) {
+      a.chat = await choose(deps, chatQuestion(a.lanes, announcing(a.deployEnvironments, ctx), ctx.req), CHAT_OPTIONS, 'slack', 'slack', 'none');
       asked('chat');
     }
     if (ctx.releases) {
@@ -1742,8 +1751,8 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
       a.deployEnvironments = parseDeployEnvironments(answer);
       asked('deployEnvironments');
       // A deploy lane announces its deploys: with no chat answer yet, asked here, unless a hook answers it.
-      if (a.chat === null && postsToChat(a.lanes, a.deployEnvironments, ctx.req) && chatOf(ctx).asks) {
-        a.chat = await choose(deps, chatQuestion(a.lanes, a.deployEnvironments, ctx.req), CHAT_OPTIONS, 'slack', 'slack', 'none');
+      if (a.chat === null && postsToChat(a.lanes, announcing(a.deployEnvironments, ctx), ctx.req) && chatOf(ctx).asks) {
+        a.chat = await choose(deps, chatQuestion(a.lanes, announcing(a.deployEnvironments, ctx), ctx.req), CHAT_OPTIONS, 'slack', 'slack', 'none');
         asked('chat');
       }
     } catch (e) {
@@ -1751,8 +1760,8 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
       a.notes.push(`${/** @type {Error} */ (e).message.replace(/^--deploy-environments/, 'The deploy environments')}; kept ${a.deployEnvironments.join(', ') || DEPLOY_NONE}.`);
     }
   }
-  if (picked.has(8) && postsToChat(a.lanes, a.deployEnvironments, ctx.req)) {
-    a.chat = await choose(deps, chatQuestion(a.lanes, a.deployEnvironments, ctx.req), CHAT_OPTIONS, 'slack', a.chat ?? 'slack', a.chat ?? 'none');
+  if (picked.has(8) && postsToChat(a.lanes, announcing(a.deployEnvironments, ctx), ctx.req)) {
+    a.chat = await choose(deps, chatQuestion(a.lanes, announcing(a.deployEnvironments, ctx), ctx.req), CHAT_OPTIONS, 'slack', a.chat ?? 'slack', a.chat ?? 'none');
     asked('chat');
   }
   return derive(a, ctx, g);

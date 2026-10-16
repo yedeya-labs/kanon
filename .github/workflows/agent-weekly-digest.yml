@@ -133,6 +133,7 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: .github/actions/notify
+          sparse-checkout-cone-mode: false
 
       # The kind's secret is read here only as one presence boolean, which is all the guard
       # (`tests/unit/notify-guard.test.ts`) admits outside the `notify` job. With a hook and the
@@ -352,6 +353,8 @@ jobs:
         with:
           arm: weekly-digest agent
           non-fatal: "true"
+          claude-args: ${{ steps.agent.outputs.claude-args }}
+          agent-outcome: ${{ steps.agent.outcome }}
 
   # THE POST (plan 0011 §5, `K-OBS-19`): the adopter's hook, with this kind's secret and no other,
   # a token that reads contents and nothing more, and no Claude credential. Of the shape

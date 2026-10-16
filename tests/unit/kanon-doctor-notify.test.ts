@@ -489,6 +489,29 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
       expect(f.fix.commands).toEqual([`      ${DEPLOY_SECRET}: \${{ secrets.${DEPLOY_SECRET} }}`]);
     });
 
+    it('decides an unmapped deploy job before the organisation lookup, and adds the gh secret set line only where a listing shows the secret missing', async () => {
+      const unmapped = deployCallerFile(TWO, REQ, PINNED).replace(/^ {4}secrets:\n {6}KANON_CHAT_DEPLOY: .*\n(?= {2}deploy-2:)/m, '');
+      const line = `      ${DEPLOY_SECRET}: \${{ secrets.${DEPLOY_SECRET} }}`;
+      const set = `gh secret set ${DEPLOY_SECRET} -R ${REPO}`;
+      const org = (shared: Set<string> | null) => check(deployFiles(unmapped), github({ secrets: held(), owner: 'Organization', org: shared }));
+      // Shared through the organisation: the job is still the finding, with its line alone.
+      const shared = await org(new Set([DEPLOY_SECRET]));
+      expect(notifyIds(shared)).toEqual([`notify.kind-unset ${DEPLOY_CALLER_PATH}`]);
+      expect(finding(shared, 'notify.kind-unset').fix.commands).toEqual([line]);
+      const secretsUnchecked = (r: Result) => notifyUnchecked(r).filter((u: { check: string }) => u.check === 'notify-secrets');
+      expect(secretsUnchecked(shared)).toEqual([]);
+      // Missing from both listings: both lines.
+      const missing = await org(new Set(['OTHER']));
+      expect(finding(missing, 'notify.kind-unset').fix.commands).toEqual([set, line]);
+      expect(finding(missing, 'notify.kind-unset').message).toContain(`nor does ${REPO} hold it`);
+      // The organisation's listing unreadable: the job's line, and the secret unchecked.
+      const blind = await org(null);
+      expect(finding(blind, 'notify.kind-unset').fix.commands).toEqual([line]);
+      expect(secretsUnchecked(blind)).toEqual([expect.objectContaining({ check: 'notify-secrets', subject: DEPLOY_CALLER_PATH })]);
+      // A mapped caller whose secret the organisation shares: nothing.
+      expect(notifyIds(await check(deployFiles(), github({ secrets: held(), owner: 'Organization', org: new Set([DEPLOY_SECRET]) })))).toEqual([]);
+    });
+
     describe('notify.failing', () => {
       const line = (outcome: string) => `${NOTIFY_LINE} {"hook":"slack","kind":"deploy","outcome":"${outcome}"}`;
       /** A deploy run whose staging announcement posted and whose production announcement said `production`. */

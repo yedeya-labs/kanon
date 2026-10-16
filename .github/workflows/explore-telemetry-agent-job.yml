@@ -295,6 +295,8 @@ jobs:
         uses: $/actions/agent-classify
         with:
           arm: telemetry Explorer agent
+          claude-args: ${{ steps.agent.outputs.claude-args }}
+          agent-outcome: ${{ steps.agent.outcome }}
 
       # THE TOKEN DIES WITH THE JOB (`K-AGENT-49`). Last, after every step that uses it. It is
       # decoded from the secret again rather than read from `Receive the App token`, so a run that
