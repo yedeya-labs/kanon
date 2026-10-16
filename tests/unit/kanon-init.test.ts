@@ -3392,6 +3392,26 @@ describe('kanon init and the chat channel (plan 0011 N11)', () => {
     expect(r.status).toBe(2);
   });
 
+  it("asks nothing for deploy announcements where deploy.yml is the project's own workflow, so init writes no deploy caller", async () => {
+    const own = 'name: Ship\non: push\njobs:\n  ship:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n';
+    const files = { '.github/workflows/deploy.yml': own };
+    const asked: string[] = [];
+    const r = await run(checkout(files), fakeGitHub(), ['--feature', 'review', '--deploy-environments', 'production', '--no-sensitive-data', '--consent', 'no', '--no-apps'], undefined, REQ, { ask: person({}, asked) });
+    expect(r.status, r.err).toBe(0);
+    expect(asked.filter((q) => /^Post .* to a chat channel\?/.test(q))).toEqual([]);
+    // Under the Full pipeline it is the digests' question alone.
+    const full: string[] = [];
+    expect((await run(checkout(files), fakeGitHub(), ['--feature', 'full', '--deploy-environments', 'production', '--no-sensitive-data', '--consent', 'no', '--no-apps'], undefined, REQ, { ask: person({}, full) })).status).toBe(0);
+    expect(full.filter((q) => /^Post .* to a chat channel\?/.test(q)).map((q) => q.split('\n')[0])).toEqual([CHAT_QUESTION]);
+    // Nor through Change something's deploy group.
+    const changed: string[] = [];
+    expect((await run(checkout(files), fakeGitHub(), ['--feature', 'review', '--no-sensitive-data', '--consent', 'no', '--no-apps'], undefined, REQ, { ask: changing('7', { "The deploy lane's environments": 'production' }, changed) })).status).toBe(0);
+    expect(changed.filter((q) => /^Post .* to a chat channel\?/.test(q))).toEqual([]);
+    // And with --yes the answer is no chat at all.
+    const { d } = await initWith(['--feature', 'review', '--deploy-environments', 'production'], files);
+    expect(d.answers.chat).toBeNull();
+  });
+
   it('asks the chat question when deploy environments are declared through Change something, under Review', async () => {
     const dir = checkout();
     const asked: string[] = [];

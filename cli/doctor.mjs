@@ -2616,29 +2616,37 @@ export const diagnose = async (deps, opts) => {
         const jobsOf = Object.entries(isMap(workflows.get(c.file)?.jobs) ? /** @type {Record<string, unknown>} */ (workflows.get(c.file)?.jobs) : {});
         const unmappedIds = unmapped.map((x) => jobsOf.find(([, j]) => j === x.job)?.[0] ?? x.lane);
         const mapLine = `      ${name}: \${{ secrets.${name} }}`;
-        if (unmapped.length && (!s.secrets || s.secrets.has(name))) {
-          find('notify.kind-unset', c.file, `calls ${c.lane}, whose ${kind} messages are posted only with ${name}, and its job${unmappedIds.length > 1 ? 's' : ''} ${unmappedIds.join(', ')} map${unmappedIds.length > 1 ? '' : 's'} none: so ${kind} is not posted. That is a choice (plan 0011 decision 3).`, {
-            text: `To post ${kind}, add the line under the secrets: of each of those jobs, as kanon init writes it:`,
-            commands: [mapLine],
-          });
-          continue;
-        }
-        if (!s.secrets) {
-          unchecked.push({ check: 'notify-secrets', subject: c.file, reason: `the token can't list ${repo}'s secret names (it needs admin access), so doctor can't tell whether ${name}, ${kind}'s secret, is held` });
-          continue;
-        }
-        if (s.secrets.has(name)) continue;
-        if (s.kind === 'Organization') {
+        // Whether the secret is held: the repository's listing, then, on an organisation's
+        // repository, the organisation's secrets shared with it. `lacks` is null where neither can
+        // be read, and `blind` then says why.
+        /** @type {boolean | null} */
+        let lacks = null;
+        /** @type {string | null} */
+        let blind = null;
+        if (!s.secrets) blind = `the token can't list ${repo}'s secret names (it needs admin access), so doctor can't tell whether ${name}, ${kind}'s secret, is held`;
+        else if (s.secrets.has(name)) lacks = false;
+        else if (s.kind === 'Organization') {
           const org = await orgSecrets();
-          if (org === null) {
-            unchecked.push({ check: 'notify-secrets', subject: c.file, reason: `${repo} doesn't hold ${name}, ${kind}'s secret, and an organisation secret of ${s.owner} shared with it could, which the token can't list` });
-            continue;
-          }
-          if (org.has(name)) continue;
+          if (org === null) blind = `${repo} doesn't hold ${name}, ${kind}'s secret, and an organisation secret of ${s.owner} shared with it could, which the token can't list`;
+          else lacks = !org.has(name);
+        } else lacks = true;
+        if (blind) unchecked.push({ check: 'notify-secrets', subject: c.file, reason: blind });
+        // A deploy job that doesn't map the optional secret is the finding whatever is held: its
+        // line is the fix, with the `gh secret set` line only where a listing shows the secret missing.
+        if (unmapped.length) {
+          const plural = unmappedIds.length > 1;
+          find('notify.kind-unset', c.file, `calls ${c.lane}, whose ${kind} messages are posted only with ${name}, and its job${plural ? 's' : ''} ${unmappedIds.join(', ')} map${plural ? '' : 's'} none${lacks ? `, nor does ${repo} hold it` : ''}: so ${kind} is not posted. That is a choice (plan 0011 decision 3).`, lacks
+            ? {
+              text: `To post ${kind}, store what your hook needs for it (for Kanon's Slack hook, the URL of a Slack incoming webhook for that channel; for its generic webhook hook, an https URL) ${OWN_TERMINAL}, and add the second line under the secrets: of each of those jobs:`,
+              commands: [`gh secret set ${name} -R ${repo}`, mapLine],
+            }
+            : { text: `To post ${kind}, add the line under the secrets: of each of those jobs, as kanon init writes it:`, commands: [mapLine] });
+          continue;
         }
-        find('notify.kind-unset', c.file, `calls ${c.lane}, whose ${kind} messages are posted only with ${name}, which ${repo} doesn't hold${unmapped.length ? `, nor do its job${unmappedIds.length > 1 ? 's' : ''} ${unmappedIds.join(', ')} map it` : ''}: so ${kind} is not posted${req.lanes[c.lane] ? ', and the model run that writes it is skipped' : ''}. That is a choice (plan 0011 decision 3).`, {
-          text: `To post ${kind}, store what your hook needs for it (for Kanon's Slack hook, the URL of a Slack incoming webhook for that channel; for its generic webhook hook, an https URL) ${OWN_TERMINAL}${unmapped.length ? `, and add the second line under the secrets: of each of those jobs` : ''}:`,
-          commands: [`gh secret set ${name} -R ${repo}`, ...(unmapped.length ? [mapLine] : [])],
+        if (!lacks) continue;
+        find('notify.kind-unset', c.file, `calls ${c.lane}, whose ${kind} messages are posted only with ${name}, which ${repo} doesn't hold: so ${kind} is not posted${req.lanes[c.lane] ? ', and the model run that writes it is skipped' : ''}. That is a choice (plan 0011 decision 3).`, {
+          text: `To post ${kind}, store what your hook needs for it (for Kanon's Slack hook, the URL of a Slack incoming webhook for that channel; for its generic webhook hook, an https URL) ${OWN_TERMINAL}:`,
+          commands: [`gh secret set ${name} -R ${repo}`],
         });
       }
     }
