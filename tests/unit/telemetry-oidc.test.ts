@@ -75,6 +75,12 @@ const fakeFetch = (...answers: Array<() => Response | Promise<Response>>) => {
 };
 const up = () => jwks(jwk(listed.publicKey, 'listed'));
 const down = () => { throw new TypeError('fetch failed'); };
+/** A fake wait for the cold cache's retry: records each wait and returns at once. */
+const fakeSleep = () => {
+  const waits: number[] = [];
+  const impl = async (ms: number) => { waits.push(ms); };
+  return { impl, waits };
+};
 
 const registrations: Record<string, { repository_owner_id: string, default_ref: string }> = {
   [REPO]: { repository_owner_id: OWNER, default_ref: 'refs/heads/main' },
@@ -429,7 +435,7 @@ describe('§2.4: GitHub\'s keys, cached and failing closed', () => {
       // An RSA key's numbers under another `kty`: the filter, not Node's import, refuses it.
       ['only a key whose kty is not RSA, holding RSA numbers', () => jwks(jwk(listed.publicKey, 'listed', { kty: 'oct' }))],
     ] as const) {
-      const keys = keyCache({ fetchImpl: fakeFetch(answer).impl });
+      const keys = keyCache({ fetchImpl: fakeFetch(answer).impl, sleep: fakeSleep().impl });
       expect(await verify(token(claims()), { keys }), name).toEqual(refused(503, 'jwks-unavailable'));
     }
   });
@@ -461,13 +467,49 @@ describe('§2.4: GitHub\'s keys, cached and failing closed', () => {
     expect(fetch.calls).toHaveLength(2);
   });
 
-  it('while GitHub is down, retries at most once a minute, and answers 503 between', async () => {
+  it('cold, a first fetch that fails is retried once in the same request, after 250 ms, and the token is admitted', async () => {
+    const fetch = fakeFetch(down, up);
+    const sleep = fakeSleep();
+    const keys = keyCache({ fetchImpl: fetch.impl, sleep: sleep.impl });
+    expect(await verify(token(claims()), { keys })).toMatchObject({ ok: true });
+    expect(fetch.calls).toEqual([{ url: JWKS_URL, signal: expect.any(AbortSignal) }, { url: JWKS_URL, signal: expect.any(AbortSignal) }]);
+    // Each attempt has its own 2-second timeout, not what is left of the first's.
+    expect(fetch.calls[1]!.signal).not.toBe(fetch.calls[0]!.signal);
+    expect(sleep.waits).toEqual([250]);
+  });
+
+  it('cold, with both fetches failing, answers 503, and fetches again 5 seconds later, not a minute', async () => {
     const fetch = fakeFetch(down);
-    const keys = keyCache({ fetchImpl: fetch.impl });
-    for (let i = 0; i < 5; i += 1) expect(await verify(token(claims()), { keys, now: NOW + 1000 * i })).toEqual(refused(503, 'jwks-unavailable'));
-    expect(fetch.calls).toHaveLength(1);
-    expect(await verify(token(claims()), { keys, now: NOW + MINUTE })).toEqual(refused(503, 'jwks-unavailable'));
+    const sleep = fakeSleep();
+    const keys = keyCache({ fetchImpl: fetch.impl, sleep: sleep.impl });
+    expect(await verify(token(claims()), { keys })).toEqual(refused(503, 'jwks-unavailable'));
     expect(fetch.calls).toHaveLength(2);
+    for (const at of [1000, 4999]) expect(await verify(token(claims()), { keys, now: NOW + at }), `+${at} ms`).toEqual(refused(503, 'jwks-unavailable'));
+    expect(fetch.calls).toHaveLength(2);
+    expect(await verify(token(claims()), { keys, now: NOW + 5000 })).toEqual(refused(503, 'jwks-unavailable'));
+    expect(fetch.calls).toHaveLength(4);
+    expect(sleep.waits).toEqual([250, 250]);
+  });
+
+  it('cold, a fetch that recovers a few seconds later admits the token', async () => {
+    const fetch = fakeFetch(down, down, up);
+    const keys = keyCache({ fetchImpl: fetch.impl, sleep: fakeSleep().impl });
+    expect(await verify(token(claims()), { keys })).toEqual(refused(503, 'jwks-unavailable'));
+    expect(await verify(tokenAt(5000), { keys, now: NOW + 5000 })).toMatchObject({ ok: true });
+    expect(fetch.calls).toHaveLength(3);
+  });
+
+  it('warm, once a set was fetched: while GitHub is down, a stale cache refetches at most once a minute, with no retry, and answers 503 between', async () => {
+    const fetch = fakeFetch(up, down);
+    const sleep = fakeSleep();
+    const keys = keyCache({ fetchImpl: fetch.impl, sleep: sleep.impl });
+    expect(await verify(token(claims()), { keys })).toMatchObject({ ok: true });
+    const stale = NOW + 16 * MINUTE;
+    for (let i = 0; i < 5; i += 1) expect(await verify(tokenAt(16 * MINUTE + 10_000 * i), { keys, now: stale + 10_000 * i })).toEqual(refused(503, 'jwks-unavailable'));
+    expect(fetch.calls).toHaveLength(2);
+    expect(await verify(tokenAt(17 * MINUTE), { keys, now: stale + MINUTE })).toEqual(refused(503, 'jwks-unavailable'));
+    expect(fetch.calls).toHaveLength(3);
+    expect(sleep.waits).toEqual([]);
   });
 
   it('a failed refetch for an unknown `kid` keeps the fresh set, and the next minute\'s refetch recovers', async () => {
