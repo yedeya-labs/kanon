@@ -57,7 +57,7 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
+import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -415,6 +415,7 @@ export const FINDINGS = {
   'deploy.subject-custom': { category: 'deploy', blocking: true },
   'deploy.trust-unproven': { category: 'deploy', blocking: true },
   'deploy.artifact-retention': { category: 'deploy', blocking: false },
+  'deploy.secret-repository': { category: 'deploy', blocking: false },
   'deploy.tag-ruleset': { category: 'deploy', blocking: false },
   'id-token.unaccepted': { category: 'id-token', blocking: true },
   'id-token.stale-acceptance': { category: 'id-token', blocking: false },
@@ -972,13 +973,17 @@ const BUILD_INPUT = /^\$\{\{\s*needs\.release\.outputs\.build\s*\}\}$/;
  * environment in order, a `deploy-<position>` job calling its per-environment workflow with that
  * environment and position, passing `build: ${{ needs.release.outputs.build }}`, and needing the
  * one before it and `release` (the first `release` alone); all at one release, and no other job.
- * With no environment declared, any caller is the problem. One sentence per problem; none when it
- * matches, as `kanon init` writes it.
+ * Each `deploy-<position>` maps each of `secrets`, the deploy hook's environment secrets, as
+ * `NAME: ${{ secrets.NAME }}` (kanon#1049): GitHub evaluates that expression in the called job's
+ * scope, the environment's secret first, so an unmapped one, or one mapped from anything else,
+ * reaches the hook empty or wrong. With no environment declared, any caller is the problem. One
+ * sentence per problem; none when it matches, as `kanon init` writes it.
  * @param {Record<string, any>} wf the caller @param {string[]} environments the declared list
  * @param {{ release: string, environment: string }} workflows the lane's two, by file name without `.yml`
+ * @param {string[]} [secrets] the environment secrets the release's `deploy.yml` declares (`deployEnvironmentSecrets`)
  * @returns {string[]}
  */
-export const deployCallerProblems = (wf, environments, workflows) => {
+export const deployCallerProblems = (wf, environments, workflows, secrets = []) => {
   if (!environments.length) return [`it calls the deploy lane, but ${ADOPTION_RECORD} declares no environment under ## Deploy, so the gate refuses every run`];
   /** @type {string[]} */
   const problems = [];
@@ -1017,6 +1022,13 @@ export const deployCallerProblems = (wf, environments, workflows) => {
     const needs = [...new Set(list(job.needs))].sort();
     const ought = (n === 1 ? ['release'] : ['release', `deploy-${n - 1}`]).sort();
     if (needs.join('\n') !== ought.join('\n')) problems.push(`\`${key}\` needs ${spans(needs)}, not ${spans(ought)}${n > 1 && !needs.includes('release') ? `: without \`release\` it can't read the build it deploys` : ''}`);
+    const mapped = isMap(job.secrets) ? job.secrets : {};
+    for (const name of secrets) {
+      const want = `\${{ secrets.${name} }}`;
+      const has = mapped[name];
+      if (has === undefined) problems.push(`\`${key}\` doesn't map \`${name}: ${want}\`, so the deploy hook reads it empty, whatever \`${environment}\` holds (kanon#1049)`);
+      else if (!new RegExp(`^\\$\\{\\{\\s*secrets\\.${name}\\s*\\}\\}$`).test(String(has).trim())) problems.push(`\`${key}\` maps \`${name}\` from \`${String(has)}\`, not \`${want}\`, which resolves \`${environment}\`'s own secret in the deploy job (kanon#1049)`);
+    }
   });
   if (refs.size > 1) problems.push(`its jobs call the lane at different releases, ${[...refs].sort().join(' and ')}: each calls the one pinned release`);
   return problems;
@@ -2835,7 +2847,7 @@ export const diagnose = async (deps, opts) => {
     }
     for (const file of deployCallers) {
       const problems = file === own
-        ? deployCallerProblems(/** @type {Record<string, any>} */ (workflows.get(file)), chain, lane)
+        ? deployCallerProblems(/** @type {Record<string, any>} */ (workflows.get(file)), chain, lane, deployEnvironmentSecrets(req))
         : [`it calls the deploy lane beside ${own}, the repository's deploy caller: a release would deploy twice`];
       if (problems.length) {
         find('deploy.caller-mismatch', file, `doesn't match ${ADOPTION_RECORD}'s ${DEPLOY_HEADING} (${chain.length ? chain.join(', ') : 'no environment'}): ${problems.join('; ')}. The gate refuses a caller whose list isn't the declaration's (plan 0010 §4, §12).`, file === own
@@ -3017,6 +3029,18 @@ export const diagnose = async (deps, opts) => {
               ...(extra.length ? [`it probed ${extra.join(', ')}, which the declaration no longer names`] : []),
             ].join('; ')}. The probe must answer exactly the declared environments, each refused (plan 0010 §5).`, false, [`gh run view ${latest.run.id} -R ${repo} --log`, dispatch]);
           }
+        }
+      }
+      // ── `deploy.secret-repository` (a note, kanon#1049): the caller maps the deploy hook's
+      // secret as `${{ secrets.NAME }}`, which GitHub evaluates in the deploy job's scope, the
+      // environment's first, then the repository's. An environment that holds none then hands the
+      // hook a repository secret of that name, which any workflow of any branch can also read.
+      if (own && s.secrets) {
+        for (const name of deployEnvironmentSecrets(req).filter((n) => s.secrets?.has(n))) {
+          find('deploy.secret-repository', name, `is a repository secret: the deploy caller maps ${name} by name, which GitHub resolves in each deploy job from the environment first, then the repository, so a declared environment that holds no ${name} hands the deploy hook this one, which every workflow on every branch can read (plan 0010 §7, §15.1). Keep it an environment secret only.`, {
+            text: `Move it into each environment that needs it, then delete the repository secret:`,
+            commands: [...chain.map((e) => `gh secret set ${name} --env ${e} -R ${repo}`), `gh secret delete ${name} -R ${repo}`],
+          });
         }
       }
       // ── `deploy.artifact-retention` (a note): the artifact must outlive a production approval.

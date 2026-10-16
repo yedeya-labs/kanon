@@ -57,8 +57,15 @@ const grants = (j: Job) => (typeof j.permissions === 'object' ? j.permissions : 
 const ALLOWED_SECRET = '${{ secrets.KANON_DEPLOY_SECRET }}';
 /** The announcement's secret (plan 0011 N9): an optional `workflow_call` secret of deploy.yml, read by its `notify` step alone. */
 const CHAT_SECRET = '${{ secrets.KANON_CHAT_DEPLOY }}';
-/** deploy.yml's one declared secret, exactly. */
-const DECLARED = { KANON_CHAT_DEPLOY: { description: 'Where the adopter\'s notify hook posts this environment\'s deploy announcement. Optional.', required: false } };
+/**
+ * deploy.yml's two declared secrets, exactly, both optional: the announcement's, and the deploy
+ * hook's, which the caller maps as `${{ secrets.KANON_DEPLOY_SECRET }}` so that GitHub resolves it
+ * in the deploy job's scope, the environment's first (kanon#1049: undeclared or unmapped, it is empty).
+ */
+const DECLARED = {
+  KANON_CHAT_DEPLOY: { description: 'Where the adopter\'s notify hook posts this environment\'s deploy announcement. Optional.', required: false },
+  KANON_DEPLOY_SECRET: { description: 'The deploy hook\'s secret, the environment\'s own, which the caller maps by the same name. Optional.', required: false },
+};
 
 /** Everything wrong with the lane's shape, by file, job and step. */
 export function laneProblems(w: Record<string, Workflow>): string[] {
@@ -67,9 +74,9 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
     const wf = w[file];
     if (!wf) { out.push(`${file} is missing`); continue; }
     if (JSON.stringify(wf.permissions) !== '{}') out.push(`${file}: the workflow grants something at the top`);
-    // deploy.yml declares one secret, the announcement's, optional; deploy-release.yml none.
+    // deploy.yml declares two secrets, the announcement's and the deploy hook's, both optional; deploy-release.yml none.
     const declared = wf.on?.workflow_call?.secrets;
-    if (file === ENV ? JSON.stringify(declared) !== JSON.stringify(DECLARED) : declared !== undefined) out.push(`${file}: declares secrets its caller would map, beyond KANON_CHAT_DEPLOY, optional, in deploy.yml`);
+    if (file === ENV ? JSON.stringify(declared) !== JSON.stringify(DECLARED) : declared !== undefined) out.push(`${file}: declares secrets its caller would map, beyond KANON_CHAT_DEPLOY and KANON_DEPLOY_SECRET, optional, in deploy.yml`);
     if (/\bvars\./.test(JSON.stringify(wf))) out.push(`${file}: reads a repository variable: where the hook finds each role is the hook's`);
     for (const [name, j] of Object.entries(wf.jobs)) {
       const at = `${file}:${name}`;
@@ -404,9 +411,11 @@ describe('the deploy lane holds its shape', () => {
       red((w) => { step(job(w, ENV, 'notify'), 'notify').with!.secret = ALLOWED_SECRET; }, /deploy\.yml:notify:notify: references a secret/);
       red((w) => { (job(w, ENV, 'notify') as Record<string, unknown>).env = { SECRET: CHAT_SECRET }; }, /deploy\.yml:notify: references a secret outside a step/);
     });
-    it('a secret declared beyond the optional KANON_CHAT_DEPLOY, or it made required (plan 0011 N9)', () => {
-      red((w) => { (w[ENV]!.on!.workflow_call!.secrets as Record<string, unknown>).KANON_DEPLOY_SECRET = { required: false }; }, /deploy\.yml: declares secrets its caller would map/);
+    it('a secret declared beyond the optional KANON_CHAT_DEPLOY and KANON_DEPLOY_SECRET, one dropped, or one made required (plan 0011 N9, kanon#1049)', () => {
+      red((w) => { (w[ENV]!.on!.workflow_call!.secrets as Record<string, unknown>).KANON_OTHER = { required: false }; }, /deploy\.yml: declares secrets its caller would map/);
+      red((w) => { delete (w[ENV]!.on!.workflow_call!.secrets as Record<string, unknown>).KANON_DEPLOY_SECRET; }, /deploy\.yml: declares secrets its caller would map/);
       red((w) => { (w[ENV]!.on!.workflow_call!.secrets as Record<string, { required: boolean }>).KANON_CHAT_DEPLOY!.required = true; }, /deploy\.yml: declares secrets its caller would map/);
+      red((w) => { (w[ENV]!.on!.workflow_call!.secrets as Record<string, { required: boolean }>).KANON_DEPLOY_SECRET!.required = true; }, /deploy\.yml: declares secrets its caller would map/);
       red((w) => { w[RELEASE]!.on!.workflow_call!.secrets = structuredClone(DECLARED); }, /deploy-release\.yml: declares secrets its caller would map/);
     });
     it('a write, or an OIDC grant, on the announcement or its post', () => {

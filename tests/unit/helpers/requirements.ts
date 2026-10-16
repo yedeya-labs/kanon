@@ -199,7 +199,8 @@ export const buildRequirements = (root: string) => {
   const lanesJson = JSON.parse(readFileSync(join(root, 'docs/lanes.json'), 'utf8')) as Doc;
   // THE DEPLOY LANE (plan 0010 §12, step D4): its two workflows, what each takes from the caller
   // and the grant the caller's job must make for it, the adopter's hooks with the inputs the lane
-  // passes them, the one secret it reads (an environment secret the caller never maps), and the
+  // passes them, the one secret its deploy hook reads (an environment secret, which the caller
+  // maps by name, kanon#1049), the secrets the per-environment workflow declares, and the
   // declaration it reads. Read from the two workflows, so `kanon init` (D6) and `kanon doctor`
   // (D7) read the release's own copy; the description is docs/lanes.json's `deploy`.
   const deployFiles = { release: 'deploy-release', environment: 'deploy' } as const;
@@ -228,10 +229,15 @@ export const buildRequirements = (root: string) => {
       .map(([k, v]) => [k, { type: v.type ?? 'string', description: String(v.description ?? '').trim() }]))])),
     grants: Object.fromEntries(Object.values(deployFiles).map((f) => [f, deployGrant(deployDocs[f]!)])),
     hooks: Object.entries(deployHooks).sort(([a], [b]) => a.localeCompare(b)).map(([path, inputs]) => ({ path, inputs: [...inputs].sort() })),
-    // The environment's own secrets: every secret the lane reads but those its caller maps, which
-    // `deploy.yml` declares (`KANON_CHAT_DEPLOY`, the announcement's, plan 0011 N9).
-    environmentSecrets: [...new Set(Object.values(deployFiles).flatMap((f) => [...readFileSync(join(root, '.github/workflows', `${f}.yml`), 'utf8').matchAll(/\$\{\{ secrets\.([A-Z0-9_]+) \}\}/g)].map((m) => m[1]!)
-      .filter((name) => !Object.hasOwn(((deployDocs[f]!.on.workflow_call ?? {}).secrets ?? {}) as Record<string, unknown>, name))))].sort(),
+    // The environment's own secrets: every secret a job that sets `environment:` reads (the deploy
+    // hook's `KANON_DEPLOY_SECRET`), not the announcement's, which `notify` reads outside it.
+    environmentSecrets: [...new Set(Object.values(deployDocs).flatMap((doc) => Object.values((doc.jobs ?? {}) as Record<string, Doc>)
+      .filter((j) => j.environment !== undefined).flatMap((j) => [...JSON.stringify(j).matchAll(/\$\{\{ secrets\.([A-Z0-9_]+) \}\}/g)].map((m) => m[1]!))))].sort(),
+    // The secrets the per-environment workflow declares, all optional, which the caller maps by
+    // name: an environment secret among them resolves in the deploy job's scope, the environment's
+    // first (kanon#1049). A release whose `deploy.yml` declares an environment secret is one whose
+    // caller must map it; before it, the caller maps none.
+    declaredSecrets: Object.keys(((deployDocs[deployFiles.environment]!.on.workflow_call ?? {}).secrets ?? {}) as Record<string, unknown>).sort(),
     declaration: { path: 'docs/qa/adoption.md', section: '## Deploy' },
     catalogue: lanesJson.deploy,
   };

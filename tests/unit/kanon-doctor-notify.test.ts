@@ -480,7 +480,7 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
     });
 
     it("names each deploy job that doesn't map KANON_CHAT_DEPLOY, with the line to add, even where the repository holds it", async () => {
-      const unmapped = deployCallerFile(TWO, REQ, PINNED).replace(/^ {4}secrets:\n {6}KANON_CHAT_DEPLOY: .*\n(?= {2}deploy-2:)/m, '');
+      const unmapped = deployCallerFile(TWO, REQ, PINNED).replace(/^ {6}KANON_CHAT_DEPLOY: .*\n(?= {6}KANON_DEPLOY_SECRET: .*\n {2}deploy-2:)/m, '');
       expect(unmapped).not.toBe(deployCallerFile(TWO, REQ, PINNED));
       const r = await check(deployFiles(unmapped), github({ secrets: held(DEPLOY_SECRET) }));
       expect(notifyIds(r)).toEqual([`notify.kind-unset ${DEPLOY_CALLER_PATH}`]);
@@ -490,7 +490,7 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
     });
 
     it('decides an unmapped deploy job before the organisation lookup, and adds the gh secret set line only where a listing shows the secret missing', async () => {
-      const unmapped = deployCallerFile(TWO, REQ, PINNED).replace(/^ {4}secrets:\n {6}KANON_CHAT_DEPLOY: .*\n(?= {2}deploy-2:)/m, '');
+      const unmapped = deployCallerFile(TWO, REQ, PINNED).replace(/^ {6}KANON_CHAT_DEPLOY: .*\n(?= {6}KANON_DEPLOY_SECRET: .*\n {2}deploy-2:)/m, '');
       const line = `      ${DEPLOY_SECRET}: \${{ secrets.${DEPLOY_SECRET} }}`;
       const set = `gh secret set ${DEPLOY_SECRET} -R ${REPO}`;
       const org = (shared: Set<string> | null) => check(deployFiles(unmapped), github({ secrets: held(), owner: 'Organization', org: shared }));
