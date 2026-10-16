@@ -212,10 +212,16 @@ Plan 0003 M7 ([#661](https://github.com/yedeya-labs/kanon/issues/661)), §6 opti
 
 **Turning Pages on, once.** In the repository's settings, under **Pages**, set **Source** to **Deploy from a branch**, the branch to `main` and the folder to `/docs`. The page is then at `/metrics/` under the Pages address. `docs/.nojekyll` makes Pages serve the folder as it is, without Jekyll, which would otherwise read the `${{ }}` in the docs as Liquid.
 
-**Reproduce a page.** The page names the release and commit it was generated at, and points here for the commands: only the store's operator can run them, so they stay off the public page (Owner, 2026-10-12). With the invoker role's credentials:
+**Reproduce a page.** The page names the release and commit it was generated at, and points here for the commands: only Kanon's maintainers can run them, so they stay off the public page (Owner, 2026-10-12). Since plan 0008 §9 step 4a the page view is read only with a token minted by `metrics-page.yml` itself on Kanon's default branch, so no command run elsewhere can read it. To get the page view a page was made from, dispatch the workflow on the default branch and download its `kanon-metrics-page-<run id>-<attempt>` artifact, `page.json`, which is kept **one day**:
 
 ```sh
-OUT=. KANON_AGGREGATE_URL=<the function URL> node "$KANON/scripts/aggregate-read.mjs" page
+gh workflow run metrics-page.yml --ref main
+gh run download <run id> --name kanon-metrics-page-<run id>-<attempt>
+```
+
+Then render it at the commit the page names:
+
+```sh
 node scripts/telemetry/kanon-health.mjs --json > health.json
 node .github/scripts/metrics-page.mjs --page page.json --health health.json --release <x.y.z> --commit <sha> --out docs/metrics/index.html
 ```
