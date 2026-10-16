@@ -1612,7 +1612,8 @@
         "a `## Deploy` section in `docs/qa/adoption.md` listing your environments",
         "a GitHub environment per declared environment, production with required reviewers, or the record's fallback marker",
         "a cloud role per environment that trusts only that environment's OIDC subject, readable from outside the environment (a repository variable)",
-        "the Releaser, so a release starts the lane"
+        "the Releaser, so a release starts the lane",
+        "to announce each deploy, a notify hook and `KANON_CHAT_DEPLOY`, which the caller `kanon init` writes maps into each environment's job"
       ],
       "cost": "No model. The gate waits for the release commit's CI, up to the declared CI wait (90 minutes by default); each environment costs what your deploy command costs.",
       "minutes": "Not measured: Kanon's own repository deploys nothing and calls no deploy lane.",
@@ -1647,7 +1648,9 @@
       },
       "deploy": {
         "secret": "KANON_CHAT_DEPLOY",
-        "lanes": []
+        "lanes": [
+          "deploy"
+        ]
       }
     },
     "legacySecret": "DIGEST_WEBHOOK",

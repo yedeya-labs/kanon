@@ -353,7 +353,7 @@ The install questions of 2026-10-10 are the feature, the review trigger, one con
 
 - **Asked only when the chosen lanes notify:** the full pipeline (its two digests), or **Customise** with a digest, and later the deploy lane. **Review** and **Review + build** never see it.
 - **Not asked when the repository already answers it:** a hook at the path infers its answer, read as the `notify` block reads it ([§5.1](#51-shape), step 4): **Kanon's Slack hook**, **Kanon's generic webhook hook**, or **My own hook**. It is shown in the summary, with its source, to confirm or change. A caller that still maps `DIGEST_WEBHOOK` infers nothing; `init` rewrites its `secrets:` to the kind secret (the lane would refuse the old one), and the summary says posts resume only once a hook is chosen and the kind secrets stored (decision 17).
-- **Otherwise asked, in two short sentences:** "Post digests to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own." Options:
+- **Otherwise asked, in two short sentences:** "Post digests to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own." Where the deploy lane is the only thing that posts, the first sentence is "Post deploy announcements to a chat channel?", and where the digests and the deploy lane both post, "Post digests and deploy announcements to a chat channel?"; the second is the same. A deploy environment counts whether `--deploy-environments` or the adoption record's `## Deploy` section declares it. Options:
   - **Kanon's Slack hook** (Recommended): `init` writes it at `.github/actions/notify/action.yml`; the digests post through Slack incoming webhooks you create, one secret per kind; a person-only step follows.
   - **Kanon's generic webhook hook:** `init` writes it; each kind posts its message as JSON to a URL you choose, one secret per kind.
   - **My own hook:** `init` writes a stub hook that fails by name until you fill it; nothing posts until then.
@@ -369,7 +369,7 @@ The install questions of 2026-10-10 are the feature, the review trigger, one con
 | `hook` | a stub at the path that exits non-zero naming its file | the same, which the hook receives | the same two ids, worded as "whatever your hook needs for this kind" | `- **Chat channel:** our own hook, .github/actions/notify` |
 | `none` | none | the project digest's caller maps its kind's secret anyway, so adding a hook later needs no change to it; the weekly digest is not installed | none | `- **Chat channel:** none yet` |
 
-`secret.digest-webhook` gives way to one step id per kind; the deploy lane's step, `secret.chat-deploy`, comes with that lane.
+`secret.digest-webhook` gives way to one step id per kind; the deploy lane's step, `secret.chat-deploy`, comes with that lane. **Built** (N9's installer half): the deploy caller maps `KANON_CHAT_DEPLOY` into each `deploy-<position>` job whatever the answer, as the `none` row has the project digest's caller do; `secret.chat-deploy` is written with a declared environment and an answer that writes a hook; a declared environment brings the question as a digest does; and doctor reads the deploy caller's `notify` jobs as the digests' (`notify.none`, and `notify.kind-unset`, which also names a `deploy-<position>` job that doesn't map the optional secret). `notify.failing` doesn't cover it yet: the deploy caller runs at a release tag, and `notify.failing` reads only default-branch runs ([#1046](https://github.com/yedeya-labs/kanon/issues/1046)). A deploy caller's path holding the project's own workflow (`deploy.caller-taken`) brings no question, since `init` then writes no caller to map the secret.
 
 **The full pipeline's lanes change** (decision 12): `agent-project-digest` becomes unconditional, since its health job is worth having without chat, as Kanon's own use shows; `agent-weekly-digest` stays conditional, now on "a notify hook at `.github/actions/notify/action.yml`". `requirements.json`'s `conditional` and `docs/lanes.json`'s features say so.
 
@@ -457,7 +457,6 @@ Read on 2026-10-14, on docs.slack.dev.
 
 ## Out of scope
 
-- **`kanon init` mapping `KANON_CHAT_DEPLOY` into the deploy caller,** and its `secret.chat-deploy` step ([§10.2](#102-what-each-answer-writes)), and doctor reading the deploy caller's `notify` jobs: the installer's and doctor's half of N9's wiring, after N11.
 - **A `release` kind** for libraries that release without deploying, **cost alerts** (`K-ADOPT-1` step 10 names them; nothing produces one yet), and **health messages** (decision 13: never, for now). Each would be an additive kind with its producer and its secret.
 - **A third prebuilt hook,** and **naming other chat systems** (shape S3: they are the adopter's own hooks).
 - **A default-branch restriction on the hook** (decision 8: the Owner chose any branch).

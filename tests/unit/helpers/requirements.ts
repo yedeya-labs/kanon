@@ -238,7 +238,7 @@ export const buildRequirements = (root: string) => {
   // CHAT NOTIFICATIONS (plan 0011 §9, step N10): the hook's fixed path and the inputs the
   // `notify` block passes it (§6.1), as Kanon's two prebuilt hooks declare them, which must agree;
   // the contract versions this release writes; each kind's secret (`KIND_SECRETS`) and the lanes
-  // that notify it, read from their `notify` jobs; the one secret the kind secrets replace
+  // that notify it, read from their `notify` jobs, the deploy lane's `deploy` among them; the one secret the kind secrets replace
   // (decision 17); and the prebuilt hooks, each its Kanon action and the file `kanon init` copies.
   // `kanon doctor` reads the release's own copy, so it checks a hook against what that release
   // passes, and only the callers of lanes that notify at that release.
@@ -258,7 +258,13 @@ export const buildRequirements = (root: string) => {
   const notify = {
     hook: { path: '.github/actions/notify/action.yml', inputs: hookInputs0 },
     versions: [...VERSIONS],
-    kinds: notifyKinds(Object.fromEntries(laneFiles(root).map((f) => [f.replace(/\.yml$/, ''), laneTree(root, f).map((t) => parse(readFileSync(join(root, '.github/workflows', t), 'utf8')) as Doc)]))),
+    // The deploy lane's per-environment workflow notifies too (plan 0011 N9), listed by its file
+    // name, `deploy`, as `deploy.workflows.environment` names it: `kanon init` maps its kind's
+    // secret into the deploy caller, and `kanon doctor` reads that caller's `notify` jobs.
+    kinds: notifyKinds({
+      ...Object.fromEntries(laneFiles(root).map((f) => [f.replace(/\.yml$/, ''), laneTree(root, f).map((t) => parse(readFileSync(join(root, '.github/workflows', t), 'utf8')) as Doc)])),
+      [deployFiles.environment]: [deployDocs[deployFiles.environment]!],
+    }),
     legacySecret: 'DIGEST_WEBHOOK',
     prebuilt,
   };

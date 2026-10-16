@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { callerFile } from '../../cli/callers.mjs';
+import { DEPLOY_CALLER_PATH, deployCallerFile } from '../../cli/init.mjs';
 import { EXIT, FINDINGS, NOTIFY_HOOK, NOTIFY_LINE, PACKAGE_INSTALL, pinnedUses, runPaths } from '../../cli/doctor.mjs';
 import { checkout, clone, fakeGitHub, healthyFiles, ids, LANES, no, NEXT, ok, PINNED, REPO, REQ, ROOT, run, type Req, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
@@ -117,7 +118,7 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
 
   it('asks nothing where the checked release has no lane that notifies, as a release before N7', async () => {
     // This tree notifies since N7 and N8, from both digests; a release before them has the entry, and no lane in it.
-    expect(Object.values(notifyOf(REQ).kinds).flatMap((k) => k.lanes)).toEqual([LANE, 'agent-weekly-digest']);
+    expect(Object.values(notifyOf(REQ).kinds).flatMap((k) => k.lanes)).toEqual([LANE, 'agent-weekly-digest', 'deploy']);
     const f = files({ hook: null, mapped: ['CLAUDE_CODE_OAUTH_TOKEN', LEGACY] });
     const r = await check(f, github({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), LEGACY]) }), beforeN7());
     expect(notifyIds(r)).toEqual([]);
@@ -433,6 +434,71 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
 
     it('says nothing while the caller has no run whose notify job ran', async () => {
       expect(notifyIds(await check(files(), github({ runs: [] })))).toEqual([]);
+    });
+  });
+
+  // Plan 0011 N9's installer half: the deploy lane's `deploy.yml` notifies too, so its caller is a
+  // notifying caller. Its kind's secret is optional there, so a job that doesn't map it is part of
+  // `notify.kind-unset`, never `caller.secret-missing`.
+  describe("the deploy lane's caller (plan 0011 N9)", () => {
+    const DEPLOY_SECRET = 'KANON_CHAT_DEPLOY';
+    const TWO = ['staging', 'production'];
+    const deployFiles = (caller = deployCallerFile(TWO, REQ, PINNED)) => files({ extra: { [DEPLOY_CALLER_PATH]: caller } });
+    const held = (...extra: string[]) => new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), 'CLAUDE_CODE_OAUTH_TOKEN', SECRET, ...extra]);
+
+    it('reports notify.kind-unset, a note, where the repository lacks KANON_CHAT_DEPLOY and a hook exists, and nothing once it holds it', async () => {
+      const r = await check(deployFiles(), github({ secrets: held() }));
+      expect(notifyIds(r)).toEqual([`notify.kind-unset ${DEPLOY_CALLER_PATH}`]);
+      const f = finding(r, 'notify.kind-unset');
+      expect(f.blocking).toBe(false);
+      expect(f.message).toContain(`whose deploy messages are posted only with ${DEPLOY_SECRET}, which ${REPO} doesn't hold`);
+      expect(f.message).not.toContain('model run');
+      expect(f.fix.commands).toEqual([`gh secret set ${DEPLOY_SECRET} -R ${REPO}`]);
+      // Never secret.missing, nor caller.secret-missing: a kind not posted is a choice.
+      expect(ids(r).filter((x: string) => /secret-missing|^secret\.missing/.test(x))).toEqual([]);
+      expect(notifyIds(await check(deployFiles(), github({ secrets: held(DEPLOY_SECRET) })))).toEqual([]);
+      // With no hook, nothing posts: notify.none names the deploy caller, and kind-unset stays quiet.
+      const none = await check(files({ hook: null, extra: { [DEPLOY_CALLER_PATH]: deployCallerFile(TWO, REQ, PINNED) } }), github({ secrets: held() }));
+      expect(notifyIds(none)).toEqual([`notify.none ${NOTIFY_HOOK}`]);
+      expect(finding(none, 'notify.none').message).toContain(`${DEPLOY_CALLER_PATH} call agent-project-digest, deploy,`);
+    });
+
+    it("names each deploy job that doesn't map KANON_CHAT_DEPLOY, with the line to add, even where the repository holds it", async () => {
+      const unmapped = deployCallerFile(TWO, REQ, PINNED).replace(/^ {4}secrets:\n {6}KANON_CHAT_DEPLOY: .*\n(?= {2}deploy-2:)/m, '');
+      expect(unmapped).not.toBe(deployCallerFile(TWO, REQ, PINNED));
+      const r = await check(deployFiles(unmapped), github({ secrets: held(DEPLOY_SECRET) }));
+      expect(notifyIds(r)).toEqual([`notify.kind-unset ${DEPLOY_CALLER_PATH}`]);
+      const f = finding(r, 'notify.kind-unset');
+      expect(f.message).toMatch(/its job deploy-1 maps none: so deploy is not posted/);
+      expect(f.fix.commands).toEqual([`      ${DEPLOY_SECRET}: \${{ secrets.${DEPLOY_SECRET} }}`]);
+    });
+
+    it('decides an unmapped deploy job before the organisation lookup, and adds the gh secret set line only where a listing shows the secret missing', async () => {
+      const unmapped = deployCallerFile(TWO, REQ, PINNED).replace(/^ {4}secrets:\n {6}KANON_CHAT_DEPLOY: .*\n(?= {2}deploy-2:)/m, '');
+      const line = `      ${DEPLOY_SECRET}: \${{ secrets.${DEPLOY_SECRET} }}`;
+      const set = `gh secret set ${DEPLOY_SECRET} -R ${REPO}`;
+      const org = (shared: Set<string> | null) => check(deployFiles(unmapped), github({ secrets: held(), owner: 'Organization', org: shared }));
+      // Shared through the organisation: the job is still the finding, with its line alone.
+      const shared = await org(new Set([DEPLOY_SECRET]));
+      expect(notifyIds(shared)).toEqual([`notify.kind-unset ${DEPLOY_CALLER_PATH}`]);
+      expect(finding(shared, 'notify.kind-unset').fix.commands).toEqual([line]);
+      const secretsUnchecked = (r: Result) => notifyUnchecked(r).filter((u: { check: string }) => u.check === 'notify-secrets');
+      expect(secretsUnchecked(shared)).toEqual([]);
+      // Missing from both listings: both lines.
+      const missing = await org(new Set(['OTHER']));
+      expect(finding(missing, 'notify.kind-unset').fix.commands).toEqual([set, line]);
+      expect(finding(missing, 'notify.kind-unset').message).toContain(`nor does ${REPO} hold it`);
+      // The organisation's listing unreadable: the job's line, and the secret unchecked.
+      const blind = await org(null);
+      expect(finding(blind, 'notify.kind-unset').fix.commands).toEqual([line]);
+      expect(secretsUnchecked(blind)).toEqual([expect.objectContaining({ check: 'notify-secrets', subject: DEPLOY_CALLER_PATH })]);
+      // A mapped caller whose secret the organisation shares: nothing.
+      expect(notifyIds(await check(deployFiles(), github({ secrets: held(), owner: 'Organization', org: new Set([DEPLOY_SECRET]) })))).toEqual([]);
+    });
+
+    it("says nothing of the deploy caller against a release whose deploy.yml posts nothing", async () => {
+      const r = await check(deployFiles(), github({ secrets: held() }), nextReq((n) => { n.kinds.deploy!.lanes = []; }));
+      expect(notifyIds(r)).toEqual([]);
     });
   });
 

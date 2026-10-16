@@ -87,7 +87,8 @@ export const releasePin = async (gh, release) => {
  * the deploy lane's caller, by its name, `DEPLOY_CALLER_NAME`, on every conclusion: the lane acts
  * on a failure only. Such a caller has no `workflow_dispatch`, since the lane reads the failed run
  * from the event and a dispatch carries none. `reask` (kanon#813, #833) is a `workflow_run` of the
- * callers of the lanes it lists, by their names here, on every conclusion: the dispatch sweep and
+ * callers of the lanes it lists, by their names here, or by the names of the callers the
+ * repository already has (`callerFile`'s `names`, #1023), on every conclusion: the dispatch sweep and
  * the reconciler recover those lanes' runs, so a real run of one asks for them besides the
  * schedule (docs/lanes.md, "Schedules are best effort"). The lane admits no run that skipped and
  * none of its own caller, and acts only when it hasn't inside its window.
@@ -156,10 +157,13 @@ const y = (s) => (/^[A-Za-z0-9_][A-Za-z0-9_ ./()—-]*$/.test(s) && !/[ ]$/.test
  * names the lane at `release`. Of a model lane's Claude pair it maps the one `claudeAuth` names
  * (plan 0009 §10), the subscription's token unless it says the API key.
  * @param {string} lane the lane's file name without `.yml` @param {Lane} spec
- * @param {{ release: string, ciName: string, defaultBranch: string, path?: string, claudeAuth?: 'subscription' | 'api-key' }} o `path`: where
- *   the caller lives, when not at its lane's file name (#451); a trigger on the file itself names it
+ * @param {{ release: string, ciName: string, defaultBranch: string, path?: string, claudeAuth?: 'subscription' | 'api-key', names?: Map<string, string> }} o `path`: where
+ *   the caller lives, when not at its lane's file name (#451); a trigger on the file itself names it.
+ *   `names`: the `name:` of each lane's caller the repository already has, by lane, which the
+ *   re-ask names in place of the template's (#1023): a covered caller named otherwise is never
+ *   matched by the template's name, and its re-ask would never fire
  */
-export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = `.github/workflows/${lane}.yml`, claudeAuth = 'subscription' }) => {
+export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = `.github/workflows/${lane}.yml`, claudeAuth = 'subscription', names = new Map() }) => {
   const t = TRIGGERS[lane];
   if (!t) throw new Error(`no caller template for the lane ${lane}: add its triggers to TRIGGERS in cli/callers.mjs`);
   if ((t.prTarget || t.pinMoved) && t.merged) throw new Error(`the caller template of ${lane} writes \`pull_request_target\` twice`);
@@ -192,7 +196,7 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
       '  workflow_run:', `    workflows: [${t.reask.map((l) => {
         const covered = TRIGGERS[l];
         if (!covered) throw new Error(`the caller template of ${lane} re-asks on ${l}, which has no caller template`);
-        return y(covered.name);
+        return y(names.get(l) ?? covered.name);
       }).join(', ')}]`, '    types: [completed]');
   }
   // A RAISED TURN LIMIT IS A DISPATCH INPUT, NEVER A SETTING (kanon#891; ADR 0005 §2, amended
