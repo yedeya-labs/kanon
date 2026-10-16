@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.40.1](https://github.com/yedeya-labs/kanon/compare/v0.40.0...v0.40.1) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deploy:** a repository with a deploy caller re-runs `kanon init` (or adds `KANON_DEPLOY_SECRET: ${{ secrets.KANON_DEPLOY_SECRET }}` under each deploy-<n> job's `secrets:`) when it moves to this release; until then doctor's deploy.caller-mismatch blocks, and the deploy hook reads the secret empty. Keep KANON_DEPLOY_SECRET an environment secret only.
+
+### Bug Fixes
+
+* **deploy:** declare KANON_DEPLOY_SECRET in deploy.yml and map it from the deploy caller ([#1049](https://github.com/yedeya-labs/kanon/issues/1049)) ([180b243](https://github.com/yedeya-labs/kanon/commit/180b24356ee60600e8ffc256709ce61daa381215))
+
 ## [0.40.0](https://github.com/yedeya-labs/kanon/compare/v0.39.0...v0.40.0) (2026-10-15)
 
 
