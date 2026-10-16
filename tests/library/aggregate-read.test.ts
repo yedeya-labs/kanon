@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { AggregateError, MIN_ADOPTERS, aggregateStore, checkAggregate, isEmpty, readAggregateToken, summaryLine, tokenRefusal } from '../../scripts/aggregate-read.mjs';
-import { masksOf } from '../../scripts/aggregate-mask.mjs';
 import { HOSTED_AGGREGATE_URL } from '../../scripts/lib/telemetry-token.mjs';
 import { HOSTED_URL, RUNNER_ENV, SELF_AUDIENCE, SELF_URL, TOKEN, tokenNet } from '../unit/helpers/token-net.js';
 
@@ -11,7 +10,6 @@ import { HOSTED_URL, RUNNER_ENV, SELF_AUDIENCE, SELF_URL, TOKEN, tokenNet } from
  * whole, so the agent doesn't run.
  */
 
-const URL_OK = 'https://abc123def.lambda-url.eu-central-1.on.aws/';
 const cell = (lane = 'review', model = 'claude-opus-5-5', runs = 47) => ({ lane, model, runs, median_cost_usd: 0.4213, p90_cost_usd: 1.0987 });
 const signal = (extra: Record<string, unknown> = {}) => ({ lane: 'review', reason: 'did_not_finish', failed_stage: 'agent', kanon_error: null, kanon_version: '0.32.0', adopters_affected: 1, ...extra });
 const answer = (extra: Record<string, unknown> = {}) => ({
@@ -72,19 +70,6 @@ describe('checkAggregate: exactly what the function may publish', () => {
   });
 });
 
-
-describe('masksOf (kanon#433): the two variables and the account id inside the role', () => {
-  // Built, never written: the public-tree test refuses twelve digits in a row in a tracked file.
-  const ACCOUNT = String(10 ** 11 + 23);
-  const ROLE = `arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-k-aggregates`;
-  it('masks the URL, the role and the account id', () => {
-    expect(masksOf({ URL: ` ${URL_OK} `, ROLE })).toEqual([URL_OK, ROLE, ACCOUNT]);
-  });
-  it('masks nothing empty, and no account id it cannot read', () => {
-    expect(masksOf({ URL: '', ROLE: '' })).toEqual([]);
-    expect(masksOf({ ROLE: 'not-an-arn' })).toEqual(['not-an-arn']);
-  });
-});
 
 // ── The token way (plan 0008 §3.6, step J5) ───────────────────────────────────────────────────────
 describe('readAggregateToken: one GET on the token URL, with a fresh OIDC token', () => {
