@@ -64,7 +64,9 @@ const io = (net: ReturnType<typeof tokenNet>, extra: Record<string, unknown> = {
 
 describe('which store (plan 0008 §2.1)', () => {
   it('reads the hosted store, unpublished until the operator publishes its URL, or a self-hosted one by its two variables together', () => {
+    expect(overseerStore({}, '')).toMatchObject({ ok: false, unpublished: true });
     if (!HOSTED_INGEST_URL) expect(overseerStore({})).toMatchObject({ ok: false, unpublished: true });
+    else expect(overseerStore({})).toEqual({ ok: true, url: HOSTED_INGEST_URL, audience: 'kanon-telemetry', hosted: true });
     expect(overseerStore({}, HOSTED_URL)).toEqual({ ok: true, url: HOSTED_URL, audience: 'kanon-telemetry', hosted: true });
     expect(overseerStore({ KANON_TELEMETRY_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE }, HOSTED_URL)).toEqual({ ok: true, url: SELF_URL, audience: SELF_AUDIENCE, hosted: false });
     expect(overseerStore({ KANON_TELEMETRY_TOKEN_URL: SELF_URL }, HOSTED_URL)).toMatchObject({ ok: false, why: expect.stringMatching(/name a self-hosted store together/) });
@@ -490,8 +492,8 @@ describe('the merge into the export', () => {
 });
 
 // Its cases run the script in `node`, so the block takes the spawn budget (#436). None reaches a
-// network: the hosted URL is unpublished in this tree, and a self-hosted one is refused before any
-// request when the job holds no OIDC token.
+// network: an unpublished hosted URL is read before any request, and the hosted store or a
+// self-hosted one is refused before any request when the job holds no OIDC token.
 describe('the script, as the lane runs it', SPAWNS, () => {
   const run = (mode: string, env: Record<string, string>) => spawnSync(process.execPath, [SCRIPT, mode], { env: { PATH: process.env.PATH ?? '', ...env }, encoding: 'utf8', timeout: 20_000 });
   const SELF = { KANON_TELEMETRY_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE };
@@ -512,6 +514,11 @@ describe('the script, as the lane runs it', SPAWNS, () => {
       expect(readFileSync(outputs, 'utf8')).toBe('status=not configured\n');
       expect(r.stdout).toMatch(/The telemetry read did not run: the hosted store's URL is not published/);
       expect(r.stdout).not.toContain('::warning');
+    } else {
+      // Published, the hosted store is read: with no OIDC token in this job, the read fails before
+      // any request, as the next case's self-hosted one does.
+      expect(readFileSync(outputs, 'utf8')).toBe('status=failed\n');
+      expect(r.stdout).toMatch(/::warning title=overseer telemetry::The telemetry read failed: .*the job holds no OIDC token/);
     }
   });
 

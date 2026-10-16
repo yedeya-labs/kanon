@@ -91,6 +91,10 @@ describe('the script, as the gate runs it', SPAWNS, () => {
       const hosted = run(ENV);
       expect([hosted.status, hosted.stdout]).toEqual([0, 'false\n']);
       expect(hosted.stderr).toContain('not published');
+    } else {
+      // Published, the script would read the default branch through `gh`, which is a network call,
+      // so the published constant is checked in-process with a snapshot instead.
+      expect(exploreCheck(ENV, { json: snapshot({ 'telemetry.yml': caller() }) })).toEqual({ configured: 'true' });
     }
   });
 });

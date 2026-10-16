@@ -2096,6 +2096,7 @@ describe('kanon init and telemetry (#428)', () => {
     expect(existsSync(join(ROOT, '.github/ISSUE_TEMPLATE/telemetry-registration.yml'))).toBe(false);
     expect(d.summary.find((l) => l.answer === 'Sharing')!.value).toContain(telemetryRegisters(HOSTED_INGEST_URL !== ''));
     if (HOSTED_INGEST_URL === '') expect(d.summary.find((l) => l.answer === 'Sharing')!.value).not.toContain("registers on the collector's first run");
+    else expect(d.summary.find((l) => l.answer === 'Sharing')!.value).not.toContain('sends nothing yet');
     // A second run leaves the caller as written.
     const again = parse(await run(dir, github, ['--yes', '--json', '--no-apps', '--telemetry']));
     expect(again.files.find((x) => x.path === TELEMETRY_CALLER_PATH)).toMatchObject({ status: 'same' });

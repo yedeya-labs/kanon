@@ -124,12 +124,15 @@ export const COLLECT_JOB_OVERRIDE = `${COLLECT_JOB} (window override)`;
 /** The same job's name on an `erase: yes` dispatch, which sweeps nothing, so is never a watermark. */
 export const ERASE_JOB = 'Erase telemetry';
 /**
- * The same job's name while the hosted store's URL is unpublished in this release and the caller
- * names no store of its own: the run skips, green, so it is never a watermark. Anchoring on it
- * would make the first real sweep, at the release that publishes the URL, reach back 90 minutes
- * instead of to the last sweep before the skips, and drop the rows in between (#843). The job's
- * name is evaluated before this script runs, so `telemetry-collect.yml` holds its own literal for
- * the case, and tests/unit/telemetry-collect-lane.test.ts holds it to `HOSTED_INGEST_URL`.
+ * The same job's name at a release whose hosted store's URL is unpublished, when the caller names
+ * no store of its own: the run skips, green, so it is never a watermark. Anchoring on it would make
+ * the first real sweep, at the release that publishes the URL, reach back 90 minutes instead of to
+ * the last sweep before the skips, and drop the rows in between (#843). The job's name is
+ * evaluated before this script runs, so the workflow at such a release held its own literal for
+ * the case; this tree publishes the URL, and its workflow has none, which
+ * tests/unit/telemetry-collect-lane.test.ts holds to `HOSTED_INGEST_URL`. The name stays because
+ * a caller pinned at an older release still runs under it, and the watermark and `kanon doctor`
+ * read those runs.
  */
 export { UNPUBLISHED_JOB };
 
@@ -675,8 +678,10 @@ async function main() {
   const { store, erase, register, problems } = inputsOf(env);
   if (problems.length) fail(`${problems.join('; ')}. Nothing was sent, and no token was minted.`);
   if (!store.ok) {
-    // The hosted URL isn't published in this release: the collector skips, green, as it did
-    // before its variables were set. The job is named `UNPUBLISHED_JOB`, so this run is no sweep.
+    // Reached only at a release whose hosted URL is unpublished: the collector skips, green, as it
+    // did before its variables were set, and that release's workflow names the job
+    // `UNPUBLISHED_JOB`, so the run is no sweep. This tree publishes the URL, so `storeOf` never
+    // answers `unpublished` here, and `inputsOf` makes any other refusal a problem above.
     summary(`Telemetry collector **skipped**: ${store.why}. This run is not a sweep: the first sweep at a release that publishes it reaches back to the last sweep before, up to ${SWEEP_CAP_DAYS} days.`);
     return;
   }
