@@ -172,6 +172,7 @@ describe('readAggregateToken: one GET on the token URL, with a fresh OIDC token'
     expect(net.minted).toEqual([]);
     expect(aggregateStore({}, '')).toMatchObject({ ok: false, unpublished: true });
     if (!HOSTED_AGGREGATE_URL) expect(aggregateStore({})).toMatchObject({ ok: false, unpublished: true });
+    else expect(aggregateStore({})).toEqual({ ok: true, url: HOSTED_AGGREGATE_URL, audience: 'kanon-telemetry', hosted: true });
   });
 
   it('asks for the page view by name when told to', async () => {
