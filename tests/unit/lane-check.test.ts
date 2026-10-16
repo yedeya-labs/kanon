@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { actionFiles } from './helpers/actions.js';
+import { RELEASE_REF } from './helpers/release-ref.js';
 import { ROOT, SCRIPT, TRIAGE, IMPL, adopter, check, red, job, type Caller, type Tree, laneCheck } from './helpers/lane-check.js';
 
 /**
@@ -38,7 +39,7 @@ laneCheck(() => {
     // A copy in a temporary directory, never Kanon's own tree (kanon#330).
     const copy = caller.includes(legacy) ? mkdtempSync(join(tmpdir(), 'kanon-self-')) : undefined;
     if (copy) {
-      expect(caller).toMatch(/uses: yedeya-labs\/kanon\/\.github\/workflows\/agent-project-digest\.yml@v\d+\.\d+\.\d+\n/);
+      expect(caller).toMatch(new RegExp(`uses: yedeya-labs/kanon/\\.github/workflows/agent-project-digest\\.yml@${RELEASE_REF}\n`));
       // The lane-check script too: it is how lane-check knows the tree is Kanon's (`KANON_TREE`).
       for (const d of ['.github', 'docs', 'actions/lane-check']) cpSync(join(ROOT, d), join(copy, d), { recursive: true });
       writeFileSync(join(copy, '.github/workflows/project-digest.yml'), caller.replace(legacy, '      KANON_CHAT_PROJECT_DIGEST: ${{ secrets.KANON_CHAT_PROJECT_DIGEST }}\n'));
