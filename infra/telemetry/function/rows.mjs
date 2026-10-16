@@ -1,7 +1,7 @@
 // A row's checks and stamps (plan 0002 §4, §10; plan 0003 §4; plan 0006 §5), shared by both of the
-// ingest function's ways in: the SigV4 path (`index.mjs`) and the token path (`token.mjs`, plan
-// 0008 §3). Moved here from `index.mjs`, which re-exports each name, so the two paths stamp a row
-// exactly alike.
+// ingest function's ways in: the token path (`token.mjs`, plan 0008 §3) and the Owner's importer
+// and backfill aliases (`index.mjs`, plan 0008 §9). Moved here from `index.mjs`, which re-exports
+// each name, so the two paths stamp a row exactly alike.
 //
 // Each row is validated with the schema module (the same file the lanes use, linked into this
 // directory so `aws cloudformation package` zips it), checked against the `recorded_at` window,
@@ -239,7 +239,7 @@ export function toAttributes(/** @type {Record<string, unknown>} */ item) {
 }
 
 /**
- * The request's rows, as both paths take them: a JSON array of 1 to 25 rows, at most 256 KB.
+ * The token path's rows: a JSON array of 1 to 25 rows, at most 256 KB.
  * @param {any} event a function URL event
  * @returns {{ ok: true, rows: unknown[] } | { ok: false, status: number, error: string }}
  */
