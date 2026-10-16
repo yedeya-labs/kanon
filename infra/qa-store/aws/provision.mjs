@@ -133,8 +133,8 @@ export function trustProblems(template) {
 /**
  * Each repository's default branch, and the subjects the store trusts: `given` when there are any,
  * else each repository's default-branch ref subject in its own form. Both are read from GitHub's
- * API through `scripts/lib/oidc-subject.mjs`, the one reading the telemetry store's `render.mjs`
- * uses too, so the two stores can't come to trust different subjects (kanon#295). The default
+ * API through `scripts/lib/oidc-subject.mjs`, the one reading of a subject (kanon#295), which the
+ * telemetry store's `render.mjs` shared until plan 0008 J9 removed it. The default
  * branches are read even when every subject is given, so a `--subject` naming another branch is
  * refused; so is a `--repository` GitHub spells differently (a rename's redirect, another case),
  * since IAM compares the subject case-sensitively.

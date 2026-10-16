@@ -1,15 +1,17 @@
-# The hosted telemetry store (plan 0002 §3 to §5, §6.1, §7, §9, §10): one DynamoDB table, written
-# only by a validating function behind an IAM-authenticated URL, with a writer and a reader role
-# per registered repository, and an aggregate-only function behind a second such URL. Beside them,
-# the register table of plan 0008 §5, and the token paths: the ingest function's (plan 0008 §3,
-# J3), a public URL on its `live` alias, its `erase` alias and the self-read role; and the
-# aggregate function's (§3.6, J4), a public URL on its own `live` alias. No lane calls either
-# until the collector and the reading lanes move to them (J5, J7).
+# The hosted telemetry store (plan 0002 §3 to §5, §6.1, §7, §9, §10; plan 0008): one DynamoDB
+# table, written only by a validating function, and an aggregate-only function beside it, each
+# behind one public URL on its `live` alias whose gate is GitHub's OIDC token, checked by the
+# function (plan 0008 §2, §3, §3.6); and the register table of plan 0008 §5, which says who is
+# registered, under which key. The ingest function's other aliases are invoked directly: `erase`
+# by the function itself (§7), and `import` and `backfill` by the Owner's two roles, each only
+# while the stack is deployed with its flag (plan 0008 §9, "The Owner's roles at vM+1").
 #
-# THIS FILE IS NOT DEPLOYED AS IT IS. The register (who is opted in) is private (§5), so
-# `render.mjs` reads it and adds each repository's roles to this template. `docs/telemetry.md`
-# has the Owner's commands. Intrinsics are written in their long form (`Ref:`, `Fn::GetAtt:`)
-# so the file parses as plain YAML, for the render script and for the unit test that checks it.
+# NO PER-ADOPTER RESOURCE, AND NO ROLE GITHUB CAN ASSUME (plan 0008 J9). The SigV4 path's IAM URLs,
+# the writer, reader and aggregate-invoker roles and both functions' per-key environments are
+# gone, so the template deploys as it is, with account-level parameters alone: no register
+# material reaches a deploy. `docs/telemetry.md` has the commands. Intrinsics are written in their
+# long form (`Ref:`, `Fn::GetAtt:`) so the file parses as plain YAML, for the unit test that
+# checks it.
 #
 # COST (§9): on-demand DynamoDB, one 128 MB ingest function and one 256 MB aggregate function,
 # neither with a schedule, and a 30-day log group each. No NAT, no VPC, no always-on compute,
@@ -23,29 +25,28 @@ Parameters:
   OwnerPrincipalArn:
     Type: String
     Description: The Owner's role (the SSO role's ARN, with its path). It alone may assume the importer, backfill and verify paths, and erase rows.
-    # One role, as render.mjs's OWNER holds it (#798): a path and name of IAM's role characters only,
-    # so no `*` or `?`, which ArnEquals and ArnNotEquals read as wildcards, and no `,`, which the
-    # register table's Fn::Split reads as a second principal. The pattern is also the backstop for a
-    # deploy that sets this parameter by hand rather than through the render.
+    # One role (#798): a path and name of IAM's role characters only, so no `*` or `?`, which
+    # ArnEquals and ArnNotEquals read as wildcards, and no `,`, which the register table's Fn::Split
+    # reads as a second principal.
     AllowedPattern: '^arn:aws:iam::\d{12}:role/(?:[\w+=.@-]+/)*[\w+=.@-]+$'
   CreateOidcProvider:
     Type: String
-    Description: Create GitHub's OIDC provider. Set false when the account already has one.
+    Description: Create GitHub's OIDC provider. Set false when the account already has one. No role of this stack trusts it since plan 0008 J9; it is kept for the account's other roles.
     AllowedValues: ['true', 'false']
     Default: 'true'
   EnableImporter:
     Type: String
-    Description: The importer role (plan 0002, section 7, step S5). Deleted when the import is done.
+    Description: The importer role and the ingest function's import alias (plan 0002, section 7, step S5; plan 0008, section 9). Deleted when the import is done.
     AllowedValues: ['true', 'false']
     Default: 'false'
   EnableBackfill:
     Type: String
-    Description: The backfill role (plan 0002, section 7, step S7a). Deleted when the backfill is done.
+    Description: The backfill role and the ingest function's backfill alias (plan 0002, section 7, step S7a; plan 0008, section 9). Deleted when the backfill is done.
     AllowedValues: ['true', 'false']
     Default: 'false'
   EnableVerify:
     Type: String
-    Description: Let the Owner assume the writer and reader roles, and create the write probe, for verify.mjs only.
+    Description: Create the write probe, which only the Owner may assume, for verify.mjs only.
     AllowedValues: ['true', 'false']
     Default: 'false'
   OperatorJobRoleArns:
@@ -311,7 +312,7 @@ Resources:
   # The adopter's own rows (plan 0008 §3.5) and the erasure walk (§7): Query and delete on the
   # rows table, assumed only by the ingest function, which passes a session policy whose
   # dynamodb:LeadingKeys is the one key the registration gave, so a query or a delete can't leave
-  # that key (Owner decision 2 of 2026-10-12). Replaces the per-adopter reader roles at vM+1.
+  # that key (Owner decision 2 of 2026-10-12). It replaced the per-adopter reader roles (J9).
   SelfReadRole:
     Type: AWS::IAM::Role
     Properties:
@@ -348,7 +349,7 @@ Resources:
       Runtime: nodejs24.x
       Architectures: [arm64]
       Handler: index.handler
-      # A local directory: `aws cloudformation package` zips it. render.mjs makes it absolute.
+      # A local directory beside this file: `aws cloudformation package` zips it.
       Code: function
       MemorySize: 128
       Timeout: 10
@@ -362,29 +363,19 @@ Resources:
         Variables:
           TABLE_NAME: kanon-telemetry
           ACCOUNT_ID: { Ref: AWS::AccountId }
-          # Set by render.mjs from the register: every key. No repository's name hashes: a finding
-          # row's text is checked against its sender's registration's (plan 0006 §4.2, kanon#607).
-          WRITER_KEYS: ''
-          IMPORTER_ROLE: { 'Fn::If': [ImporterOn, kanon-telemetry-importer, ''] }
-          BACKFILL_ROLE: { 'Fn::If': [BackfillOn, kanon-telemetry-backfill, ''] }
-          # The token path (plan 0008 J3). Since J3 the SigV4 path reads its keys and name hashes
-          # from the register too; WRITER_KEYS stays, unread, until J9.
+          # No key and no repository: the keys and each sender's name hashes come from the
+          # register table and the token (plan 0008 §3.4, J9).
           REGISTER_TABLE: kanon-telemetry-register
           AUDIENCE: { Ref: Audience }
           MIN_TOKEN_VERSION: { Ref: MinTokenVersion }
           SELF_READ_ROLE: { 'Fn::GetAtt': [SelfReadRole, Arn] }
           CURSOR_KEY: { Ref: CursorKey }
 
-  IngestUrl:
-    Type: AWS::Lambda::Url
-    Properties:
-      TargetFunctionArn: { 'Fn::GetAtt': [IngestFunction, Arn] }
-      AuthType: AWS_IAM
-
-  # The token path's two aliases (plan 0008 §7, §9), on $LATEST, so a deploy moves them with the
+  # The ingest function's aliases (plan 0008 §7, §9), on $LATEST, so a deploy moves them with the
   # function. The handler reads which one it was invoked through from the ARN Lambda passes it,
-  # never from the request: `live` serves the five endpoints, `erase` the erasure walk, and the
-  # unqualified function the SigV4 path above.
+  # never from the request: `live` serves the five endpoints, `erase` the erasure walk, `import`
+  # and `backfill` the Owner's two roles; the unqualified function, which has no URL, refuses
+  # every event.
   IngestLiveAlias:
     Type: AWS::Lambda::Alias
     Properties:
@@ -397,6 +388,23 @@ Resources:
       FunctionName: { Ref: IngestFunction }
       FunctionVersion: $LATEST
       Name: erase
+  # Each of the Owner's roles reaches the function through an alias of its own, and nothing else
+  # (plan 0008 §9): a direct invocation carries no caller identity, so IAM's grant per alias is the
+  # whole gate, and the alias tells the handler which caller's limits hold.
+  IngestImportAlias:
+    Type: AWS::Lambda::Alias
+    Condition: ImporterOn
+    Properties:
+      FunctionName: { Ref: IngestFunction }
+      FunctionVersion: $LATEST
+      Name: import
+  IngestBackfillAlias:
+    Type: AWS::Lambda::Alias
+    Condition: BackfillOn
+    Properties:
+      FunctionName: { Ref: IngestFunction }
+      FunctionVersion: $LATEST
+      Name: backfill
 
   # The token path's URL: public, since the token is the gate (plan 0008 §2, §12), and bounded by
   # the reserved concurrency, a precondition of deploying it (§9 step 3a). It serves the `live`
@@ -423,9 +431,14 @@ Resources:
       Principal: '*'
       InvokedViaFunctionUrl: true
 
+  # No role of this stack trusts it since plan 0008 J9. It stays, and is retained if it is ever
+  # removed, because a role outside this stack may (the deployment lane's, plan 0010 §15): deleting
+  # it would cut every such role off at once.
   OidcProvider:
     Type: AWS::IAM::OIDCProvider
     Condition: CreateOidc
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Url: https://token.actions.githubusercontent.com
       ClientIdList: [sts.amazonaws.com]
@@ -445,23 +458,16 @@ Resources:
             Action: sts:AssumeRole
             Condition:
               ArnEquals: { aws:PrincipalArn: { Ref: OwnerPrincipalArn } }
+      # Its own alias, and nothing else (plan 0008 §9): not the function, not another alias.
       Policies:
-        - PolicyName: invoke-ingest-url
-          PolicyDocument: &invokeIngestUrl
-            # A function URL call needs both actions since October 2025. InvokeFunction is held
-            # to URL calls, so no caller can invoke the function with a forged request context.
+        - PolicyName: invoke-the-import-alias
+          PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action: lambda:InvokeFunctionUrl
-                Resource: { 'Fn::GetAtt': [IngestFunction, Arn] }
-                Condition:
-                  StringEquals: { lambda:FunctionUrlAuthType: AWS_IAM }
-              - Effect: Allow
                 Action: lambda:InvokeFunction
-                Resource: { 'Fn::GetAtt': [IngestFunction, Arn] }
-                Condition:
-                  Bool: { lambda:InvokedViaFunctionUrl: 'true' }
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kanon-telemetry-ingest:import
 
   # §7, S7a: may name an adopter key, for work-item rows only, in the normal window.
   BackfillRole:
@@ -478,14 +484,20 @@ Resources:
             Action: sts:AssumeRole
             Condition:
               ArnEquals: { aws:PrincipalArn: { Ref: OwnerPrincipalArn } }
+      # Its own alias, and nothing else (plan 0008 §9): not the function, not another alias.
       Policies:
-        - PolicyName: invoke-ingest-url
-          PolicyDocument: *invokeIngestUrl
+        - PolicyName: invoke-the-backfill-alias
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kanon-telemetry-ingest:backfill
 
-  # verify.mjs check 7 (kanon#101): a role whose OWN policy allows every write the table's
+  # verify.mjs's probe check (kanon#101): a role whose OWN policy allows every write the table's
   # resource policy denies, so a denied write proves that deny rather than missing IAM grants.
-  # The writer can't show it: it holds no DynamoDB action, so IAM refuses it first. Owner-only,
-  # and only while EnableVerify is on, like the Owner's way into the writer and reader roles.
+  # Owner-only, and only while EnableVerify is on.
   VerifyProbeRole:
     Type: AWS::IAM::Role
     Condition: VerifyOn
@@ -647,25 +659,13 @@ Resources:
           ACCOUNT_ID: { Ref: AWS::AccountId }
           AUDIENCE: { Ref: Audience }
           MIN_TOKEN_VERSION: { Ref: MinTokenVersion }
-          # Set by render.mjs from the register file. Only INVOKER_KEYS is still read: the keys
-          # whose invoker role may call the IAM URL. Whose rows are aggregated, and under which
-          # labels, comes from the register table on both URLs (plan 0008 §3.6, §9), so
-          # AGGREGATE_KEYS and OWN_FIGURES are unused, and go with render.mjs at vM+1.
-          AGGREGATE_KEYS: ''
-          OWN_FIGURES: ''
-          INVOKER_KEYS: ''
-
-  # Only the invoker roles render.mjs adds may call it: AWS_IAM auth, and a permission per role.
-  # The unqualified function's URL; the handler refuses a bearer token on it (plan 0008 §9).
-  AggregateUrl:
-    Type: AWS::Lambda::Url
-    Properties:
-      TargetFunctionArn: { 'Fn::GetAtt': [AggregateFunction, Arn] }
-      AuthType: AWS_IAM
+          # No key and no label: whose rows are aggregated, under which labels, and who may ask
+          # come from the register table (plan 0008 §3.6, J9).
 
   # The token path (plan 0008 §3.6, §9): an alias of its own, `live`, on the latest code, whose
   # URL takes no IAM auth. GitHub's OIDC token is the gate, checked by the function, which tells
-  # the two URLs apart by the alias in the ARN Lambda invoked, never by the request.
+  # it from the Owner's direct invoke of the unqualified function by the ARN Lambda invoked, never
+  # by the request.
   AggregateLiveAlias:
     Type: AWS::Lambda::Alias
     Properties:
@@ -699,20 +699,12 @@ Resources:
       Principal: '*'
       InvokedViaFunctionUrl: true
 
-  # render.mjs adds, per registered repository: WriterRole<id>, ReaderRole<id> and
-  # WriterUrlPermission<id>, from the shapes it holds; and, for an entry that sets
-  # `aggregate_invoker`, AggregateInvokerRole<id> and AggregateUrlPermission<id>.
-
 Outputs:
   TableName:
     Value: { Ref: Table }
   RegisterTableName:
     Value: { Ref: RegisterTable }
-  IngestUrl:
-    Value: { 'Fn::GetAtt': [IngestUrl, FunctionUrl] }
   IngestTokenUrl:
     Value: { 'Fn::GetAtt': [IngestLiveUrl, FunctionUrl] }
-  AggregateUrl:
-    Value: { 'Fn::GetAtt': [AggregateUrl, FunctionUrl] }
   AggregateTokenUrl:
     Value: { 'Fn::GetAtt': [AggregateLiveUrl, FunctionUrl] }

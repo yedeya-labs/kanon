@@ -2,8 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-
 import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
+
 import { detect, parseRows, signature } from '../../scripts/telemetry/kanon-bugs.mjs';
 import {
   BODY_BUDGET, EARLIER, EXPIRED_HEAD, KeyRefusal, LABELS, assertNoKeyIn, holdsKey, main, plan, readFinding, registerContext, summary,

@@ -39,7 +39,7 @@ import { erase as walk, REGION } from './erase.mjs';
 import {
   KEY_ITEM_PREFIX as KEY_ITEM, REGISTER_TABLE, REGISTRATION_PREFIX as REGISTRATION, SUSPENDED_REASONS, TOMBSTONE_FIELDS,
 } from './function/register-fields.mjs';
-import { firstReviewExpired, KEY, registerProblems } from './render.mjs';
+import { firstReviewExpired, KEY, registerProblems } from './register-file.mjs';
 
 /**
  * @typedef {{ code: number, stdout: string, stderr?: string }} AwsResult
@@ -276,7 +276,7 @@ export function set(deps, repository, o) {
 }
 
 /**
- * A label's rules, `render.mjs`'s today (`registerProblems`): the key's pattern, never a key,
+ * A label's rules, the register file's (`registerProblems`): the key's pattern, never a key,
  * unique. Returns the registration's partition key.
  * @param {Deps} deps @param {string} repository @param {string} label
  */

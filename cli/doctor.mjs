@@ -417,7 +417,8 @@ const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 /**
  * The strings `git grep` looks for in the tracked files before doctor reads any as JSON, so that
  * it parses only the files that can hold a register's shape (#1071): the register's owner ARN,
- * `render.mjs`'s `parameters.json` line for it, and its `template.json`'s writer keys.
+ * `render.mjs`'s `parameters.json` line for it, and its `template.json`'s writer keys. Plan 0008
+ * J9 removed `render.mjs`, but a render made before it can still be tracked, so both stay.
  */
 export const REGISTER_MARKERS = ['owner_principal_arn', 'OwnerPrincipalArn=', 'WRITER_KEYS'];
 
@@ -427,11 +428,12 @@ const placeholder = (v) => typeof v === 'string' && /<[^<>]+>/.test(v);
 /**
  * What a file holds of a telemetry register, by its shape and never its name (#1071): `register`,
  * a JSON object with an `owner_principal_arn` and `repositories` some entry of which pairs a `key`
- * with a `repository` (`infra/telemetry/register.example.json`'s shape); `render.mjs`'s output,
+ * with a `repository` (the shape of the register example Kanon shipped until plan 0008 J9); the
+ * output of `render.mjs`, which J9 removed,
  * `parameters.json`, an array of `Name=value` strings holding `OwnerPrincipalArn=`, or
  * `template.json`, whose ingest function holds writer keys; or null. A register or parameters
  * whose owner ARN is still a `<…>` placeholder is an example, which pairs no real key, and is
- * null: so Kanon's own example is exempt by what it holds, and doctor learns no repository's case.
+ * null: so an example is exempt by what it holds, and doctor learns no repository's case.
  * @param {string} text @returns {'register' | 'template' | 'parameters' | null}
  */
 export const registerShape = (text) => {

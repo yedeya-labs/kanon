@@ -66,7 +66,7 @@ const TOP = ['computed_at', 'min_adopters', 'signal_days', 'cross_adopter', 'own
 const CELL = ['lane', 'model', 'runs', 'median_cost_usd', 'p90_cost_usd'];
 const OWN = ['label', 'cells'];
 const SIGNAL = ['lane', 'reason', 'failed_stage', 'kanon_error', 'kanon_version', 'adopters_affected'];
-/** A label as the register holds it (`render.mjs`): the key's pattern. */
+/** A label as the register holds it (`publish_own_figures_as`): the key's pattern. */
 const LABEL = /^[a-z0-9][a-z0-9-]{0,31}$/;
 /** A lane, a reason, a stage or an error code: a short code, never prose. Not the schema's enums,
  * so a lane a later release adds doesn't refuse a whole answer here. */
