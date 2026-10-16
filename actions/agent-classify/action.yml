@@ -47,6 +47,24 @@ inputs:
       read as the cause of a red job.
     required: false
     default: "false"
+  # THE TWO FACTS THE ACTION'S OWN TURN-CAP CHECK NEEDS (kanon#1015). `claude-code-action`
+  # fails the step when a result says `success` past `--max-turns`, and the result it wrote
+  # still says `completed`, so without both of these the notice for that run is "finished
+  # cleanly" beside a telemetry row that says `exhausted` (kanon#1008). Empty, the run is
+  # classified by its terminal reason alone.
+  claude-args:
+    description: >-
+      The flags the agent ran with: agent-run's `claude-args` output. Only its `--max-turns`
+      is read.
+    required: false
+    default: ""
+  agent-outcome:
+    description: >-
+      The agent step's `outcome` (`steps.<id>.outcome`). 'failure' says the step that ran the
+      agent failed, which a run past its turn cap needs to be called one: a step that passed
+      left the run's clean finish standing, whatever reddened the job after it.
+    required: false
+    default: ""
 
 outputs:
   kind:
@@ -80,8 +98,12 @@ runs:
         ARM: ${{ inputs.arm }}
         RECOVER: ${{ inputs.recover }}
         NON_FATAL: ${{ inputs.non-fatal }}
+        CLAUDE_ARGS: ${{ inputs.claude-args }}
+        AGENT_OUTCOME: ${{ inputs.agent-outcome }}
       run: |
         set -- --arm "$ARM"
         if [ -n "$RECOVER" ]; then set -- "$@" --recover "$RECOVER"; fi
         if [ "$NON_FATAL" = "true" ]; then set -- "$@" --non-fatal; fi
+        if [ -n "$CLAUDE_ARGS" ]; then set -- "$@" --claude-args "$CLAUDE_ARGS"; fi
+        if [ -n "$AGENT_OUTCOME" ]; then set -- "$@" --agent-outcome "$AGENT_OUTCOME"; fi
         node "$GITHUB_ACTION_PATH/classify-agent-result.mjs" "$@"

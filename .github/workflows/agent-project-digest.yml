@@ -372,6 +372,8 @@ jobs:
         with:
           arm: project-digest agent
           non-fatal: "true"
+          claude-args: ${{ steps.agent.outputs.claude-args }}
+          agent-outcome: ${{ steps.agent.outcome }}
 
   # ── A WORKFLOW RED ON EVERY RUN (RA-1036) ────────────────────────────────────────────
   #
