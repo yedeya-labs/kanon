@@ -2551,7 +2551,7 @@ export const diagnose = async (deps, opts) => {
           continue;
         }
         const behind = EXACT_RELEASE.test(/** @type {string} */ (m[2])) && newer(/** @type {string} */ (m[2]), pinned) < 0;
-        find('notify.hook-pin-behind', hookPath, `is Kanon's ${name} hook at ${m[2]}, and the callers pin ${pinned}: ${behind ? 'it is behind them' : 'they differ'}. It works while it declares a contract version the callers' release still writes; kanon upgrade moves it with the callers (plan 0011 decision 18).`, {
+        find('notify.hook-pin-behind', hookPath, `is Kanon's ${name} hook at ${m[2]}, and the callers pin ${pinned}: ${behind ? 'it is behind them' : 'they differ'}. It works while it declares a contract version the callers' release still writes; the upgrade skill moves it with the callers (plan 0011 decision 18).`, {
           text: `Move its pin to the callers', as the upgrade skill does:`,
           commands: [`    - uses: ${m[1]}@${pinned}`],
         });
