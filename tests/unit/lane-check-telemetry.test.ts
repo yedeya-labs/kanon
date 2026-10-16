@@ -30,15 +30,29 @@ laneCheck(() => {
     const URL = '      url: ${{ vars.KANON_TELEMETRY_URL }}\n';
     const ROLE = '      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}\n';
 
-    it('refuses `url:` and `writer-role:` without `audience:`, naming the caller, the job, both inputs and both fixes', () => {
+    // Plan 0008 J9: this release's collector declares no `writer-role`, so that line is
+    // `caller.input-stale`, as doctor splits them, and `telemetry.legacy-inputs` names `url:` alone.
+    it('refuses `url:` without `audience:` as legacy-inputs, and `writer-role:` as an input the collector no longer declares, each naming the job and the fix', () => {
       const r = red(caller(`${URL}${ROLE}`),
-        /::error file=\.github\/workflows\/telemetry\.yml,title=lane-check::the job `collect` passes `url:` and `writer-role:` to Kanon's telemetry collector without `audience:`.*refuses them before it mints a token.*nothing is sent or registered.*kanon init --telemetry.*add `audience:` beside `url:` and remove `writer-role:`.*telemetry\.legacy-inputs/, AT);
-      expect(r.out.match(/::error/g)).toHaveLength(1);
+        /::error file=\.github\/workflows\/telemetry\.yml,title=lane-check::the job `collect` passes `url:` to Kanon's telemetry collector without `audience:`.*refuses it before it mints a token.*nothing is sent or registered.*kanon init --telemetry.*add `audience:` beside `url:` \(.*telemetry\.legacy-inputs/, AT);
+      expect(r.out).toMatch(/::error file=\.github\/workflows\/telemetry\.yml,title=lane-check::the job `collect` passes `writer-role:` to Kanon's telemetry collector, which does not declare it at this release, so GitHub refuses the call before the run starts\. Remove it from the job's `with:`, with the repository variable it read .*\(caller\.input-stale\)/);
+      expect(r.out.match(/::error/g)).toHaveLength(2);
       // Only the inputs' names reach the message, never a value.
       expect(r.out).not.toContain('vars.KANON_TELEMETRY');
     });
-    it('refuses `writer-role:` alone without `audience:`', () =>
-      red(caller(ROLE), /the job `collect` passes `writer-role:` to Kanon's telemetry collector without `audience:`/, AT));
+    it('refuses `writer-role:` alone as caller.input-stale, not as legacy-inputs', () => {
+      const r = red(caller(ROLE), /the job `collect` passes `writer-role:` to Kanon's telemetry collector, which does not declare it.*\(caller\.input-stale\)/, AT);
+      expect(r.out).not.toContain('telemetry.legacy-inputs');
+      expect(r.out.match(/::error/g)).toHaveLength(1);
+    });
+    it('refuses `writer-role:` without `audience:` as legacy-inputs against a release whose requirements list no collector inputs (before J9)', () => {
+      const t = adopter();
+      caller(ROLE)(t);
+      const r = check(t, { ...AT, KANON_ROOT: kanonWithout((req) => { delete req.telemetry.inputs; }) });
+      expect(r.status, r.out).not.toBe(0);
+      expect(r.out).toMatch(/the job `collect` passes `writer-role:` to Kanon's telemetry collector without `audience:`.*remove `writer-role:`.*telemetry\.legacy-inputs/);
+      expect(r.out).not.toContain('caller.input-stale');
+    });
     it('refuses `url:` alone without `audience:`', () =>
       red(caller(URL), /the job `collect` passes `url:` to Kanon's telemetry collector without `audience:`/, AT));
     it('passes a self-hosted store named by `url:` and `audience:` together, and init\'s caller, which passes neither', () => {
@@ -56,20 +70,21 @@ laneCheck(() => {
     // collector still takes `url:` and `writer-role:`, so the rule asks nothing of the caller.
     const roots: string[] = [];
     afterAll(() => { for (const d of roots) rmSync(d, { recursive: true, force: true }); });
-    const preTokenKanon = () => {
+    /** Kanon's tree, with its requirements changed by `change`, as an earlier release's would read. */
+    function kanonWithout(change: (req: { telemetry: Record<string, unknown> }) => void) {
       const dir = mkdtempSync(join(tmpdir(), 'kanon-pre-token-'));
       roots.push(dir);
       for (const e of readdirSync(ROOT)) if (e !== 'requirements.json') symlinkSync(join(ROOT, e), join(dir, e));
       const req = JSON.parse(readFileSync(join(ROOT, 'requirements.json'), 'utf8'));
       expect(req.telemetry.token).toBe(true);
-      delete req.telemetry.token;
+      change(req);
       writeFileSync(join(dir, 'requirements.json'), JSON.stringify(req));
       return dir;
-    };
-    it('asks nothing of the caller against a release whose requirements don\'t say `telemetry.token`', () => {
+    }
+    it('asks nothing of the caller against a release whose requirements don\'t say `telemetry.token` or list its inputs', () => {
       const t = adopter();
       caller(`${URL}${ROLE}`)(t);
-      const r = check(t, { ...AT, KANON_ROOT: preTokenKanon() });
+      const r = check(t, { ...AT, KANON_ROOT: kanonWithout((req) => { delete req.telemetry.token; delete req.telemetry.inputs; }) });
       expect(r.status, r.out).toBe(0);
     });
 
