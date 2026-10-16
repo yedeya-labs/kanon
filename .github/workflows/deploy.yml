@@ -317,6 +317,8 @@ jobs:
           VERSION: ${{ needs.declare.outputs.tag }}
           SHA: ${{ needs.declare.outputs.sha }}
           ROLE: ${{ needs.declare.outputs.role }}
+          # Under `no-environments` GitHub records no deployment, so the range is the release alone (kanon#1038).
+          FALLBACK: ${{ needs.declare.outputs.fallback }}
           OUTCOME: ${{ needs.record.outputs.outcome }}
           FAILED_STAGE: ${{ needs.record.outputs.stage }}
           ISSUE: ${{ needs.report.outputs.issue }}

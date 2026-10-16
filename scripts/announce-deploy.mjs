@@ -12,7 +12,10 @@
  *   becomes one Features / Fixes / Maintenance summary, `info`. With no earlier successful
  *   deployment, or one whose release can't be told, it announces the deployed release alone, never
  *   the whole history; a redeploy of the same release announces nothing; a rollback (a dispatch of
- *   an older release) announces the deployed release alone. A pre-release is announced alone.
+ *   an older release) announces the deployed release alone. A pre-release is announced alone. Only
+ *   releases of the deployed tag's line count (a release-please component prefix, `widgets-v1.2.3`,
+ *   kanon#1039). Under the `no-environments` fallback GitHub records no deployment, so none is read
+ *   and each deploy announces its own release alone (kanon#1038).
  * - `failed` or `smoke_failed`: a failure, `critical` for production and `warning` for any other
  *   environment (plan 0011 §3.2), naming the release, the stage that failed, the run, and the
  *   environment's issue when the `report` job filed or commented on one.
@@ -26,7 +29,8 @@
  * It makes requests to GitHub's API and nowhere else.
  *
  * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, STAGE (the environment deployed to, as the project names
- * it; required since kanon#54), VERSION (the deployed release's tag, a leading v ok), OUTCOME (the
+ * it; required since kanon#54), VERSION (the deployed release's tag: `v1.2.3`, `1.2.3`, a
+ * line prefix `widgets-v1.2.3`, a pre-release's suffix), FALLBACK (the declaration's marker), OUTCOME (the
  * `record` job's), ROLE (`production` or `pre-production`; production when unset), FAILED_STAGE,
  * ISSUE (the environment's issue number, when known), SHA (optional, the summary's build),
  * MESSAGE_PATH (default `message.json`), GITHUB_SERVER_URL and GITHUB_RUN_ID (the run link, and
@@ -51,8 +55,13 @@ export const API = 'https://api.github.com';
 
 /** `owner/name`, as GitHub spells them; anything else never reaches a request's path. */
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
-/** A release's version: `1.2.3`, a leading `v` allowed, and a pre-release's suffix. */
-const VERSION = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+/**
+ * A release tag the lane deploys (kanon#1039): an optional line prefix, as release-please's
+ * `include-component-in-tag` writes (`widgets-v1.2.3`, Kanon's own `candidate-v1.2.3`), an optional
+ * `v`, the version, and a pre-release's suffix. The prefix is tried last, so `1.2.3-rc.1` is a
+ * pre-release, not a `1.2.3` line.
+ */
+const TAG = /^(?:([A-Za-z0-9][A-Za-z0-9._-]*?)-)??v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?$/;
 /** A GitHub environment's name: one line, at most 255 characters. */
 const ENVIRONMENT = /^[^\r\n]{1,255}$/;
 /** A commit SHA, shown in the summary as code. */
@@ -71,10 +80,23 @@ const DEPLOYMENTS_READ = 30;
  * @typedef {{ tag_name: string, body?: string | null, draft?: boolean, prerelease?: boolean }} Release
  */
 
-/** Numeric semver parts of a 'v0.1.6'-style tag, any pre-release suffix left out. */
-const parts = (/** @type {string} */ v) => v.replace(/^v/, '').split('-')[0]?.split('.').map(Number) ?? [];
+/**
+ * A tag read as its line (the prefix, empty for none), its numeric version and whether it is a
+ * pre-release's; null for a tag of no such shape.
+ * @param {string} tag
+ */
+export function parseTag(tag) {
+  const m = TAG.exec(String(tag));
+  return m ? { line: m[1] ?? '', parts: [Number(m[2]), Number(m[3]), Number(m[4])], pre: m[5] !== undefined, suffix: m[5] ?? '' } : null;
+}
+/** Numeric semver parts of a tag, its prefix and any pre-release suffix left out. */
+const parts = (/** @type {string} */ v) => parseTag(v)?.parts ?? [];
 /** Whether a version is a pre-release's (`1.2.3-rc.1`). */
-const isPre = (/** @type {string} */ v) => v.replace(/^v/, '').includes('-');
+const isPre = (/** @type {string} */ v) => parseTag(v)?.pre === true;
+/** Whether two tags are of one line, so their versions compare (kanon#1039): another component's never do. */
+export const sameLine = (/** @type {string} */ a, /** @type {string} */ b) => parseTag(a) !== null && parseTag(a)?.line === parseTag(b)?.line;
+/** Whether two tags name one release: one line, one version, and the same pre-release or none. */
+const sameRelease = (/** @type {string} */ a, /** @type {string} */ b) => sameLine(a, b) && cmp(a, b) === 0 && parseTag(a)?.suffix === parseTag(b)?.suffix;
 
 /**
  * Numeric semver compare of the release part.
@@ -97,7 +119,7 @@ export function cmp(a, b) {
  */
 export function selectReleases(releases, version, last) {
   return releases
-    .filter((r) => !r.draft && !r.prerelease)
+    .filter((r) => !r.draft && !r.prerelease && sameLine(r.tag_name, version) && !isPre(r.tag_name))
     .filter((r) => cmp(r.tag_name, version) <= 0)
     // A release is newer than a pre-release of its own version (`1.2.3` after `1.2.3-rc.1`).
     .filter((r) => (last ? cmp(r.tag_name, last) > 0 || (isPre(last) && cmp(r.tag_name, last) === 0) : cmp(r.tag_name, version) === 0))
@@ -207,9 +229,9 @@ function common(env) {
   const stage = /** @type {string} */ (env.STAGE);
   const raw = /** @type {string} */ (env.VERSION);
   if (!REPOSITORY.test(repo)) return { error: 'GITHUB_REPOSITORY is not owner/name.' };
-  if (!VERSION.test(raw)) return { error: 'VERSION is not a version like 1.2.3.' };
+  if (!parseTag(raw)) return { error: 'VERSION is not a release tag like v1.2.3, with an optional line prefix like widgets-v1.2.3.' };
   if (!ENVIRONMENT.test(stage)) return { error: 'STAGE is not an environment name: one line, at most 255 characters.' };
-  return { repo, stage, version: raw.replace(/^v/, ''), tag: raw, token: /** @type {string} */ (env.GITHUB_TOKEN) };
+  return { repo, stage, tag: raw, token: /** @type {string} */ (env.GITHUB_TOKEN) };
 }
 
 /**
@@ -234,12 +256,13 @@ function github(io, repo, token) {
 /**
  * The release of the environment's previous successful deployment, or null: the newest deployment
  * to `stage` whose latest status is `success` and which this run (`runId`) didn't make, read as the
- * release tag its ref names, else a release tag on its commit.
+ * release tag its ref names, else a release tag on its commit; only a release of the deployed tag's
+ * line (`tag`) counts, since another component's version never compares (kanon#1039).
  * @param {(path: string) => Promise<any>} gh a GET on the repository's API path
- * @param {{ stage: string, runId: string, releases: Release[] }} o
+ * @param {{ stage: string, runId: string, releases: Release[], tag: string }} o
  * @returns {Promise<string | null>}
  */
-export async function previousRelease(gh, { stage, runId, releases }) {
+export async function previousRelease(gh, { stage, runId, releases, tag }) {
   const list = await gh(`/deployments?environment=${encodeURIComponent(stage)}&per_page=${DEPLOYMENTS_READ}`);
   const ownRun = new RegExp(`/actions/runs/${runId}(?:/|$)`);
   for (const d of Array.isArray(list) ? list : []) {
@@ -247,7 +270,7 @@ export async function previousRelease(gh, { stage, runId, releases }) {
     if (status?.state !== 'success') continue;
     // This run's own deployment of the environment, which just succeeded: its status links the run.
     if (runId && [status.log_url, status.target_url].some((u) => ownRun.test(String(u ?? '')))) continue;
-    const tags = new Set(releases.filter((r) => !r.draft).map((r) => r.tag_name));
+    const tags = new Set(releases.filter((r) => !r.draft && sameLine(r.tag_name, tag)).map((r) => r.tag_name));
     // A release run's deployment names its tag; a dispatch's names its branch, so read its commit.
     if (tags.has(String(d.ref))) return String(d.ref);
     const onCommit = /** @type {any[]} */ (await gh('/tags?per_page=100'))
@@ -267,7 +290,8 @@ export async function previousRelease(gh, { stage, runId, releases }) {
 export async function produce({ env, io, out }) {
   const c = common(env);
   if ('error' in c) { out.error(String(c.error)); return 1; }
-  const { repo, stage, version, tag, token } = c;
+  const { repo, stage, tag, token } = c;
+  const version = tag;
   const dryRun = Boolean(env.DRY_RUN);
   const server = env.GITHUB_SERVER_URL || 'https://github.com';
   if (!/^https:\/\/[^\s/]+$/.test(server)) { out.error('GITHUB_SERVER_URL is not an https:// origin.'); return 1; }
@@ -289,13 +313,18 @@ export async function produce({ env, io, out }) {
     const gh = github(io, repo, token);
     /** @type {Release[]} */
     const releases = await gh('/releases?per_page=100');
-    const last = await previousRelease(gh, { stage, runId, releases });
-    const alone = () => releases.filter((r) => !r.draft && r.tag_name.replace(/^v/, '') === version);
-    const toAnnounce = isPre(version) || (last && cmp(version, last) < 0)
+    // Under the `no-environments` fallback no job sets an environment, so GitHub records no
+    // deployment and there is none to read (kanon#1038): the range starts at the release before the
+    // deployed one, so each deploy announces its own release, and a redeploy announces it again.
+    const fallback = env.FALLBACK === 'no-environments';
+    const last = fallback ? null : await previousRelease(gh, { stage, runId, releases, tag });
+    const deployed = releases.find((r) => !r.draft && sameRelease(r.tag_name, version));
+    const alone = () => (deployed ? [deployed] : []);
+    const toAnnounce = isPre(version) || deployed?.prerelease || (last && cmp(version, last) < 0)
       ? alone()
       : last && cmp(version, last) === 0 && !isPre(last) ? [] : selectReleases(releases, version, last);
     if (toAnnounce.length === 0) {
-      out.log(`Nothing new to announce (deployed ${version} to ${stage}; the previous successful deployment there was ${last ?? 'none'}).`);
+      out.log(`Nothing new to announce (deployed ${version} to ${stage}; the previous successful deployment there was ${last ?? (fallback ? 'not recorded under the no-environments fallback' : 'none')}).`);
       output('');
       return 0;
     }

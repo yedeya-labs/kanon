@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { validate } from '../../scripts/lib/notify-contract.mjs';
 import { kanonBullet, kanonList, kanonMaint } from '../../scripts/lib/release-notes.mjs';
-import { API, buildDeployMessage, buildFailureMessage, failureSeverity, main, produce, selectReleases } from '../../scripts/announce-deploy.mjs';
+import { API, buildDeployMessage, buildFailureMessage, failureSeverity, main, parseTag, produce, selectReleases } from '../../scripts/announce-deploy.mjs';
 
 /**
  * Plan 0011 step N9, wired into plan 0010's lane (the Owner's decisions of 2026-10-15):
@@ -178,6 +178,87 @@ describe('a landed deploy announces the releases since the environment\'s previo
     const g = fakeGithub();
     expect(await produce({ env: { ...ENV, STAGE: 'a\nb' }, io: g.io, out: g.out })).toBe(1);
     expect(g.requests).toEqual([]);
+  });
+});
+
+describe('a release tag with a line prefix, as release-please writes for a component (kanon#1039)', () => {
+  /** Two components' lines and a pre-release, each with its own version line. */
+  const LINES = [
+    release(1, { tag_name: 'widgets-v1.0.0' }), release(2, { tag_name: 'widgets-v1.1.0' }), release(3, { tag_name: 'widgets-v1.2.0' }),
+    release(4, { tag_name: 'gadgets-v1.0.5' }), release(6, { tag_name: 'gadgets-v1.1.5' }), release(5, { tag_name: 'candidate-v1.3.0', prerelease: true }),
+  ];
+  const lined = (deployments: Deployment[]) => {
+    const g = fakeGithub(deployments);
+    const fetch = g.io.fetch;
+    g.io.fetch = (async (input: string | URL | Request, init?: RequestInit) => (String(input).includes('/releases') ? new Response(JSON.stringify(LINES)) : fetch(input, init))) as typeof globalThis.fetch;
+    return g;
+  };
+  const own = (tag: string): Deployment => ({ ...OWN, ref: tag });
+
+  it('reads the line, the version and a pre-release, trying the bare shapes first', () => {
+    expect(parseTag('widgets-v1.2.0')).toEqual({ line: 'widgets', parts: [1, 2, 0], pre: false, suffix: '' });
+    expect(parseTag('my-app-1.2.0')).toMatchObject({ line: 'my-app', parts: [1, 2, 0] });
+    expect(parseTag('v1.2.3-rc.1')).toEqual({ line: '', parts: [1, 2, 3], pre: true, suffix: '-rc.1' });
+    expect(parseTag('candidate-v1.3.0')).toMatchObject({ line: 'candidate', pre: false });
+    expect(parseTag('latest')).toBeNull();
+  });
+
+  it("announces the range within the deployed tag's line alone, keeping the full tag in the title and the link", async () => {
+    const g = lined([own('widgets-v1.2.0'), { id: 99, ref: 'widgets-v1.0.0', sha: SHA(1), state: 'success' }]);
+    expect(await produce({ env: { ...ENV, VERSION: 'widgets-v1.2.0' }, io: g.io, out: g.out })).toBe(0);
+    const m = JSON.parse(g.files['message.json'] ?? '');
+    expect(validate(m)).toEqual({ ok: true });
+    expect(m.title).toBe('widgets-v1.1.0 to widgets-v1.2.0 (2 releases) are live on production');
+    // gadgets-v1.1.5 falls between them by number, and is another line's.
+    expect(selectReleases(LINES, 'widgets-v1.2.0', 'widgets-v1.0.0').map((r: Any) => r.tag_name)).toEqual(['widgets-v1.1.0', 'widgets-v1.2.0']);
+  });
+
+  it("never starts the range at another line's deployment: it announces the deployed release alone", async () => {
+    // gadgets-v1.0.5 is older by number, so read as widgets' start it would announce widgets-v1.1.0 too.
+    const g = lined([own('widgets-v1.2.0'), { id: 99, ref: 'gadgets-v1.0.5', sha: SHA(4), state: 'success' }]);
+    expect(await produce({ env: { ...ENV, VERSION: 'widgets-v1.2.0' }, io: g.io, out: g.out })).toBe(0);
+    const m = JSON.parse(g.files['message.json'] ?? '');
+    expect(m.title).toBe('widgets-v1.2.0 is live on production');
+    expect(m.links[0].url).toBe(`https://github.com/${REPO}/releases/tag/widgets-v1.2.0`);
+  });
+
+  it('announces a prefixed pre-release, as GitHub marks it, alone, and a failure names the tag whole', async () => {
+    const g = lined([own('candidate-v1.3.0'), { id: 99, ref: 'widgets-v1.0.0', sha: SHA(1), state: 'success' }]);
+    expect(await produce({ env: { ...ENV, VERSION: 'candidate-v1.3.0' }, io: g.io, out: g.out })).toBe(0);
+    expect(JSON.parse(g.files['message.json'] ?? '').title).toBe('candidate-v1.3.0 is live on production');
+    const f = lined([]);
+    expect(await produce({ env: { ...ENV, VERSION: 'widgets-v1.2.0', OUTCOME: 'failed', FAILED_STAGE: 'smoke' }, io: f.io, out: f.out })).toBe(0);
+    expect(JSON.parse(f.files['message.json'] ?? '').title).toBe('widgets-v1.2.0 failed to deploy to production');
+  });
+
+  it('refuses a tag of no version shape, before any request', async () => {
+    const g = lined([]);
+    expect(await produce({ env: { ...ENV, VERSION: 'latest' }, io: g.io, out: g.out })).toBe(1);
+    expect(g.requests).toEqual([]);
+  });
+});
+
+describe('under the no-environments fallback, with no deployment to read (kanon#1038)', () => {
+  const FALLBACK = { ...ENV, FALLBACK: 'no-environments' };
+
+  it('reads no deployment and starts at the release before the deployed one, so it announces that release alone', async () => {
+    // Even a deployment from before the fallback is not read: under it, GitHub records none, so one would be stale.
+    const g = fakeGithub([OWN, { id: 99, ref: 'v0.1.1', sha: SHA(1), state: 'success' }]);
+    expect(await produce({ env: FALLBACK, io: g.io, out: g.out })).toBe(0);
+    expect(JSON.parse(g.files['message.json'] ?? '').title).toBe('v0.1.3 is live on production');
+    expect(g.requests.map((r) => r.url.replace(`${API}/repos/${REPO}`, ''))).toEqual(['/releases?per_page=100']);
+  });
+
+  it('announces a redeploy of the same release again, since nothing tells it apart', async () => {
+    const g = fakeGithub([]);
+    expect(await produce({ env: FALLBACK, io: g.io, out: g.out })).toBe(0);
+    expect(JSON.parse(g.files['message.json'] ?? '').title).toBe('v0.1.3 is live on production');
+  });
+
+  it('reads the deployments with any other fallback, or none', async () => {
+    const g = fakeGithub([OWN, { id: 99, ref: 'v0.1.1', sha: SHA(1), state: 'success' }]);
+    expect(await produce({ env: { ...ENV, FALLBACK: 'no-reviewers' }, io: g.io, out: g.out })).toBe(0);
+    expect(JSON.parse(g.files['message.json'] ?? '').title).toBe('v0.1.2 to v0.1.3 (2 releases) are live on production');
   });
 });
 
