@@ -62,6 +62,10 @@
 // agent commit is recognised by its author: the login `<slug>[bot]`, or the noreply email
 // `<id>+<slug>[bot]@users.noreply.github.com`, with `<slug>` in the register. Every other
 // commit is checked exactly as above.
+// - The register's rows for Apps that aren't agents, `Other App` and `Intake`
+//   (`NON_AGENT_ROLES`), name no agent (#998). Their slugs are left out, so such an App's
+//   commit is checked like any other bot's and fails on its bot sign-off: the delegation
+//   covers only the Apps the repository's agents run under, never an App it doesn't run.
 // - Both files are read from the repository's DEFAULT branch over the API (`repos/{o}/{r}`
 //   -> `default_branch`), never from the PR and never from the PR's base (K-MERGE-17). Only
 //   merged, reviewed changes reach the default branch. A PR's base is not enough: on a
@@ -125,6 +129,12 @@ export const NO_TRUST = /** @type {Trust} */ ({ slugs: [], delegate: null, relea
 /** The App register's role whose GitHub-created commits are exempt (plan 0005 §3.1, #337). Fixed (ADR 0002). */
 export const RELEASER_ROLE = 'Releaser';
 
+/**
+ * The App register's roles of Apps that aren't agents and get no delegated sign-off (#998): the
+ * `Other App` rows (`OTHER_APP` in `scripts/app-register.mjs`) and the Intake App. Fixed (ADR 0002).
+ */
+export const NON_AGENT_ROLES = /** @type {const} */ (['Other App', 'Intake']);
+
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const BOT_LOGIN = /^([a-z0-9]+(?:-[a-z0-9]+)*)\[bot\]$/;
 const BOT_NOREPLY = /^\d+\+([a-z0-9]+(?:-[a-z0-9]+)*)\[bot\]@users\.noreply\.github\.com$/i;
@@ -170,7 +180,8 @@ const unquote = (/** @type {string} */ s) => (/^`[^`]*`$/.test(s) ? s.slice(1, -
 
 /**
  * The App slugs in the App register: every row of its one table headed `| Role | App slug |`,
- * read as `actions/lane-check/app-register.awk` reads one role. Also the Releaser's slug: the
+ * read as `actions/lane-check/app-register.awk` reads one role, except the rows of a role in
+ * `NON_AGENT_ROLES`, whose slugs must still be well formed. Also the Releaser's slug: the
  * one `Releaser` row's, or null when there is none, more than one, or another role's row names
  * the same slug (an App that is also an agent is never exempt).
  * @param {string} text
@@ -190,8 +201,9 @@ export function parseRegister(text) {
     if (slug === null || !SLUG.test(slug)) {
       return { problem: `${REGISTER_PATH} gives the role ${unbold(row[0] ?? '')} no App slug in backticks` };
     }
-    slugs.push(slug);
-    (unbold(row[0] ?? '') === RELEASER_ROLE ? releasers : others).push(slug);
+    const role = unbold(row[0] ?? '');
+    if (!(/** @type {readonly string[]} */ (NON_AGENT_ROLES)).includes(role)) slugs.push(slug);
+    (role === RELEASER_ROLE ? releasers : others).push(slug);
   }
   const releaser = releasers.length === 1 && !others.includes(/** @type {string} */ (releasers[0])) ? /** @type {string} */ (releasers[0]) : null;
   return { slugs, releaser };

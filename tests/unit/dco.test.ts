@@ -688,3 +688,63 @@ describe('#337 the Releaser\'s release commits are exempt, by its App identity',
     expect(await main(env, impl, sink)).toBe(1);
   });
 });
+
+// #998: an App on an `Other App` row, or the Intake App, isn't one of the repository's agents
+// (K-LAYOUT-6), so the sign-off delegation (K-AGENT-44) doesn't cover its commits.
+const REPORTER = 'example-reporter';
+const INTAKE = 'example-intake';
+const NON_AGENT_ROWS = [
+  `| Other App | \`${REPORTER}\` | No access | Read & write | No access | No access |`,
+  '| **Other App** | **`example-scanner`** | Read | No access | No access | No access |',
+  `| Intake | \`${INTAKE}\` | No access | Read & write | No access | No access |`,
+];
+const REGISTER_N = `${REGISTER.trimEnd()}\n${NON_AGENT_ROWS.join('\n')}\n`;
+
+describe("#998 an App that isn't an agent gets no delegated sign-off", () => {
+  it('[REG-4] reads no slug from an Other App or an Intake row, bold or not, and every agent\'s as before', () => {
+    expect(parseRegister(REGISTER_N)).toEqual({ slugs: [IMPL, 'example-lead'], releaser: null });
+    expect(parseRegister(['| Role | App slug |', '|---|---|', ...NON_AGENT_ROWS, ''].join('\n'))).toEqual({ slugs: [], releaser: null });
+  });
+
+  it.each([
+    ['an Other App', REPORTER],
+    ['the Intake App', INTAKE],
+  ])("[REG-4] checks %s's commit like any bot's, so the delegate's sign-off doesn't pass it", (_, slug) => {
+    const reg = parseRegister(REGISTER_N);
+    const trust = { slugs: 'slugs' in reg ? reg.slugs : [], delegate: DELEGATE, releaser: null };
+    const c = agentCommit(`fix: one\n\n${sob()}`, slug);
+    expect(agentSlug(c, trust.slugs)).toBeNull();
+    const result = checkCommit(c, trust);
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining('not by its author') });
+    expect(!result.ok && result.reason).not.toContain("repository's own App");
+    expect(checkCommit(agentCommit(`fix: one\n\n${sob({ name: `${slug}[bot]`, email: `4242+${slug}[bot]@users.noreply.github.com` })}`, slug), trust))
+      .toMatchObject({ ok: false, reason: expect.stringContaining('an AI or bot identity') });
+  });
+
+  it("still delegates for an agent's App that an Other App row names too", () => {
+    const reg = parseRegister(`${REGISTER.trimEnd()}\n| Other App | \`${IMPL}\` | Read | No access | No access | No access |\n`);
+    expect(reg).toEqual({ slugs: [IMPL, 'example-lead'], releaser: null });
+  });
+
+  it("still refuses an Other App row's slug out of backticks, as any row's", () => {
+    const got = parseRegister(`${REGISTER.trimEnd()}\n| Other App | ${REPORTER} | Read | No access | No access | No access |\n`);
+    expect('problem' in got && got.problem).toContain('gives the role Other App no App slug');
+  });
+
+  it('[REG-4] the action fails an Other App\'s commit signed off by the delegate the default branch names', async () => {
+    const files = { ...BASE_FILES, [`main:${REGISTER_PATH}`]: REGISTER_N };
+    const { impl } = repoFetch([agentCommit(`fix: one\n\n${sob()}`), agentCommit(`chore: report\n\n${sob()}`, REPORTER)], files);
+    const { out, sink } = capture();
+    expect(await main(env, impl, sink)).toBe(1);
+    const errors = out.errors.join('\n');
+    expect(errors).toContain('chore: report');
+    expect(errors).not.toContain('fix: one');
+  });
+
+  it("names the roles it leaves out as the App register's reader does", async () => {
+    const { NON_AGENT_ROLES } = await import('../../actions/dco/dco.mjs');
+    const { OTHER_APP, ROLES } = await import('../../scripts/app-register.mjs');
+    expect([...NON_AGENT_ROLES]).toEqual([OTHER_APP, 'Intake']);
+    expect(ROLES).toContain('Intake');
+  });
+});
