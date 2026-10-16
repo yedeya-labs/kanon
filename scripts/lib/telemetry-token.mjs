@@ -32,12 +32,12 @@ export const UNPUBLISHED_JOB = 'Collect telemetry rows (hosted store unpublished
 export const HOSTED_AUDIENCE = 'kanon-telemetry';
 /**
  * The hosted ingest function's token URL, the `live` alias's (`IngestTokenUrl`), and the hosted
- * aggregate function's (`AggregateTokenUrl`). Empty until the operator publishes them, with
- * reserved concurrency in place first (Owner decision 10 of 2026-10-12; docs/telemetry.md,
- * "Publish the hosted URLs").
+ * aggregate function's (`AggregateTokenUrl`), published on 2026-10-16 after the store's first
+ * deploy through the operator's deployment lane, with reserved concurrency in place first (Owner
+ * decision 10 of 2026-10-12; docs/telemetry.md, "Publish the hosted URLs").
  */
-export const HOSTED_INGEST_URL = '';
-export const HOSTED_AGGREGATE_URL = '';
+export const HOSTED_INGEST_URL = 'https://doepcoqbpivm2b7x2rxiwitsn40tawde.lambda-url.eu-central-1.on.aws/';
+export const HOSTED_AGGREGATE_URL = 'https://swfz3z5qop5g7zcpole6xegf540ukewv.lambda-url.eu-central-1.on.aws/';
 
 /** An audience as a store's `Audience` parameter takes it: a short token, never a URL. */
 const AUDIENCE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
