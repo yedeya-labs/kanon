@@ -1076,11 +1076,64 @@ describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
       for (const role of appRoles(all[app]!)) text = writeRegisterRow(text, { role, slug, permissions: withExtras(all[app]!.permissions, extras[app]) }).text;
     }
     // The Author's Commit statuses write (`K-AGENT-3`) keeps its reason by hand, as that rule
-    // asks: a marker on the Implementer row and one footnote. Nothing else differs.
+    // asks: a marker on the Implementer row and one footnote. The Apps that aren't agents have
+    // their rows by hand too (`docs/apps.md`, "Kanon's three Apps only"), each with a footnote
+    // of its own. Nothing else differs.
+    const { table, others } = splitOwnRegister(readFileSync(OWN, 'utf8'));
+    expect(`${table.replace('| Commit statuses: Read & write [^1] |', '| Commit statuses: Read & write |').trimEnd()}\n`).toBe(text);
+    // The end-to-end Reporter (plan 0012 decision 18, #967): it posts the `kanon-e2e` check run.
+    expect(others).toEqual([{ slug: 'kanon-e2e-reporter', other: 'Checks: Read & write' }]);
+  });
+
+  /**
+   * Kanon's own register split into what `kanon apps` writes and what is written by hand beside
+   * it: the Implementer's footnote 1, and the `Other App` rows (`K-AGENT-3`) that follow every
+   * role's row, each `No access` in every column but Other and marked with a footnote of its
+   * own, numbered from 2 in order, that says what the App is. Anything else throws.
+   */
+  function splitOwnRegister(own: string): { table: string; others: Array<{ slug: string; other: string }> } {
+    const [head, ...notes] = own.split(/\n(?=\[\^\d+\]: )/);
+    const lines = head!.split('\n');
+    const rows = lines.flatMap((l, i) => (/^\| Other App \|/.test(l) ? [i] : []));
+    const lastRole = lines.reduce((last, l, i) => (/^\| (?!Other App \|)(?!Role \|)[A-Z][a-z]+ \|/.test(l) ? i : last), -1);
+    const others = rows.map((i, n) => {
+      const m = /^\| Other App \| `([a-z0-9-]+)` \| No access \| No access \| No access \| No access \| No access \| ([^|]*\S) \[\^(\d+)\] \|$/.exec(lines[i]!);
+      if (!m) throw new Error(`register line ${i + 1} is no hand-written Other App row: ${lines[i]}`);
+      if (i <= lastRole) throw new Error(`the Other App row on register line ${i + 1} comes before a role's row`);
+      if (m[3] !== String(n + 2)) throw new Error(`the Other App row \`${m[1]}\` is marked [^${m[3]}], not [^${n + 2}]`);
+      if (/^(None|No access)$/.test(m[2]!)) throw new Error(`the Other App row \`${m[1]}\` holds no permission`);
+      return { slug: m[1]!, other: m[2]! };
+    });
+    if (rows.some((r, n) => r !== rows[0]! + n)) throw new Error('the Other App rows are not together');
+    expect(notes).toHaveLength(1 + others.length);
+    expect(notes[0]).toMatch(/^\[\^1\]: \*\*Commit statuses: Read & write, broadened beyond the Implementer's row\*\* \(`K-AGENT-3`/);
+    others.forEach((o, n) => {
+      expect(notes[n + 1]).toMatch(new RegExp(`^\\[\\^${n + 2}\\]: \\*\\*[^*]+\\*\\* \\(\`K-AGENT-3\``));
+      expect(notes[n + 1]).toContain(`\`${o.slug}\``);
+    });
+    return { table: lines.filter((_, i) => !rows.includes(i)).join('\n'), others };
+  }
+
+  it("reads the hand-written Other App rows, and refuses anything else beside kanon apps' rows (K-PRIN-11)", () => {
     const own = readFileSync(OWN, 'utf8');
-    const [table, footnote] = own.split(/\n(?=\[\^1\]: )/);
-    expect(footnote).toMatch(/^\[\^1\]: \*\*Commit statuses: Read & write, broadened beyond the Implementer's row\*\* \(`K-AGENT-3`/);
-    expect(`${table!.replace('| Commit statuses: Read & write [^1] |', '| Commit statuses: Read & write |').trimEnd()}\n`).toBe(text);
+    const reporter = '| Other App | `kanon-e2e-reporter` | No access | No access | No access | No access | No access | Checks: Read & write [^2] |';
+    expect(own).toContain(`${reporter}\n`);
+    const second = '| Other App | `acme-scanner` | No access | No access | No access | No access | No access | Code scanning alerts: Read [^3] |';
+    const withSecond = `${own.replace(`${reporter}\n`, `${reporter}\n${second}\n`).trimEnd()}\n\n[^3]: **A scanner** (\`K-AGENT-3\`). \`acme-scanner\` reads alerts.\n`;
+    expect(splitOwnRegister(withSecond).others.map((o) => o.slug)).toEqual(['kanon-e2e-reporter', 'acme-scanner']);
+    // Each of these is refused, or leaves the table differing from what `kanon apps` writes.
+    for (const [bad, why] of [
+      [own.replace(reporter, reporter.replace('| No access | No access | No access | No access | No access |', '| Read | No access | No access | No access | No access |')), /no hand-written Other App row/],
+      [own.replace(reporter, reporter.replace(' [^2]', '')), /no hand-written Other App row/],
+      [own.replace(reporter, reporter.replace('[^2]', '[^3]')), /marked \[\^3\], not \[\^2\]/],
+      [own.replace(reporter, reporter.replace('Checks: Read & write', 'None')), /holds no permission/],
+      [own.replace(`${reporter}\n`, '').replace('| Reviewer |', `${reporter}\n| Reviewer |`), /comes before a role's row/],
+      [own.replace(/\n\[\^2\]: [^\n]*\n?/, '\n'), /expected/],
+    ] as const) expect(() => splitOwnRegister(bad), String(why)).toThrow(why);
+    // A role's row changed by hand still differs from what `kanon apps` writes.
+    const { table } = splitOwnRegister(own.replace('| Releaser | `yedeya-labs-releaser` | Read & write | No access |', '| Releaser | `yedeya-labs-releaser` | Read & write | Read & write |'));
+    expect(table).toContain('| Releaser | `yedeya-labs-releaser` | Read & write | Read & write |');
+    expect(table).not.toContain('Other App');
   });
 
   it('keeps the Implementer as one row when kanon apps writes the slug GitHub gave it', () => {
@@ -1096,7 +1149,7 @@ describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
     const { text, diff } = writeRegisterRow(before, { role: 'Reviewer', slug: 'yedeya-labs-judge-2', permissions: loadApps().judge!.permissions });
     for (const row of others) expect(text).toContain(`${row}\n`);
     expect(diff.filter((l) => l.includes('Other App'))).toEqual([]);
-    expect(parseOtherApps(text)).toEqual(['acme-reporter', 'acme-scanner']);
+    expect(parseOtherApps(text)).toEqual(['acme-reporter', 'acme-scanner', 'kanon-e2e-reporter']);
     expect(parseAppRegister(text).get('Reviewer')).toBe('yedeya-labs-judge-2');
   });
 
