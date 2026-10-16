@@ -26,7 +26,7 @@ import { URL } from 'node:url';
  *   identities: { roles: Record<string, RoleIdentity>, apps: Record<string, AppIdentity> }, labels: string[],
  *   declarations?: Record<string, { baseline: boolean, requiredSections: string[] }>,
  *   release?: { dcoExemptsReleaser?: boolean }, catalogue?: Catalogue, features?: Feature[],
- *   telemetry?: { collector: string, variables: string[], grant?: Record<string, string>, token?: boolean }, qaStore?: { hook: string, secrets: string[], secretsOnly?: boolean } }} Requirements
+ *   telemetry?: { collector: string, variables: string[], grant?: Record<string, string>, token?: boolean, inputs?: string[] }, qaStore?: { hook: string, secrets: string[], secretsOnly?: boolean } }} Requirements
  * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, minutes: string, recommend: 'always' | string[], when: string, mergeQueue?: string, requires?: string[] }} CatalogueEntry
  * @typedef {{ groups: Array<{ id: string, title: string, header: string }>, lanes: Record<string, CatalogueEntry> }} Catalogue
  * @typedef {{ feature: string, title: string, does: string, lanes: string[],
