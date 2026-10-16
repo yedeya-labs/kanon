@@ -11,7 +11,7 @@ import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs'
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
 import { TELEMETRY_QUESTION, telemetryQuestion, telemetryRegisters, UPSTREAM_EVIDENCE_QUESTION, upstreamFindingsQuestion } from '../../cli/init.mjs';
 import { HOSTED_INGEST_URL } from '../../scripts/lib/telemetry-token.mjs';
-import { CHAT_QUESTION, chatHookStub, legacyChatRewrite } from '../../cli/init.mjs';
+import { CHAT_QUESTION, CHAT_QUESTION_BOTH, CHAT_QUESTION_DEPLOY, chatHookStub, legacyChatRewrite } from '../../cli/init.mjs';
 import { codeownersOf, DIAGNOSE_DROPPED, CONSENT_LEVELS, CONSENT_OPTIONS, CONSENT_QUESTION, consentOf, consentQuestion, DATA_QUESTION, FEATURE_QUESTION, featureOf, REVIEW_HOW, sharingUrl, testDatabaseSignal } from '../../cli/init.mjs';
 import { parseUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
 import { SPAWNS } from './helpers/spawns.js';
@@ -3367,12 +3367,37 @@ describe('kanon init and the chat channel (plan 0011 N11)', () => {
     expect(() => parseArgs(['--feature', 'review', '--chat', 'slack', '--deploy-environments', 'none'], REQ)).toThrow(/--feature review has none/);
   });
 
+  it('words the question for what posts: the digests, the deploy announcements, or both, in two sentences', async () => {
+    const question = async (argv: string[], files: Record<string, string> = {}) => {
+      const asked: string[] = [];
+      const r = await run(checkout(files), fakeGitHub(), [...argv, '--no-sensitive-data', '--consent', 'no', '--no-apps'], undefined, REQ, { ask: person({}, asked) });
+      expect(r.status, r.err).toBe(0);
+      return asked.filter((q) => /^Post .* to a chat channel\?/.test(q)).map((q) => q.split('\n')[0]);
+    };
+    expect(await question(['--feature', 'full'])).toEqual([CHAT_QUESTION]);
+    expect(await question(['--feature', 'review', '--deploy-environments', 'production'])).toEqual([CHAT_QUESTION_DEPLOY]);
+    expect(await question(['--feature', 'full', '--deploy-environments', 'staging,production'])).toEqual([CHAT_QUESTION_BOTH]);
+    for (const q of [CHAT_QUESTION, CHAT_QUESTION_DEPLOY, CHAT_QUESTION_BOTH]) expect(q.split('? ')[1]).toBe('Kanon ships a Slack hook and a generic webhook hook, or you can write your own.');
+  });
+
+  it("accepts --chat beside a deploy lane the adoption record's ## Deploy section declares, with no --deploy-environments", async () => {
+    const record = (await initWith(['--feature', 'review', '--deploy-environments', 'staging,production'])).dir;
+    const files = { 'docs/qa/adoption.md': read(record, 'docs/qa/adoption.md') };
+    const { d } = await initWith(['--feature', 'review', '--chat', 'slack'], files);
+    expect(d.answers.deployEnvironments).toEqual(['staging', 'production']);
+    expect(d.answers.chat).toBe('slack');
+    expect(chatSteps(d).map((f) => f.id)).toEqual(['secret.chat-deploy']);
+    // Without the record's declaration it is still no answer.
+    const r = await run(checkout(), fakeGitHub(), ['--json', '--no-apps', '--feature', 'review', '--chat', 'slack']);
+    expect(r.status).toBe(2);
+  });
+
   it('asks the chat question when deploy environments are declared through Change something, under Review', async () => {
     const dir = checkout();
     const asked: string[] = [];
-    const r = await run(dir, fakeGitHub(), ['--feature', 'review', '--no-sensitive-data', '--consent', 'no', '--no-apps'], undefined, REQ, { ask: changing('7', { "The deploy lane's environments": 'production', [CHAT_QUESTION]: 'webhook' }, asked) });
+    const r = await run(dir, fakeGitHub(), ['--feature', 'review', '--no-sensitive-data', '--consent', 'no', '--no-apps'], undefined, REQ, { ask: changing('7', { "The deploy lane's environments": 'production', [CHAT_QUESTION_DEPLOY]: 'webhook' }, asked) });
     expect(r.status, r.err).toBe(0);
-    expect(asked.filter((q) => q.startsWith(CHAT_QUESTION))).toHaveLength(1);
+    expect(asked.filter((q) => q.startsWith(CHAT_QUESTION_DEPLOY))).toHaveLength(1);
     expect(read(dir, HOOK)).toBe(prebuilt('webhook'));
   });
 

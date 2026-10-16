@@ -413,8 +413,11 @@ export const CONFLICTS = [
  * Parses `kanon init`'s arguments. Throws with a message naming the problem: an unknown flag, a
  * value flag given twice, a bad value, or two flags that contradict each other.
  * @param {string[]} argv @param {Requirements} req
+ * @param {(dir: string) => string[]} [declaredOf] the deploy environments the adoption record in
+ *   the checkout at `dir` declares, for `--chat` without `--deploy-environments`: a record that
+ *   declares the deploy lane already posts its announcements (plan 0011 N9)
  */
-export const parseArgs = (argv, req) => {
+export const parseArgs = (argv, req, declaredOf = () => []) => {
   /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, json: boolean, apps: boolean, help: boolean, given: Given, releaserFlag?: string }} */
   const opts = { repo: '', dir: process.cwd(), lanes: null, yes: false, dryRun: false, json: false, apps: true, help: false, given: {} };
   const g = opts.given;
@@ -528,7 +531,7 @@ export const parseArgs = (argv, req) => {
   // A chat answer without a lane that posts is no answer (plan 0011 §10.1).
   if (g.chat) {
     const chosen = opts.lanes ?? (g.feature ? req.features?.find((f) => f.feature === g.feature)?.lanes : null);
-    if (chosen && !postsToChat(chosen, g.deployEnvironments ?? [], req)) {
+    if (chosen && !postsToChat(chosen, g.deployEnvironments ?? declaredOf(opts.dir), req)) {
       throw new Error(`--chat is for lanes that post to a chat channel (${notifyingLanes(req).map((l) => l.slice('agent-'.length)).join(', ')}), and ${opts.lanes ? `--lanes ${opts.lanes.map((l) => l.slice('agent-'.length)).join(',')}` : `--feature ${g.feature}`} has none`);
     }
   }
@@ -1121,6 +1124,21 @@ export const postsToChat = (lanes, environments, req) => lanes.some((l) => notif
  * skill asks it word for word.
  */
 export const CHAT_QUESTION = 'Post digests to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own.';
+/** The chat question when the deploy lane is the only thing that posts (plan 0011 §10.1). */
+export const CHAT_QUESTION_DEPLOY = 'Post deploy announcements to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own.';
+/** The chat question when the digests and the deploy lane both post (plan 0011 §10.1). */
+export const CHAT_QUESTION_BOTH = 'Post digests and deploy announcements to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own.';
+
+/**
+ * The chat question's words for what posts (plan 0011 §10.1): the digests alone, the deploy
+ * lane's announcements alone, or both.
+ * @param {string[]} lanes @param {string[]} environments @param {Requirements} req
+ */
+export const chatQuestion = (lanes, environments, req) => {
+  const digests = lanes.some((l) => notifyingLanes(req).includes(l));
+  const deploys = environments.length > 0 && deployKinds(req).length > 0;
+  return digests && deploys ? CHAT_QUESTION_BOTH : deploys ? CHAT_QUESTION_DEPLOY : CHAT_QUESTION;
+};
 /** Its options, Kanon's Slack hook recommended (decision 11). @type {Array<Option<Chat>>} */
 export const CHAT_OPTIONS = [
   { value: 'slack', label: "Kanon's Slack hook", does: 'init writes it at .github/actions/notify/action.yml; the digests post through Slack incoming webhooks you create, one secret per kind.', names: ['slack'] },
@@ -1568,7 +1586,7 @@ export const askAll = async (deps, opts, ctx) => {
     const inferred = chatOf(ctx);
     if (g.chat) [chat, why.chat] = [g.chat, flag];
     else if (opts.yes || !inferred.asks) [chat, why.chat] = [inferred.value, inferred.why];
-    else [chat, why.chat] = [await choose(deps, CHAT_QUESTION, CHAT_OPTIONS, 'slack', 'slack', 'none'), asked];
+    else [chat, why.chat] = [await choose(deps, chatQuestion(lanes, g.deployEnvironments ?? ctx.declaredEnvironments ?? [], ctx.req), CHAT_OPTIONS, 'slack', 'slack', 'none'), asked];
   }
 
   // Q3. Private or sensitive material: recommended Yes on a private repository, No on a public one.
@@ -1669,7 +1687,7 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
     asked('lanes');
     // Lanes that post now, with no chat answer yet: asked here, unless a hook answers it.
     if (a.chat === null && postsToChat(a.lanes, a.deployEnvironments, ctx.req) && chatOf(ctx).asks) {
-      a.chat = await choose(deps, CHAT_QUESTION, CHAT_OPTIONS, 'slack', 'slack', 'none');
+      a.chat = await choose(deps, chatQuestion(a.lanes, a.deployEnvironments, ctx.req), CHAT_OPTIONS, 'slack', 'slack', 'none');
       asked('chat');
     }
     if (ctx.releases) {
@@ -1725,7 +1743,7 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
       asked('deployEnvironments');
       // A deploy lane announces its deploys: with no chat answer yet, asked here, unless a hook answers it.
       if (a.chat === null && postsToChat(a.lanes, a.deployEnvironments, ctx.req) && chatOf(ctx).asks) {
-        a.chat = await choose(deps, CHAT_QUESTION, CHAT_OPTIONS, 'slack', 'slack', 'none');
+        a.chat = await choose(deps, chatQuestion(a.lanes, a.deployEnvironments, ctx.req), CHAT_OPTIONS, 'slack', 'slack', 'none');
         asked('chat');
       }
     } catch (e) {
@@ -1734,7 +1752,7 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
     }
   }
   if (picked.has(8) && postsToChat(a.lanes, a.deployEnvironments, ctx.req)) {
-    a.chat = await choose(deps, CHAT_QUESTION, CHAT_OPTIONS, 'slack', a.chat ?? 'slack', a.chat ?? 'none');
+    a.chat = await choose(deps, chatQuestion(a.lanes, a.deployEnvironments, ctx.req), CHAT_OPTIONS, 'slack', a.chat ?? 'slack', a.chat ?? 'none');
     asked('chat');
   }
   return derive(a, ctx, g);
@@ -2545,6 +2563,24 @@ export const SCHEMA = 'kanon-init/v1';
  */
 
 /**
+ * The deploy environments the adoption record of the checkout at `dir` declares, read through the
+ * one parser every reader uses (plan 0010 §4): none where there is no checkout, no record, or a
+ * `## Deploy` section it refuses, which the run itself then stops on.
+ * @param {Pick<Deps, 'git' | 'readFile'>} deps @param {string} dir
+ * @returns {string[]}
+ */
+export const recordEnvironments = (deps, dir) => {
+  const top = deps.git(['-C', resolve(dir), 'rev-parse', '--show-toplevel']);
+  if (top.status !== 0) return [];
+  try {
+    return parseDeployDeclaration(deps.readFile(join(top.stdout.trim(), DEPLOY_RECORD)) ?? '').environments;
+  } catch (e) {
+    if (e instanceof DeclarationError) return [];
+    throw e;
+  }
+};
+
+/**
  * `kanon init`. Returns the exit code: 0 when it ran (manual steps may remain, and are printed),
  * 1 when something failed, 2 on a usage error. With `--json`, the same exit code, one JSON
  * document on standard output, and the prose on standard error.
@@ -2567,7 +2603,7 @@ export const init = async (argv, overrides = {}) => {
   let usageError = null;
   if (req) {
     try {
-      opts = parseArgs(argv, req);
+      opts = parseArgs(argv, req, (dir) => recordEnvironments(base, dir));
     } catch (e) {
       usageError = /** @type {Error} */ (e).message;
     }
