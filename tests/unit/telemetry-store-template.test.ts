@@ -562,8 +562,8 @@ describe('the register and what is rendered from it never live in a repository w
     expect(section('## Deploy')).toMatch(/\[Where the register lives\]\(#where-the-register-lives\)/);
   });
 
-  it('points the first-deploy and add-a-repository steps at it', () => {
+  // The add-a-repository step that pointed at it went with the SigV4 path's register entries (J9).
+  it('points the first-deploy step at it', () => {
     expect(section('## Before the first deploy')).toMatch(/^1\. \*\*Keep the register out of every repository where Kanon's lanes run\*\* \(\[Where the register lives\]\(#where-the-register-lives\)\)/m);
-    expect(section('## Add a repository')).toMatch(/^1\. Add an entry to the register, where \[it lives\]\(#where-the-register-lives\):/m);
   });
 });
