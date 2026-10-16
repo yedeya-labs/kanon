@@ -2473,7 +2473,16 @@ export const diagnose = async (deps, opts) => {
   // requirements file's `notify` entry: none before the release that ships one, and no lane
   // before the release whose lane has a `notify` job. Doctor says nothing of the branch exposure
   // (decision 22): the weakness is stated in the plan and docs/notifications.md alone.
-  const notifyCallers = notify ? callers.filter((c) => req.lanes[c.lane] && kindOf(c.lane)) : [];
+  // The deploy lane's caller notifies too (plan 0011 N9): each job calling the lane's
+  // per-environment workflow, at a release whose `deploy.yml` has a `notify` job, which
+  // requirements.json's `notify.kinds` lists by its file name. Its kind's secret is optional there.
+  const deployNotifyJobs = notify
+    ? [...workflows].flatMap(([file, wf]) => Object.values(isMap(wf.jobs) ? wf.jobs : {}).filter(isMap).flatMap((job) => {
+      const lane = kanonCall(job.uses)?.workflow ?? '';
+      return !Object.hasOwn(req.lanes, lane) && kindOf(lane) ? [{ file, lane, job }] : [];
+    }))
+    : [];
+  const notifyCallers = notify ? [...callers.filter((c) => req.lanes[c.lane] && kindOf(c.lane)), ...deployNotifyJobs] : [];
   if (notify && notifyCallers.length) {
     const hookPath = notify.hook.path;
     const hookText = read(hookPath);
@@ -2601,6 +2610,19 @@ export const diagnose = async (deps, opts) => {
         const name = kindSecret(kind);
         if (seen.has(`${c.file} ${kind}`)) continue;
         seen.add(`${c.file} ${kind}`);
+        // A deploy caller's job that doesn't map the optional secret hands its notify job none, so
+        // it records `skipped` whatever the repository holds: its line is part of the fix.
+        const unmapped = deployNotifyJobs.filter((x) => x.file === c.file && kindOf(x.lane) === kind && !(x.job.secrets === 'inherit' || (isMap(x.job.secrets) && Object.hasOwn(x.job.secrets, name))));
+        const jobsOf = Object.entries(isMap(workflows.get(c.file)?.jobs) ? /** @type {Record<string, unknown>} */ (workflows.get(c.file)?.jobs) : {});
+        const unmappedIds = unmapped.map((x) => jobsOf.find(([, j]) => j === x.job)?.[0] ?? x.lane);
+        const mapLine = `      ${name}: \${{ secrets.${name} }}`;
+        if (unmapped.length && (!s.secrets || s.secrets.has(name))) {
+          find('notify.kind-unset', c.file, `calls ${c.lane}, whose ${kind} messages are posted only with ${name}, and its job${unmappedIds.length > 1 ? 's' : ''} ${unmappedIds.join(', ')} map${unmappedIds.length > 1 ? '' : 's'} none: so ${kind} is not posted. That is a choice (plan 0011 decision 3).`, {
+            text: `To post ${kind}, add the line under the secrets: of each of those jobs, as kanon init writes it:`,
+            commands: [mapLine],
+          });
+          continue;
+        }
         if (!s.secrets) {
           unchecked.push({ check: 'notify-secrets', subject: c.file, reason: `the token can't list ${repo}'s secret names (it needs admin access), so doctor can't tell whether ${name}, ${kind}'s secret, is held` });
           continue;
@@ -2614,9 +2636,9 @@ export const diagnose = async (deps, opts) => {
           }
           if (org.has(name)) continue;
         }
-        find('notify.kind-unset', c.file, `calls ${c.lane}, whose ${kind} messages are posted only with ${name}, which ${repo} doesn't hold: so ${kind} is not posted, and the model run that writes it is skipped. That is a choice (plan 0011 decision 3).`, {
-          text: `To post ${kind}, store what your hook needs for it (for Kanon's Slack hook, the URL of a Slack incoming webhook for that channel; for its generic webhook hook, an https URL) ${OWN_TERMINAL}:`,
-          commands: [`gh secret set ${name} -R ${repo}`],
+        find('notify.kind-unset', c.file, `calls ${c.lane}, whose ${kind} messages are posted only with ${name}, which ${repo} doesn't hold${unmapped.length ? `, nor do its job${unmappedIds.length > 1 ? 's' : ''} ${unmappedIds.join(', ')} map it` : ''}: so ${kind} is not posted${req.lanes[c.lane] ? ', and the model run that writes it is skipped' : ''}. That is a choice (plan 0011 decision 3).`, {
+          text: `To post ${kind}, store what your hook needs for it (for Kanon's Slack hook, the URL of a Slack incoming webhook for that channel; for its generic webhook hook, an https URL) ${OWN_TERMINAL}${unmapped.length ? `, and add the second line under the secrets: of each of those jobs` : ''}:`,
+          commands: [`gh secret set ${name} -R ${repo}`, ...(unmapped.length ? [mapLine] : [])],
         });
       }
     }

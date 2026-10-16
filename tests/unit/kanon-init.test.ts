@@ -2917,9 +2917,11 @@ describe('kanon init and the deploy lane (plan 0010 D6)', () => {
       expect(job.with, env).toEqual({ environment: env, position: i + 1, build: BUILD });
       expect(job.permissions).toEqual(DEPLOY.grants[DEPLOY.workflows.environment]);
     });
-    // No secret mapped anywhere: the lane's one secret is an environment secret.
-    for (const [name, job] of Object.entries(wf.jobs)) expect(job.secrets, name).toBeUndefined();
-    expect(read(dir, CALLER)).not.toMatch(/secrets/);
+    // The deploy secret is an environment secret, mapped nowhere. Each environment's job maps the
+    // announcement's chat secret alone, whatever the chat answer (plan 0011 N9, §10.2's `none` row).
+    expect(wf.jobs.release!.secrets).toBeUndefined();
+    envs.forEach((env, i) => expect(wf.jobs[`deploy-${i + 1}`]!.secrets, env).toEqual({ KANON_CHAT_DEPLOY: '${{ secrets.KANON_CHAT_DEPLOY }}' }));
+    expect(read(dir, CALLER)).not.toMatch(/KANON_DEPLOY_SECRET/);
   };
 
   it.each([[['production']], [['staging', 'production']], [['dev', 'staging', 'production']]])('writes the caller for %j: a release job, then one job per environment in order, each needing the one before and release', async (envs) => {
@@ -3328,6 +3330,52 @@ describe('kanon init and the chat channel (plan 0011 N11)', () => {
     expect(read(ROOT, 'docs/notifications.md')).toMatch(/^## Kanon's generic webhook hook$/m);
   });
 
+  // Plan 0011 N9's installer half (§10.2's last line): the deploy lane announces each deploy with
+  // KANON_CHAT_DEPLOY, which its caller maps whatever the answer, and whose step comes with the lane.
+  it('maps KANON_CHAT_DEPLOY into each deploy job, with or without a hook, and never into the release job', async () => {
+    const DEPLOY = '.github/workflows/deploy.yml';
+    const LINE = '${{ secrets.KANON_CHAT_DEPLOY }}';
+    for (const chat of ['slack', 'none']) {
+      const { dir } = await initWith(['--feature', 'full', '--chat', chat, '--deploy-environments', 'staging,production']);
+      const jobs = (parseYaml(read(dir, DEPLOY)) as { jobs: Record<string, { secrets?: Record<string, string> }> }).jobs;
+      expect(jobs.release!.secrets, chat).toBeUndefined();
+      expect(jobs['deploy-1']!.secrets, chat).toEqual({ KANON_CHAT_DEPLOY: LINE });
+      expect(jobs['deploy-2']!.secrets, chat).toEqual({ KANON_CHAT_DEPLOY: LINE });
+    }
+  });
+
+  it('leaves secret.chat-deploy only with a declared deploy environment and an answer that writes a hook', async () => {
+    const deploy = (d: Doc) => chatSteps(d).filter((f) => f.id === 'secret.chat-deploy');
+    const envs = ['--deploy-environments', 'staging,production'];
+    const [slack] = deploy((await initWith(['--feature', 'full', '--chat', 'slack', ...envs])).d);
+    expect(slack).toMatchObject({ id: 'secret.chat-deploy', subject: 'KANON_CHAT_DEPLOY', category: 'secret', blocking: false });
+    expect(slack!.fix.url).toBe(SLACK_PAGE);
+    expect(slack!.fix.text).toMatch(/^Create a Slack incoming webhook for the channel the deploy announcement posts to/);
+    expect(slack!.fix.commands).toEqual([`gh secret set KANON_CHAT_DEPLOY -R ${REPO}   # in your own terminal, never with ! at the Claude Code prompt`]);
+    expect(slack!.message).toContain("which the deploy lane's caller, .github/workflows/deploy.yml, maps");
+    const [webhook] = deploy((await initWith(['--feature', 'full', '--chat', 'webhook', ...envs])).d);
+    expect(webhook!.fix.url).toBe(`https://github.com/yedeya-labs/kanon/blob/${PINNED}/docs/notifications.md#kanons-generic-webhook-hook`);
+    expect(webhook!.fix.text).toMatch(/^Store the https URL your receiver takes the deploy announcement at/);
+    // The deploy lane alone asks the question: Review with environments takes --chat, and its step follows.
+    const review = await initWith(['--feature', 'review', '--chat', 'slack', ...envs]);
+    expect(review.d.answers.chat).toBe('slack');
+    expect(chatSteps(review.d).map((f) => f.id)).toEqual(['secret.chat-deploy']);
+    // Not without an environment, nor with none for the answer, nor once the repository holds it.
+    expect(deploy((await initWith(['--feature', 'full', '--chat', 'slack'])).d)).toEqual([]);
+    expect(deploy((await initWith(['--feature', 'full', '--chat', 'none', ...envs])).d)).toEqual([]);
+    expect(deploy((await initWith(['--feature', 'full', '--chat', 'slack', ...envs], {}, { secrets: new Set(['KANON_CHAT_DEPLOY']) })).d)).toEqual([]);
+    expect(() => parseArgs(['--feature', 'review', '--chat', 'slack', '--deploy-environments', 'none'], REQ)).toThrow(/--feature review has none/);
+  });
+
+  it('asks the chat question when deploy environments are declared through Change something, under Review', async () => {
+    const dir = checkout();
+    const asked: string[] = [];
+    const r = await run(dir, fakeGitHub(), ['--feature', 'review', '--no-sensitive-data', '--consent', 'no', '--no-apps'], undefined, REQ, { ask: changing('7', { "The deploy lane's environments": 'production', [CHAT_QUESTION]: 'webhook' }, asked) });
+    expect(r.status, r.err).toBe(0);
+    expect(asked.filter((q) => q.startsWith(CHAT_QUESTION))).toHaveLength(1);
+    expect(read(dir, HOOK)).toBe(prebuilt('webhook'));
+  });
+
   it("writes the adoption record's Chat channel bullet for each answer, and none without a notifying lane", async () => {
     const want: Record<string, string> = {
       slack: "- **Chat channel:** Slack, through Kanon's Slack hook (one secret per kind)",
@@ -3379,5 +3427,34 @@ describe('kanon init and the chat channel (plan 0011 N11)', () => {
     expect(old.d.notes).toContainEqual(expect.stringMatching(/^\.github\/workflows\/agent-project-digest\.yml maps DIGEST_WEBHOOK.*the upgrade skill rewrites its secrets: in the same edit/));
     expect(legacyChatRewrite(legacy('v0.39.0'), 'agent-project-digest', REQ, PINNED)).toBeNull();
     expect(legacyChatRewrite(legacy(PINNED), 'agent-review', REQ, PINNED)).toBeNull();
+  });
+});
+
+// kanon#1023: the re-ask names each covered caller by the name it has in the repository, as the
+// `ci` trigger names the adopter's CI, and by its template's name only where init writes it.
+describe("kanon init's re-ask names the covered callers the repository has (#1023)", () => {
+  const SWEEP = '.github/workflows/agent-dispatch-sweep.yml';
+  const IMPLEMENT = '.github/workflows/agent-implement.yml';
+  const reask = (dir: string) => (parseYaml(read(dir, SWEEP)) as { on: { workflow_run: { workflows: string[] } } }).on.workflow_run.workflows;
+  const implementCaller = (name: string) => callerFile('agent-implement', REQ.lanes['agent-implement']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }).replace(/^name: .*$/m, `name: ${name}`);
+  const lanes = ['--yes', '--json', '--no-apps', '--lanes', 'review,implement,dispatch-sweep'];
+
+  it('names an existing caller by its own name:, and a lane with no caller yet by its template name', async () => {
+    const dir = checkout({ [IMPLEMENT]: implementCaller('Implement') });
+    const r = await run(dir, fakeGitHub(), lanes);
+    expect(r.status, r.err).toBe(0);
+    expect(reask(dir)).toEqual(['Implement', TRIGGERS['agent-triage']!.name]);
+    // The implement caller is the project's: init never overwrites it.
+    expect(read(dir, IMPLEMENT)).toBe(implementCaller('Implement'));
+    // A quoted name with a comment, as GitHub reads it.
+    const quoted = checkout({ [IMPLEMENT]: implementCaller('"Implement: ours" # renamed') });
+    expect((await run(quoted, fakeGitHub(), lanes)).status).toBe(0);
+    expect(reask(quoted)).toEqual(['Implement: ours', TRIGGERS['agent-triage']!.name]);
+  });
+
+  it('keeps the template names where no covered caller exists, and ignores a file at the path that calls no lane', async () => {
+    const dir = checkout({ [IMPLEMENT]: 'name: Something else\non: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n' });
+    expect((await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--lanes', 'review,dispatch-sweep'])).status).toBe(0);
+    expect(reask(dir)).toEqual([TRIGGERS['agent-implement']!.name, TRIGGERS['agent-triage']!.name]);
   });
 });

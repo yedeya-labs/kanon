@@ -513,7 +513,9 @@ describe('each skill is held to the kanon command it drives', () => {
     const questions = section(skill('adopt').body, /^## The questions$/)!;
     const chat = questions.split(/^(?=### )/m).find((b) => b.startsWith('### `.answers.chat`: '))!;
     expect(chat).toMatch(/\*\*Ask it only when the chosen lanes post to a chat channel\*\*/);
-    expect(chat).toMatch(/\*\*Review\*\* and \*\*Review \+ build\*\* never see it/);
+    expect(chat).toMatch(/\*\*Review\*\* and \*\*Review \+ build\*\* with no deploy environment never see it/);
+    // The deploy lane announces too (plan 0011 N9): declared environments bring the question.
+    expect(chat).toMatch(/any feature with deploy environments declared/);
     expect(chat).toMatch(/\*\*Don't ask it when the repository answers it already:\*\* when `\.inspection\.notifyHook` is not null/);
     expect(chat).toContain(`"${CHAT_QUESTION}"`);
     expect(chat).toMatch(/^- \*\*Recommended:\*\* \*\*Kanon's Slack hook\*\*/m);

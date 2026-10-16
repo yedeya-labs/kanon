@@ -369,7 +369,7 @@ The install questions of 2026-10-10 are the feature, the review trigger, one con
 | `hook` | a stub at the path that exits non-zero naming its file | the same, which the hook receives | the same two ids, worded as "whatever your hook needs for this kind" | `- **Chat channel:** our own hook, .github/actions/notify` |
 | `none` | none | the project digest's caller maps its kind's secret anyway, so adding a hook later needs no change to it; the weekly digest is not installed | none | `- **Chat channel:** none yet` |
 
-`secret.digest-webhook` gives way to one step id per kind; the deploy lane's step, `secret.chat-deploy`, comes with that lane.
+`secret.digest-webhook` gives way to one step id per kind; the deploy lane's step, `secret.chat-deploy`, comes with that lane. **Built** (N9's installer half): the deploy caller maps `KANON_CHAT_DEPLOY` into each `deploy-<position>` job whatever the answer, as the `none` row has the project digest's caller do; `secret.chat-deploy` is written with a declared environment and an answer that writes a hook; a declared environment brings the question as a digest does; and doctor reads the deploy caller's `notify` jobs as the digests' (`notify.none`, `notify.kind-unset`, which also names a `deploy-<position>` job that doesn't map the optional secret, and `notify.failing`).
 
 **The full pipeline's lanes change** (decision 12): `agent-project-digest` becomes unconditional, since its health job is worth having without chat, as Kanon's own use shows; `agent-weekly-digest` stays conditional, now on "a notify hook at `.github/actions/notify/action.yml`". `requirements.json`'s `conditional` and `docs/lanes.json`'s features say so.
 
@@ -457,7 +457,6 @@ Read on 2026-10-14, on docs.slack.dev.
 
 ## Out of scope
 
-- **`kanon init` mapping `KANON_CHAT_DEPLOY` into the deploy caller,** and its `secret.chat-deploy` step ([§10.2](#102-what-each-answer-writes)), and doctor reading the deploy caller's `notify` jobs: the installer's and doctor's half of N9's wiring, after N11.
 - **A `release` kind** for libraries that release without deploying, **cost alerts** (`K-ADOPT-1` step 10 names them; nothing produces one yet), and **health messages** (decision 13: never, for now). Each would be an additive kind with its producer and its secret.
 - **A third prebuilt hook,** and **naming other chat systems** (shape S3: they are the adopter's own hooks).
 - **A default-branch restriction on the hook** (decision 8: the Owner chose any branch).

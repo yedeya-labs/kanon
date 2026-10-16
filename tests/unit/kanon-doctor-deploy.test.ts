@@ -119,7 +119,9 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
     for (const envs of [['production'], TWO, ['dev', 'staging', 'production']]) {
       it(`finds nothing on a chain of ${envs.length}, its caller, stubs and section as init writes them (the mutations' baseline)`, async () => {
         const r = await check(files(envs), github({ chain: envs }));
-        expect(ids(r)).toEqual([]);
+        // The deploy caller announces through a notify hook (plan 0011 N9), which this
+        // installation lacks: a note, never blocking, and the one finding.
+        expect(ids(r)).toEqual(['notify.none .github/actions/notify/action.yml']);
         expect(r.json.unchecked).toEqual([]);
         expect(r.status, r.out).toBe(EXIT.healthy);
         // The caller's jobs at the pinned release are Kanon's id-token holders.
