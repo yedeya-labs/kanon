@@ -31,7 +31,7 @@ What ships, and when:
 
 The hosted stores' trust and code:
 
-- `^infra/telemetry/(template\.yaml|render\.mjs)$` `infra` `always` — the telemetry store's template and its renderer, which write each adopter's writer and reader roles and the subject each trusts
+- `^infra/telemetry/template\.yaml$` `infra` `always` — the telemetry store's template: its tables' resource policies, its functions' URLs and the roles and aliases that reach them (no role trusts GitHub's OIDC provider since plan 0008 J9)
 - `^infra/telemetry/function/` `infra` `always` — the ingest function, the only code that writes the telemetry table and maps a signed role to the one key it may write, and the aggregate function, which publishes only what at least three adopters contribute to
 - `^infra/qa-store/aws/(template\.yaml|provision\.mjs)$` `infra` `always` — the QA store's template and its provisioner, which set the role and the exact subjects it trusts
 
