@@ -352,6 +352,8 @@ jobs:
         with:
           arm: weekly-digest agent
           non-fatal: "true"
+          claude-args: ${{ steps.agent.outputs.claude-args }}
+          agent-outcome: ${{ steps.agent.outcome }}
 
   # THE POST (plan 0011 §5, `K-OBS-19`): the adopter's hook, with this kind's secret and no other,
   # a token that reads contents and nothing more, and no Claude credential. Of the shape

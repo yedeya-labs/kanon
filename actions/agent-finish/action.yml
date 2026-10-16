@@ -185,6 +185,11 @@ runs:
       uses: $/actions/agent-classify
       with:
         arm: ${{ inputs.arm }}
+        # The flags the row records, and whether the agent step failed (kanon#1015): a lane
+        # that classifies here runs its agent step without `continue-on-error`, so its `agent`
+        # stage's conclusion is the step's outcome.
+        claude-args: ${{ inputs.claude-args-ran || inputs.claude_args }}
+        agent-outcome: ${{ inputs.agent-outcome || contains(inputs.stages, 'agent=failure') && 'failure' || '' }}
 
     # WHAT THIS RUN OPENED (RA-1627), for a lane that opts in with `quality-pr-label`.
     # Derived from GitHub, never from the agent — asking the agent to report it would

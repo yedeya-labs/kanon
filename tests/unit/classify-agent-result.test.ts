@@ -1,8 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
+import { laneBlockOf } from './helpers/agent-lanes.mjs';
+import { interpolate } from './helpers/expression.js';
 import { readBlock } from './helpers/blocks.js';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import {
@@ -90,6 +93,17 @@ const OVER_CAP_BUT_FINISHED = [
     modelUsage: { ...HAIKU, ...OPUS },
   },
 ];
+
+// KANON#1008. Verbatim off run 38628914592 (the Lead's revise of PR #915), whose row said
+// `completed`. `claude-code-action` since #1607 fails the step itself when a result says
+// `success` past `--max-turns` ("Claude reported a successful result after 100 turns,
+// exceeding the configured maximum of 90"), so the CLI's terminal reason is not the one
+// that ended the run.
+const OVERSHOT = {
+  type: 'result', subtype: 'success', is_error: false, terminal_reason: 'completed',
+  duration_ms: 718909, num_turns: 100, total_cost_usd: 5.2277682,
+  modelUsage: { ...HAIKU, 'claude-opus-5-5': { contextWindow: 1000000, maxOutputTokens: 128000 } },
+};
 
 // THE REAL FILE, verbatim off run 33764297592 — two PRETTY-PRINTED objects concatenated
 // with no separator and no enclosing array. Neither `JSON.parse` of the whole text nor a
@@ -216,17 +230,6 @@ describe('classifyResult', () => {
       expect(classifyResult(run, OPUS_5, { maxTurns: 150, stepFailed: false }).kind).toBe('ok');
     }
   });
-
-  // KANON#1008. Verbatim off run 38628914592 (the Lead's revise of PR #915), whose row said
-  // `completed`. `claude-code-action` since #1607 fails the step itself when a result says
-  // `success` past `--max-turns` ("Claude reported a successful result after 100 turns,
-  // exceeding the configured maximum of 90"), so the CLI's terminal reason is not the one
-  // that ended the run.
-  const OVERSHOT = {
-    type: 'result', subtype: 'success', is_error: false, terminal_reason: 'completed',
-    duration_ms: 718909, num_turns: 100, total_cost_usd: 5.2277682,
-    modelUsage: { ...HAIKU, 'claude-opus-5-5': { contextWindow: 1000000, maxOutputTokens: 128000 } },
-  };
 
   it('calls a run the action failed past its turn cap `exhausted` (kanon#1008)', () => {
     const c = classifyResult(OVERSHOT, 'claude-opus-5-5', { maxTurns: 90, stepFailed: true });
@@ -650,6 +653,31 @@ describe('the CLI, run as the workflow runs it', SPAWNS, () => {
     expect(r.stdout).toMatch(/downstream of it/);
     expect(r.outputs).toContain('kind=ok');
   });
+
+  // KANON#1015. Run 38628914592's telemetry row said `exhausted` once #1012 handed the
+  // classifier the cap and the step's outcome, and its notice still said "finished cleanly",
+  // because the CLI handed it neither.
+  it('says a run the action failed past its turn cap hit its turn cap (kanon#1015)', () => {
+    const r = run(JSON.stringify(OVERSHOT), [
+      '--arm', 'Lead agent', '--claude-args', '--model claude-opus-5-5\n--max-turns 90\n', '--agent-outcome', 'failure',
+    ]);
+    expect(r.outputs).toContain('kind=exhausted');
+    expect(r.stdout).toMatch(/^::error title=Lead agent ran out of turns/m);
+    expect(r.stdout).toMatch(/num_turns 100 past --max-turns 90/);
+    expect(r.stdout, 'and not the clean finish it used to print').not.toMatch(/finished cleanly|downstream of it/);
+    expect(r.summary).toMatch(/🪫/);
+  });
+
+  it('keeps the clean-finish notice when the agent step did not fail, or the cap is unknown (kanon#1015)', () => {
+    const args = ['--claude-args', '--max-turns 90'];
+    // The agent step passed, so whatever reddened the job is downstream of it.
+    for (const extra of [[...args, '--agent-outcome', 'success'], args, ['--agent-outcome', 'failure'],
+      ['--claude-args', '--model claude-opus-5-5', '--agent-outcome', 'failure'], []]) {
+      const r = run(JSON.stringify(OVERSHOT), extra);
+      expect(r.outputs, extra.join(' ')).toContain('kind=ok');
+      expect(r.stdout).toMatch(/finished cleanly/);
+    }
+  });
 });
 
 /**
@@ -663,7 +691,8 @@ describe('the CLI, run as the workflow runs it', SPAWNS, () => {
 describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS, () => {
   const block = readBlock('agent-classify');
   const step = block.runs.steps[0]!;
-  const run = (result: unknown, inputs: { arm?: string; recover?: string; nonFatal?: string } = {}) => {
+  type Inputs = { arm?: string; recover?: string; nonFatal?: string; claudeArgs?: string; agentOutcome?: string };
+  const run = (result: unknown, inputs: Inputs = {}) => {
     const temp = mkdtempSync(join(tmpdir(), 'classify-block-'));
     if (result !== null) writeFileSync(join(temp, 'claude-execution-output.json'), JSON.stringify(result));
     return runWorkflowStep(step as never, {
@@ -674,6 +703,8 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS
         ARM: inputs.arm ?? 'x agent',
         RECOVER: inputs.recover ?? '',
         NON_FATAL: inputs.nonFatal ?? 'false',
+        CLAUDE_ARGS: inputs.claudeArgs ?? '',
+        AGENT_OUTCOME: inputs.agentOutcome ?? '',
       },
     });
   };
@@ -682,7 +713,10 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS
     expect(block.runs.steps).toHaveLength(1);
     expect(step.id).toBe('classify');
     expect(step.if, 'the caller gates it').toBeUndefined();
-    expect(step.env).toEqual({ ARM: '${{ inputs.arm }}', RECOVER: '${{ inputs.recover }}', NON_FATAL: '${{ inputs.non-fatal }}' });
+    expect(step.env).toEqual({
+      ARM: '${{ inputs.arm }}', RECOVER: '${{ inputs.recover }}', NON_FATAL: '${{ inputs.non-fatal }}',
+      CLAUDE_ARGS: '${{ inputs.claude-args }}', AGENT_OUTCOME: '${{ inputs.agent-outcome }}',
+    });
     expect(String(step.run), 'no input is spliced into the script text').not.toMatch(/\$\{\{/);
     expect(block.outputs?.kind?.value).toBe('${{ steps.classify.outputs.kind }}');
     expect(block.outputs?.retry?.value).toBe('${{ steps.classify.outputs.retry }}');
@@ -690,9 +724,29 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS
     // three, because nothing asserted the SET: the third, `code`, was read by no caller and
     // its description sent the reader to `agent-telemetry`, which derives that value itself.
     expect(Object.keys(block.outputs ?? {})).toEqual(['kind', 'retry']);
-    expect(Object.keys(block.inputs ?? {}).sort()).toEqual(['arm', 'non-fatal', 'recover']);
+    expect(Object.keys(block.inputs ?? {}).sort()).toEqual(['agent-outcome', 'arm', 'claude-args', 'non-fatal', 'recover']);
     expect(block.inputs?.recover?.default).toBe('');
     expect(block.inputs?.['non-fatal']?.default).toBe('false');
+    expect(block.inputs?.['claude-args']?.default).toBe('');
+    expect(block.inputs?.['agent-outcome']?.default).toBe('');
+  });
+
+  it('calls a run the action failed past its turn cap `exhausted`, from the flags and the outcome it is handed (kanon#1015)', () => {
+    // The flags arrive as the multi-line block a lane writes, and stay one value.
+    const flags = '--model claude-opus-5-5\n--max-turns 90\n--allowedTools "Bash(git *)"\n';
+    const r = run(OVERSHOT, { claudeArgs: flags, agentOutcome: 'failure' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.outputs).toMatchObject({ kind: 'exhausted', retry: '' });
+    expect(r.stdout).toMatch(/ran out of turns/);
+    // A step that failed only downstream keeps its notice, and so does a caller that hands neither.
+    expect(run(OVERSHOT, { claudeArgs: flags, agentOutcome: 'success' }).outputs.kind).toBe('ok');
+    expect(run(OVERSHOT).outputs.kind).toBe('ok');
+  });
+
+  it('keeps hostile flags as data (kanon#1015)', () => {
+    const r = run(OVERSHOT, { claudeArgs: `--max-turns 90 $(touch /tmp/never) "q'`, agentOutcome: 'failure' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.outputs.kind).toBe('exhausted');
   });
 
   it('runs the script in its own directory, not the checked-out tree\'s', () => {
@@ -731,5 +785,62 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS
     expect(nonFatal.stdout, 'a non-fatal step warns').toMatch(/^::warning title=/m);
     expect(nonFatal.stdout).toMatch(/non-fatal/);
     expect(run(MID_RUN, { nonFatal: 'false' }).stdout, "'false' is not non-fatal").toMatch(/^::error /m);
+  });
+});
+
+/**
+ * KANON#1015 — every caller of `agent-classify` hands it the flags the agent ran with and the
+ * agent step's outcome, which the classifier needs to call a run the action failed past its turn
+ * cap (kanon#1008). A caller that hands neither still classifies, by the terminal reason alone,
+ * so a missing pair is silent: the notice says "finished cleanly" beside a telemetry row that
+ * says `exhausted`. Hence the census.
+ */
+describe('every caller hands agent-classify the flags that ran and the agent step\'s outcome (kanon#1015)', () => {
+  type Step = { id?: string; uses?: string; with?: Record<string, string> };
+  const isClassify = (s: Step) => laneBlockOf(s) === 'agent-classify';
+  // The smoke classifies a fixture it copies into place: there is no agent step to read.
+  const NO_AGENT = 'agent-blocks-smoke.yml';
+  const calls = readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).flatMap((f) => {
+    const d = parse(readFileSync(join('.github/workflows', f), 'utf8'));
+    return Object.entries<{ steps?: Step[] }>(d?.jobs ?? {}).flatMap(([job, def]) => (def.steps ?? [])
+      .filter(isClassify).map((s) => ({ where: `${f}:${job}`, file: f, step: s, steps: def.steps! })));
+  });
+
+  it('finds the calls it is about', () => {
+    expect(calls.map((c) => c.file).sort()).toEqual([
+      'agent-blocks-smoke.yml', 'agent-project-digest.yml', 'agent-weekly-digest.yml', 'code-audit-agent-job.yml',
+      'explore-telemetry-agent-job.yml', 'overseer-agent-job.yml', 'review-agent-job.yml',
+    ]);
+  });
+
+  it.each(calls.filter((c) => c.file !== NO_AGENT).map((c) => [c.where, c] as const))(
+    '%s passes its agent-run call\'s flags and outcome',
+    (_w, c) => {
+      const agent = c.steps.find((s) => laneBlockOf(s) === 'agent-run');
+      expect(agent?.id, 'the job runs its agent through agent-run, with an id to read').toBeTruthy();
+      expect(c.step.with?.['claude-args']).toBe(`\${{ steps.${agent!.id}.outputs.claude-args }}`);
+      expect(c.step.with?.['agent-outcome']).toBe(`\${{ steps.${agent!.id}.outcome }}`);
+    },
+  );
+
+  it('agent-finish passes the flags its row records, and whether the agent stage failed', () => {
+    const finish = readBlock('agent-finish');
+    const step = finish.runs.steps.find((s) => s.id === 'classify')!;
+    const telemetry = finish.runs.steps.find((s) => s.uses === '$/actions/agent-telemetry')!;
+    expect(step.with?.['claude-args'], 'the same flags as the telemetry row').toBe(telemetry.with?.claude_args);
+    expect(step.with?.['claude-args']).toBe('${{ inputs.claude-args-ran || inputs.claude_args }}');
+    // A lane whose agent step can fail reports it in its `agent` stage; one that runs it
+    // `continue-on-error` passes the outcome, and classifies in a step of its own anyway.
+    expect(step.with?.['agent-outcome'])
+      .toBe("${{ inputs.agent-outcome || contains(inputs.stages, 'agent=failure') && 'failure' || '' }}");
+    // What it evaluates to, on the folded stages a lane writes and the outcome one passes.
+    const outcome = (inputs: Record<string, string>) =>
+      interpolate(step.with?.['agent-outcome'], { inputs: { 'agent-outcome': '', stages: '', ...inputs } });
+    expect(outcome({ stages: 'token=success checkout=success hook=success setup=success agent=failure' })).toBe('failure');
+    expect(outcome({ stages: 'token=success checkout=success hook=success setup=success\nagent=failure' })).toBe('failure');
+    expect(outcome({ stages: 'token=success checkout=success hook=success setup=success agent=success' }), 'failed downstream').toBe('');
+    expect(outcome({ stages: 'token=success checkout=failure hook=skipped setup=skipped agent=skipped' })).toBe('');
+    expect(outcome({ 'agent-outcome': 'failure', stages: 'agent=success' })).toBe('failure');
+    expect(outcome({})).toBe('');
   });
 });

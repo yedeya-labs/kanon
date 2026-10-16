@@ -210,6 +210,17 @@ export function classifyResult(result, model = '', opts = {}) {
 }
 
 /**
+ * The run's `--max-turns`, from the flags it ran with, or null when they set none. The cap
+ * `classifyResult` needs to call a run the action failed past it (kanon#1008); `agent-telemetry`
+ * records it on the row too, from this.
+ */
+export function parseMaxTurns(claudeArgs) {
+  if (!claudeArgs) return null;
+  const m = claudeArgs.match(/--max-turns[\s=]+(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+
+/**
  * Whether a red run died of a cause that WAITING cures, and which (RA-2519) — `unreachable`,
  * `api_error`, or null.
  *
@@ -459,10 +470,16 @@ export function renderNotice(kind, why, { arm = 'agent', recover = '', nonFatal 
 
 /**
  * CLI: `node classify-agent-result.mjs [--arm <name>] [--recover <cmd>] [--file <path>]
- *                                       [--non-fatal]`
+ *                                       [--non-fatal] [--claude-args <flags>]
+ *                                       [--agent-outcome <outcome>]`
  *
  * Emits the annotation, appends a line to `$GITHUB_STEP_SUMMARY`, and writes
  * `kind=<kind>` to `$GITHUB_OUTPUT` so a later step can branch on it.
+ *
+ * `--claude-args` and `--agent-outcome` are the flags the agent ran with and its step's
+ * `outcome`: with both, a run the action failed past its `--max-turns` gets the turn-cap
+ * notice rather than "finished cleanly" (kanon#1015). Without them it is classified by its
+ * terminal reason alone, as before.
  *
  * ALWAYS EXITS 0. This step explains a red run; it must not be the thing that makes one,
  * or a classifier bug would turn a healthy agent arm red and this would be a new failure
@@ -478,10 +495,12 @@ function cli() {
   const arm = arg('arm', 'agent');
   const recover = arg('recover');
   const nonFatal = process.argv.includes('--non-fatal');
+  const maxTurns = parseMaxTurns(arg('claude-args'));
+  const stepFailed = arg('agent-outcome') === 'failure';
 
   const result = readResult(file);
   const model = readConfiguredModel(file);
-  const { kind, why } = classifyResult(result, model);
+  const { kind, why } = classifyResult(result, model, { maxTurns, stepFailed });
   const { level, title, body } = renderNotice(kind, why, { arm, recover, nonFatal });
 
   console.log(`::${level} title=${title}::${body}`);

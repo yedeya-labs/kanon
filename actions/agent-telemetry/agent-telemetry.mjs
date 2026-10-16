@@ -56,7 +56,7 @@ import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 
 // The classifier lives in the `agent-classify` block's directory (RA-2691), so the block can
 // run it from its own path; this imports the same file.
-import { classifyResult, parseObjects, readConfiguredModel, readResult } from "../agent-classify/classify-agent-result.mjs";
+import { classifyResult, parseMaxTurns, parseObjects, readConfiguredModel, readResult } from "../agent-classify/classify-agent-result.mjs";
 import { LANE_ROLES, PROMPT_CACHE_TTLS, STAGES, TERMINAL_REASONS, describeErrors, validate } from "./schema.mjs";
 import { isCliEntry } from "../../scripts/lib/cli-entry.mjs";
 import { markedRole } from "../../scripts/lib/role-marker.mjs";
@@ -142,12 +142,9 @@ export function parseEffort(claudeArgs) {
 // A RUN THAT HIT ITS TURN CAP IS NOT A SAMPLE OF THE SAME THING as one that
 // finished. `terminal_reason` plus `num_turns` against this tells the two apart;
 // without the cap value, a truncated run silently reads as a cheap one and drags
-// every median it lands in.
-export function parseMaxTurns(claudeArgs) {
-  if (!claudeArgs) return null;
-  const m = claudeArgs.match(/--max-turns[\s=]+(\d+)/);
-  return m ? Number(m[1]) : null;
-}
+// every median it lands in. The parser is the classifier's, which needs the cap too
+// (kanon#1015), so the row and the notice read one value.
+export { parseMaxTurns };
 
 // WHICH CONTEXT WINDOW THIS RUN ACTUALLY HAD (RA-1949), and `null` is the finding here
 // exactly as it is for `--effort`. `--autocompact` takes `auto` or 100k-1M tokens, and

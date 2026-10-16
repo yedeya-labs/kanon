@@ -1396,6 +1396,8 @@ jobs:
         with:
           arm: review agent
           recover: ${{ steps.reconcile.outputs.recover }}
+          claude-args: ${{ steps.agent.outputs.claude-args }}
+          agent-outcome: ${{ steps.agent.outcome }}
 
       # BREADCRUMBS FOR THE RETRY (RA-2519). A review that died of its CAUSE (the model
       # was unreachable, or its API failed mid-run) is retried once, after a cool-down,
