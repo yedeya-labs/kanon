@@ -52,6 +52,11 @@ Parameters:
   OperatorJobRoleArns:
     Type: CommaDelimitedList
     Description: The operator's private jobs' roles (plan 0008, section 5.3), comma-separated, which the register table's resource policy lets in. Empty names none.
+    # Each element one role, as OwnerPrincipalArn (#729): no `*` or `?`, which ArnNotEquals reads
+    # as wildcards and would exempt every matching role from the register table's deny, and no
+    # other kind of ARN. CloudFormation matches a CommaDelimitedList's AllowedPattern against
+    # each element, so a `,` only ever splits; the empty default is one empty element.
+    AllowedPattern: '^$|^arn:aws:iam::\d{12}:role/(?:[\w+=.@-]+/)*[\w+=.@-]+$'
     Default: ''
   Audience:
     Type: String
