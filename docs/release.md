@@ -173,7 +173,7 @@ Kanon releases itself weekly, and in two steps, so every release runs on Kanon b
 
 Kanon's own workflow, [`promote.yml`](../.github/workflows/promote.yml), runs [`scripts/promote.mjs`](../scripts/promote.mjs) daily at 06:00 UTC and on dispatch. It takes the newest candidate tag with no stable release yet and reads its gates from GitHub, never from anything self-reported:
 
-| Gate | Holds when |
+| Gate | Passes when |
 |---|---|
 | **Soak** | The pull request that moved Kanon's pins to the candidate, `ci(deps): run Kanon on candidate vX.Y.Z`, merged at least 72 hours ago, and every lane caller on the default branch still pins `candidate-vX.Y.Z` |
 | **No revert** | No pull request merged to the default branch since the candidate was cut reverts one the candidate contains, read with the revert detector the metrics run (`revertsOf`) |

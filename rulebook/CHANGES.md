@@ -35,6 +35,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-AGENT-44`
 
 - **2026-10-15.** The Owner decided that the sign-off delegation covers only the repository's agent Apps: a commit by an App on an `Other App` row, or by the Intake App, is checked like any other bot's commit and needs a person's sign-off. The `dco` check leaves those rows' slugs out. [#998](https://github.com/yedeya-labs/kanon/issues/998)
+- **2026-10-16.** The Why says what passes such an App's commit: a person re-authoring it and signing it off, since a sign-off counts only when it is the author's, so a person's sign-off added to a bot's commit never passes it. The check is unchanged. [#1036](https://github.com/yedeya-labs/kanon/issues/1036)
 
 ## `K-AGENT-45`
 
@@ -139,6 +140,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-15.** The Maintainer decided that the register holds every App installed on the repository that isn't an agent, under one generic role, so an adopter can register any such App. The role is `Other App`, with one row per App, each naming an App no other row names; the readers that map a role to a login, the membership gate among them, never read those rows. [#990](https://github.com/yedeya-labs/kanon/issues/990)
 - **2026-10-15.** The Owner decided that the sign-off check reads no `Other App` row, nor the Intake row, so the sign-off delegation never covers an App that isn't an agent. [#998](https://github.com/yedeya-labs/kanon/issues/998)
+- **2026-10-16.** The Why says the sign-off check takes no delegated slug from those rows, rather than that it doesn't read them: it still parses them, so a malformed slug on one still refuses the register, and their slugs still count as another role's for the Releaser. The check is unchanged. [#1036](https://github.com/yedeya-labs/kanon/issues/1036)
 
 ## `K-LAYOUT-8`
 
