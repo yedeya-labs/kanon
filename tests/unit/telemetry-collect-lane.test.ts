@@ -151,15 +151,17 @@ describe("telemetry.yml, Kanon's caller (S7, S9)", () => {
     expect(pin(job.uses!)).toBe(pin(readFileSync('.github/workflows/review.yml', 'utf8')));
   });
 
-  it('passes what its pinned release takes, and no secret; it drops the two variables when its pin moves to the token path (plan 0008 §9 step 4)', () => {
-    // The pin is a release before the token path, whose collector still takes the two variables.
-    // J7 moves the pin and the caller together.
+  it('passes what its pinned release takes on the token path, and no variable and no secret (plan 0008 §9 step 4)', () => {
+    // The pin is on the token path: the collector refuses `url` or `writer-role` without
+    // `audience` (#842), and the hosted store's URL is its own constant, so the caller passes
+    // only the three dispatch inputs through.
     expect(job.with).toEqual({
-      url: '${{ vars.KANON_TELEMETRY_URL }}',
-      'writer-role': '${{ vars.KANON_TELEMETRY_WRITER_ROLE }}',
       window_minutes: '${{ inputs.window_minutes }}',
+      erase: '${{ inputs.erase }}',
+      register: '${{ inputs.register }}',
     });
     expect(job.secrets).toBeUndefined();
+    expect(CALLER_TEXT).not.toMatch(/\bvars\./);
     expect(caller.permissions).toEqual({ actions: 'read', contents: 'read', 'id-token': 'write', issues: 'read', 'pull-requests': 'read' });
   });
 
@@ -171,11 +173,9 @@ describe("telemetry.yml, Kanon's caller (S7, S9)", () => {
     expect(caller.on.workflow_dispatch.inputs.window_minutes.default).toBe('');
   });
 
-  it('the runbook names the variables the caller reads until its pin moves', () => {
-    const doc = readFileSync('docs/telemetry.md', 'utf8');
-    for (const v of ['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE']) {
-      expect(CALLER_TEXT).toContain(v);
-      expect(doc).toContain(v);
+  it("takes the collector's erase and register dispatch inputs, `no` by default, as docs/telemetry.md's caller does", () => {
+    for (const k of ['erase', 'register']) {
+      expect(caller.on.workflow_dispatch.inputs[k]).toMatchObject({ type: 'choice', options: ['no', 'yes'], default: 'no' });
     }
   });
 });

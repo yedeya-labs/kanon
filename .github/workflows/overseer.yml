@@ -36,10 +36,10 @@
 # pin every adopter runs, so its Overseer reviews the runtime's changelog once, for everyone. A
 # release that predates the choice runs the watch regardless.
 #
-# ITS COST VIEW (kanon#470). The lane reads Kanon's own telemetry rows with Kanon's reader role,
-# whose ARN is the repository secret KANON_TELEMETRY_READER_ROLE, which this caller maps (since its
-# pin reached v0.36.0, the first release that declares it; an earlier release refuses a secret it
-# doesn't declare).
+# ITS COST VIEW (kanon#470). The lane reads Kanon's own telemetry rows through the store's
+# `GET /v1/rows/self`, with GitHub's OIDC token (plan 0008 J5): no role and no secret. The caller
+# mapped the reader role's ARN, KANON_TELEMETRY_READER_ROLE, until its pin reached v0.40.2, whose
+# lane reads it in no job (plan 0008 §9 step 4).
 #
 # WHERE ITS FINDINGS GO. The adoption record declares `Upstream findings: filed here`, so a
 # finding only Kanon can act on is filed on Kanon, like any other (plan 0004 decision 12, as
@@ -76,11 +76,10 @@ permissions:
 
 jobs:
   oversee:
-    uses: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@v0.39.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@v0.40.2
     secrets:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       QA_STORE_ROLE_ARN: ${{ secrets.QA_STORE_ROLE_ARN }}
       QA_STORE_BUCKET: ${{ secrets.QA_STORE_BUCKET }}
-      KANON_TELEMETRY_READER_ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}

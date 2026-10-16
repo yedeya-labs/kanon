@@ -5,7 +5,8 @@
 # `telemetry-collect.yml` is the collector itself.
 #
 # IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap, as review.yml does). The job
-# holds the store's writer credentials, so the code that runs with them is a released version.
+# mints the token the store admits Kanon's rows with, so the code that holds it is a released
+# version.
 # Dependabot's `kanon` group proposes each release here with the other pins
 # (.github/dependabot.yml, ADR 0011), and `lane-check` (in CI) holds every Kanon reference to
 # one version.
@@ -15,10 +16,15 @@
 # The schedule was held back until the pins reached a release that ships the collector, since
 # GitHub resolves a called workflow before it reads any job's `if:`; v0.27.0 does (kanon#304).
 #
-# THE VARIABLES (not secrets: neither is a credential), from the store's stack outputs:
-#   KANON_TELEMETRY_URL          the `IngestUrl` output
-#   KANON_TELEMETRY_WRITER_ROLE  the `WriterRole<key>` output, for Kanon's register key
-# Until both are set the collector skips with a warning.
+# ITS CREDENTIAL IS GITHUB'S OIDC TOKEN (plan 0008 §2.1, step J5). It passes no variable and no
+# secret: the hosted store's URL is the collector's own constant, published from v0.40.2, and
+# the store checks the token's claims. The SigV4 path's `url:` and `writer-role:` inputs went when
+# the pin reached v0.40.2 (plan 0008 §9 step 4): from v0.40.0 the collector refuses either without
+# `audience`, which names a self-hosted store (#842).
+#
+# THE DISPATCH INPUTS, passed through: `window_minutes`, `erase: yes` (erase this repository's rows
+# and registration, send nothing) and `register: yes` (register again after an erasure), as
+# docs/telemetry.md's caller has them.
 name: Telemetry
 
 on:
@@ -32,10 +38,21 @@ on:
           successful sweep, which is what recovers dropped schedules.
         required: false
         default: ""
+      erase:
+        description: Erase this repository's rows and registration from the store, and send nothing.
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
+      register:
+        description: Register this repository again after an erasure.
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
 
 # The ceiling for the collector: it reads the artifacts and runs, and the adoption record's
-# upstream-findings level (plan 0006 F4), and its collect job mints the OIDC token for the writer
-# role. It reads the pull requests and issues its work-item rows are derived from (plan 0003 M4).
+# upstream-findings level (plan 0006 F4), and its collect job mints the OIDC token each request to
+# the store carries. It reads the pull requests and issues its work-item rows are derived from
+# (plan 0003 M4).
 # Nothing else is granted.
 permissions:
   actions: read
@@ -46,8 +63,8 @@ permissions:
 
 jobs:
   collect:
-    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.39.0
+    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.40.2
     with:
-      url: ${{ vars.KANON_TELEMETRY_URL }}
-      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}
       window_minutes: ${{ inputs.window_minutes }}
+      erase: ${{ inputs.erase }}
+      register: ${{ inputs.register }}

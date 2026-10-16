@@ -52,7 +52,7 @@ permissions:
 
 jobs:
   rebase:
-    uses: yedeya-labs/kanon/.github/workflows/agent-rebase.yml@v0.39.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-rebase.yml@v0.40.2
     with:
       pr_number: ${{ inputs.pr_number }}
     secrets:

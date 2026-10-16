@@ -73,18 +73,18 @@ laneCheck(() => {
       expect(r.status, r.out).toBe(0);
     });
 
-    // Kanon's own tree: its collector caller pins the last release, which still takes the SigV4
-    // path's inputs, while this tree's requirements are the next release's. Run without an
+    // A caller pinned to another release than the one lane-check runs at. Run without an
     // `ACTION_REF`, as tests/unit/lane-check.test.ts runs it, lane-check doesn't read the release
     // the caller pins, so it judges nothing; CI's released lane-check runs at that pin, and judges
-    // the pull request that moves it.
+    // the pull request that moves it. Kanon's own collector caller moved to the token path with
+    // its pin at v0.40.2 (plan 0008 §9 step 4), so it passes neither input any more.
     it("asks nothing of a caller whose pin isn't the release lane-check runs at, as in Kanon's own tree", () => {
       const t = adopter();
       caller(`${URL}${ROLE}`)(t);
       const r = check(t);
       expect(r.status, r.out).toBe(0);
       const kanon = spawnSync('bash', [SCRIPT], { cwd: ROOT, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '' } });
-      expect(readFileSync(join(ROOT, '.github/workflows/telemetry.yml'), 'utf8')).toMatch(/^ {6}writer-role: /m);
+      expect(readFileSync(join(ROOT, '.github/workflows/telemetry.yml'), 'utf8')).not.toMatch(/^ {6}(url|writer-role): /m);
       expect(kanon.stdout).not.toContain('telemetry.legacy-inputs');
     }, 30_000);
   });
