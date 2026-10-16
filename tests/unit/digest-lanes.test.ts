@@ -444,7 +444,7 @@ describe('the weekly digest posts only through its notify job (plan 0011 N8)', (
     const steps = gate.steps!;
     const at = (pred: (s: Step) => boolean) => steps.findIndex(pred);
     const checkout = steps.find((s) => String(s.uses).startsWith('actions/checkout@'))!;
-    expect(checkout.with).toEqual({ 'persist-credentials': false, 'sparse-checkout': '.github/actions/notify' });
+    expect(checkout.with).toEqual({ 'persist-credentials': false, 'sparse-checkout': '.github/actions/notify', 'sparse-checkout-cone-mode': false });
     expect(at((s) => s.id === 'gate')).toBeLessThan(steps.indexOf(checkout));
     expect(steps.indexOf(checkout)).toBeLessThan(at((s) => s.id === 'post'));
     for (const s of [checkout, decide]) expect(s.if).toBe("steps.gate.outputs.member == 'true'");

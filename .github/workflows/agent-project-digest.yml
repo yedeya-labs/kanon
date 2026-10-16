@@ -30,7 +30,7 @@
 #
 # `DIGEST_WEBHOOK` IS GONE (decision 17, a clean break). The lane no longer declares it, so GitHub
 # refuses to start a caller that still maps it, health job included, until the line goes;
-# `kanon doctor`'s `notify.legacy-secret` and `kanon upgrade` say what to change.
+# `kanon doctor`'s `notify.legacy-secret` and the upgrade skill say what to change.
 #
 # INERT until: the caller is on the default branch + these secrets (plan 0001 §8):
 #   CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, and a notify hook with KANON_CHAT_PROJECT_DIGEST to post

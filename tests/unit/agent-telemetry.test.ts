@@ -787,6 +787,12 @@ describe('#173 — the issue\'s acceptance-criteria count', () => {
     expect(issueAcCount('## Acceptance criteria\n\nSee the plan.')).toBe(1);
     expect(issueAcCount('## What must be true\n\nThe diagnose lane\'s runs reach the store\nunder their own name.\n\n## Evidence\n\nPR 965.')).toBe(1);
     expect(issueAcCount('## What must be true\n\n- the store takes it\n- the lane names it\n- the docs say so')).toBe(3);
+    // An intro sentence before the bullets introduces them: only the bullets count (#1022), and
+    // an Evidence block's bullets after them are not pulled in.
+    expect(issueAcCount('## What must be true\n\nToday they don\'t:\n\n- the store takes it\n- the lane names it\n\n**Evidence:**\n- x\n- y')).toBe(2);
+    expect(issueAcCount('## What must be true\n\nThe two digests differ.\nToday they don\'t:\n- a\n- b\n- c\n\n## Evidence\n\n- z')).toBe(3);
+    // A paragraph alone stays one criterion, and a clause cited on any of its lines is in it.
+    expect(issueAcCount('## What must be true\n\nThe lane posts\nunder `[NOTIFY-3]`.\n\n**Evidence:** x')).toBe(1);
     // A label followed by nothing, or straight by another heading, states nothing.
     expect(issueAcCount('## Acceptance criteria\n\n')).toBe(0);
     expect(issueAcCount('## Acceptance criteria\n\n## Evidence\n\nPR 965.')).toBe(0);
