@@ -102,6 +102,29 @@ laneCheck(() => {
     it('refuses a literal reason, like any other setting', () => {
       red(withTurns({ max_turns: '${{ inputs.max_turns }}', reason: 'because' }), 'passes `reason: because`; a caller only passes its own input through');
     });
+
+    // kanon#1007: GitHub fills a dispatch input's `default` whenever a dispatch doesn't supply it,
+    // and Kanon's own scripts dispatch a caller with only its own inputs, so a default on either
+    // input would raise every such run with a canned reason: a raise stored in the repository.
+    // The implement-revise fixture declares both inputs, with no default, and passes them through.
+    const dispatchInput = (name: string, extra: Record<string, unknown>) => (t: Tree) => t.edit(IMPL, (d) => {
+      const inputs = ((d as { on: { workflow_dispatch: { inputs: Record<string, Record<string, unknown>> } } }).on.workflow_dispatch.inputs);
+      inputs[name] = { ...inputs[name], ...extra };
+    });
+    it.each([['140'], [140]])('refuses a default on the max_turns dispatch input (%s), which raises every dispatch that leaves it out', (v) => {
+      const r = red(dispatchInput('max_turns', { default: v }), `its \`workflow_dispatch\` input \`max_turns\` has the default \`${v}\``);
+      expect(r.out).toContain('a raise stored in the repository');
+    });
+    it('refuses a default on the reason dispatch input, which gives every raise a canned reason', () => {
+      red(dispatchInput('reason', { default: 'always' }), 'its `workflow_dispatch` input `reason` has the default `always`');
+    });
+    it('passes an empty default on either, which is no raise and no reason', () => {
+      const t = adopter();
+      dispatchInput('max_turns', { default: '' })(t);
+      dispatchInput('reason', { default: '' })(t);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
   });
 });
 

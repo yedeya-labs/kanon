@@ -476,6 +476,15 @@ for (const f of WORKFLOWS) {
       } else if (!Object.hasOwn(withs, 'reason')) {
         fail(f, `passes \`max_turns\` without \`reason\`; a raised turn limit needs a reason, so pass your workflow_dispatch input through as \`reason: \${{ inputs.reason }}\` (docs/lanes.md, "The turn budget")`);
       }
+      // Nor as the dispatch inputs' defaults (kanon#1007): GitHub fills a `default` whenever a
+      // dispatch leaves its input out, as Kanon's own scripts do when they dispatch a caller, so
+      // a default raises every such run, or gives every raise a canned reason.
+      const dispatch = isObject(doc.on) && isObject(doc.on.workflow_dispatch) ? doc.on.workflow_dispatch.inputs : null;
+      for (const input of ['max_turns', 'reason']) {
+        const d = isObject(dispatch) && isObject(dispatch[input]) ? dispatch[input].default : null;
+        if (d === null || d === undefined || d === '') continue;
+        fail(f, `its \`workflow_dispatch\` input \`${input}\` has the default \`${tsv(tostring(d))}\`; GitHub fills it whenever a dispatch leaves the input out, as Kanon's scripts do when they dispatch a lane, so it would be a raise stored in the repository. The turn limit is raised only by a person, for one dispatched run: remove the default (docs/lanes.md, "The turn budget")`);
+      }
       continue;
     }
     // The key is part of the pattern, as the shell's `[[ =~ ]]` had it; one that isn't a
