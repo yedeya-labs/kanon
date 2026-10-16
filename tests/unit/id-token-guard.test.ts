@@ -55,7 +55,7 @@ describe('every Kanon workflow', () => {
       'agent-lanes-smoke.yml:code-audit', 'agent-lanes-smoke.yml:dispatch-sweep', 'agent-lanes-smoke.yml:explore',
       'agent-lanes-smoke.yml:explore-telemetry', 'agent-lanes-smoke.yml:overseer',
       'agent-overseer.yml:export',
-      // The Overseer's telemetry read job (kanon#470), which assumes the reader role.
+      // The Overseer's telemetry read job (kanon#470), which calls the store's token URL (plan 0008 J5).
       'agent-overseer.yml:telemetry',
       // Kanon's own caller of the code-audit lane (plan 0004 step 11a): it calls a lane with
       // store jobs, so it grants their id-token, and no job of its own runs anything.
