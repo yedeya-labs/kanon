@@ -32,10 +32,13 @@
 // token whose `ref` differs is refused.
 //
 // THE KEYS (§2.4), `keyCache`: GitHub's JWKS from its fixed URL, RSA keys with `use: sig` only,
-// held 15 minutes per container. An unknown `kid` refetches, and every fetch, a refetch or a
-// stale cache's, happens at most once a minute, with a 2-second timeout and no retry. FAIL
-// CLOSED: with no set younger than 15 minutes and a failed fetch, every token answers 503
-// `jwks-unavailable`; a stale key is never used.
+// held 15 minutes per container. Every fetch has a 2-second timeout. COLD, while the container
+// has never fetched a set, a failed fetch is retried once in the same request after 250 ms, and
+// a request fetches again 5 seconds after the last try, so one slow first fetch (DNS and a new
+// TLS connection) doesn't hold every token at 503 for a minute. WARM, once a set was fetched, an
+// unknown `kid` refetches, and every fetch, a refetch or a stale cache's, happens at most once a
+// minute, with no retry. FAIL CLOSED: with no set younger than 15 minutes and failed fetches,
+// every token answers 503 `jwks-unavailable`; a stale key is never used.
 //
 // NOTHING IS LOGGED: no token, key or claim value. A refusal is its status and code alone.
 //
@@ -43,6 +46,7 @@
 
 import { createPublicKey, verify } from 'node:crypto';
 import { Buffer } from 'node:buffer';
+import { setTimeout as wait } from 'node:timers/promises';
 
 /** @typedef {import('node:crypto').KeyObject} KeyObject */
 /** @typedef {{ ok: false, status: number, error: string }} Refusal */
@@ -69,6 +73,9 @@ export const MAX_AGE_SECONDS = 600;
 export const JWKS_TTL_MS = 15 * 60_000;
 export const JWKS_REFETCH_MS = 60_000;
 export const JWKS_TIMEOUT_MS = 2_000;
+/** Cold, with no set fetched yet: the wait before the one retry, and the least time between two tries. */
+export const JWKS_COLD_RETRY_MS = 250;
+export const JWKS_COLD_REFETCH_MS = 5_000;
 /** The collector caller's two triggers (check 6). */
 export const EVENTS = ['schedule', 'workflow_dispatch'];
 /** Check 7: the only repository whose workflows may call the store. */
@@ -150,10 +157,11 @@ async function fetchKeys(fetchImpl, url) {
 /**
  * The container's JWKS cache (§2.4). One per container: create it outside the handler.
  *
- * @param {{ fetchImpl?: typeof fetch, url?: string }} [opts]
+ * @param {{ fetchImpl?: typeof fetch, url?: string, sleep?: (ms: number) => Promise<void> }} [opts]
+ *   `sleep` waits before the cold retry; a test passes its own
  * @returns {KeyCache}
  */
-export function keyCache({ fetchImpl = fetch, url = JWKS_URL } = {}) {
+export function keyCache({ fetchImpl = fetch, url = JWKS_URL, sleep = wait } = {}) {
   /** @type {Map<string, KeyObject>} */
   let keys = new Map();
   let fetchedAt = -Infinity;
@@ -161,9 +169,14 @@ export function keyCache({ fetchImpl = fetch, url = JWKS_URL } = {}) {
   return {
     async keyOf(kid, now) {
       const fresh = () => now - fetchedAt < JWKS_TTL_MS;
-      if ((!fresh() || !keys.has(kid)) && now - triedAt >= JWKS_REFETCH_MS) {
+      const cold = fetchedAt === -Infinity;
+      if ((!fresh() || !keys.has(kid)) && now - triedAt >= (cold ? JWKS_COLD_REFETCH_MS : JWKS_REFETCH_MS)) {
         triedAt = now;
-        const fetched = await fetchKeys(fetchImpl, url);
+        let fetched = await fetchKeys(fetchImpl, url);
+        if (!fetched && cold) {
+          await sleep(JWKS_COLD_RETRY_MS);
+          fetched = await fetchKeys(fetchImpl, url);
+        }
         if (fetched) {
           keys = fetched;
           fetchedAt = now;

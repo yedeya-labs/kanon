@@ -525,9 +525,13 @@ describe('what the step reads a candidate from', () => {
     expect(await referencingCommits({ gh, sleep: async () => {}, progress: () => {} }, REPO, 41)).toEqual([{ message: 'one', prs: [51] }, { message: 'two', prs: [52] }]);
   });
 
-  it("reads the caller's pin of the collector, and nothing else", () => {
+  it("reads the caller's pin of the collector, stable or candidate, and nothing else", () => {
     expect(pinOf(CALLER('1.2.3'))).toBe('1.2.3');
-    expect(pinOf('    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@main\n')).toBeUndefined();
+    // A candidate is the same code as its stable release (plan 0009), so it is the same version.
+    expect(pinOf('    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@candidate-v1.2.3\n')).toBe('1.2.3');
+    for (const ref of ['main', 'v0', 'candidate-v0', 'candidate-main', 'v1.2.3-rc.1']) {
+      expect(pinOf(`    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@${ref}\n`), ref).toBeUndefined();
+    }
     expect(pinOf(null)).toBeUndefined();
   });
 });

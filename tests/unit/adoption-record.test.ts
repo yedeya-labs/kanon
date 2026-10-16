@@ -1,8 +1,9 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fencedLines } from '../../scripts/spec-lib.mjs';
 import { linesOf } from '../../scripts/lib/declarations.mjs';
+import { parseYaml } from '../../cli/workflow-yaml.mjs';
 
 /**
  * `docs/qa/adoption.md` is Kanon's own adoption record (`K-LAYOUT-10`). This test checks the
@@ -399,5 +400,71 @@ describe("the record's accepted id-token holders (#1056)", () => {
     const { record, found } = await holders();
     const held = new Set(found.map((h) => `${h.workflow.slice('.github/workflows/'.length)}#${h.job}`));
     expect([...record.accepted.keys()].filter((k) => !held.has(k))).toEqual([]);
+  });
+});
+
+/**
+ * Kanon calls the Lead's lane, so `kanon init` would have written its brief template beside the
+ * caller, and doctor reports `lead.template-missing` or `lead.template-stale` until Kanon's own
+ * copy is the one init writes (K-LAYOUT-11, #1064). The copy is compared with init's own source,
+ * never with a second copy kept here.
+ */
+describe("Kanon's own brief template (K-LAYOUT-11, #1064)", () => {
+  it('is the template kanon init writes, unchanged', async () => {
+    const { BRIEF_TEMPLATE_PATH, briefTemplate } = await import('../../cli/init.mjs');
+    const copy = join(ROOT, BRIEF_TEMPLATE_PATH);
+    expect(existsSync(copy), `${BRIEF_TEMPLATE_PATH} is missing`).toBe(true);
+    expect(readFileSync(copy, 'utf8')).toBe(briefTemplate());
+  });
+});
+
+/**
+ * Since plan 0008's J5 the telemetry read jobs request an OIDC token for the hosted store's
+ * audience and send it to the store's token URL; they assume no cloud role. Their record entries
+ * say what they do now (#1064), while a job that still assumes a role, the metrics page's, says so.
+ */
+describe("the record's id-token holders say how each one reads (#1064)", () => {
+  type Step = { env?: Record<string, unknown>; with?: Record<string, unknown> };
+  const jobs = () => {
+    const out: Array<{ key: string; holds: boolean; steps: Step[] }> = [];
+    const dir = join(ROOT, '.github/workflows');
+    for (const f of readdirSync(dir).filter((x) => /\.ya?ml$/.test(x))) {
+      const wf = parseYaml(readFileSync(join(dir, f), 'utf8')) as { jobs?: Record<string, { permissions?: unknown; steps?: Step[] }> };
+      for (const [name, j] of Object.entries(wf.jobs ?? {})) {
+        const holds = typeof j.permissions === 'object' && j.permissions !== null && (j.permissions as Record<string, unknown>)['id-token'] === 'write';
+        out.push({ key: `${f}#${name}`, holds, steps: j.steps ?? [] });
+      }
+    }
+    return out;
+  };
+  // A gate job reads the URL too, to tell whether the store is configured, but holds no grant.
+  const readsTokenUrl = (j: { holds: boolean; steps: Step[] }) => j.holds && j.steps.some((s) => Object.keys(s.env ?? {}).some((k) => /_TOKEN_URL$/.test(k)));
+  const assumesRole = (steps: Step[]) => steps.some((s) => 'role-to-assume' in (s.with ?? {}));
+  const accepted = async () => {
+    const { readHolderAcceptances } = await import('../../cli/doctor.mjs');
+    return readHolderAcceptances(readFileSync(RECORD, 'utf8')).accepted as Map<string, string>;
+  };
+
+  it("finds Kanon's two token-URL read jobs, so the check below is not vacuous", () => {
+    expect(jobs().filter((j) => readsTokenUrl(j)).map((j) => j.key).sort())
+      .toEqual(['agent-explore-telemetry.yml#aggregate', 'agent-overseer.yml#telemetry']);
+  });
+
+  it('says a job that reads through a token URL requests an OIDC token for the audience and calls it, and assumes no role', async () => {
+    const record = await accepted();
+    for (const { key } of jobs().filter((j) => readsTokenUrl(j))) {
+      const why = record.get(key) ?? '';
+      expect(why, key).toMatch(/OIDC token/);
+      expect(why, key).toMatch(/audience/);
+      expect(why, key).toMatch(/token URL/);
+      expect(why, key).not.toMatch(/\brole\b/);
+    }
+  });
+
+  it('says a job that assumes a cloud role assumes it: the metrics page still does (plan 0008 §9 step 4a)', async () => {
+    const record = await accepted();
+    const roleJobs = jobs().filter((j) => assumesRole(j.steps)).map((j) => j.key);
+    expect(roleJobs).toContain('metrics-page.yml#aggregate');
+    for (const key of roleJobs.filter((k) => record.has(k))) expect(record.get(key), key).toMatch(/\brole\b/);
   });
 });
