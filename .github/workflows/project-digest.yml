@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   digest:
-    uses: yedeya-labs/kanon/.github/workflows/agent-project-digest.yml@v0.40.2
+    uses: yedeya-labs/kanon/.github/workflows/agent-project-digest.yml@candidate-v0.41.0
     with:
       dry_run: ${{ inputs.dry_run }}
     secrets:
