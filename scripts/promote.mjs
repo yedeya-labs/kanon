@@ -373,8 +373,9 @@ const truthy = (v) => /^(true|1|yes)$/i.test(String(v ?? '').trim());
 /**
  * @typedef {{ tag: string, candidate: string, sha: string, major: string, notes: string, resume: boolean, publish: boolean, latest: boolean, moveMajor: boolean }} Plan
  *   `resume`: the stable tag exists already; `publish`: the Release is still to publish; `latest`:
- *   it is published as GitHub's latest; `moveMajor`: the major tag moves to it. The last two are
- *   false only when a newer stable release exists, so neither moves back
+ *   it is published as GitHub's latest; `moveMajor`: the major tag moves to it. `latest` is false
+ *   only when a newer stable release exists; `moveMajor` is false then too, and also when the major
+ *   tag is on the candidate's commit already. Neither moves back
  * @typedef {{
  *   decision: 'promote' | 'hold' | 'none',
  *   why: string,

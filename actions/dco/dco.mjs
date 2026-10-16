@@ -57,15 +57,17 @@
 //
 // Delegated sign-off for the repository's own agents (K-AGENT-44). An adopter may record a
 // standing delegation naming one person in `docs/qa/sign-off-delegation.md` (K-LAYOUT-14).
-// A commit authored by an App listed in the App register (`docs/qa/agent-identities.md`,
+// A commit authored by an agent's App in the App register (`docs/qa/agent-identities.md`,
 // K-LAYOUT-6) must then carry that person's sign-off, and nobody else's counts for it. An
 // agent commit is recognised by its author: the login `<slug>[bot]`, or the noreply email
-// `<id>+<slug>[bot]@users.noreply.github.com`, with `<slug>` in the register. Every other
-// commit is checked exactly as above.
+// `<id>+<slug>[bot]@users.noreply.github.com`, with `<slug>` on a register row of an agent's
+// role (not in `NON_AGENT_ROLES`). Every other commit is checked exactly as above.
 // - The register's rows for Apps that aren't agents, `Other App` and `Intake`
 //   (`NON_AGENT_ROLES`), name no agent (#998). Their slugs are left out, so such an App's
 //   commit is checked like any other bot's and fails on its bot sign-off: the delegation
-//   covers only the Apps the repository's agents run under, never an App it doesn't run.
+//   covers only the Apps the repository's agents run under, never an App it doesn't run. A
+//   person's `Signed-off-by:` added to it doesn't pass it either, since a sign-off counts only
+//   when it is the author's; it passes once a person re-authors the commit and signs it off.
 // - Both files are read from the repository's DEFAULT branch over the API (`repos/{o}/{r}`
 //   -> `default_branch`), never from the PR and never from the PR's base (K-MERGE-17). Only
 //   merged, reviewed changes reach the default branch. A PR's base is not enough: on a
