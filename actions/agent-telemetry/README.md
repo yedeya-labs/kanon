@@ -11,7 +11,7 @@ Turns `claude-code-action`'s result file into one telemetry row (cost, turns, to
 ```yaml
 - if: always()
   continue-on-error: true
-  uses: yedeya-labs/kanon/actions/agent-telemetry@v0.40.1
+  uses: yedeya-labs/kanon/actions/agent-telemetry@v0.40.2
   with:
     agent: reviewer
     execution_file: ${{ steps.agent.outputs.execution_file }}

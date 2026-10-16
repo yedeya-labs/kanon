@@ -15,7 +15,7 @@ Run every `kanon` command in this skill, and every one a finding's fix names, fr
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.40.1 kanon init --dry-run --json
+npx --yes --package github:yedeya-labs/kanon#v0.40.2 kanon init --dry-run --json
 ```
 
 <!-- x-release-please-end -->
@@ -69,7 +69,7 @@ Some steps are the person's alone (**Only a person can**, above): creating and i
 <!-- x-release-please-start-version -->
 
 ```sh
-! cd <the checkout's root> && npx --yes --package github:yedeya-labs/kanon#v0.40.1 kanon apps --owner <owner> --repo <repo> --apps <apps>
+! cd <the checkout's root> && npx --yes --package github:yedeya-labs/kanon#v0.40.2 kanon apps --owner <owner> --repo <repo> --apps <apps>
 ```
 
 <!-- x-release-please-end -->

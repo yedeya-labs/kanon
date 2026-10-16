@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.40.2](https://github.com/yedeya-labs/kanon/compare/v0.40.1...v0.40.2) (2026-10-16)
+
+
+### Features
+
+* **telemetry:** publish the hosted store's token URLs (plan 0008 step 3b) ([#1055](https://github.com/yedeya-labs/kanon/issues/1055)) ([9f7023c](https://github.com/yedeya-labs/kanon/commit/9f7023cadd99f9d932ee147c36f9719258aef5ec))
+
 ## [0.40.1](https://github.com/yedeya-labs/kanon/compare/v0.40.0...v0.40.1) (2026-10-16)
 
 
