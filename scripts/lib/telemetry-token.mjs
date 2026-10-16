@@ -36,7 +36,9 @@ export const HOSTED_AUDIENCE = 'kanon-telemetry';
  * deploy through the operator's deployment lane, with reserved concurrency in place first (Owner
  * decision 10 of 2026-10-12; docs/telemetry.md, "Publish the hosted URLs").
  */
+/** @type {string} */
 export const HOSTED_INGEST_URL = 'https://doepcoqbpivm2b7x2rxiwitsn40tawde.lambda-url.eu-central-1.on.aws/';
+/** @type {string} */
 export const HOSTED_AGGREGATE_URL = 'https://swfz3z5qop5g7zcpole6xegf540ukewv.lambda-url.eu-central-1.on.aws/';
 
 /** An audience as a store's `Audience` parameter takes it: a short token, never a URL. */
