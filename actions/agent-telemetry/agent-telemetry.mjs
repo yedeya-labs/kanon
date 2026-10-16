@@ -258,12 +258,31 @@ const HEADING = /^\s{0,3}#{1,6}\s/;
 const FENCE = /^\s{0,3}(?:```|~~~)/;
 
 /**
+ * The top-level bullets of a criteria region that starts at `from`, and the line it ends at: the
+ * first that resumes prose at column zero. Blank and indented lines are passed over.
+ * @param {string[]} lines @param {number} from
+ */
+const bulletsFrom = (lines, from) => {
+  const bullets = [];
+  let end = from;
+  for (; end < lines.length; end++) {
+    const line = lines[end];
+    if (!line.trim()) continue;
+    if (AC_ITEM.test(line)) { bullets.push(end); continue; }
+    if (/^\s/.test(line)) continue;
+    break;
+  }
+  return { bullets, end };
+};
+
+/**
  * How many acceptance criteria an issue states: the top-level bullets under each line that opens
  * with "Acceptance criteria" or "What must be true", plus each distinct `[ID-n]` spec clause the
  * body cites outside those bullets. A label with no bullets under it is one criterion when it
  * states one in prose: its own text after it (`**What must be true:** the lane's runs reach the
  * store`), or a paragraph under it (`## What must be true`, then a sentence), as a Reviewer
- * follow-up is written. A label followed by nothing, or by another heading, is 0. A region ends, as
+ * follow-up is written. A paragraph that top-level bullets follow introduces them instead, so only
+ * the bullets count (#1022). A label followed by nothing, or by another heading, is 0. A region ends, as
  * `acBullets`' does, at the first line that resumes prose at column zero; a fenced block is never
  * read. Null for an unread body, so unknown stays absent; an empty body is a measured 0.
  * @param {unknown} body
@@ -282,15 +301,9 @@ export function issueAcCount(body) {
   for (let i = 0; i < lines.length; i++) {
     const m = AC_START.exec(lines[i]);
     if (!m) continue;
-    const bullets = [];
-    let j = i + 1;
-    for (; j < lines.length; j++) {
-      const line = lines[j];
-      if (!line.trim()) continue;
-      if (AC_ITEM.test(line)) { bullets.push(j); continue; }
-      if (/^\s/.test(line)) continue;
-      break;
-    }
+    const region = bulletsFrom(lines, i + 1);
+    const bullets = region.bullets;
+    let j = region.end;
     if (bullets.length) {
       count += bullets.length;
       for (const b of bullets) counted.add(b);
@@ -298,9 +311,20 @@ export function issueAcCount(body) {
       count += 1;
       counted.add(i);
     } else if (j < lines.length && !HEADING.test(lines[j]) && !AC_START.test(lines[j])) {
-      // A heading followed by a prose paragraph, as a Reviewer follow-up states its one criterion.
-      count += 1;
-      counted.add(j);
+      // A heading followed by a prose paragraph, as a Reviewer follow-up is written. When top-level
+      // bullets follow that paragraph, it introduced them and each bullet is a criterion (#1022);
+      // otherwise the paragraph states the one criterion, every line of it.
+      let k = j;
+      while (k < lines.length && lines[k].trim() && !AC_ITEM.test(lines[k]) && !HEADING.test(lines[k])) k++;
+      const after = bulletsFrom(lines, k);
+      if (after.bullets.length) {
+        count += after.bullets.length;
+        for (const b of after.bullets) counted.add(b);
+        j = after.end;
+      } else {
+        count += 1;
+        for (let p = j; p < k; p++) counted.add(p);
+      }
     }
     i = j - 1;
   }

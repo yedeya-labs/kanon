@@ -133,6 +133,7 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: .github/actions/notify
+          sparse-checkout-cone-mode: false
 
       # The kind's secret is read here only as one presence boolean, which is all the guard
       # (`tests/unit/notify-guard.test.ts`) admits outside the `notify` job. With a hook and the
