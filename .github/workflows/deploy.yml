@@ -33,7 +33,10 @@
 # `.github/actions/deploy`, which obtains the environment's credential and deploys the checked
 # directory, its `artifact` input, then `.github/actions/smoke`. The deploy hook's step alone
 # receives `KANON_DEPLOY_SECRET`, an environment secret, empty when the environment holds none
-# (plan 0010 §7, `K-AGENT-47`). No environment's job runs the build hook.
+# (plan 0010 §7, `K-AGENT-47`). It is the one optional secret of this workflow, and the caller
+# maps it from `secrets.KANON_DEPLOY_SECRET`: GitHub evaluates that expression in this job's scope,
+# where the environment's secret comes first (kanon#1049 measured that an undeclared or unmapped
+# secret is empty here). No environment's job runs the build hook.
 #
 # AFTER (plan 0010 §8): `record` writes this environment's `deploy` row (`scripts/deploy-row.mjs`),
 # reading the run's approvals to tell a rejection from a failure (kanon#890), and `report` files,
@@ -58,6 +61,14 @@ on:
         description: "The build to deploy: `deploy-release.yml`'s `build` output, as the caller's `needs.release.outputs.build`. The lane downloads the artifact it names, which must be this run's, and checks it against its digest."
         required: true
         type: string
+    secrets:
+      # The deploy hook's secret (plan 0010 §7, `K-AGENT-47`), read by the deploy hook's step alone.
+      # The caller maps it from `secrets.KANON_DEPLOY_SECRET`, which GitHub evaluates in the deploy
+      # job's scope, so it resolves to the environment's secret first, then the repository's.
+      # Unmapped, it is empty (kanon#1049). Optional: an environment that needs none holds none.
+      KANON_DEPLOY_SECRET:
+        description: The deploy hook's secret, the environment's own, which the caller maps by the same name. Optional.
+        required: false
 
 # Each job declares its own, and none is granted more than it uses.
 permissions: {}

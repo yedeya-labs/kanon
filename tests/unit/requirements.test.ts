@@ -46,7 +46,7 @@ describe('requirements.json', () => {
     });
   });
 
-  it("names the deploy lane's workflows, the grant each caller job makes, its three hooks with their inputs, its one environment secret and its declaration (plan 0010 §12, D4, D5)", () => {
+  it("names the deploy lane's workflows, the grant each caller job makes, its three hooks with their inputs, its one environment secret, the secrets it declares and its declaration (plan 0010 §12, D4, D5, kanon#1049)", () => {
     // `kanon init` writes the deploy caller (D6) and `kanon doctor` checks it (D7) from this entry.
     const deploy = built.deploy as Record<string, unknown>;
     expect(deploy.workflows).toEqual({ release: 'deploy-release', environment: 'deploy' });
@@ -63,6 +63,9 @@ describe('requirements.json', () => {
       { path: '.github/actions/smoke/action.yml', inputs: ['environment', 'release', 'role'] },
     ]);
     expect(deploy.environmentSecrets).toEqual(['KANON_DEPLOY_SECRET']);
+    // deploy.yml declares it, optional, so the caller maps it by name and GitHub resolves it in the
+    // deploy job's scope, the environment's first (kanon#1049).
+    expect(deploy.declaredSecrets).toEqual(['KANON_DEPLOY_SECRET']);
     expect(deploy.declaration).toEqual({ path: 'docs/qa/adoption.md', section: '## Deploy' });
     expect((deploy.catalogue as { name: string }).name).toBe('Deploy');
     // Not an agent lane: no catalogue lane, no feature.

@@ -385,15 +385,17 @@ jobs:
     needs: release
     uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.40.0
     with: { environment: staging, position: 1, build: '${{ needs.release.outputs.build }}' }
+    secrets: { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' }
   deploy-2:
     name: production
     needs: [release, deploy-1]
     uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.40.0
     with: { environment: production, position: 2, build: '${{ needs.release.outputs.build }}' }
+    secrets: { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' }
 ```
 <!-- x-release-please-end -->
 
-Grant each job the permissions its workflow asks for (`requirements.json`'s `deploy` entry lists them), and map no secret. A run lists each environment's job as `staging / deploy`, the caller's job name then the lane's, which is what a reference deploy declaration names. Publish releases with the Releaser: a release the workflow token creates starts no run.
+Grant each job the permissions its workflow asks for (`requirements.json`'s `deploy` entry lists them), and map one secret into each `deploy.yml` call, by its own name, and no other: `KANON_DEPLOY_SECRET`, the deploy hook's, which GitHub resolves in the deploy job from the environment first ([#1049](https://github.com/yedeya-labs/kanon/issues/1049); a call that doesn't map it hands the hook an empty value). The `release` job maps none. A run lists each environment's job as `staging / deploy`, the caller's job name then the lane's, which is what a reference deploy declaration names. Publish releases with the Releaser: a release the workflow token creates starts no run.
 
 **Dispatch at the release's tag, always.** To deploy a release again, or to roll back to an earlier one, dispatch the caller at that release's tag, naming it as the input too: `gh workflow run deploy.yml --ref <tag> -f release=<tag>`. The gate refuses a dispatch run at any other ref, the default branch included, as `no-release`, before the probe or any environment runs. That way no job of the lane carries the default branch's OIDC subject, which your QA store's role, and any other role that trusts the default branch, would accept: every job carries the tag's subject or its environment's ([#914](https://github.com/yedeya-labs/kanon/issues/914)).
 
@@ -407,7 +409,7 @@ Grant each job the permissions its workflow asks for (`requirements.json`'s `dep
 | `.github/actions/deploy/action.yml` | `environment`, `role` (`production` or `pre-production`), `release`, `sha`, `artifact`, `probe` (`'true'` or `'false'`), `environments` | Obtain the environment's cloud credential and deploy. With `probe: 'true'`, only try to obtain each listed environment's credential, and write the answer, one of `refused`, `obtained` or `unconfigured` per environment, as a JSON object to `$RUNNER_TEMP/kanon-deploy-probe.json` |
 | `.github/actions/smoke/action.yml` | `environment`, `role`, `release` | Check the deployed system answers as the release expects, and fail otherwise |
 
-The lane judges each hook by whether it succeeded. The deploy hook's step alone receives `KANON_DEPLOY_SECRET` in its environment: an environment secret of the environment it deploys, empty when the environment holds none. GitHub masks it in the log; write it nowhere but `$RUNNER_TEMP`. `artifact` is the directory your build hook filled, downloaded and checked: deploy what it holds.
+The lane judges each hook by whether it succeeded. The deploy hook's step alone receives `KANON_DEPLOY_SECRET` in its environment: an environment secret of the environment it deploys, empty when the environment holds none. `deploy.yml` declares it as an optional secret, and the caller `kanon init` writes maps it on each environment's job as `KANON_DEPLOY_SECRET: ${{ secrets.KANON_DEPLOY_SECRET }}`. GitHub evaluates that expression in the deploy job's scope, where the environment's secret comes first, then the repository's, then the organisation's; a caller that doesn't map it hands the hook an empty value, whatever the environment holds ([#1049](https://github.com/yedeya-labs/kanon/issues/1049)). So keep it an environment secret only: an environment that holds none would hand the hook a repository or organisation secret of that name, and doctor notes a repository one (`deploy.secret-repository`). GitHub masks it in the log; write it nowhere but `$RUNNER_TEMP`. `artifact` is the directory your build hook filled, downloaded and checked: deploy what it holds.
 
 **The trust probe.** Before anything deploys, a job outside every environment, with `id-token: write`, runs your deploy hook with `probe: 'true'`. Each environment's cloud role must trust only that environment's OIDC subject, `…:environment:<name>`, so every attempt must be refused. The lane prints `kanon-deploy-probe/v1 {"staging":"refused","production":"refused"}` for doctor and goes on only when every declared environment answered `refused`: an `obtained` fails `trust-unbound`, and anything else, a missing answer included, `probe-unconfigured`. Keep each environment's role identifier where a job outside the environment can read it, such as a repository variable: an environment's own variables don't resolve in the probe. The lane reads no role itself; where your hook finds each is yours.
 

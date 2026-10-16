@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { appSecrets, ciFile } from '../../cli/callers.mjs';
 import { deployCallerProblems, EXIT, FINDINGS, probeAnswer, readWaivers, restrictsTags, runsOnPush, UNWAIVABLE, UNWAIVABLE_UNDER, WAIVER_LABEL } from '../../cli/doctor.mjs';
-import { DEPLOY_CALLER_PATH, deployCallerFile, deployHookStub, deploySection } from '../../cli/init.mjs';
+import { DEPLOY_CALLER_PATH, deployCallerFile, deployEnvironmentSecrets, deployHookStub, deploySection } from '../../cli/init.mjs';
 import { parseYaml } from '../../cli/workflow-yaml.mjs';
 import { PROBE_LINE } from '../../scripts/deploy-gate.mjs';
 import { checkout, fakeGitHub, HEALTHY_DEPLOY, healthyFiles, ids, LANES, no, ok, PINNED, releaseBy, releaserFiles, releaserOn, REPO, REQ, ROOT, run, type Result } from './helpers/doctor.js';
@@ -131,7 +131,7 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
 
     it("reads init's caller as matching the declaration, in the pure check too", () => {
       for (const envs of [['production'], TWO, ['a', 'b', 'c']]) {
-        expect(deployCallerProblems(parseYaml(deployCallerFile(envs, REQ, PINNED)) as Record<string, unknown>, envs, LANE.workflows)).toEqual([]);
+        expect(deployCallerProblems(parseYaml(deployCallerFile(envs, REQ, PINNED)) as Record<string, unknown>, envs, LANE.workflows, deployEnvironmentSecrets(REQ))).toEqual([]);
       }
     });
 
@@ -230,6 +230,30 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
       expect(f.message).toContain("`deploy-2` doesn't pass `build: ${{ needs.release.outputs.build }}`, which deploy.yml requires");
       const { f: other } = await mismatch(caller().replace('build: ${{ needs.release.outputs.build }}', 'build: ${{ needs.release.outputs.other }}'));
       expect(other.message).toContain("`deploy-1` doesn't pass `build:");
+    });
+
+    it('is reported for a deploy job that maps no KANON_DEPLOY_SECRET, or maps it from anything but its own name (kanon#1049)', async () => {
+      expect(deployEnvironmentSecrets(REQ)).toEqual(['KANON_DEPLOY_SECRET']);
+      const MAP = '      KANON_DEPLOY_SECRET: ${{ secrets.KANON_DEPLOY_SECRET }}';
+      const text = caller().split('\n');
+      // deploy-2's `secrets:` and its one line.
+      text.splice(text.lastIndexOf(MAP) - 1, 2);
+      const { r, f } = await mismatch(text.join('\n'));
+      expect(deployIds(r)).toEqual([`deploy.caller-mismatch ${DEPLOY_CALLER_PATH}`]);
+      expect(f.blocking).toBe(true);
+      expect(f.message).toContain("`deploy-2` doesn't map `KANON_DEPLOY_SECRET: ${{ secrets.KANON_DEPLOY_SECRET }}`, so the deploy hook reads it empty, whatever `production` holds");
+      expect(f.message).not.toContain('`deploy-1`');
+      expect(f.fix.commands).toEqual(['kanon init']);
+      // A constant, an empty string or another secret's name: each reaches the hook as that, not the environment's.
+      for (const from of ["''", 'environment', '${{ secrets.OTHER }}']) {
+        const { f: other } = await mismatch(caller().replace(MAP, `      KANON_DEPLOY_SECRET: ${from}`));
+        expect(other.message, from).toContain('`deploy-1` maps `KANON_DEPLOY_SECRET` from `');
+        expect(other.message, from).toContain('not `${{ secrets.KANON_DEPLOY_SECRET }}`');
+      }
+      // Pure: nothing asked of a caller at a release whose deploy.yml declares none.
+      const old = parseYaml(text.join('\n').replaceAll(`    secrets:\n${MAP}\n`, '')) as Record<string, unknown>;
+      expect(deployCallerProblems(old, TWO, LANE.workflows)).toEqual([]);
+      expect(deployCallerProblems(old, TWO, LANE.workflows, ['KANON_DEPLOY_SECRET'])).toHaveLength(2);
     });
 
     it('is reported for a different pinned release between jobs', async () => {
@@ -445,6 +469,25 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
     });
   });
 
+  describe('deploy.secret-repository (kanon#1049)', () => {
+    it('is a note when the repository holds KANON_DEPLOY_SECRET, which an environment without one would hand the hook', async () => {
+      const g = github();
+      (g.st.secrets as Set<string>).add('KANON_DEPLOY_SECRET');
+      const r = await check(files(), g);
+      expect(deployIds(r)).toEqual(['deploy.secret-repository KANON_DEPLOY_SECRET']);
+      const f = finding(r, 'deploy.secret-repository');
+      expect(f.blocking).toBe(false);
+      expect(f.message).toContain('from the environment first, then the repository');
+      expect(f.fix.commands).toEqual([...TWO.map((e) => `gh secret set KANON_DEPLOY_SECRET --env ${e} -R ${REPO}`), `gh secret delete KANON_DEPLOY_SECRET -R ${REPO}`]);
+      expect(r.status, r.out).toBe(EXIT.healthy);
+      // None without it, and none where the secrets can't be listed (the `secrets` check is unchecked).
+      expect(deployIds(await check(files(), github()))).toEqual([]);
+      const blind = github();
+      blind.st.secrets = null;
+      expect(deployIds(await check(files(), blind))).toEqual([]);
+    });
+  });
+
   describe('deploy.tag-ruleset', () => {
     const tagFinding = (r: Result) => finding(r, 'deploy.tag-ruleset');
 
@@ -498,7 +541,7 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
       ['deploy.admin-bypass', false], ['deploy.artifact-retention', false], ['deploy.branch-policy', true], ['deploy.caller-mismatch', true],
       ['deploy.ci-push-missing', true], ['deploy.declaration', true], ['deploy.declaration-moved', true], ['deploy.environment-missing', true],
       ['deploy.hook-missing', true], ['deploy.reference-undeclared', false], ['deploy.releaser-missing', true], ['deploy.reviewers-missing', true],
-      ['deploy.self-review', false], ['deploy.subject-custom', true], ['deploy.tag-ruleset', false], ['deploy.trust-unproven', true],
+      ['deploy.secret-repository', false], ['deploy.self-review', false], ['deploy.subject-custom', true], ['deploy.tag-ruleset', false], ['deploy.trust-unproven', true],
     ]);
     expect(Object.keys(UNWAIVABLE).filter((id) => id.startsWith('deploy.')).sort()).toEqual([
       'deploy.caller-mismatch', 'deploy.declaration', 'deploy.declaration-moved', 'deploy.environment-missing', 'deploy.reviewers-missing', 'deploy.subject-custom',

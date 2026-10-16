@@ -2749,9 +2749,12 @@ describe('kanon init and the deploy lane (plan 0010 D6)', () => {
       expect(job.with, env).toEqual({ environment: env, position: i + 1, build: BUILD });
       expect(job.permissions).toEqual(DEPLOY.grants[DEPLOY.workflows.environment]);
     });
-    // No secret mapped anywhere: the lane's one secret is an environment secret.
-    for (const [name, job] of Object.entries(wf.jobs)) expect(job.secrets, name).toBeUndefined();
-    expect(read(dir, CALLER)).not.toMatch(/secrets/);
+    // Each environment's job maps the deploy hook's environment secret by its own name, which
+    // GitHub evaluates in the deploy job's scope, the environment's first (kanon#1049). Nothing else.
+    expect(wf.jobs.release!.secrets).toBeUndefined();
+    envs.forEach((env, i) => expect(wf.jobs[`deploy-${i + 1}`]!.secrets, env).toEqual({ KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' }));
+    expect(read(dir, CALLER).match(/KANON_DEPLOY_SECRET: \$\{\{ secrets\.KANON_DEPLOY_SECRET \}\}/g)).toHaveLength(envs.length);
+    expect(read(dir, CALLER)).not.toMatch(/inherit/);
   };
 
   it.each([[['production']], [['staging', 'production']], [['dev', 'staging', 'production']]])('writes the caller for %j: a release job, then one job per environment in order, each needing the one before and release', async (envs) => {
@@ -2812,6 +2815,30 @@ describe('kanon init and the deploy lane (plan 0010 D6)', () => {
     const holders = d.inspection.idTokenHolders as Array<{ workflow: string; status: string }>;
     expect(holders.filter((h) => h.workflow === CALLER).map((h) => h.status)).toEqual(['kanon-lane', 'kanon-lane', 'kanon-lane']);
     expect(d.findings.map((x) => x.id)).not.toContain('id-token.unaccepted');
+  });
+
+  it("rewrites a caller that doesn't map KANON_DEPLOY_SECRET, the old caller's shape, so the hook reads the environment's secret (kanon#1049)", async () => {
+    const { dir } = await declare('staging,production');
+    const MAP = '    secrets:\n      KANON_DEPLOY_SECRET: ${{ secrets.KANON_DEPLOY_SECRET }}\n';
+    const written = read(dir, CALLER);
+    expect(written.split(MAP)).toHaveLength(3);
+    writeFileSync(join(dir, CALLER), written.split(MAP).join(''));
+    const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    const f = d.files.find((x) => x.path === CALLER)!;
+    expect(f.status).toBe('rewritten');
+    expect(f.diff).toContain('+       KANON_DEPLOY_SECRET: ${{ secrets.KANON_DEPLOY_SECRET }}');
+    expectChain(dir, ['staging', 'production']);
+  });
+
+  it("maps no KANON_DEPLOY_SECRET for a release whose deploy.yml doesn't declare it, as before kanon#1049", async () => {
+    const before = structuredClone(REQ) as unknown as { deploy: { declaredSecrets?: string[] } };
+    delete before.deploy.declaredSecrets;
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--deploy-environments', 'staging,production'], undefined, before as unknown as typeof REQ);
+    expect(r.status, r.err).toBe(0);
+    const jobs = callerOf(dir).jobs;
+    expect(jobs['deploy-1']!.secrets).toBeUndefined();
+    expect(read(dir, CALLER)).not.toMatch(/secrets/);
   });
 
   it("leaves a deploy workflow of the project's own at that path alone, writes nothing of the lane, and says why (#956)", async () => {

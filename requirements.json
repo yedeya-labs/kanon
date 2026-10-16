@@ -1409,6 +1409,9 @@
     "environmentSecrets": [
       "KANON_DEPLOY_SECRET"
     ],
+    "declaredSecrets": [
+      "KANON_DEPLOY_SECRET"
+    ],
     "declaration": {
       "path": "docs/qa/adoption.md",
       "section": "## Deploy"
