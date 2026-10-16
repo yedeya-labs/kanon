@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { AggregateError, PAGE_FILE, checkPage, readAggregate } from '../../scripts/aggregate-read.mjs';
+import { AggregateError, PAGE_FILE, checkPage, readAggregate, readAggregateToken, tokenRefusal } from '../../scripts/aggregate-read.mjs';
+import { HOSTED_URL, RUNNER_ENV, TOKEN, tokenNet } from '../unit/helpers/token-net.js';
 import { pageView } from '../../infra/telemetry/function/aggregate.mjs';
 
 /**
@@ -85,5 +86,31 @@ describe('readAggregate for the page: one signed GET of `?view=page`', () => {
     expect(p.view).toBe('page');
     const wrong = (async () => new Response(JSON.stringify({ ...answer(), extra: 1 }), { status: 200 })) as unknown as typeof fetch;
     await expect(readAggregate({ url: URL_OK, env: ENV, fetchImpl: wrong, view: 'page' })).rejects.toThrow(AggregateError);
+  });
+});
+
+/**
+ * Plan 0008 §9 step 4a (J7): the read `metrics-page.yml` runs, `aggregate-read.mjs page`, on the
+ * hosted store's token URL. Handed no variable, it reads the hosted store with a fresh token.
+ */
+describe('readAggregateToken for the page: the token read of `?view=page` (J7)', () => {
+  it("asks the hosted store for the page view with a fresh token, and answers checkPage's output", async () => {
+    const net = tokenNet(() => ({ status: 200, json: answer() }));
+    const p = await readAggregateToken({ env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL, view: 'page' });
+    expect(net.calls).toEqual([expect.objectContaining({ url: `${HOSTED_URL}?view=page`, method: 'GET', query: { view: 'page' }, auth: `Bearer ${TOKEN}1` })]);
+    expect(p).toEqual(checkPage(answer()));
+    expect(p.view).toBe('page');
+    const wrong = tokenNet(() => ({ status: 200, json: { ...answer(), extra: 1 } }));
+    await expect(readAggregateToken({ env: RUNNER_ENV, fetchImpl: wrong.fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL, view: 'page' })).rejects.toThrow(/`extra`/);
+  });
+
+  it("names the page exception's conditions, not a pin, for a 403 `workflow` on the page view", async () => {
+    const net = tokenNet(() => ({ status: 403, json: { error: 'workflow' } }));
+    const e = await readAggregateToken({ env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL, view: 'page' }).catch((x: Error) => x);
+    expect(e).toBeInstanceOf(AggregateError);
+    expect((e as Error).message).toMatch(/answered 403 \(workflow\): the store admits the metrics page's read only from Kanon's `metrics-page\.yml` on its registration's default branch, and only while that registration sets `page_reader`/);
+    expect((e as Error).message).not.toMatch(/pin/);
+    // The Explorer's read keeps its own cause.
+    expect(tokenRefusal(403, 'workflow')).toMatch(/check the caller's pin/);
   });
 });

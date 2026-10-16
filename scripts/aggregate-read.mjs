@@ -5,10 +5,10 @@
 //
 // TWO WAYS IN (plan 0008 §3.6, §9, step J5). From vM the Explorer calls the function's token URL
 // with a fresh GitHub OIDC token for the store's audience (`token`, below, through
-// `scripts/lib/telemetry-token.mjs`), and holds no AWS credential. The SigV4 way, signed with an
-// invoker role's credentials, stays for the overlap: Kanon's metrics page (`page`) reads through
-// it until it moves in a pull request of its own after vM's deploy (J7), and the release after vM
-// removes it (J9).
+// `scripts/lib/telemetry-token.mjs`), and holds no AWS credential, and so, since J7 (plan 0008 §9
+// step 4a), does Kanon's metrics page (`page`). The SigV4 way, signed with an invoker role's
+// credentials, stays for the overlap, for a caller below vM, until the release after vM removes
+// it (J9).
 //
 // WHAT LEAVES THIS STEP IS WHAT THE FUNCTION MAY PUBLISH, AND NOTHING ELSE. The function answers
 // only `cross_adopter` cells (at least three non-declaring adopters each), the `own` cells of
@@ -42,8 +42,9 @@
 // page` asks the same function for its page view (`?view=page`), the declaring adopters' work-item
 // indicators, checks it as strictly (`checkPage`: exactly the page view's keys, codes, dates,
 // versions and numbers, no text, a threshold of three, one adopter per entry) and writes
-// $OUT/page.json, which the page job renders (`.github/scripts/metrics-page.mjs`). It signs with
-// SigV4 until J7 moves the metrics page to the token (plan 0008 §9 step 4a).
+// $OUT/page.json, which the page job renders (`.github/scripts/metrics-page.mjs`). It reads on the
+// hosted store's token URL (plan 0008 §9 step 4a, J7), which admits `metrics-page.yml` at Kanon's
+// default branch for the page view alone (§2.2's exception, `page_reader`).
 //
 // `node:` built-ins only, like every script under scripts/ (`K-SELF-8`).
 
@@ -321,11 +322,13 @@ export const aggregateStore = (env, hostedUrl = HOSTED_AGGREGATE_URL) =>
 
 /**
  * What a refusal on the token URL means, in the store's code: plan 0008 §3.1's list and §3.6's
- * `invoker`. Never a value from the answer.
- * @param {number} status @param {string | null} code
+ * `invoker`. Never a value from the answer. On the page view (`view: 'page'`), a 403 `workflow` is
+ * §2.2's metrics page exception refusing, which no pin decides.
+ * @param {number} status @param {string | null} code @param {'page'} [view]
  */
-export function tokenRefusal(status, code) {
+export function tokenRefusal(status, code, view) {
   const said = `the aggregate function answered ${status}${code ? ` (${code})` : ''}`;
+  if (view === 'page' && status === 403 && code === 'workflow') return `${said}: the store admits the metrics page's read only from Kanon's \`metrics-page.yml\` on its registration's default branch, and only while that registration sets \`page_reader\`, which only Kanon's operator sets (docs/telemetry.md, "The token URL")`;
   if (status === 403 && code === 'invoker') return `${said}: this repository's registration doesn't set \`aggregate_invoker\`, which only Kanon's operator sets (docs/telemetry.md, "The token URL")`;
   if (status === 404 && code === 'not-registered') return `${said}: this repository is not registered with the store; its telemetry collector's first default-branch run registers it (docs/telemetry.md, "Collect the rows")`;
   if (status === 403 && code === 'suspended') return `${said}: Kanon's operator has suspended this repository's registration`;
@@ -356,7 +359,7 @@ export async function readAggregateToken({ env, fetchImpl = fetch, mask = runner
     if (e instanceof TokenError) throw new AggregateError(e.message);
     throw new AggregateError(`the aggregate function could not be reached (${e instanceof Error ? e.name : 'error'})`);
   }
-  if (res.status !== 200) throw new AggregateError(tokenRefusal(res.status, codeOf(res.json)));
+  if (res.status !== 200) throw new AggregateError(tokenRefusal(res.status, codeOf(res.json), view));
   if (res.json === null) throw new AggregateError('the aggregate function answered something that is not JSON');
   return view === 'page' ? checkPage(res.json) : checkAggregate(res.json);
 }
@@ -377,7 +380,7 @@ if (isCliEntry(import.meta.url)) {
   }
   if (process.argv[2] === 'page') {
     try {
-      const p = await readAggregate({ url: env.KANON_AGGREGATE_URL ?? '', env, view: 'page' });
+      const p = await readAggregateToken({ env, view: 'page' });
       mkdirSync(out, { recursive: true });
       writeFileSync(join(out, PAGE_FILE), `${JSON.stringify(p, null, 2)}\n`);
       const line = `Page view computed ${p.computed_at}: the own figures of ${p.own.length} declaring adopter(s), each one adopter's.`;
