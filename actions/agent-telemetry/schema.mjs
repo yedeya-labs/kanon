@@ -64,6 +64,10 @@ export const LANE_ROLES = Object.freeze({
   'project-digest': 'overseer',
   // Plan 0010 D8's diagnose lane, which reads a failed deploy and comments on it (#966).
   'deploy-diagnose': 'explorer',
+  // The deploy lane's announcement (plan 0011 N9), for its `notify` rows alone: it runs no model
+  // and writes no run row, so its role is never checked against one. The Overseer's, as the
+  // digests', the other lanes that notify. Not `deploy`, the deploy rows' reserved partition.
+  'deploy-announce': 'overseer',
 });
 export const LANES = Object.freeze(Object.keys(LANE_ROLES));
 /** The work-item partition's name, which no lane may take (plan 0002 §4). */

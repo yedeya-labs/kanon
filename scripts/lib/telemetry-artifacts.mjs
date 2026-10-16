@@ -86,22 +86,25 @@ export const deployArtifactName = (runId, attempt, position) => `${DEPLOY_ARTIFA
 /**
  * A `notify` row's artifact (plan 0011 §11, N5): one per run of a lane's `notify` job,
  * `kanon-delivery-<lane>-<run id>-<attempt>`, the `notify` job's run and attempt, holding one row
- * in `kanon-delivery.json`. Not under `kanon-telemetry-`, which only a lane's run row may carry
+ * in `kanon-delivery.json`. The deploy lane's `notify` job runs once per environment in one run, so
+ * its name ends in the environment's position too, `…-<attempt>-<position>` (plan 0011 N9). Not under `kanon-telemetry-`, which only a lane's run row may carry
  * (kanon#826). The collector sends these since N5; the `notify` block (N6) writes them, taking the
  * name and the file from here.
  */
 export const DELIVERY_ARTIFACT_PREFIX = 'kanon-delivery-';
 /** The file inside a delivery artifact: one notify row. */
 export const DELIVERY_ARTIFACT_FILE = 'kanon-delivery.json';
-/** A delivery artifact's name: a lane from the schema's list, then the run id and the attempt. */
-export const DELIVERY_ARTIFACT = new RegExp(`^${DELIVERY_ARTIFACT_PREFIX}(${LANES.join('|')})-(\\d+)-(\\d+)$`);
+/** A delivery artifact's name: a lane from the schema's list, then the run id, the attempt, and a position when it has one. */
+export const DELIVERY_ARTIFACT = new RegExp(`^${DELIVERY_ARTIFACT_PREFIX}(${LANES.join('|')})-(\\d+)-(\\d+)(?:-(\\d+))?$`);
 /**
  * The name a lane's `notify` job uploads its row under.
  * @param {string} lane one of the schema's `LANES`
  * @param {number | string} runId
  * @param {number | string} attempt
+ * @param {number | string} [position] the environment's, in the deploy lane, where one run notifies once per environment
  */
-export const deliveryArtifactName = (lane, runId, attempt) => `${DELIVERY_ARTIFACT_PREFIX}${lane}-${runId}-${attempt}`;
+export const deliveryArtifactName = (lane, runId, attempt, position) =>
+  `${DELIVERY_ARTIFACT_PREFIX}${lane}-${runId}-${attempt}${position === undefined || position === '' ? '' : `-${position}`}`;
 /** The sweep's window, in days, as `dispatch-sweep.mjs`'s `UNREACHED_WINDOW_DAYS` defaults it. */
 export const WINDOW_DAYS = 14;
 /** Pages of 100 the listing may read before it gives up and fails the read. */

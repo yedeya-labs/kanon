@@ -202,10 +202,13 @@ describe('announce-deploy names no environment of its own (kanon#54)', () => {
     expect(r.stderr).toMatch(/Missing required env:.*\bSTAGE\b/);
   });
 
-  it('runs as a CLI in either mode: --advance refuses by name when notify did not post (plan 0011 N9)', () => {
-    const env = { PATH: process.env.PATH ?? '', GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'o/r', STAGE: 'staging', VERSION: '1.0.0', NOTIFY_RESULT: 'failure' };
-    const r = spawnSync(process.execPath, [join(ROOT, 'scripts/announce-deploy.mjs'), '--advance'], { cwd: tmpdir(), env, encoding: 'utf8' });
-    expect(r.status).toBe(1);
-    expect(r.stderr).toMatch(/--advance refuses: the notify job did not post/);
+  it('runs as a CLI: a refused deploy announces nothing, and --advance is gone (plan 0011 N9)', () => {
+    const env = { PATH: process.env.PATH ?? '', GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'o/r', STAGE: 'staging', VERSION: '1.0.0', OUTCOME: 'refused', GITHUB_RUN_ID: '1' };
+    const r = spawnSync(process.execPath, [join(ROOT, 'scripts/announce-deploy.mjs')], { cwd: tmpdir(), env, encoding: 'utf8' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/Nothing to announce/);
+    const old = spawnSync(process.execPath, [join(ROOT, 'scripts/announce-deploy.mjs'), '--advance'], { cwd: tmpdir(), env, encoding: 'utf8' });
+    expect(old.status).toBe(1);
+    expect(old.stderr).toMatch(/--advance is gone/);
   });
 });

@@ -234,7 +234,10 @@ describe("the deploy lane's two exceptions hold only what plan 0010 §7 lets the
   it('no other job of the deploy lane runs the code under test but the build, which holds nothing (step D5)', () => {
     const running = DEPLOY.flatMap((f) => Object.entries(read(join(WF, f)).jobs ?? {})
       .filter(([, j]) => (j.steps ?? []).some(runsCodeUnderTest)).map(([n]) => `${f}:${n}`));
-    expect(running).toEqual(['deploy-release.yml:probe', 'deploy-release.yml:build', 'deploy.yml:deploy']);
+    expect(running).toEqual(['deploy-release.yml:probe', 'deploy-release.yml:build', 'deploy.yml:deploy', 'deploy.yml:notify']);
+    // The announcement's post runs the adopter's notify hook, as every notify job does: the notify
+    // exception, in its exact shape, with KANON_CHAT_DEPLOY alone (plan 0011 N9).
+    expect(isNotifyException('deploy.yml:notify')).toBe(true);
     // The build runs the adopter's build hook and its dependencies with no credential at all, so
     // it is no exception: the rule holds for it as written (plan 0010 decision 8).
     const { wf, j } = job('deploy-release.yml', 'build');

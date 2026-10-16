@@ -22,6 +22,13 @@ import { TAGS } from '../../../actions/agent-telemetry/schema.mjs';
  * - **Its one step is the block**, `$/actions/notify`, with `kind`, the producer's
  *   `message-artifact` output as `artifact` (never a name it builds: after "Re-run failed jobs"
  *   its own attempt is one past the producer's), and the kind's secret as `secret`.
+ *
+ * **The deploy lane's** (`deploy.yml`, plan 0011 N9) differs in its gate alone, by `GATED`: it has
+ * no membership gate, no dry run and no gate-decided hook, so its gate is `declare`, which admits
+ * only a published release or a dispatch naming one (`held == 'false'`, which `deploy-gate.mjs`
+ * sets only then, so never on a pull request), its hook's presence is the producer's output, and it
+ * hands the block the environment's `position`, which keeps the row's artifact apart from the
+ * other environments' in the same run. Everything else is the same shape.
  */
 
 export type Step = { id?: string; name?: string; uses?: string; run?: string; if?: string; with?: Record<string, unknown>; env?: Record<string, unknown> };
@@ -48,19 +55,29 @@ export const NOTIFY_JOB = 'notify';
 export const NOTIFY_IF = "!cancelled() && needs.gate.outputs.member == 'true' && needs.gate.outputs.hook == 'present' && inputs.dry_run != 'true'";
 /** The producing job's output that names its message artifact (§4). */
 export const MESSAGE_OUTPUT = 'message-artifact';
+/** The deploy lane's one `if:` (plan 0011 N9): past an admitting `declare`, with a hook, never in a cancelled run. */
+export const DEPLOY_NOTIFY_IF = "!cancelled() && needs.declare.outputs.held == 'false' && needs.announce.outputs.hook == 'present'";
 
-/**
- * Kanon's notifying lanes and their kinds (§3.2). The deploy lane joins with plan 0010's step
- * that wires its announcement in.
- */
+/** How a kind's `notify` job is gated: its gate's job (`undefined`: the membership gate's), its `if:`, and what else it hands the block. */
+export type Gated = { gate?: string; if: string; with?: Record<string, string> };
+/** Each kind's gating; a kind not listed is gated by the membership gate, with `NOTIFY_IF`. */
+export const GATED: Record<string, Gated> = {
+  deploy: { gate: 'declare', if: DEPLOY_NOTIFY_IF, with: { position: '${{ inputs.position }}' } },
+};
+const gatingOf = (kind: string): Gated => GATED[kind] ?? { if: NOTIFY_IF };
+
+/** Kanon's notifying lanes and their kinds (§3.2). */
 export const NOTIFYING_LANES: Record<string, string> = {
   'agent-project-digest.yml': 'project-digest',
   'agent-weekly-digest.yml': 'weekly-digest',
+  'deploy.yml': 'deploy',
 };
 
 const JOB_KEYS = new Set(['name', 'needs', 'if', 'runs-on', 'timeout-minutes', 'permissions', 'outputs', 'steps']);
 const STEP_KEYS = new Set(['uses', 'id', 'name', 'with']);
 const WITH_KEYS = new Set(['kind', 'artifact', 'secret', 'tag']);
+/** The block's inputs only a gating in `GATED` may hand it, each with its one value. */
+const GATED_WITH_KEYS = new Set(Object.values(GATED).flatMap((g) => Object.keys(g.with ?? {})));
 const BLOCK_OUTPUTS = new Set(['outcome']);
 
 /** An expression's text, its `${{ }}` stripped and its spaces collapsed. */
@@ -78,10 +95,10 @@ export const producersOf = (wf: Workflow): string[] =>
 export const notifyJobsOf = (wf: Workflow): string[] =>
   Object.entries(wf.jobs ?? {}).filter(([, j]) => (j.steps ?? []).some((s) => String(s.uses ?? '').replace(/@.*$/, '') === NOTIFY_BLOCK)).map(([id]) => id);
 
-/** The canonical `notify` job, for a lane whose gate is `gate` and whose producer is `producer`. */
+/** The canonical `notify` job, for a lane whose gate is `gate` (or its kind's, in `GATED`) and whose producer is `producer`. */
 export const notifyJob = (kind: string, producer: string): Job => ({
-  needs: ['gate', producer],
-  if: `\${{ ${NOTIFY_IF} }}`,
+  needs: [gatingOf(kind).gate ?? 'gate', producer],
+  if: `\${{ ${gatingOf(kind).if} }}`,
   'runs-on': 'ubuntu-latest',
   'timeout-minutes': 5,
   permissions: { contents: 'read' },
@@ -93,6 +110,7 @@ export const notifyJob = (kind: string, producer: string): Job => ({
       kind,
       artifact: `\${{ needs.${producer}.outputs.${MESSAGE_OUTPUT} }}`,
       secret: `\${{ secrets.${KIND_SECRETS[kind]} }}`,
+      ...gatingOf(kind).with,
     },
   }],
 });
@@ -112,13 +130,14 @@ export const notifyJobProblems = (wf: Workflow, id: string, kind: string): strin
   if (!secret) return [`${kind} is not a message kind`];
   if (id !== NOTIFY_JOB) problems.push(`the job is called ${id}, not ${NOTIFY_JOB}`);
   for (const k of Object.keys(job)) if (!JOB_KEYS.has(k)) problems.push(`the job declares \`${k}:\``);
-  const gate = gateJobOf(wf);
+  const gating = gatingOf(kind);
+  const gate = gating.gate ?? gateJobOf(wf);
   const producers = producersOf(wf);
   if (producers.length !== 1) problems.push(`the lane has ${producers.length} producing jobs, not one`);
   const producer = producers[0];
   const needs = [job.needs ?? []].flat().sort();
   if (!gate || !producer || JSON.stringify(needs) !== JSON.stringify([gate, producer].sort())) problems.push(`it needs ${needs.join(', ') || 'nothing'}, not the gate's job and the producing job`);
-  if (bare(job.if) !== NOTIFY_IF) problems.push(`its if: is not \`${NOTIFY_IF}\``);
+  if (bare(job.if) !== gating.if) problems.push(`its if: is not \`${gating.if}\``);
   if (JSON.stringify(job.permissions) !== JSON.stringify({ contents: 'read' })) problems.push(`its permissions are ${JSON.stringify(job.permissions ?? null)}, not contents: read alone`);
   if (typeof job['timeout-minutes'] !== 'number' || job['timeout-minutes'] > 10) problems.push('it has no timeout of at most 10 minutes');
   for (const [k, v] of Object.entries(job.outputs ?? {})) {
@@ -132,7 +151,8 @@ export const notifyJobProblems = (wf: Workflow, id: string, kind: string): strin
     if (step.id !== 'notify') problems.push('its step is not `id: notify`');
     for (const k of Object.keys(step)) if (!STEP_KEYS.has(k)) problems.push(`its step declares \`${k}:\``);
     const w = step.with ?? {};
-    for (const k of Object.keys(w)) if (!WITH_KEYS.has(k)) problems.push(`its step hands the block \`${k}\``);
+    for (const k of Object.keys(w)) if (!WITH_KEYS.has(k) && !(GATED_WITH_KEYS.has(k) && gating.with?.[k] !== undefined)) problems.push(`its step hands the block \`${k}\``);
+    for (const [k, v] of Object.entries(gating.with ?? {})) if (w[k] !== v) problems.push(`its ${k} is not \`${v}\``);
     if (w.kind !== kind) problems.push(`its kind is ${String(w.kind)}, not ${kind}`);
     if (!producer || bare(w.artifact) !== `needs.${producer}.outputs.${MESSAGE_OUTPUT}`) problems.push('its artifact is not the producing job\'s message-artifact output');
     if (bare(w.secret) !== `secrets.${secret}`) problems.push(`its secret is not ${secret}`);
@@ -160,6 +180,8 @@ export type NotifyWorld = {
   /** The gate's and the producer's results. */
   gate: 'success' | 'failure' | 'skipped';
   producer: 'success' | 'failure' | 'skipped';
+  /** Any other job output the `if:` reads, as `<job>.<output>`: the deploy lane's `declare.held` and `announce.hook`. Empty when that job didn't run. */
+  outputs?: Record<string, string>;
 };
 
 const STATUS = new Set(['always', 'success', 'failure', 'cancelled']);
@@ -189,6 +211,10 @@ export const startsNotify = (cond: string | undefined, needs: string[], world: N
       case 'lit': return n.value;
       case 'ref': {
         const out = /^needs\.([\w-]+)\.outputs\.([\w-]+)$/.exec(n.path);
+        if (out && world.outputs && `${out[1]}.${out[2]}` in world.outputs) {
+          const ran = (out[1] === gate ? world.gate : world.producer) !== 'skipped';
+          return ran ? world.outputs[`${out[1]}.${out[2]}`]! : '';
+        }
         if (out) return out[1] === gate && world.gate !== 'skipped' ? (out[2] === 'member' ? world.member : out[2] === 'hook' ? world.hook : '') : '';
         const res = /^needs\.([\w-]+)\.result$/.exec(n.path);
         if (res) return results[res[1]!] ?? '';

@@ -8,7 +8,7 @@ import { validate } from '../../actions/agent-telemetry/schema.mjs';
 import {
   classifyEnvironment, classifyRelease, DEPLOY_ARTIFACT_FILE, deployArtifactName, environmentRow, isHeld, releaseRow,
 } from '../../scripts/deploy-row.mjs';
-import { issueTitle, report, reportFrom } from '../../scripts/deploy-report.mjs';
+import { issueOf, issueTitle, report, reportFrom } from '../../scripts/deploy-report.mjs';
 import * as collected from '../../scripts/lib/telemetry-artifacts.mjs';
 import { CI_POLL_MS, CI_WAIT_CEILING, deployCheck, GATE_MARGIN_MINUTES } from '../../scripts/deploy-gate.mjs';
 import { BUILD_DIR, buildArtifactName, checkBuild, listFiles, readBuild, treeDigest } from '../../scripts/deploy-build.mjs';
@@ -55,6 +55,10 @@ const SECRET = /secrets\s*(?:\.\s*([A-Za-z0-9_-]+)|\[)/g;
 const isCheckout = (s: Step) => String(s.uses ?? '').startsWith('actions/checkout@');
 const grants = (j: Job) => (typeof j.permissions === 'object' ? j.permissions : {});
 const ALLOWED_SECRET = '${{ secrets.KANON_DEPLOY_SECRET }}';
+/** The announcement's secret (plan 0011 N9): an optional `workflow_call` secret of deploy.yml, read by its `notify` step alone. */
+const CHAT_SECRET = '${{ secrets.KANON_CHAT_DEPLOY }}';
+/** deploy.yml's one declared secret, exactly. */
+const DECLARED = { KANON_CHAT_DEPLOY: { description: 'Where the adopter\'s notify hook posts this environment\'s deploy announcement. Optional.', required: false } };
 
 /** Everything wrong with the lane's shape, by file, job and step. */
 export function laneProblems(w: Record<string, Workflow>): string[] {
@@ -63,7 +67,9 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
     const wf = w[file];
     if (!wf) { out.push(`${file} is missing`); continue; }
     if (JSON.stringify(wf.permissions) !== '{}') out.push(`${file}: the workflow grants something at the top`);
-    if (wf.on?.workflow_call?.secrets !== undefined) out.push(`${file}: declares secrets its caller would map`);
+    // deploy.yml declares one secret, the announcement's, optional; deploy-release.yml none.
+    const declared = wf.on?.workflow_call?.secrets;
+    if (file === ENV ? JSON.stringify(declared) !== JSON.stringify(DECLARED) : declared !== undefined) out.push(`${file}: declares secrets its caller would map, beyond KANON_CHAT_DEPLOY, optional, in deploy.yml`);
     if (/\bvars\./.test(JSON.stringify(wf))) out.push(`${file}: reads a repository variable: where the hook finds each role is the hook's`);
     for (const [name, j] of Object.entries(wf.jobs)) {
       const at = `${file}:${name}`;
@@ -77,7 +83,9 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
         if (!refs.length) continue;
         const here = file === ENV && name === 'deploy' && s.id === 'deploy';
         const only = here && refs.length === 1 && s.env?.KANON_DEPLOY_SECRET === ALLOWED_SECRET;
-        if (!only) out.push(`${at}:${s.id ?? s.name ?? s.uses}: references a secret; only deploy.yml's deploy hook step may, KANON_DEPLOY_SECRET in its env:`);
+        // …and deploy.yml's notify step, the block, handed KANON_CHAT_DEPLOY as its `secret` (plan 0011 N9).
+        const post = file === ENV && name === 'notify' && s.id === 'notify' && refs.length === 1 && s.uses === '$/actions/notify' && s.with?.secret === CHAT_SECRET && !s.env;
+        if (!only && !post) out.push(`${at}:${s.id ?? s.name ?? s.uses}: references a secret; only deploy.yml's deploy hook step may, KANON_DEPLOY_SECRET in its env:, and its notify step, KANON_CHAT_DEPLOY as the block's secret`);
       }
       // Grants.
       const g = grants(j);
@@ -291,7 +299,12 @@ function buildProblems(w: Record<string, Workflow>): string[] {
   if (!String(download?.uses ?? '').startsWith('actions/download-artifact@') || download?.with?.name !== '${{ steps.build-input.outputs.artifact }}' || download?.with?.path !== '${{ runner.temp }}/kanon-deploy-artifact') out.push(`${ENV}:deploy: doesn't download the build's artifact by its run-scoped name`);
   // A "Re-run failed jobs" reuses attempt 1's build output and its artifact, `…-1` (measured on
   // #940): a name rebuilt from the attempt would look for one that was never uploaded.
-  if (/run_attempt/.test(JSON.stringify(w[ENV] ?? {}).replace(/kanon-deploy-row-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/g, ''))) out.push(`${ENV}: rebuilds the build's artifact name from the run attempt, so a re-run of the failed jobs misses attempt 1's artifact`);
+  // The announcement's message artifact carries its own job's attempt, as every producer's does (plan 0011 §4).
+  const unattempted = JSON.stringify(w[ENV] ?? {})
+    .replace(/kanon-deploy-row-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/g, '')
+    .replace(/kanon-notify-deploy-announce-\$\{\{ inputs\.position \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/g, '')
+    .replace(/format\('kanon-notify-deploy-announce-\{0\}-\{1\}-\{2\}', inputs\.position, github\.run_id, github\.run_attempt\)/g, '');
+  if (/run_attempt/.test(unattempted)) out.push(`${ENV}: rebuilds the build's artifact name from the run attempt, so a re-run of the failed jobs misses attempt 1's artifact`);
   if (!/deploy-build\.mjs" check$/.test(String(check?.run)) || check?.env?.DIGEST !== '${{ steps.build-input.outputs.digest }}') out.push(`${ENV}:deploy: doesn't check the build's digest`);
   if (!(idx('build-input') < idx('download') && idx('download') < idx('build-check') && idx('build-check') < deployAt) || idx('build-input') < 0) out.push(`${ENV}:deploy: the deploy hook can run before the build is checked`);
   if (ds[deployAt]?.with?.artifact !== '${{ steps.build-check.outputs.path }}') out.push(`${ENV}:deploy: the deploy hook isn't given the checked build`);
@@ -313,7 +326,7 @@ describe('the deploy lane holds its shape', () => {
 
   it('reads the jobs it is about, so the checks are not vacuous', () => {
     expect(Object.keys(PARSED[RELEASE]!.jobs)).toEqual(['gate', 'probe', 'build', 'record', 'report']);
-    expect(Object.keys(PARSED[ENV]!.jobs)).toEqual(['declare', 'deploy', 'record', 'report']);
+    expect(Object.keys(PARSED[ENV]!.jobs)).toEqual(['declare', 'deploy', 'record', 'report', 'announce', 'notify']);
     // The run lists the environment's job as `<caller job> / deploy` (kanon#890), which the reference deploy names.
     expect(PARSED[ENV]!.jobs.deploy!.name).toBe('deploy');
     expect(step(PARSED[ENV]!.jobs.deploy!, 'deploy').env).toEqual({ KANON_DEPLOY_SECRET: ALLOWED_SECRET });
@@ -321,9 +334,11 @@ describe('the deploy lane holds its shape', () => {
 
   it('every checkout of the two workflows persists no credential, and checks out the release commit the gate or the declaration resolved', () => {
     const checkouts = LANE.flatMap((f) => Object.values(PARSED[f]!.jobs).flatMap((j) => (j.steps ?? []).filter(isCheckout)));
-    expect(checkouts).toHaveLength(3);
+    expect(checkouts).toHaveLength(4);
     // The probe's and the build's: the gate's commit, which on a dispatch is the one the release's tag resolves to.
-    expect(checkouts.map((s) => s.with?.ref)).toEqual(['${{ needs.gate.outputs.sha }}', '${{ needs.gate.outputs.sha }}', '${{ needs.declare.outputs.sha }}']);
+    // The announcement's: the notify hook's directory alone, at the run's commit, where the notify block reads the hook (plan 0011 decision 8).
+    expect(checkouts.map((s) => s.with?.ref)).toEqual(['${{ needs.gate.outputs.sha }}', '${{ needs.gate.outputs.sha }}', '${{ needs.declare.outputs.sha }}', undefined]);
+    expect(checkouts[3]!.with).toEqual({ 'persist-credentials': false, 'sparse-checkout': '.github/actions/notify' });
   });
 
   it('the hooks get the inputs plan 0010 §7 lists, and the smoke hook never the secret', () => {
@@ -381,6 +396,22 @@ describe('the deploy lane holds its shape', () => {
       red((w) => { step(job(w, ENV, 'deploy'), 'smoke').env = { KANON_DEPLOY_SECRET: ALLOWED_SECRET }; }, /deploy\.yml:deploy:smoke: references a secret/);
       red((w) => { (job(w, RELEASE, 'probe').steps!.find((s) => s.uses === './.github/actions/deploy')!).env = { KANON_DEPLOY_SECRET: ALLOWED_SECRET }; }, /deploy-release\.yml:probe:.*references a secret/);
       red((w) => { (job(w, ENV, 'deploy') as Record<string, unknown>).env = { KANON_DEPLOY_SECRET: ALLOWED_SECRET }; }, /references a secret outside a step/);
+    });
+    it('`KANON_CHAT_DEPLOY` read anywhere but the notify step, or handed to it otherwise (plan 0011 N9)', () => {
+      red((w) => { step(job(w, ENV, 'announce'), 'message').env!.URL = CHAT_SECRET; }, /deploy\.yml:announce:message: references a secret/);
+      red((w) => { step(job(w, ENV, 'deploy'), 'deploy').env!.KANON_CHAT_DEPLOY = CHAT_SECRET; }, /deploy\.yml:deploy:deploy: references a secret/);
+      red((w) => { step(job(w, ENV, 'notify'), 'notify').env = { SECRET: CHAT_SECRET }; }, /deploy\.yml:notify:notify: references a secret/);
+      red((w) => { step(job(w, ENV, 'notify'), 'notify').with!.secret = ALLOWED_SECRET; }, /deploy\.yml:notify:notify: references a secret/);
+      red((w) => { (job(w, ENV, 'notify') as Record<string, unknown>).env = { SECRET: CHAT_SECRET }; }, /deploy\.yml:notify: references a secret outside a step/);
+    });
+    it('a secret declared beyond the optional KANON_CHAT_DEPLOY, or it made required (plan 0011 N9)', () => {
+      red((w) => { (w[ENV]!.on!.workflow_call!.secrets as Record<string, unknown>).KANON_DEPLOY_SECRET = { required: false }; }, /deploy\.yml: declares secrets its caller would map/);
+      red((w) => { (w[ENV]!.on!.workflow_call!.secrets as Record<string, { required: boolean }>).KANON_CHAT_DEPLOY!.required = true; }, /deploy\.yml: declares secrets its caller would map/);
+      red((w) => { w[RELEASE]!.on!.workflow_call!.secrets = structuredClone(DECLARED); }, /deploy-release\.yml: declares secrets its caller would map/);
+    });
+    it('a write, or an OIDC grant, on the announcement or its post', () => {
+      red((w) => { (job(w, ENV, 'announce').permissions as Record<string, string>).deployments = 'write'; }, /deploy\.yml:announce: grants deployments/);
+      red((w) => { (job(w, ENV, 'notify').permissions as Record<string, string>)['id-token'] = 'write'; }, /deploy\.yml:notify: holds id-token/);
     });
     it("the gate job's limit lowered under the CI wait plus its setup (#912)", () => {
       red((w) => { job(w, RELEASE, 'gate')['timeout-minutes'] = CI_WAIT_CEILING; }, /gate: its timeout-minutes \(345\) can end the CI wait/);
@@ -772,6 +803,16 @@ describe("deploy-report.mjs: one issue per environment (plan 0010 §8, decision 
     const { api, writes } = issues([{ number: 7, title: issueTitle('staging') }, { number: 8, title: 'Deploy to staging failed again' }]);
     expect(report({ ...base, api, environment: 'staging', role: 'pre-production', position: 1, outcome: 'failed', failed_stage: 'deploy' })).toEqual({ action: 'commented', number: 7 });
     expect(writes.map((x) => [x.method, x.path])).toEqual([['POST', 'repos/acme/app/issues/7/comments']]);
+  });
+
+  it("outputs the issue a failure filed or commented on, for the announcement's link, and none after a close (plan 0011 N9)", () => {
+    expect(issueOf({ action: 'filed', number: 9 })).toBe('9');
+    expect(issueOf({ action: 'commented', number: 7 })).toBe('7');
+    expect(issueOf({ action: 'closed', number: 7 })).toBe('');
+    expect(issueOf({ action: 'none' })).toBe('');
+    const rep = PARSED[ENV]!.jobs.report!;
+    expect(rep.outputs).toEqual({ issue: '${{ steps.issue.outputs.issue }}' });
+    expect(step(PARSED[ENV]!.jobs.announce!, 'message').env!.ISSUE).toBe('${{ needs.report.outputs.issue }}');
   });
 
   it("closes the environment's open issue on its next success, and does nothing when none is open", () => {

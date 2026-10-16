@@ -9,6 +9,7 @@ import {
 } from '../../actions/notify/notify.mjs';
 import { renderText } from '../../scripts/lib/notify-contract.mjs';
 import { validate as validateRow } from '../../actions/agent-telemetry/schema.mjs';
+import { DELIVERY_ARTIFACT } from '../../scripts/lib/telemetry-artifacts.mjs';
 import { parseCondition } from '../unit/helpers/job-condition.js';
 import { runWorkflowStep } from '../unit/helpers/workflow-step.js';
 import { SPAWNS } from '../unit/helpers/spawns.js';
@@ -358,13 +359,21 @@ describe('the doctor line and the notify row, on every outcome (§5.1, steps 6 a
     expect(r.log).toContain("nothing was posted: the hook's step failed");
   });
 
-  it('a deploy message posts, and writes no row until the deploy lane is in the schema\'s lanes', () => {
-    const deploy = message({ kind: 'deploy', severity: 'info', source: { ...message().source, lane: 'deploy' } });
-    const name = 'kanon-notify-deploy-announce-77-1';
-    const r = runBlock({ inputs: { kind: 'deploy', artifact: name, secret: SECRET }, artifacts: { [name]: JSON.stringify(deploy) } });
+  it("a deploy message's row is the deploy-announce lane's, its artifact named for the environment's position (plan 0011 N9)", () => {
+    const deploy = message({ kind: 'deploy', severity: 'critical', source: { ...message().source, lane: 'deploy' } });
+    const name = `kanon-notify-deploy-announce-2-${RUN_ID}-1`;
+    const r = runBlock({ inputs: { kind: 'deploy', artifact: name, secret: SECRET, position: '2' }, artifacts: { [name]: JSON.stringify(deploy) } });
     expect(r.outputs.outcome).toBe('posted');
-    expect(r.uploads).toEqual([]);
-    expect(r.log).toContain('no notify row: the deploy lane is not in the telemetry schema\'s lanes yet');
+    expect(r.rows).toHaveLength(1);
+    expect(validateRow(r.rows[0])).toEqual({ ok: true });
+    expect(r.rows[0]).toMatchObject({ row_kind: 'notify', lane: 'deploy-announce', kind: 'deploy', outcome: 'posted', producer_attempt: 1 });
+    // Two environments' notify jobs in one run upload two names, which the collector reads back.
+    expect(r.uploads.map((u) => u.name)).toEqual([`kanon-delivery-deploy-announce-${RUN_ID}-1-2`]);
+    expect(DELIVERY_ARTIFACT.exec(r.uploads[0]!.name)?.slice(1)).toEqual(['deploy-announce', RUN_ID, '1', '2']);
+    // With no secret mapped, it is recorded as skipped, under the same lane.
+    const none = runBlock({ inputs: { kind: 'deploy', artifact: name, secret: '', position: '1' }, artifacts: { [name]: JSON.stringify(deploy) } });
+    expect(none.rows[0]).toMatchObject({ lane: 'deploy-announce', outcome: 'skipped', skip_reason: 'no-secret' });
+    expect(none.uploads.map((u) => u.name)).toEqual([`kanon-delivery-deploy-announce-${RUN_ID}-1-1`]);
   });
 });
 
