@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { appSecrets, ciFile } from '../../cli/callers.mjs';
-import { deployCallerProblems, EXIT, FINDINGS, probeAnswer, readWaivers, restrictsTags, runsOnPush, UNWAIVABLE, UNWAIVABLE_UNDER, WAIVER_LABEL } from '../../cli/doctor.mjs';
+import { deployCallerProblems, EXIT, FINDINGS, NOTIFY_HOOK, probeAnswer, readWaivers, restrictsTags, runsOnPush, UNWAIVABLE, UNWAIVABLE_UNDER, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { DEPLOY_CALLER_PATH, deployCallerFile, deployEnvironmentSecrets, deployHookStub, deploySection } from '../../cli/init.mjs';
 import { parseYaml } from '../../cli/workflow-yaml.mjs';
 import { PROBE_LINE } from '../../scripts/deploy-gate.mjs';
@@ -53,16 +53,18 @@ const healthyEnv = (name: string, envs: string[]): Env => ({ reviewers: name ===
 /**
  * A fake GitHub holding the deploy lane's state: the environments (null: the token can't read
  * them), the OIDC subject template, the artifact retention, the tag rulesets' rules, the deploy
- * caller's runs (newest first), each with its probe job's log, and the release tags. Its run
+ * caller's runs (newest first), each with its probe job's log, the release tags, the owner's kind
+ * and the organisation secrets shared with the repository (null: the token can't list them). Its run
  * listing ignores the filters, as a server that did would, so doctor's own check of each run is
  * what refuses one.
  */
 const github = (o: {
   envs?: Record<string, Env> | null; chain?: string[]; sub?: unknown | null; retention?: number | null;
-  tagRules?: string[][]; runs?: DeployRun[] | null; tags?: string[];
+  tagRules?: string[][]; runs?: DeployRun[] | null; tags?: string[]; owner?: 'User' | 'Organization'; org?: Set<string> | null;
 } = {}) => {
   const chain = o.chain ?? TWO;
   const g = releaserOn(fakeGitHub({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...appSecrets('releaser')]) }));
+  g.st.ownerType = o.owner ?? 'User';
   (o.tagRules ?? [['creation', 'update', 'deletion']]).forEach((rules, i) => {
     (g.st.rulesets as unknown[]).push({ id: 80 + i, name: `Release tags ${i}`, target: 'tag', enforcement: 'active', conditions: { ref_name: { include: ['refs/tags/v*'], exclude: [] } }, rules: rules.map((type) => ({ type })), bypass_actors: [] });
   });
@@ -94,6 +96,7 @@ const github = (o: {
       return ok({ total_count: 0, branch_policies: Array.isArray(e?.policy) ? e.policy.map((p, i) => ({ id: i + 1, ...p })) : [] });
     }
     if (path === `repos/${REPO}/actions/oidc/customization/sub`) return o.sub === null ? denied : ok(o.sub ?? { use_default: true });
+    if (path === `repos/${REPO}/actions/organization-secrets?per_page=100`) return o.org ? ok({ total_count: o.org.size, secrets: [...o.org].map((name) => ({ name })) }) : denied;
     if (path === `repos/${REPO}/actions/permissions/artifact-and-log-retention`) return o.retention === null ? denied : ok({ days: o.retention ?? 90, maximum_allowed_days: 90 });
     if (path.startsWith(`repos/${REPO}/actions/workflows/deploy.yml/runs?`)) {
       if (runs === null) return denied;
@@ -489,6 +492,62 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
     });
   });
 
+  describe('deploy.secret-organization (kanon#1051)', () => {
+    const ORG_PATH = 'organization-secrets';
+    const orgCalls = (g: ReturnType<typeof github>) => g.paths.filter((p) => p.includes(ORG_PATH));
+
+    it('is a note when an organisation secret named KANON_DEPLOY_SECRET is shared with the repository, which an environment without one would hand the hook', async () => {
+      const r = await check(files(), github({ owner: 'Organization', org: new Set(['KANON_DEPLOY_SECRET']) }));
+      expect(deployIds(r)).toEqual(['deploy.secret-organization KANON_DEPLOY_SECRET']);
+      const f = finding(r, 'deploy.secret-organization');
+      expect(f.blocking).toBe(false);
+      expect(f.message).toContain('from the environment first, then the repository, then the organisation');
+      expect(f.message).toContain('every repository it is shared with');
+      expect(f.fix.commands).toEqual(TWO.map((e) => `gh secret set KANON_DEPLOY_SECRET --env ${e} -R ${REPO}`));
+      expect(f.fix.text).toContain(`stop sharing acme's KANON_DEPLOY_SECRET with ${REPO}`);
+      expect(f.fix.url).toBe('https://github.com/organizations/acme/settings/secrets/actions');
+      expect(deployUnchecked(r)).toEqual([]);
+      expect(r.status, r.out).toBe(EXIT.healthy);
+    });
+
+    it('says nothing where the organisation shares no secret of that name, and never asks on a personal account', async () => {
+      expect(deployIds(await check(files(), github({ owner: 'Organization', org: new Set(['OTHER']) })))).toEqual([]);
+      const user = github({ org: new Set(['KANON_DEPLOY_SECRET']) });
+      expect(deployIds(await check(files(), user))).toEqual([]);
+      expect(orgCalls(user)).toEqual([]);
+      // Nor without a deploy caller, which maps no deploy hook's secret.
+      const none = github({ owner: 'Organization', org: new Set(['KANON_DEPLOY_SECRET']) });
+      expect(deployIds(await check(files([], { caller: null }), none)).filter((x: string) => x.startsWith('deploy.secret-'))).toEqual([]);
+      expect(orgCalls(none)).toEqual([]);
+    });
+
+    it("is unchecked, never a finding, where the token can't list the organisation's secrets", async () => {
+      const r = await check(files(), github({ owner: 'Organization', org: null }));
+      expect(deployIds(r)).toEqual([]);
+      expect(deployUnchecked(r)).toEqual([{ check: 'deploy-secrets', subject: 'KANON_DEPLOY_SECRET', reason: expect.stringContaining('an organisation secret of acme shared with it') }]);
+      expect(r.status).toBe(EXIT.incomplete);
+    });
+
+    it('stands beside deploy.secret-repository, whose fix deletes the repository secret that hides the organisation one', async () => {
+      const g = github({ owner: 'Organization', org: new Set(['KANON_DEPLOY_SECRET']) });
+      (g.st.secrets as Set<string>).add('KANON_DEPLOY_SECRET');
+      const r = await check(files(), g);
+      expect(deployIds(r)).toEqual(['deploy.secret-repository KANON_DEPLOY_SECRET', 'deploy.secret-organization KANON_DEPLOY_SECRET']);
+      expect(orgCalls(g)).toHaveLength(1);
+    });
+
+    it("lists the organisation's secrets once, for notify.kind-unset and this check alike", async () => {
+      // With a notify hook, notify.kind-unset asks for the organisation's secrets too, since the
+      // repository lacks KANON_CHAT_DEPLOY: the two checks share the one listing.
+      const f = files();
+      f[NOTIFY_HOOK] = readFileSync(join(ROOT, 'actions/notify/hooks/slack.yml'), 'utf8').replace(/@v\d+\.\d+\.\d+/, `@${PINNED}`);
+      const g = github({ owner: 'Organization', org: new Set(['KANON_DEPLOY_SECRET']) });
+      const r = await check(f, g);
+      expect(ids(r)).toEqual(expect.arrayContaining([`notify.kind-unset ${DEPLOY_CALLER_PATH}`, 'deploy.secret-organization KANON_DEPLOY_SECRET']));
+      expect(orgCalls(g)).toHaveLength(1);
+    });
+  });
+
   describe('deploy.tag-ruleset', () => {
     const tagFinding = (r: Result) => finding(r, 'deploy.tag-ruleset');
 
@@ -542,7 +601,7 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
       ['deploy.admin-bypass', false], ['deploy.artifact-retention', false], ['deploy.branch-policy', true], ['deploy.caller-mismatch', true],
       ['deploy.ci-push-missing', true], ['deploy.declaration', true], ['deploy.declaration-moved', true], ['deploy.environment-missing', true],
       ['deploy.hook-missing', true], ['deploy.reference-undeclared', false], ['deploy.releaser-missing', true], ['deploy.reviewers-missing', true],
-      ['deploy.secret-repository', false], ['deploy.self-review', false], ['deploy.subject-custom', true], ['deploy.tag-ruleset', false], ['deploy.trust-unproven', true],
+      ['deploy.secret-organization', false], ['deploy.secret-repository', false], ['deploy.self-review', false], ['deploy.subject-custom', true], ['deploy.tag-ruleset', false], ['deploy.trust-unproven', true],
     ]);
     expect(Object.keys(UNWAIVABLE).filter((id) => id.startsWith('deploy.')).sort()).toEqual([
       'deploy.caller-mismatch', 'deploy.declaration', 'deploy.declaration-moved', 'deploy.environment-missing', 'deploy.reviewers-missing', 'deploy.subject-custom',
