@@ -33,7 +33,10 @@
 # `.github/actions/deploy`, which obtains the environment's credential and deploys the checked
 # directory, its `artifact` input, then `.github/actions/smoke`. The deploy hook's step alone
 # receives `KANON_DEPLOY_SECRET`, an environment secret, empty when the environment holds none
-# (plan 0010 §7, `K-AGENT-47`). No environment's job runs the build hook.
+# (plan 0010 §7, `K-AGENT-47`). It is an optional secret of this workflow, and the caller maps it
+# from `secrets.KANON_DEPLOY_SECRET`: GitHub evaluates that expression in this job's scope, where
+# the environment's secret comes first (kanon#1049 measured that an undeclared or unmapped secret
+# is empty here). No environment's job runs the build hook.
 #
 # AFTER (plan 0010 §8): `record` writes this environment's `deploy` row (`scripts/deploy-row.mjs`),
 # reading the run's approvals to tell a rejection from a failure (kanon#890), and `report` files,
@@ -47,8 +50,8 @@
 # and the issue `report` filed. A refusal, a rejection or a cancel announces nothing. It holds no
 # chat secret, and runs only when the run's commit has a notify hook. `notify` hands the message to
 # the adopter's hook (`$/actions/notify`) with `KANON_CHAT_DEPLOY`, an optional secret of this
-# workflow and the only one its caller maps, and no other: the one job here that holds it, of the
-# shape `tests/unit/helpers/notify-jobs.ts` holds every `notify` job to. A post that fails turns
+# workflow, and no other: the one job here that holds it, of the shape
+# `tests/unit/helpers/notify-jobs.ts` holds every `notify` job to. A post that fails turns
 # `notify` red and leaves every deploy job green, so a failure to announce is never a deploy's.
 #
 # NO MODEL IN THE DEPLOY PATH (plan 0010 §9): no agent, no Claude credential, no App key or App
@@ -75,6 +78,13 @@ on:
       # caller that maps none deploys as before, and `notify` records `skipped` (`no-secret`).
       KANON_CHAT_DEPLOY:
         description: Where the adopter's notify hook posts this environment's deploy announcement. Optional.
+        required: false
+      # The deploy hook's secret (plan 0010 §7, `K-AGENT-47`), read by the deploy hook's step alone.
+      # The caller maps it from `secrets.KANON_DEPLOY_SECRET`, which GitHub evaluates in the deploy
+      # job's scope, so it resolves to the environment's secret first, then the repository's.
+      # Unmapped, it is empty (kanon#1049). Optional: an environment that needs none holds none.
+      KANON_DEPLOY_SECRET:
+        description: The deploy hook's secret, the environment's own, which the caller maps by the same name. Optional.
         required: false
 
 # Each job declares its own, and none is granted more than it uses.

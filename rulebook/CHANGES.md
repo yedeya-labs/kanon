@@ -45,6 +45,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-07.** `lane-check` holds every job that calls a Kanon workflow, the spine `agent-lane.yml` included, to mapping each secret by name or passing none, and fails `secrets: inherit`. Releases before this one let it through on a call to the spine. [#500](https://github.com/yedeya-labs/kanon/issues/500)
 - **2026-10-14.** The Owner's plan for the deploy lane amended the rule: a Kanon workflow may read an environment secret only by a fixed name, in a job that sets `environment:`, and only where its own guard test names it, since GitHub can't pass an environment secret from a caller to a called workflow; today that is `KANON_DEPLOY_SECRET` in `deploy.yml`'s `deploy` job. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+- **2026-10-16.** A measurement in the sandbox showed that GitHub evaluates a caller's secret mapping in the called job's scope, the environment's secret first, and that a secret the caller doesn't map is empty there. The rule now says the caller maps `KANON_DEPLOY_SECRET` by that one name, and `deploy.yml` declares it optional; the amendment of 2026-10-14 had said no caller could map it. [#1049](https://github.com/yedeya-labs/kanon/issues/1049)
 
 ## `K-AGENT-49`
 
@@ -93,6 +94,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-SHIP-12`
 
 - **2026-10-15.** The deploy lane holds one more secret, the announcement's `KANON_CHAT_DEPLOY`, declared by `deploy.yml` as optional and read by its `notify` job alone, which holds no cloud credential; the guard admits exactly that. [Plan 0011](../docs/plans/0011-notifications.md) N9, [#972](https://github.com/yedeya-labs/kanon/issues/972)
+- **2026-10-16.** `deploy.yml` declares `KANON_DEPLOY_SECRET` optional too, which the caller maps by that name so that GitHub resolves it in the deploy job's environment; the guard admits exactly the two optional declarations. [#1049](https://github.com/yedeya-labs/kanon/issues/1049)
 
 ## `K-SHIP-10`
 

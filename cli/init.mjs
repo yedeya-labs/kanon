@@ -2025,12 +2025,28 @@ export const callerPaths = (lanes, read, waived) => {
 // the record's section (only into a record it writes), the caller, and the three hooks' stubs.
 
 /**
- * The release's `deploy` entry (plan 0010 D4): the two workflows, their grants and the hooks.
- * @typedef {{ workflows: { release: string, environment: string }, grants: Record<string, Record<string, string>>, hooks: Array<{ path: string, inputs: string[] }> }} DeployRequirements
+ * The release's `deploy` entry (plan 0010 D4): the two workflows, their grants and the hooks; the
+ * environment secrets its deploy job reads, and the secrets its per-environment workflow declares
+ * (kanon#1049; absent before the release that declares the deploy hook's).
+ * @typedef {{ workflows: { release: string, environment: string }, grants: Record<string, Record<string, string>>, hooks: Array<{ path: string, inputs: string[] }>, environmentSecrets?: string[], declaredSecrets?: string[] }} DeployRequirements
  */
 
 /** The release's deploy entry, or null for a release without the lane. @param {Requirements} req @returns {DeployRequirements | null} */
 export const deployOf = (req) => /** @type {{ deploy?: DeployRequirements }} */ (req).deploy ?? null;
+
+/**
+ * The environment secrets each `deploy-<n>` job of the caller maps, each as
+ * `NAME: ${{ secrets.NAME }}` (kanon#1049): those the release's deploy job reads and its
+ * `deploy.yml` declares. GitHub evaluates the mapping in the called job's scope, so it resolves the
+ * environment's secret first; a secret the callee doesn't declare, or the caller doesn't map, is
+ * empty there. None at a release whose `deploy.yml` declares none, where the caller maps none.
+ * @param {Requirements} req @returns {string[]}
+ */
+export const deployEnvironmentSecrets = (req) => {
+  const d = deployOf(req);
+  const declared = d?.declaredSecrets ?? [];
+  return (d?.environmentSecrets ?? []).filter((n) => declared.includes(n));
+};
 
 /** Where `init` writes the deploy lane's caller, the file name a reference deploy names. */
 export const DEPLOY_CALLER_PATH = '.github/workflows/deploy.yml';
@@ -2067,9 +2083,10 @@ const envScalar = (n) => (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(n) && !/^(true|false|
  * `deploy-release.yml` with the list, then one `deploy-<position>` job per environment, in order,
  * calling `deploy.yml` with its environment, its position and the release job's `build` output,
  * each needing `release` and the one before it. Each job grants its workflow's permissions, as
- * the release's requirements list them. The deploy secret is an environment secret, which
- * resolves only in the called job that sets `environment:`, so no job maps it; each `deploy-<n>`
- * maps the announcement's chat secret alone, where the release's `deploy.yml` posts one.
+ * the release's requirements list them. Each `deploy-<n>` maps the announcement's chat secret,
+ * where the release's `deploy.yml` posts one, and the deploy hook's environment secret by its own
+ * name, where the release's `deploy.yml` declares it (`deployEnvironmentSecrets`, kanon#1049).
+ * Nothing else: no `secrets: inherit`, so no App key reaches the deploy path.
  * @param {string[]} environments @param {Requirements} req @param {string} release
  */
 export const deployCallerFile = (environments, req, release) => {
@@ -2103,8 +2120,10 @@ export const deployCallerFile = (environments, req, release) => {
   ];
   // THE ANNOUNCEMENT'S SECRET (plan 0011 N9, §10.2): each environment's job maps the deploy kind's
   // secret, which `deploy.yml` declares optional, whatever the chat answer, as the project digest's
-  // caller maps its own under `none`: a hook added later needs no change here.
-  const secrets = deployKinds(req).map((k) => k.secret);
+  // caller maps its own under `none`: a hook added later needs no change here. THE DEPLOY HOOK'S
+  // SECRET (kanon#1049): mapped as `${{ secrets.KANON_DEPLOY_SECRET }}`, which GitHub evaluates in
+  // the deploy job's scope, the environment's secret first; unmapped, the hook reads it empty.
+  const secrets = [...new Set([...deployKinds(req).map((k) => k.secret), ...deployEnvironmentSecrets(req)])];
   environments.forEach((e, i) => {
     const n = i + 1;
     out.push(

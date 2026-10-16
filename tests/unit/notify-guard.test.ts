@@ -455,7 +455,8 @@ describe('the deploy lane, wired (plan 0011 N9; the Owner\'s decisions of 2026-1
     expect(producersOf(DOCS[DEPLOY]!)).toEqual(['announce']);
     expect(notifyJobProblems(DOCS[DEPLOY]!, 'notify', 'deploy')).toEqual([]);
     expect(DOCS[DEPLOY]!.jobs!.notify).toEqual(notifyJob('deploy', 'announce'));
-    expect(Object.keys(DOCS[DEPLOY]!.on!.workflow_call!.secrets!)).toEqual(['KANON_CHAT_DEPLOY']);
+    // Beside the deploy hook's own, `KANON_DEPLOY_SECRET` (kanon#1049), which tests/unit/deploy-lane.test.ts holds.
+    expect(Object.keys(DOCS[DEPLOY]!.on!.workflow_call!.secrets!)).toEqual(['KANON_CHAT_DEPLOY', 'KANON_DEPLOY_SECRET']);
     expect(notifyLaneProblems(with_(lane()))).toEqual([]);
     expect(chatSecretProblems(with_(lane()))).toEqual([]);
   });
