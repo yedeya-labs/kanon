@@ -379,6 +379,24 @@ describe('the spacing, hold and urgent (plan 0009 §3, §7)', () => {
     expect(outcome.why).toBe("held by the dispatch's `hold`");
     expect(outcome.plan).toBeUndefined();
   });
+
+  it('`hold` finishes no interrupted promotion either: no Release, no latest, no major tag moved (#1054; MUTATION: the resume branch ignoring `hold` turns this red)', () => {
+    const tagged = [ref('v0.40.0', PREV), ref(STABLE, SHA)];
+    const cases: Record<string, Route>[] = [
+      { [`repos/${REPO}/git/matching-refs/tags/v`]: tagged },
+      { [`repos/${REPO}/git/matching-refs/tags/v`]: tagged, [`repos/${REPO}/releases/tags/${STABLE}`]: { tag_name: STABLE } },
+    ];
+    for (const over of cases) {
+      const { outcome } = run(4 * DAY, { env: { HOLD: 'true' }, over });
+      expect(outcome).toMatchObject({ decision: 'hold', candidate: CANDIDATE, gates: [] });
+      expect(outcome.why).toMatch(/^held by the dispatch's `hold`: v0\.41\.0 (is|and its Release are) on candidate-v0\.41\.0's commit[^;]*; the next run without `hold` finishes it$/);
+      expect(outcome.plan).toBeUndefined();
+      expect(summary(outcome)).toContain("**Held:** held by the dispatch's `hold`");
+    }
+    // A promotion with nothing left to finish is still `none`, held or not.
+    const done = { [`repos/${REPO}/git/matching-refs/tags/v`]: tagged, [`repos/${REPO}/releases/tags/${STABLE}`]: { tag_name: STABLE }, [`repos/${REPO}/git/ref/tags/v0`]: { ref: 'refs/tags/v0', object: { sha: SHA } } };
+    expect(run(4 * DAY, { env: { HOLD: 'true' }, over: done }).outcome.decision).toBe('none');
+  });
 });
 
 describe('what the promotion refuses or skips', () => {
