@@ -8,8 +8,9 @@
 // `aws dynamodb scan --output json` prints it. The transform (§7 step 2) maps each version-1
 // item to a version-2 run row; the dry run (step 3) prints per-lane counts, field names and enum
 // values only, never a row or a value from one. `--apply` (step 4) sends the rows through the
-// ingest function with the importer role, 25 to a `POST`, naming the adopter's key; the stack
-// must be deployed with `render.mjs --importer`. A re-sent row overwrites itself, so a re-run is
+// ingest function with the importer role, 25 to a direct invocation of its `import` alias, naming
+// the adopter's key, which must have an `active` registration; the stack must be deployed with
+// `EnableImporter=true` (plan 0008 §9, J9). A re-sent row overwrites itself, so a re-run is
 // harmless.
 //
 // NOTHING IS GUESSED. An `agent` outside §7's table stops the row, and so does a required field
@@ -26,7 +27,8 @@ import { parseArgs } from 'node:util';
 import { parseSeverities, verdictOf } from '../../actions/agent-telemetry/agent-telemetry.mjs';
 import { LANE_ROLES, REASON_OUTCOME, TERMINAL_REASONS, validate } from '../../actions/agent-telemetry/schema.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
-import { aws, post, REGION, STACK } from './verify.mjs';
+import { aws, invokeIngest, REGION, STACK } from './verify.mjs';
+import { BACKFILL, IMPORT } from './function/index.mjs';
 
 /** §7's table: the reference adopter's `agent` name -> the lane. The role is the lane's own. */
 export const AGENT_LANES = Object.freeze({
@@ -185,6 +187,9 @@ function redact(text, key = '') {
   return SECRET_SHAPES.reduce((l, shape) => l.replace(shape, (m) => (m.startsWith('arn:') ? '<arn>' : '<account>')), line);
 }
 
+/** The stack parameter that creates each of the Owner's roles and its alias. */
+const FLAG = Object.freeze({ importer: 'EnableImporter', backfill: 'EnableBackfill' });
+
 /**
  * Why an `aws` call failed, from its exit code and stderr: the call it was, then the cause.
  * An expired or missing session names the login command; a stack that isn't there says so.
@@ -206,7 +211,7 @@ function awsFailure(call, r, profile, role) {
     return `aws ${call} failed: the stack ${STACK} is not deployed`;
   }
   const said = redact(stderr);
-  return `aws ${call} exited ${r.code}${said ? `: ${said}` : ''}${role ? `; is the ${role} role deployed with --${role}?` : ''}`;
+  return `aws ${call} exited ${r.code}${said ? `: ${said}` : ''}${role ? `; is the stack deployed with ${FLAG[/** @type {'importer' | 'backfill'} */ (role)]}=true?` : ''}`;
 }
 
 /**
@@ -219,16 +224,19 @@ export function sendFailure(e, key) {
 }
 
 /**
- * §7 step 4: send the rows with the importer role, 25 to a `POST`. Returns the rows stored and
- * the rows refused, by field name. The work-item backfill (plan 0003 M5, `backfill.mjs`) sends
- * through it too, as the backfill role. An `aws` call that exits non-zero stops it with the call
- * and the cause, before anything is posted (kanon#693).
+ * §7 step 4: send the rows with the importer role, 25 to a direct invocation of the ingest
+ * function's `import` alias, the event `{ key, rows }` (plan 0008 §9, "The Owner's roles at
+ * vM+1"). Returns the rows stored and the rows refused, by field name. The work-item backfill
+ * (plan 0003 M5, `backfill.mjs`) sends through it too, as the backfill role, on the `backfill`
+ * alias. An `aws` call that exits non-zero stops it with the call and the cause, before anything
+ * is sent (kanon#693). The key travels in the invocation's payload file, never on a command line.
  * @param {Record<string, any>[]} rows
  * @param {string} key
- * @param {{ aws: typeof aws, post: typeof post, profile: string, role?: 'importer' | 'backfill' }} deps
+ * @param {{ aws: typeof aws, profile: string, role?: 'importer' | 'backfill' }} deps
  */
 export async function send(rows, key, deps) {
   const role = deps.role ?? 'importer';
+  const alias = role === 'backfill' ? BACKFILL : IMPORT;
   const owner = ['--profile', deps.profile, '--region', REGION, '--output', 'json'];
   /** @param {string[]} args @param {string} [assumes] */
   const call = (args, assumes) => {
@@ -238,18 +246,21 @@ export async function send(rows, key, deps) {
   };
   const who = call(['sts', 'get-caller-identity']);
   const stack = call(['cloudformation', 'describe-stacks', '--stack-name', STACK]);
-  const url = (stack?.Stacks?.[0]?.Outputs ?? []).find((/** @type {any} */ o) => o.OutputKey === 'IngestUrl')?.OutputValue;
-  if (!who.Account || !url) throw new Error(`the stack ${STACK} is not reachable: it has no IngestUrl, or no account answered`);
+  if (!who.Account || !stack?.Stacks?.length) throw new Error(`the stack ${STACK} is not reachable: no stack, or no account answered`);
   const c = call(['sts', 'assume-role', '--role-arn', `arn:aws:iam::${who.Account}:role/kanon-telemetry-${role}`,
     '--role-session-name', `kanon-${role}`], role)?.Credentials;
-  if (!c) throw new Error(`the ${role} role is not reachable: is it deployed with --${role}?`);
+  if (!c) throw new Error(`the ${role} role is not reachable: is the stack deployed with ${FLAG[role]}=true?`);
   const creds = { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken };
   let stored = 0;
   /** @type {Record<string, number>} */
   const refused = {};
   for (let i = 0; i < rows.length; i += 25) {
-    const res = await deps.post(`${url}?key=${encodeURIComponent(key)}`, JSON.stringify(rows.slice(i, i + 25)), creds);
-    if (!Array.isArray(res.json?.results)) throw new Error(`the function answered ${res.status}`);
+    const res = await invokeIngest(deps.aws, { alias, event: { key, rows: rows.slice(i, i + 25) }, creds });
+    if (res.run.code !== 0) throw new Error(awsFailure('lambda invoke', res.run, deps.profile, role));
+    if (!Array.isArray(res.json?.results)) {
+      const code = typeof res.json?.error === 'string' && /^[a-z-]{1,40}$/.test(res.json.error) ? ` (${res.json.error})` : '';
+      throw new Error(`the function answered ${res.status ?? 'nothing'}${code}`);
+    }
     for (const r of res.json.results) {
       if (r.status === 'stored') stored += 1;
       else for (const e of r.errors ?? [{ field: '(row)', problem: 'refused' }]) refused[`${e.field} (${e.problem})`] = (refused[`${e.field} (${e.problem})`] ?? 0) + 1;
@@ -272,7 +283,7 @@ if (isCliEntry(import.meta.url)) {
   if (values.apply) {
     let sent;
     try {
-      sent = await send(d.rows, /** @type {string} */ (values.key), { aws, post, profile: values.profile });
+      sent = await send(d.rows, /** @type {string} */ (values.key), { aws, profile: values.profile });
     } catch (e) {
       console.log(sendFailure(e, /** @type {string} */ (values.key)));
       process.exit(1);
