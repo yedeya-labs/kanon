@@ -6,8 +6,10 @@
 # the adopter's repository, which `kanon init` writes from the adoption record's `## Deploy`
 # list (plan 0010 §4, step D6): one `release` job calling this file with the declared list, then
 # one `deploy-<position>` job per environment calling `deploy.yml`, chained by `needs:`. The
-# caller holds the triggers and maps no secret (`K-AGENT-47`): the one secret the lane reads is
-# an environment secret, which resolves only in `deploy.yml`'s job that sets `environment:`.
+# caller holds the triggers and maps no secret into this workflow (`K-AGENT-47`). Each
+# `deploy-<position>` job maps `deploy.yml`'s two optional secrets by name: `KANON_CHAT_DEPLOY`,
+# and `KANON_DEPLOY_SECRET`, which GitHub evaluates in `deploy.yml`'s job that sets
+# `environment:`, so it resolves to the environment's secret first (kanon#1049).
 #
 # THE CALLER'S TRIGGERS (`K-LAYOUT-18`) — this lane's contract with it:
 #   release:
