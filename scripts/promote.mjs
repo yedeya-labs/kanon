@@ -472,11 +472,13 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
     }
     const moveMajor = majorAt !== candidate.sha && !newer;
     if (published && !moveMajor) return { decision: 'none', why: `${candidate.name} is promoted already, as ${tag}`, candidate: candidate.name, gates: [] };
+    const left = published ? `${tag} and its Release are on ${candidate.name}'s commit, but ${major} is not` : `${tag} is on ${candidate.name}'s commit with no Release`;
+    // `hold` holds this too: finishing publishes the Release as latest and moves the major tag,
+    // which is what reaches adopters (#1054). There are no gates to report, since the tag is out.
+    if (hold) return { decision: 'hold', why: `held by the dispatch's \`hold\`: ${left}; the next run without \`hold\` finishes it`, candidate: candidate.name, gates: [] };
     return {
       decision: 'promote',
-      why: published
-        ? `${tag} and its Release are on ${candidate.name}'s commit, but ${major} is not: finishing that promotion`
-        : `${tag} is on ${candidate.name}'s commit with no Release: finishing that promotion`,
+      why: `${left}: finishing that promotion`,
       candidate: candidate.name,
       gates: [],
       plan: { tag, candidate: candidate.name, sha: candidate.sha, major, notes: notesOf(), resume: true, publish: !published, latest: !newer, moveMajor },

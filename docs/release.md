@@ -188,7 +188,7 @@ The pull requests a candidate contains are the squash commits, `<title> (#N)`, b
 
 Each candidate's changelog starts at the previous candidate's tag, so a candidate that was held and never promoted lists its changes, breaking ones included, only in its own pre-release. An adopter's Dependabot pull request jumps from the last stable release to the new one and never shows that pre-release. So the stable Release carries the promoted candidate's notes, then those of each candidate it superseded, back to the last stable release; with a single candidate, they are that candidate's notes alone.
 
-It writes as the Releaser because that App is the one bypass actor of the `v*` tag ruleset (plan 0008), as the release workflow creates its tags and moves the major tag with the Releaser's token. The check itself runs with the workflow's read-only token. A run interrupted after the tag finishes the Release and the major tag on the next run, and one interrupted after the Release moves the major tag, unless a newer stable release already holds it. In that case the Release is published but not marked latest, and the major tag stays where it is.
+It writes as the Releaser because that App is the one bypass actor of the `v*` tag ruleset (plan 0008), as the release workflow creates its tags and moves the major tag with the Releaser's token. The check itself runs with the workflow's read-only token. A run interrupted after the tag finishes the Release and the major tag on the next run, and one interrupted after the Release moves the major tag, unless a newer stable release already holds it. In that case the Release is published but not marked latest, and the major tag stays where it is. A run dispatched with `hold` finishes none of this: it says what is left to finish, and the next run without `hold` finishes it.
 
 **It promotes nothing** when a stable release newer than the candidate exists, whether it was tagged by hand or by a fallback to plain releases. The candidate is superseded, and promoting it would move latest and the major tag back to an older release. This holds with `urgent` too.
 
@@ -196,7 +196,7 @@ It writes as the Releaser because that App is the one bypass actor of the `v*` t
 
 **The Owner's controls** (Owner decision 3 of plan 0009):
 
-- **Hold:** dispatch with `hold`, which reports the gates and promotes nothing, or disable the workflow.
+- **Hold:** dispatch with `hold`, which reports the gates and promotes nothing, nor finishes an interrupted promotion, or disable the workflow. A hold lasts one run: the daily run carries no `hold`, so to hold a candidate for longer, disable the workflow.
 - **Urgent** ([plan 0009 §7](plans/0009-release-channels-and-api-key.md#7-urgent-fixes)): dispatch with `urgent` and a `reason`. It skips the soak and the six-day spacing; the other three gates still apply, and a run of the review lane's caller since the pins moved must have called the review lane at the candidate's tag, as the run's own `referenced_workflows` records it (not the caller's copy at the run's head, which for `pull_request_target` is the pull request's), and run its `review` job to success (a run the filter declined reviewed nothing). The reason goes into the stable Release's notes. `urgent` without a reason is refused.
 
 A bad stable release is never deleted, since deleting a tag breaks every repository that pins it: its fix ships as the next candidate, promoted with `urgent`.
