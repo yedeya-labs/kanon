@@ -717,7 +717,7 @@ describe('the routes, and the two URLs (§3.1, §9)', () => {
     expect(s.f.all(ROWS)).toEqual([]);
   });
 
-  it('a bearer token on the unqualified IAM URL is refused, and nothing is stored', async () => {
+  it('the unqualified function, which has no URL since J9, refuses a bearer token and a SigV4 request alike, and nothing is stored', async () => {
     const s = store((f) => seedRegistration(f));
     expect(await s.post([runRow()], { arn: FN })).toMatchObject({ status: 403, body: { error: 'path' } });
     expect(await s.post([runRow()], { arn: FN, iam: true })).toMatchObject({ status: 403, body: { error: 'path' } });
@@ -726,11 +726,11 @@ describe('the routes, and the two URLs (§3.1, §9)', () => {
 
   it('any other qualifier, or none that is a function\'s, is refused; the unqualified function never runs the walk', async () => {
     const s = store((f) => { seedRegistration(f, { status: 'erased', erased_at: '2026-10-12T11:00:00Z' }); seedRow(f, `${KEY_MARK}seed`, 'review'); });
-    for (const arn of [`${FN}:$LATEST`, `${FN}:import`, `${FN}:3`, 'not-an-arn']) {
+    for (const arn of [`${FN}:$LATEST`, `${FN}:importer`, `${FN}:3`, 'not-an-arn']) {
       expect(await s.post([runRow()], { arn }), arn).toMatchObject({ status: 403, body: { error: 'path' } });
     }
     const direct: J = await handle({ kanon_erase: { repository_id: REPO } }, s.deps(FN));
-    expect(direct.statusCode).toBe(405);
+    expect(direct.statusCode).toBe(403);
     expect(s.f.partition(`${KEY_MARK}seed#review`)).toHaveLength(1);
   });
 });
