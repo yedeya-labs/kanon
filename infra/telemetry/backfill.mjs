@@ -23,9 +23,10 @@
 //
 // `--apply` sends the rows through the ingest function as the backfill role, 25 to a direct
 // invocation of its `backfill` alias, naming the adopter's key; the stack must be deployed with
-// `EnableBackfill=true` (plan 0008 §9, J9), and the function stores work-item rows only from it. A re-sent row overwrites itself (its key is
-// the PR number), so a re-run, or a span that overlaps the collector's, is harmless. The
-// repository and the key are arguments and are never printed.
+// `EnableBackfill=true` (plan 0008 §9, J9), and the function stores work-item rows only from it.
+// A re-sent row overwrites itself (its key is the PR number), so a re-run, or a span that
+// overlaps the collector's, is harmless. The repository and the key are arguments and are never
+// printed.
 
 import { parseArgs } from 'node:util';
 import { declarations } from '../../cli/metrics.mjs';

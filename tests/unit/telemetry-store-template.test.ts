@@ -483,6 +483,24 @@ describe("the template's parameters are account-level alone, so a deploy needs n
   });
   it('OperatorJobRoleArns is a list, empty by default, which the register table\'s resource policy lets in when set (plan 0008 §5.3)', () => {
     expect(template.Parameters.OperatorJobRoleArns).toMatchObject({ Type: 'CommaDelimitedList', Default: '' });
+    // #729, held by render.mjs until J9: a `*` or `?` in a role name is a wildcard to IAM's
+    // `ArnNotEquals`, so it would exempt every matching role from the register table's deny.
+    // CloudFormation matches a CommaDelimitedList's AllowedPattern against each element.
+    const pattern = template.Parameters.OperatorJobRoleArns.AllowedPattern as string | undefined;
+    expect(pattern, 'OperatorJobRoleArns has no AllowedPattern').toBeTypeOf('string');
+    const accepts = (value: string) => value.split(',').every((element) => new RegExp(pattern!).test(element));
+    const acct = `arn:aws:iam::${'1'.repeat(12)}`;
+    const a = `${acct}:role/ops-job-a`;
+    const b = `${acct}:role/ops-job-b`;
+    expect(accepts('')).toBe(true);
+    expect(accepts(`${a},${b}`)).toBe(true);
+    expect(accepts(`${acct}:role/aws-reserved/sso.amazonaws.com/x/a+b=c.d@e_f-g`)).toBe(true);
+    for (const bad of ['arn:aws:iam::*:role/x', `${a},arn:aws:sts::${'1'.repeat(12)}:assumed-role/x/y`,
+      `${acct}:role/*`, `${acct}:role/a?`, `${a},${acct}:role/ops-*`, `${acct}:role/*/x`, `${acct}:user/x`, `${acct}:role/`, `${acct}:role/x/`]) {
+      expect(accepts(bad), bad).toBe(false);
+    }
+    // The same pattern as OwnerPrincipalArn's, with the empty value the default needs.
+    expect(pattern).toBe(`^$|${template.Parameters.OwnerPrincipalArn.AllowedPattern}`);
     expect(template.Parameters.MinTokenVersion.AllowedPattern).toBe('^$|^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$');
     expect(template.Parameters.CursorKey).toMatchObject({ NoEcho: true, AllowedPattern: '^$|^[0-9a-f]{64}$' });
   });
