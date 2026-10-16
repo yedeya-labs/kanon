@@ -682,13 +682,14 @@ describe("step 14: Kanon reads its telemetry's aggregate, through the lane at it
     expect(wf.permissions).toEqual({ contents: 'read', issues: 'read', actions: 'read', 'id-token': 'write' });
   });
 
-  it('passes no inputs, and maps the four secrets by name, never inheriting', () => {
+  // The invoker role's ARN went from the caller when its pin reached the token path, whose lane
+  // reads it in no job (plan 0008 §9 step 4).
+  it('passes no inputs, and maps the three secrets by name, never inheriting, and no invoker role', () => {
     expect(jobs[0]?.with).toBeUndefined();
     expect(jobs[0]?.secrets).toEqual({
       AUTHOR_APP_ID: '${{ secrets.AUTHOR_APP_ID }}',
       AUTHOR_APP_PRIVATE_KEY: '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}',
       CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
-      KANON_AGGREGATE_ROLE: '${{ secrets.KANON_AGGREGATE_ROLE }}',
     });
   });
 });

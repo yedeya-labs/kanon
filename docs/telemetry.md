@@ -318,7 +318,7 @@ Give `window_minutes` no default. Empty means "no operator instruction", and a d
 
 **The check.** Dispatch the caller on the default branch. The run is green, and its summary says how many rows the store accepted and that the registration is `active`. The run rows are under `<key>#<lane>`, the work-item rows under `<key>#work`.
 
-**Kanon's own caller** is [`telemetry.yml`](../.github/workflows/telemetry.yml). It is pinned like Kanon's other callers ([ADR 0011](decisions/0011-kanon-runs-its-own-lanes.md)). It runs hourly at minute 40, from the change after its pin reached v0.27.0, the first release that ships the collector it calls ([#304](https://github.com/yedeya-labs/kanon/issues/304)). Its pin is still below vM, so it still passes the two variables, `KANON_TELEMETRY_URL` and `KANON_TELEMETRY_WRITER_ROLE`, which the SigV4 path reads; it drops them when its pin moves to vM (J7).
+**Kanon's own caller** is [`telemetry.yml`](../.github/workflows/telemetry.yml). It is pinned like Kanon's other callers ([ADR 0011](decisions/0011-kanon-runs-its-own-lanes.md)). It runs hourly at minute 40, from the change after its pin reached v0.27.0, the first release that ships the collector it calls ([#304](https://github.com/yedeya-labs/kanon/issues/304)). Since its pin reached v0.40.2, the first release that publishes the hosted store's URLs, it passes no variable: it dropped `url:` and `writer-role:` and took the `erase` and `register` dispatch inputs in the pull request that moved the pin (plan 0008 §9 step 4). The two variables, `KANON_TELEMETRY_URL` and `KANON_TELEMETRY_WRITER_ROLE`, stay in the repository until a week of runs is green (§9 step 5).
 
 ## Who can write
 
