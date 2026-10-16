@@ -1,18 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { AggregateError, PAGE_FILE, checkPage, readAggregate, readAggregateToken, tokenRefusal } from '../../scripts/aggregate-read.mjs';
+import { AggregateError, PAGE_FILE, checkPage, readAggregateToken, tokenRefusal } from '../../scripts/aggregate-read.mjs';
 import { HOSTED_URL, RUNNER_ENV, TOKEN, tokenNet } from '../unit/helpers/token-net.js';
 import { pageView } from '../../infra/telemetry/function/aggregate.mjs';
 
 /**
  * Plan 0003 M7 (kanon#661): the metrics page's read of the aggregate function's page view. The
- * same signed `GET`, asking for `?view=page`, and an answer checked as strictly as the Explorer's:
+ * same `GET` on the token URL, asking for `?view=page`, and an answer checked as strictly as the Explorer's:
  * exactly the keys the page view has, codes, dates and numbers where it has them, no text, a
  * threshold of three, and one adopter per declared entry. Anything else refuses the read whole,
  * so nothing reaches the page.
  */
 
-const URL_OK = 'https://abc123def.lambda-url.eu-central-1.on.aws/';
-const ENV = { AWS_ACCESS_KEY_ID: 'AKIDEXAMPLE', AWS_SECRET_ACCESS_KEY: 'secret', AWS_SESSION_TOKEN: 'session' };
 const NOW = Date.parse('2026-10-07T12:00:00Z');
 const LIVE = Math.floor(NOW / 1000) + 86_400;
 
@@ -74,18 +72,6 @@ describe('checkPage: exactly what the page view may publish', () => {
       expect(e).toBeInstanceOf(AggregateError);
       expect(String((e as Error).message)).not.toContain('leaked');
     }
-  });
-});
-
-describe('readAggregate for the page: one signed GET of `?view=page`', () => {
-  it('asks for the page view by name, signs it, and checks the answer as a page', async () => {
-    let seen = '';
-    const fetchImpl = (async (url: string) => { seen = url; return new Response(JSON.stringify(answer()), { status: 200 }); }) as unknown as typeof fetch;
-    const p = await readAggregate({ url: URL_OK, env: ENV, fetchImpl, view: 'page' });
-    expect(seen).toBe(`${URL_OK}?view=page`);
-    expect(p.view).toBe('page');
-    const wrong = (async () => new Response(JSON.stringify({ ...answer(), extra: 1 }), { status: 200 })) as unknown as typeof fetch;
-    await expect(readAggregate({ url: URL_OK, env: ENV, fetchImpl: wrong, view: 'page' })).rejects.toThrow(AggregateError);
   });
 });
 

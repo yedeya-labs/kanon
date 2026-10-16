@@ -7,16 +7,17 @@ import { renderPage } from '../../.github/scripts/metrics-page.mjs';
 import { runBoth } from '../../actions/agent-telemetry/agent-telemetry.mjs';
 import { handle } from '../../infra/telemetry/function/aggregate.mjs';
 import { stamp, toAttributes } from '../../infra/telemetry/function/index.mjs';
-import { readAggregate } from '../../scripts/aggregate-read.mjs';
+import { readAggregateToken } from '../../scripts/aggregate-read.mjs';
 import { IDLE_DAYS } from '../../scripts/metrics/indicators.mjs';
 import { fakeRegister } from './helpers/aggregate-register.js';
+import { HOSTED_URL, RUNNER_ENV, tokenNet } from './helpers/token-net.js';
 
 /**
  * Kanon#703: a delivery run that bails before opening a pull request (a split, a refusal, a run
  * that finds nothing to do) reaches yield's "no PR" column on the public page, through the path
  * the page itself takes. The row is built by the telemetry step (`runBoth`), stored as the ingest
  * function stores it (`stamp`, `toAttributes`), read back by the aggregate function's page view
- * (`handle`, `?view=page`), checked by `scripts/aggregate-read.mjs page` (`readAggregate`), and
+ * (`handle`, `?view=page`), checked by `scripts/aggregate-read.mjs page` (`readAggregateToken`), and
  * rendered by `.github/scripts/metrics-page.mjs` (`renderPage`).
  *
  * The page's first window (2026-09-14 to 2026-10-12) read "not enough data (0)" there. That is
@@ -26,7 +27,6 @@ import { fakeRegister } from './helpers/aggregate-register.js';
 
 const KEY = 'alpha';
 const ACCOUNT = '5'.repeat(12);
-const URL = 'https://abc.lambda-url.eu-central-1.on.aws/';
 const COMMIT = 'a'.repeat(40);
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -84,12 +84,12 @@ const HEALTH = {
 
 /** The page as the metrics-page workflow makes it: the function's page view, the reader's check, the generator. */
 async function publish(stored: Record<string, unknown>[], now: string) {
-  const env = { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, INVOKER_KEYS: KEY };
+  const env = { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT };
   // Kanon's registration in the register table (plan 0008 J4), declaring its figures as `kanon`.
   const { scan } = fakeRegister([{ repository_id: '1', key: KEY, label: 'kanon', aggregate_invoker: true }]);
   const res = await handle({ queryStringParameters: { view: 'page' } }, { env, now: () => Date.parse(now), query: table(stored), scan, log: () => {} });
-  const fetchImpl = (async () => new Response(res.body, { status: res.statusCode })) as unknown as typeof fetch;
-  const page = await readAggregate({ url: URL, env: { AWS_ACCESS_KEY_ID: 'A', AWS_SECRET_ACCESS_KEY: 'S' }, fetchImpl, view: 'page' });
+  const net = tokenNet(() => ({ status: res.statusCode, text: res.body }));
+  const page = await readAggregateToken({ env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL, view: 'page' });
   const html = renderPage({ page, health: HEALTH, release: '0.38.0', commit: COMMIT });
   const entry = page.own.find((o: J) => o.label === 'kanon');
   return { yield: entry.headline.yield, window: entry.window, html };
