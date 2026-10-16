@@ -364,3 +364,40 @@ describe("the record's list of Kanon's callers", () => {
     expect(() => callerLists('- **Waived doctor finding:** `caller.misplaced` on `.github/workflows/review.yml`')).toThrow(/0 rows/);
   });
 });
+
+/**
+ * The record's `Accepted id-token holder` bullets are what `kanon doctor` reads to tell an
+ * accepted holder from the blocking `id-token.unaccepted` (#1056). Kanon's lane definitions and
+ * its own workflows live in `.github/workflows/`, where doctor scans every job, so each one that
+ * holds the grant needs its bullet, and a bullet whose job no longer holds it is
+ * `id-token.stale-acceptance`. Doctor's own reader and holder scan judge Kanon's tree here, with
+ * every pin taken as the callers', so a lane caller is exempt as doctor exempts it on `main`.
+ */
+describe("the record's accepted id-token holders (#1056)", () => {
+  const WORKFLOWS = join(ROOT, '.github/workflows');
+  const holders = async () => {
+    const { idTokenHolders, readHolderAcceptances } = await import('../../cli/doctor.mjs');
+    const { loadRequirements } = await import('../../cli/callers.mjs');
+    const { parseYaml } = await import('../../cli/workflow-yaml.mjs');
+    const workflows = new Map<string, Record<string, unknown>>();
+    for (const f of readdirSync(WORKFLOWS).filter((x) => /\.ya?ml$/.test(x))) {
+      workflows.set(`.github/workflows/${f}`, parseYaml(readFileSync(join(WORKFLOWS, f), 'utf8')) as Record<string, unknown>);
+    }
+    const record = readHolderAcceptances(readFileSync(RECORD, 'utf8'));
+    const found = idTokenHolders({ workflows, accepted: record.accepted, pinned: () => true, req: loadRequirements() }) as Array<{ workflow: string; job: string; status: string }>;
+    return { record, found };
+  };
+
+  it("accepts every job of Kanon's workflows that holds the grant, so doctor reports none unaccepted", async () => {
+    const { record, found } = await holders();
+    expect(record.errors).toEqual([]);
+    expect(found.filter((h) => h.status === 'accepted').length).toBeGreaterThan(10);
+    expect(found.filter((h) => h.status === 'unaccepted').map((h) => `${h.workflow}#${h.job}`)).toEqual([]);
+  });
+
+  it('accepts no job that no longer holds it', async () => {
+    const { record, found } = await holders();
+    const held = new Set(found.map((h) => `${h.workflow.slice('.github/workflows/'.length)}#${h.job}`));
+    expect([...record.accepted.keys()].filter((k) => !held.has(k))).toEqual([]);
+  });
+});
