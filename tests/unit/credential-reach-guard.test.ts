@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { escalatingPaths, readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import { credentialProblems, credentialReach as reachOf, evaluateIf, type Reach } from './helpers/credential-reach.js';
+import { RELEASE_REF } from './helpers/release-ref.js';
 
 /**
  * kanon#730: every file of this tree that a Kanon workflow runs or imports, transitively, in a
@@ -113,13 +114,18 @@ describe('the guard goes red', { timeout: 30_000 }, () => {
     expect(credentialProblems(REACH, dropped).map((p) => p.split(',')[0])).toEqual(['cli/gh-token.mjs: apps-check.yml']);
   });
 
-  it('when a lane caller stops pinning a release, at a branch or through `$/`', () => {
+  it('when a lane caller stops pinning a release, at a branch, the major tag or through `$/`', () => {
     const file = '.github/workflows/telemetry.yml';
     const text = readFileSync(file, 'utf8');
-    const pin = /yedeya-labs\/kanon\/\.github\/workflows\/telemetry-collect\.yml@v\d+\.\d+\.\d+/;
+    const pin = new RegExp(`yedeya-labs/kanon/\\.github/workflows/telemetry-collect\\.yml@${RELEASE_REF}`);
     expect(text).toMatch(pin);
-    for (const uses of ['yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@main', '$/.github/workflows/telemetry-collect.yml']) {
+    const at = (ref: string) => `yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@${ref}`;
+    for (const uses of [at('main'), at('v0'), at('candidate-main'), '$/.github/workflows/telemetry-collect.yml']) {
       expect(reached(credentialReach({ [file]: text.replace(pin, uses) })), uses).toContain('telemetry.yml:collect scripts/telemetry-collect.mjs');
+    }
+    // A release, stable or the candidate Kanon's pin job moves it to (plan 0009 S4), runs no file of this tree.
+    for (const uses of [at('v1.2.3'), at('candidate-v1.2.3')]) {
+      expect(reached(credentialReach({ [file]: text.replace(pin, uses) })), uses).not.toContain('telemetry.yml:collect scripts/telemetry-collect.mjs');
     }
   });
 

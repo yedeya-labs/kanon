@@ -655,7 +655,7 @@ node infra/telemetry/backfill.mjs --repo <owner/name> --since 2026-09-04
 node infra/telemetry/backfill.mjs --repo <owner/name> --since 2026-09-04 --key <key> --apply --profile kanon
 ```
 
-`--caller` names the repository's collector caller under `.github/workflows` (default `telemetry.yml`), whose pin at each merge gives the row's `kanon_version`.
+`--caller` names the repository's collector caller under `.github/workflows` (default `telemetry.yml`), whose pin at each merge gives the row's `kanon_version`: `X.Y.Z` for a stable release, `vX.Y.Z`, and for its candidate, `candidate-vX.Y.Z`, alike.
 
 The dry run prints M5's check, counts only. For each month, it shows the pull requests closed, from GitHub's own listing with release PRs left out, beside the rows derived. Earlier items whose rows the span rewrites are counted apart. It exits non-zero when a month differs or the step failed, and `--apply` sends nothing when the step failed. A re-sent row overwrites itself, so a span that overlaps the collector's is harmless.
 

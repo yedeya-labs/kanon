@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, normalize, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { parse } from 'yaml';
+import { RELEASE_REF } from './release-ref.js';
 
 /**
  * kanon#730: what this tree's code a Kanon workflow runs with a credential, and by which path.
@@ -377,10 +378,13 @@ class IfParser {
   }
 }
 
-/** A Kanon release tag: what a pinned caller names. A branch or a commit of this tree isn't one. */
-const RELEASE = /^v\d+\.\d+\.\d+$/;
+/**
+ * A Kanon release tag, stable or candidate: what a pinned caller names. A branch, a commit of this
+ * tree or the moving major tag isn't one.
+ */
+const RELEASE = new RegExp(`^${RELEASE_REF}$`);
 /** A Kanon reusable workflow called at a release tag, and its file name. */
-const RELEASED = /^yedeya-labs\/kanon\/\.github\/workflows\/([^/]+\.ya?ml)@v\d+\.\d+\.\d+$/;
+const RELEASED = new RegExp(`^yedeya-labs/kanon/\\.github/workflows/([^/]+\\.ya?ml)@${RELEASE_REF}$`);
 /** A reusable workflow named from its own repository, and its file name. */
 const LOCAL_WORKFLOW = /^(?:\$\/|\.\/)\.github\/workflows\/([^/]+\.ya?ml)$/;
 
