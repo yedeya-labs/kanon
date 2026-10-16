@@ -2225,15 +2225,33 @@ export const diagnose = async (deps, opts) => {
       });
     }
   }
+  // An input the collector does not declare at the checked release: GitHub refuses the call before
+  // the run starts, so every sweep fails. The SigV4 path's `writer-role` is one since plan 0008 J9.
+  // Read only against a release whose requirements list the collector's inputs.
+  /** @type {string[] | null} */
+  const collectorInputs = Array.isArray(req.telemetry?.inputs) ? req.telemetry.inputs : null;
+  if (collectorInputs) {
+    for (const file of collectorCallers) {
+      const wf = /** @type {Record<string, any>} */ (workflows.get(file));
+      const stale = [...new Set(Object.values(isMap(wf.jobs) ? wf.jobs : {}).filter((j) => isMap(j) && kanonCall(j.uses)?.workflow === collector && isMap(j.with))
+        .flatMap((j) => Object.keys(j.with).filter((k) => !collectorInputs.includes(k))))];
+      if (stale.length) {
+        findItems('caller.input-stale', file, stale, (xs) => [`passes ${xs.join(', ')}, which Kanon's telemetry collector does not declare at ${checked}; GitHub refuses a call that passes an input the called workflow does not declare, so every sweep fails before it starts.`, {
+          text: `Remove ${xs.map((k) => `\`${k}\``).join(', ')} from the job's with:${xs.includes('writer-role') ? ', and the repository variable it read (the SigV4 path\'s writer role, gone since plan 0008 J9)' : ''}.`,
+        }]);
+      }
+    }
+  }
   // Only against a release on the token path: before it, the collector waited on two variables the
   // operator gave, which this release of doctor no longer asks for.
   if (collectorCallers.length && req.telemetry?.token) {
     for (const file of collectorCallers) {
       // The SigV4 path's inputs without `audience` (Owner decision of 2026-10-14, #842): the
       // collector refuses them before any token, so the caller sends nothing and registers nothing.
+      // An input the checked release no longer declares is `caller.input-stale`'s, above.
       const wf = /** @type {Record<string, any>} */ (workflows.get(file));
       const legacy = [...new Set(Object.values(isMap(wf.jobs) ? wf.jobs : {}).filter((j) => isMap(j) && kanonCall(j.uses)?.workflow === collector && isMap(j.with) && !('audience' in j.with))
-        .flatMap((j) => ['url', 'writer-role'].filter((k) => k in j.with)))];
+        .flatMap((j) => ['url', 'writer-role'].filter((k) => k in j.with && (!collectorInputs || collectorInputs.includes(k)))))];
       if (legacy.length) {
         find('telemetry.legacy-inputs', file, `passes ${legacy.map((k) => `\`${k}:\``).join(' and ')} to Kanon's telemetry collector without \`audience:\`, the inputs of the SigV4 path ${checked} no longer takes. The collector refuses them before it mints a token, so every run is red, and nothing is sent or registered.`, {
           text: "Run kanon init again to write the new caller, which passes neither and sends to Kanon's hosted store: init never overwrites a workflow, so it lists this one as differing, with the new caller's content to write in its place. Then delete the repository variables the old lines read. Or, for a store of your own, add `audience:` beside `url:` and remove `writer-role:` (docs/telemetry.md, \"Collect the rows\").",
