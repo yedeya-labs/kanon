@@ -39,8 +39,10 @@
 // reverting it, and a bug issue introduced by another PR, cost no read.
 //
 // THE KANON VERSION (§3.3) is the tag the collector's own caller pins, read from that file at the
-// merge commit, or, for a PR closed unmerged, at the default branch's head when it closed. A file
-// that isn't there, or doesn't pin a release, leaves the field out, as does a read that fails.
+// merge commit, or, for a PR closed unmerged, at the default branch's head when it closed. A
+// stable release, `vX.Y.Z`, and its candidate, `candidate-vX.Y.Z` (plan 0009), are the same code,
+// so both give `X.Y.Z`. A file that isn't there, or doesn't pin a release, leaves the field out,
+// as does a read that fails.
 //
 // NOTHING READ HERE LEAVES IN A ROW BUT WHAT `workItemRow` PUTS THERE, and the schema refuses any
 // field outside its list (ADR 0007, `K-OBS-16`). Logs hold counts and PR numbers, never a title,
@@ -99,9 +101,12 @@ export function mentionsOf(text, repo) {
   return [...found].sort((a, b) => a - b);
 }
 
-/** The release a caller pins Kanon's collector at, without its `v`, or undefined. @param {string | null} text */
+/**
+ * The release a caller pins Kanon's collector at, stable or candidate, without its `v` or
+ * `candidate-v`, or undefined. @param {string | null} text
+ */
 export function pinOf(text) {
-  return /yedeya-labs\/kanon\/\.github\/workflows\/telemetry-collect\.yml@v(\d+\.\d+\.\d+)\s*$/m.exec(text ?? '')?.[1];
+  return /yedeya-labs\/kanon\/\.github\/workflows\/telemetry-collect\.yml@(?:candidate-)?v(\d+\.\d+\.\d+)\s*$/m.exec(text ?? '')?.[1];
 }
 
 /** `gh`, asynchronously, as the metrics reader takes it. @type {Gh} */

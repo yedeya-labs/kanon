@@ -4,6 +4,7 @@ import { parse } from 'yaml';
 import { COLLECT_JOB, COLLECT_JOB_OVERRIDE, ERASE_JOB, inputsOf, UNPUBLISHED_JOB } from '../../scripts/telemetry-collect.mjs';
 import { HOSTED_INGEST_URL } from '../../scripts/lib/telemetry-token.mjs';
 import { evaluate } from './helpers/expression.js';
+import { RELEASE_REF, releasedUses } from './helpers/release-ref.js';
 import { COLLECTOR_CHECK_ENV, isCollectorJob } from './helpers/store-jobs.js';
 
 /**
@@ -144,10 +145,10 @@ describe("the collect job's if: holds a dispatch to the default branch (plan 000
 
 describe("telemetry.yml, Kanon's caller (S7, S9)", () => {
   const job = caller.jobs.collect!;
-  const pin = (text: string) => /yedeya-labs\/kanon\/[^@\s]+@(v\d+\.\d+\.\d+)/.exec(text)?.[1];
+  const pin = (text: string) => new RegExp(`yedeya-labs/kanon/[^@\\s]+@(${RELEASE_REF})`).exec(text)?.[1];
 
   it("calls the collector at Kanon's last release, the same pin as the review lane's caller (ADR 0011)", () => {
-    expect(job.uses).toMatch(/^yedeya-labs\/kanon\/\.github\/workflows\/telemetry-collect\.yml@v\d+\.\d+\.\d+$/);
+    expect(job.uses).toMatch(releasedUses('.github/workflows/telemetry-collect.yml'));
     expect(pin(job.uses!)).toBe(pin(readFileSync('.github/workflows/review.yml', 'utf8')));
   });
 

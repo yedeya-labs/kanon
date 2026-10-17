@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { actionFiles } from './helpers/actions.js';
+import { RELEASE_REF } from './helpers/release-ref.js';
 
 // Plan 0001 §4 (decision 3): every reference from one Kanon file to another is `$/`, GitHub's
 // self-reference, which resolves to Kanon at the commit the caller pinned. A `./` reference
@@ -24,8 +25,9 @@ const files = [
 //
 // The other two are the checks that judge a Kanon PR (#47). They run Kanon's LAST release, so a
 // PR can't weaken the check that passes it: ADR 0011's bootstrap, applied to a check's code.
-// Their version is whatever Dependabot last proposed, so it is compared as `vX.Y.Z`, and only
-// an exact version matches. The PR's own copies run as a test, in judging-actions-smoke.yml.
+// Their version is whatever Kanon's pins last moved to, a stable release or a candidate (plan
+// 0009 S4), so it is compared as `vX.Y.Z`, and only an exact version matches: never a branch or
+// the major tag. The PR's own copies run as a test, in judging-actions-smoke.yml.
 //
 // The last two are Kanon running its own lanes (ADR 0011, plan 0001 step 4b), for the same
 // reason. review.yml is the caller of the review lane: through `$/`, a PR's own lane code
@@ -123,8 +125,11 @@ const EXEMPT = new Set([
   '.github/workflows/deploy.yml: ./.github/actions/deploy',
   '.github/workflows/deploy.yml: ./.github/actions/smoke',
 ]);
-/** An exact release, written as the form, so the exemption survives each Dependabot bump. */
-const form = (entry: string): string => entry.replace(/^(.*: yedeya-labs\/kanon\/[^@]+)@v\d+\.\d+\.\d+$/, '$1@vX.Y.Z');
+/**
+ * An exact release, stable or candidate, written as the form, so the exemption survives each pin
+ * move. A branch or the major tag keeps its ref, and fails the exemption.
+ */
+const form = (entry: string): string => entry.replace(new RegExp(`^(.*: yedeya-labs/kanon/[^@]+)@${RELEASE_REF}$`), '$1@vX.Y.Z');
 
 type Node = { uses?: unknown; steps?: Node[]; jobs?: Record<string, Node>; runs?: { steps?: Node[] } };
 const usesOf = (file: string): string[] => {
@@ -158,6 +163,13 @@ describe('plan 0001 §4: Kanon references itself only through `$/`', () => {
       .filter(({ line }) => /^\s*(#\s*)?(-\s*)?uses:\s*["']?(\.\/|yedeya-labs\/kanon\/)/.test(line))
       .map(({ at, line }) => `${at}: ${line.trim()}`));
     expect([...new Set(hits.map((h) => form(h.replace(/:\d+: (- )?uses: /, ': '))))].sort()).toEqual([...EXEMPT].sort());
+  });
+
+  it('writes a stable release and a candidate as the form, and never a branch or the major tag', () => {
+    const at = (ref: string) => `.github/workflows/dco.yml: yedeya-labs/kanon/actions/dco@${ref}`;
+    expect(form(at('v0.41.0'))).toBe(at('vX.Y.Z'));
+    expect(form(at('candidate-v0.41.0'))).toBe(at('vX.Y.Z'));
+    for (const ref of ['main', 'v0', 'candidate-v0', 'candidate-main', 'v0.41.0-rc.1']) expect(form(at(ref)), ref).toBe(at(ref));
   });
 
   it('names every `$/` target that exists in this tree', () => {

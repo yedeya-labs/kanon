@@ -102,12 +102,15 @@ describe('K-ADOPT-11 the version references an adopter copies stay current', () 
   // Kanon declares its own plugin as any adopter can (docs/skills.md, #376), and release-please
   // moves the declaration's `ref` with each release. Its json updater replaces the X.Y.Z inside
   // the value and keeps the `v`; the file must hold the declaration `kanon doctor` reads, at the
-  // jsonpath above, or the updater would skip it with only a warning.
+  // jsonpath above, or the updater would skip it with only a warning. The ref is that version's
+  // stable release or its candidate, `candidate-vX.Y.Z`, which Kanon's pin job moves it to with
+  // the callers (plan 0009 S4); the updater keeps either prefix.
   it("Kanon's own declaration of the plugin pins package.json's version, where a release rewrites it", () => {
     const settings = JSON.parse(read('.claude/settings.json')) as { extraKnownMarketplaces: { kanon: { source: { ref: string } } } };
-    expect(settings.extraKnownMarketplaces.kanon.source.ref).toBe(`v${version}`);
-    expect(readPluginDeclaration(read('.claude/settings.json'))).toEqual({ status: 'declared', name: 'kanon', ref: `v${version}`, enabled: true });
-    expect(read('.claude/settings.json')).toBe(pluginSettingsFile(`v${version}`));
+    const ref = settings.extraKnownMarketplaces.kanon.source.ref;
+    expect([`v${version}`, `candidate-v${version}`]).toContain(ref);
+    expect(readPluginDeclaration(read('.claude/settings.json'))).toEqual({ status: 'declared', name: 'kanon', ref, enabled: true });
+    expect(read('.claude/settings.json')).toBe(pluginSettingsFile(ref));
   });
 
   it('a release rewrites every reference and nothing else', () => {

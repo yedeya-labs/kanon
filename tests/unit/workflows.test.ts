@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { auditAreas, readCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { actionFiles } from './helpers/actions.js';
+import { releasedUses } from './helpers/release-ref.js';
 import { writeStub } from './helpers/stub-bin.js';
 
 type Step = {
@@ -54,10 +55,11 @@ const expectPassesOnMergeGroup = (wf: Workflow, action: string) => {
   expect(steps.filter((s) => s.if !== ON_PULL_REQUEST && s.if !== ON_MERGE_GROUP)).toEqual([]);
 };
 
-// #47: a check that judges a PR runs Kanon's last release, an exact version Dependabot bumps,
-// never the PR's own copy through `$/`. Returns the one released reference to `action` in
-// the workflow, and fails unless there is exactly one.
-const RELEASED = (action: string) => new RegExp(`^yedeya-labs/kanon/actions/${action}@v\\d+\\.\\d+\\.\\d+$`);
+// #47: a check that judges a PR runs Kanon's last release, an exact version (a stable release,
+// or the candidate Kanon's pin job moved it to, plan 0009 S4), never the PR's own copy through
+// `$/`. Returns the one released reference to `action` in the workflow, and fails unless there
+// is exactly one.
+const RELEASED = (action: string) => releasedUses(`actions/${action}`);
 const judge = (wf: Workflow, action: string): string => {
   const refs = stepsOf(wf).map((s) => s.uses ?? '').filter((u) => RELEASED(action).test(u));
   expect(refs).toHaveLength(1);
@@ -582,7 +584,7 @@ describe('step 4b: Kanon reviews its own pull requests, through the lane at its 
 
   it('calls the review lane at an exact release, never through `$/`, from its one job', () => {
     expect(jobs).toHaveLength(1);
-    expect(job.uses).toMatch(/^yedeya-labs\/kanon\/\.github\/workflows\/agent-review\.yml@v\d+\.\d+\.\d+$/);
+    expect(job.uses).toMatch(releasedUses('.github/workflows/agent-review.yml'));
   });
 
   it('is started by CI finishing, a review label or a dispatch, and CI is the workflow it names', () => {
@@ -645,7 +647,7 @@ describe('stage 2: Kanon runs the Implementer on itself, through the lanes at it
     const { wf } = load(file);
     const jobs = Object.values(wf.jobs) as (Job & { with?: Record<string, string>; secrets?: unknown })[];
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.uses).toMatch(new RegExp(`^yedeya-labs/kanon/\\.github/workflows/${lane}\\.yml@v\\d+\\.\\d+\\.\\d+$`));
+    expect(jobs[0]?.uses).toMatch(releasedUses(`.github/workflows/${lane}.yml`));
     expect(wf.on).toEqual(triggers);
     expect(jobs[0]?.with).toEqual(inputs);
     expect(jobs[0]?.secrets).toEqual(SECRETS);
@@ -661,7 +663,7 @@ describe('step 11a: Kanon audits its own code, through the lane at its last rele
 
   it('calls the code-audit lane at an exact release, never through `$/`, from its one job', () => {
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.uses).toMatch(/^yedeya-labs\/kanon\/\.github\/workflows\/agent-code-audit\.yml@v\d+\.\d+\.\d+$/);
+    expect(jobs[0]?.uses).toMatch(releasedUses('.github/workflows/agent-code-audit.yml'));
   });
 
   it("runs on the lane's two triggers only: its schedule and a dispatch with no inputs", () => {
@@ -702,7 +704,7 @@ describe("step 14: Kanon reads its telemetry's aggregate, through the lane at it
 
   it('calls the telemetry lane at an exact release, never through `$/`, from its one job', () => {
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.uses).toMatch(/^yedeya-labs\/kanon\/\.github\/workflows\/agent-explore-telemetry\.yml@v\d+\.\d+\.\d+$/);
+    expect(jobs[0]?.uses).toMatch(releasedUses('.github/workflows/agent-explore-telemetry.yml'));
   });
 
   it("runs on the lane's two triggers only: its weekly schedule and a dispatch with no inputs", () => {

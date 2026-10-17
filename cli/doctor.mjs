@@ -318,7 +318,7 @@ export const ITEMIZED = {
  * `unchecked[].check` it is listed under: a waiver of such a finding can't be called stale.
  * @type {Record<string, string>}
  */
-const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', 'turn-cap-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset', 'notify-secrets': 'secret', 'notify-hook': 'declaration', 'notify-runs': 'caller', 'deploy-hook': 'declaration', 'deploy-ci': 'caller', 'deploy-environments': 'deploy', 'deploy-subject': 'deploy', 'deploy-runs': 'deploy', 'deploy-retention': 'deploy', 'deploy-rulesets': 'deploy', 'deploy-secrets': 'deploy' };
+const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'telemetry-register': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', 'turn-cap-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset', 'notify-secrets': 'secret', 'notify-hook': 'declaration', 'notify-runs': 'caller', 'deploy-hook': 'declaration', 'deploy-ci': 'caller', 'deploy-environments': 'deploy', 'deploy-subject': 'deploy', 'deploy-runs': 'deploy', 'deploy-retention': 'deploy', 'deploy-rulesets': 'deploy', 'deploy-secrets': 'deploy' };
 
 /**
  * The finding categories, in the order a finding is listed and fixed: the pin decides which
@@ -350,6 +350,7 @@ export const FINDINGS = {
   'secret.stale': { category: 'secret', blocking: false },
   'claude.token-age': { category: 'secret', blocking: true },
   'claude.unreachable-runs': { category: 'secret', blocking: false },
+  'telemetry.register-tracked': { category: 'secret', blocking: true },
   'declaration.missing': { category: 'declaration', blocking: true },
   'declaration.section-missing': { category: 'declaration', blocking: true },
   'declaration.malformed': { category: 'declaration', blocking: true },
@@ -562,6 +563,48 @@ const level = (v) => (v === 'write' ? 2 : v === 'read' ? 1 : 0);
 
 /** @param {unknown} v @returns {v is Record<string, any>} */
 const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * The strings `git grep` looks for in the tracked files before doctor reads any as JSON, so that
+ * it parses only the files that can hold a register's shape (#1071): the register's owner ARN,
+ * `render.mjs`'s `parameters.json` line for it, and its `template.json`'s writer keys.
+ */
+export const REGISTER_MARKERS = ['owner_principal_arn', 'OwnerPrincipalArn=', 'WRITER_KEYS'];
+
+/** An owner ARN still holding a `<…>` placeholder, which no real ARN does. @param {unknown} v */
+const placeholder = (v) => typeof v === 'string' && /<[^<>]+>/.test(v);
+
+/**
+ * What a file holds of a telemetry register, by its shape and never its name (#1071): `register`,
+ * a JSON object with an `owner_principal_arn` and `repositories` some entry of which pairs a `key`
+ * with a `repository` (`infra/telemetry/register.example.json`'s shape); `render.mjs`'s output,
+ * `parameters.json`, an array of `Name=value` strings holding `OwnerPrincipalArn=`, or
+ * `template.json`, whose ingest function holds writer keys; or null. A register or parameters
+ * whose owner ARN is still a `<…>` placeholder is an example, which pairs no real key, and is
+ * null: so Kanon's own example is exempt by what it holds, and doctor learns no repository's case.
+ * @param {string} text @returns {'register' | 'template' | 'parameters' | null}
+ */
+export const registerShape = (text) => {
+  /** @type {any} */
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (Array.isArray(doc)) {
+    if (!doc.length || !doc.every((p) => typeof p === 'string')) return null;
+    const owner = doc.find((p) => p.startsWith('OwnerPrincipalArn='));
+    return owner !== undefined && !placeholder(owner) ? 'parameters' : null;
+  }
+  if (!isMap(doc)) return null;
+  if ('owner_principal_arn' in doc && Array.isArray(doc.repositories)) {
+    const pairs = doc.repositories.some((/** @type {unknown} */ r) => isMap(r) && typeof r.key === 'string' && r.key !== '' && typeof r.repository === 'string' && r.repository !== '');
+    return pairs && !placeholder(doc.owner_principal_arn) ? 'register' : null;
+  }
+  const keys = doc.Resources?.IngestFunction?.Properties?.Environment?.Variables?.WRITER_KEYS;
+  return typeof keys === 'string' && keys !== '' ? 'template' : null;
+};
 
 /** @typedef {{ runId: number, maxTurns: number | null, numTurns: number | null, reason: string | null }} TurnRow */
 
@@ -1903,6 +1946,29 @@ export const diagnose = async (deps, opts) => {
         commands: xs.map((n) => `gh secret delete ${n} -R ${repo}`),
       }]);
     }
+  }
+
+  // ── A telemetry register tracked in the checkout (#1071) ──────────────────────────────────
+  // docs/telemetry.md, "Where the register lives": never in a repository where Kanon's lanes
+  // run, public or private, which this one is. The Reviewer reads any diff that touches it, and
+  // every agent reads the checkout. Read by shape, from the tracked files alone, and named by its
+  // path alone: what doctor prints never holds a key or a repository from it.
+  const marked = deps.git(['-C', root, 'grep', '-l', '-z', '-I', '-F', ...REGISTER_MARKERS.flatMap((m) => ['-e', m])]);
+  if (marked.status !== 0 && marked.status !== 1) {
+    unchecked.push({ check: 'telemetry-register', subject: repo, reason: `git could not search the tracked files (${marked.stderr.trim() || `exit ${marked.status}`}), so doctor can't tell whether a telemetry register is tracked here` });
+  }
+  const quoted = (/** @type {string} */ p) => `'${p.replace(/'/g, `'\\''`)}'`;
+  for (const path of (marked.status === 0 ? marked.stdout : '').split('\0').filter(Boolean).sort()) {
+    const shape = registerShape(read(path) ?? '');
+    if (!shape) continue;
+    const what = shape === 'register'
+      ? 'has the shape of a telemetry register: an owner_principal_arn, and repositories that pair each key with its repository'
+      : `has the shape of render.mjs's ${shape}.json, which holds the telemetry register's ${shape === 'template' ? 'keys and repositories' : 'owner ARN and the store\'s cursor key'}`;
+    find('telemetry.register-tracked', path, `${what}. It is tracked in ${repo}, where Kanon's lanes run: the Reviewer reads any diff that touches it, and every agent reads the checkout, so it never lives in such a repository, public or private (docs/telemetry.md, "Where the register lives").`, {
+      text: `Move it out of the checkout first, to a place "Where the register lives" names, such as an untracked file under ~/kanon-private/telemetry/. Then, on a branch, run these and merge them in a pull request with no review label (review:please, agent:triage or agent:implement), so the Reviewer doesn't read the deletion's diff. Its history still holds every version: treat each key in it as paired with its repository for anyone who can read that history.`,
+      commands: [`git rm --cached -- ${quoted(path)}`, `printf '\\n%s\\n' ${quoted(`/${path}`)} >> .gitignore`],
+      url: `https://github.com/${KANON_REPO}/blob/${checked}/docs/telemetry.md#where-the-register-lives`,
+    });
   }
 
   // ── The Claude credential: the token's age, and runs that never reached the model ─────────

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { actionFiles } from './helpers/actions.js';
+import { isReleaseRef } from './helpers/release-ref.js';
 
 // K-PRIN-19: the security rules that can be checked by reading Kanon's own workflow files.
 // - K-AGENT-48: no `pull_request_target` workflow checks out the PR's head.
@@ -80,12 +81,15 @@ const PINNED = /^(v\d+(\.\d+){0,2}|[0-9a-f]{40})$/;
 
 /**
  * The third-party `uses:` that aren't pinned to a version tag or a full SHA (K-ADOPT-12).
- * Kanon's own `$/` and the adopter's `./` aren't third-party.
+ * Kanon's own `$/` and the adopter's `./` aren't third-party. A Kanon reference may also pin a
+ * candidate, `candidate-vX.Y.Z`, an exact version (K-ADOPT-11), as Kanon's own callers do during
+ * a soak (plan 0009 S4); no other repository's tag of that form counts.
  */
 const unpinned = (doc: Doc): string[] =>
   usesOf(doc).filter((u) => {
     if (u.startsWith('$/') || u.startsWith('./')) return false;
     const at = u.lastIndexOf('@');
+    if (at !== -1 && u.startsWith('yedeya-labs/kanon/') && isReleaseRef(u.slice(at + 1))) return false;
     return at === -1 || !PINNED.test(u.slice(at + 1));
   });
 
@@ -140,6 +144,28 @@ describe('K-ADOPT-12 every third-party action is pinned to a version tag or a fu
       'actions/setup-node@1a2b3c4',
       'someone/action',
       'someone/repo/.github/workflows/x.yml@develop',
+    ]);
+  });
+
+  it("takes a Kanon candidate as pinned, and only Kanon's, never a branch or a malformed one", () => {
+    const doc = y([
+      'jobs:',
+      '  a:',
+      '    steps:',
+      '      - uses: yedeya-labs/kanon/actions/dco@candidate-v0.41.0',
+      '      - uses: yedeya-labs/kanon/actions/dco@v0.41.0',
+      '      - uses: yedeya-labs/kanon/actions/dco@main',
+      '      - uses: yedeya-labs/kanon/actions/dco@candidate-main',
+      '      - uses: yedeya-labs/kanon/actions/dco@candidate-v0',
+      '      - uses: someone/action@candidate-v1.2.3',
+      '  b:',
+      '    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@candidate-v0.41.0',
+    ].join('\n'));
+    expect(unpinned(doc)).toEqual([
+      'yedeya-labs/kanon/actions/dco@main',
+      'yedeya-labs/kanon/actions/dco@candidate-main',
+      'yedeya-labs/kanon/actions/dco@candidate-v0',
+      'someone/action@candidate-v1.2.3',
     ]);
   });
 
