@@ -250,6 +250,70 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
   });
 });
 
+// #1090: a secret a lane lists under `optionalSecrets` is one its caller may leave out, so doctor
+// never asks for it, even where the caller maps it, as `kanon init` writes every caller. The QA
+// store's two keep their own rule (#433): needed once the store hook exists.
+describe("kanon doctor and a lane's optional secrets (#1090)", () => {
+  const STORE = REQ.qaStore!.secrets;
+  const HOOK = REQ.qaStore!.hook;
+  const OVERSEER = 'agent-overseer';
+  const caller = (lane: string) => ({ [`.github/workflows/${lane}.yml`]: callerFile(lane, REQ.lanes[lane]!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }) });
+  const optional = (lane: string) => REQ.lanes[lane]!.optionalSecrets ?? [];
+  /** Every secret the lanes take, but none of their optional ones. */
+  const required = (lanes: string[]) => new Set(lanes.flatMap((l) => REQ.lanes[l]!.secrets.filter((n) => !optional(l).includes(n))));
+  const secretIds = (r: Result) => ids(r).filter((x: string) => x.startsWith('secret.'));
+  const named = (r: Result, n: string) => r.json.findings.filter((f: { message: string }) => f.message.includes(n));
+  // The lanes whose optional secrets are not the store's: the Overseer's KANON_TELEMETRY_READER_ROLE
+  // and the telemetry Explorer's KANON_AGGREGATE_ROLE, deprecated and read by no job.
+  const lanes = Object.keys(REQ.lanes).filter((l) => optional(l).some((n) => !STORE.includes(n))).sort();
+
+  it('declares the Overseer\'s reader role optional, and init\'s caller maps it (the case\'s premise)', () => {
+    expect(optional(OVERSEER)).toContain('KANON_TELEMETRY_READER_ROLE');
+    expect(lanes).toContain(OVERSEER);
+    expect(caller(OVERSEER)[`.github/workflows/${OVERSEER}.yml`]).toContain('KANON_TELEMETRY_READER_ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}');
+  });
+
+  for (const lane of lanes) {
+    it(`reports no secret.missing for an optional secret ${lane}'s caller maps and the repository lacks`, async () => {
+      const dir = checkout({ ...healthyFiles(), ...caller(lane) });
+      const r = await run(dir, fakeGitHub({ secrets: required([...LANES, lane]) }), ['--json']);
+      expect(r.json.lanes).toContain(lane);
+      expect(secretIds(r), r.out).toEqual([]);
+      for (const n of optional(lane)) expect(named(r, n), n).toEqual([]);
+    });
+  }
+
+  it('still asks for the store\'s two once the store hook exists, beside the Overseer\'s reader role it does not ask for (#433)', async () => {
+    const dir = checkout({ ...healthyFiles(), ...caller(OVERSEER), [HOOK]: 'name: QA store\nruns: { using: composite, steps: [] }\n' });
+    const r = await run(dir, fakeGitHub({ secrets: required([...LANES, OVERSEER]) }), ['--json']);
+    expect(secretIds(r)).toEqual(STORE.map(() => `secret.missing ${REPO}`));
+    expect(r.json.findings.filter((f: { id: string }) => f.id === 'secret.missing').map((f: { message: string }) => f.message.split(',')[0])).toEqual(STORE.map((n) => `lacks ${n}`));
+    expect(named(r, 'KANON_TELEMETRY_READER_ROLE')).toEqual([]);
+  });
+
+  it('asks for an optional secret once another installed lane takes it as required (mutation)', async () => {
+    const next = clone(REQ);
+    next.lanes['agent-review']!.secrets = [...next.lanes['agent-review']!.secrets, 'KANON_TELEMETRY_READER_ROLE'].sort();
+    const dir = checkout({ ...healthyFiles(), ...caller(OVERSEER) });
+    const r = await run(dir, fakeGitHub({ secrets: required([...LANES, OVERSEER]), releases: { [NEXT]: next } }), ['--to', NEXT, '--json']);
+    expect(named(r, 'KANON_TELEMETRY_READER_ROLE').map((f: { id: string }) => f.id)).toContain('secret.missing');
+  });
+
+  // The callers a fresh `kanon init --feature full` writes, each from callerFile as init's own
+  // loop writes it, and the repository holding every secret the install asks for: no secret
+  // finding names the Overseer's reader role, which init's caller maps and no job reads.
+  it('reports no secret finding for KANON_TELEMETRY_READER_ROLE after a fresh install of the full feature', async () => {
+    const full = REQ.features!.find((f) => f.feature === 'full')!.lanes;
+    expect(full).toContain(OVERSEER);
+    const dir = checkout({ ...healthyFiles(), ...Object.assign({}, ...full.map(caller)) });
+    const apps = REQ.features!.find((f) => f.feature === 'full')!.apps!.flatMap(appSecrets);
+    const r = await run(dir, fakeGitHub({ secrets: new Set([...required([...LANES, ...full]), ...apps]) }), ['--json']);
+    expect(r.json.lanes).toEqual(expect.arrayContaining([...full]));
+    expect(named(r, 'KANON_TELEMETRY_READER_ROLE'), r.out).toEqual([]);
+    expect(secretIds(r), r.out).toEqual([]);
+  });
+});
+
 // #428: a caller of Kanon's telemetry collector, as `kanon init --telemetry` writes it, is Kanon's
 // id-token holder. From the token path (plan 0008 §8, J5) nothing is set beside it: its first
 // default-branch run registers the repository, so doctor reads that run, `telemetry.not-run` while

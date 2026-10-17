@@ -1819,8 +1819,14 @@ export const diagnose = async (deps, opts) => {
   const secretApps = [...new Set([...identities, ...Object.keys(req.identities.apps).filter((a) => appSecrets(a).some((n) => mappedBy(n).length))])].sort();
   // The QA store's two secrets are optional (kanon#433): a caller maps them, empty, whether or not
   // the repository has a store, so they are needed only once its store hook exists.
+  // Any other secret an installed lane lists as optional, and none takes as required, is never
+  // needed (kanon#1090): the lane runs without it, as the Overseer's KANON_TELEMETRY_READER_ROLE,
+  // which `kanon init`'s caller maps and no job reads.
+  const optionalOnly = new Set(installed.flatMap((l) => req.lanes[l]?.optionalSecrets ?? [])
+    .filter((n) => !storeSecrets.includes(n) && !installed.some((l) => req.lanes[l]?.secrets.includes(n) && !(req.lanes[l]?.optionalSecrets ?? []).includes(n))));
   const needSecrets = [...new Set([...installed.flatMap((l) => (req.lanes[l]?.secrets ?? []).filter((n) => !pairOf(l).includes(n))), ...unnamed, ...secretApps.flatMap(appSecrets), ...[...laneSecrets].filter((n) => mappedBy(n).length)])]
     .filter((n) => hasStore || !storeSecrets.includes(n))
+    .filter((n) => !optionalOnly.has(n))
     // A chat secret is never `secret.missing` (plan 0011 §9): a kind not posted is a choice, which
     // `notify.kind-unset` notes, and the secret the kind secrets replace is `notify.legacy-secret`.
     .filter((n) => !chatSecrets.has(n))
