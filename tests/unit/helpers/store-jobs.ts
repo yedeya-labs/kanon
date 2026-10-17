@@ -338,15 +338,14 @@ export function isMaintenanceJob(j: Job): boolean {
 export const COLLECTOR_FILE = 'telemetry-collect.yml';
 export const COLLECTOR_JOB = 'collect';
 /** What the collector's script step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
-export const COLLECTOR_ENV = ['GH_TOKEN', 'KANON_TELEMETRY_URL', 'KANON_TELEMETRY_AUDIENCE', 'LEGACY', 'WINDOW', 'ERASE', 'REGISTER'];
+export const COLLECTOR_ENV = ['GH_TOKEN', 'KANON_TELEMETRY_URL', 'KANON_TELEMETRY_AUDIENCE', 'WINDOW', 'ERASE', 'REGISTER'];
 const COLLECTOR_RUN = 'node "$KANON/scripts/telemetry-collect.mjs"';
 const COLLECTOR_CHECK_RUN = 'node "$KANON/scripts/telemetry-collect.mjs" check';
-/** What the inputs' check reads, by name: the store's inputs, whether a writer role is passed (never
- *  its value), and the two dispatch inputs (plan 0008 J5). */
+/** What the inputs' check reads, by name: the store's inputs and the two dispatch inputs (plan 0008
+ *  J5; the writer role's flag went with the input in J9). */
 export const COLLECTOR_CHECK_ENV = {
   KANON_TELEMETRY_URL: '${{ inputs.url }}',
   KANON_TELEMETRY_AUDIENCE: '${{ inputs.audience }}',
-  LEGACY: "${{ inputs.writer-role != '' }}",
   ERASE: '${{ inputs.erase }}',
   REGISTER: '${{ inputs.register }}',
 };

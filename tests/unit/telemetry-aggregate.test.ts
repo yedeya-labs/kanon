@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  aggregate, assertNoKey, bearerOf, callerAllowed, configOf, handle, keyOf, median, MIN_ADOPTERS, pageView, pathOf, percentile, PROJECTION,
+  aggregate, assertNoKey, bearerOf, handle, keyOf, median, MIN_ADOPTERS, pageView, pathOf, percentile, PROJECTION,
   publicView, queryRequest, readAll, REGISTER_TTL_MS, registerCache, registrationsFrom, scanRegister, scanRequest, SIGNAL_DAYS,
 } from '../../infra/telemetry/function/aggregate.mjs';
 import { AGGREGATE_GET, AGGREGATE_SCAN } from '../../infra/telemetry/function/register-fields.mjs';
@@ -419,15 +419,18 @@ describe('a malformed register or answer is refused without quoting it (#638)', 
   });
 });
 
-describe('the aggregate-only function (§6.1), on the IAM URL', () => {
+describe("the aggregate-only function (§6.1), on the Owner's direct invoke", () => {
   const ACCOUNT = '5'.repeat(12);
-  // Plan 0008 J4: only INVOKER_KEYS is still read from the environment; whose rows are read, and
-  // under which labels, comes from the register table.
-  const env = { TABLE_NAME: TABLE, ACCOUNT_ID: ACCOUNT, INVOKER_KEYS: 'alpha' };
+  // Plan 0008 J9: nothing is read from the environment but the tables' names; whose rows are
+  // read, and under which labels, comes from the register table.
+  const env = { TABLE_NAME: TABLE, ACCOUNT_ID: ACCOUNT };
   const registered: Registration[] = [
     { repository_id: '1', key: 'alpha', label: 'kanon', aggregate_invoker: true },
     { repository_id: '2', key: 'beta' }, { repository_id: '3', key: 'gamma' }, { repository_id: '4', key: 'delta' },
   ];
+  /** What `aws lambda invoke` hands the unqualified function: no request context. */
+  const direct = {};
+  /** What the IAM URL handed it, before J9: an invoker role's signed GET. */
   const urlEvent = (role = 'kanon-telemetry-alpha-aggregates', method = 'GET', account = ACCOUNT) => ({
     requestContext: { http: { method }, authorizer: { iam: { userArn: `arn:aws:sts::${account}:assumed-role/${role}/GitHubActions` } } },
   });
@@ -442,7 +445,7 @@ describe('the aggregate-only function (§6.1), on the IAM URL', () => {
   };
 
   it('answers only what may leave: cross-adopter cells, declared own figures and signals', async () => {
-    const { status, body, logs } = await call(urlEvent());
+    const { status, body, logs } = await call(direct);
     expect(status).toBe(200);
     expect(Object.keys(body).sort()).toEqual(['computed_at', 'cross_adopter', 'min_adopters', 'own', 'signal_days', 'signals']);
     expect(body.min_adopters).toBe(3);
@@ -459,84 +462,69 @@ describe('the aggregate-only function (§6.1), on the IAM URL', () => {
     expect(text).not.toMatch(/_usd":7\b/);
   });
 
-  it('the IAM path still answers as today, through the unqualified function, from a register equal to the old environment', async () => {
-    const today = await call(urlEvent());
-    const unqualified = await call(urlEvent(), { arn: UNQUALIFIED_ARN });
+  it('answers the same through the unqualified ARN, and reads no key or label from the environment', async () => {
+    const plain = await call(direct);
+    const unqualified = await call(direct, { arn: UNQUALIFIED_ARN });
     expect(unqualified.status).toBe(200);
-    expect(unqualified.body).toEqual(today.body);
-    // The environment's old keys and labels are no longer read: a malformed one changes nothing.
-    expect((await call(urlEvent(), { over: { AGGREGATE_KEYS: 'Al#pha', OWN_FIGURES: 'zeta=x' } })).body).toEqual(today.body);
+    expect(unqualified.body).toEqual(plain.body);
+    // The variables render.mjs once wrote are not read: malformed ones change nothing.
+    expect((await call(direct, { over: { AGGREGATE_KEYS: 'Al#pha', OWN_FIGURES: 'zeta=x', INVOKER_KEYS: 'Al#pha' } })).body).toEqual(plain.body);
   });
 
   it('declares nobody\'s own figures when the register declares none', async () => {
     const regs = registered.map((r) => ({ ...r, label: undefined }));
-    expect((await call(urlEvent(), { regs })).body.own).toEqual([]);
+    expect((await call(direct, { regs })).body.own).toEqual([]);
   });
 
-  it('answers only a registered invoker role in this account, by GET', async () => {
-    expect((await call(urlEvent('kanon-telemetry-beta-aggregates'))).status).toBe(403);
-    expect((await call(urlEvent('kanon-telemetry-alpha-writer'))).status).toBe(403);
-    expect((await call(urlEvent('kanon-telemetry-alpha-aggregates', 'GET', '6'.repeat(12)))).status).toBe(403);
-    expect((await call({ requestContext: { http: { method: 'GET' } } })).status).toBe(403);
+  it('refuses every URL-shaped event on the unqualified function, which has no URL since J9: an invoker role\'s among them', async () => {
+    for (const ev of [
+      urlEvent(), urlEvent('kanon-telemetry-beta-aggregates'), urlEvent('kanon-telemetry-alpha-aggregates', 'GET', '6'.repeat(12)),
+      { requestContext: { http: { method: 'GET' } } }, { ...urlEvent(), headers: { authorization: 'AWS4-HMAC-SHA256 Credential=x' } },
+    ]) {
+      expect(await call(ev), JSON.stringify(ev).slice(0, 80)).toMatchObject({ status: 403, body: { error: 'caller' } });
+    }
     expect((await call(urlEvent('kanon-telemetry-alpha-aggregates', 'POST'))).status).toBe(405);
-    expect((await call({})).status).toBe(200);
+    // A bearer token is the alias's, never the unqualified function's.
+    expect(await call({ headers: { authorization: 'Bearer a.b.c' } })).toMatchObject({ status: 403, body: { error: 'caller' } });
   });
 
-  it("refuses an invoker role whose key's registration is suspended or missing (plan 0008 §9)", async () => {
-    const suspended = registered.map((r) => (r.key === 'alpha' ? { ...r, status: 'suspended' } : r));
-    expect(await call(urlEvent(), { regs: suspended })).toMatchObject({ status: 403, body: { error: 'suspended' } });
-    expect(await call(urlEvent(), { regs: registered.filter((r) => r.key !== 'alpha') })).toMatchObject({ status: 404, body: { error: 'not-registered' } });
-  });
-
-  it('refuses a bearer token on the IAM URL, and any alias but the token path\'s', async () => {
-    const withBearer = { ...urlEvent(), headers: { authorization: 'Bearer a.b.c' } };
-    expect(await call(withBearer)).toMatchObject({ status: 403, body: { error: 'caller' } });
-    // A SigV4 signature is not a bearer token.
-    expect((await call({ ...urlEvent(), headers: { authorization: 'AWS4-HMAC-SHA256 Credential=x' } })).status).toBe(200);
-    expect((await call(urlEvent(), { arn: `${UNQUALIFIED_ARN}:other` })).status).toBe(403);
-    expect((await call(urlEvent(), { arn: 'not-an-arn' })).status).toBe(403);
+  it('refuses any alias but the token path\'s', async () => {
+    expect((await call(direct, { arn: `${UNQUALIFIED_ARN}:other` })).status).toBe(403);
+    expect((await call(direct, { arn: 'not-an-arn' })).status).toBe(403);
   });
 
   it('says only that it failed when a query fails, never which partition', async () => {
-    const { status, body, logs } = await call(urlEvent(), { q: fakeQuery(items, { failOn: 'beta#lead' }).query });
+    const { status, body, logs } = await call(direct, { q: fakeQuery(items, { failOn: 'beta#lead' }).query });
     expect(status).toBe(502);
     expect(JSON.stringify(body) + logs.join('')).not.toContain('beta');
     expect(logs).toEqual(['aggregate: failed (error)']);
     const denied = async () => { throw new Error('Query 400'); };
-    expect((await call(urlEvent(), { q: denied })).logs).toEqual(['aggregate: failed (Query 400)']);
+    expect((await call(direct, { q: denied })).logs).toEqual(['aggregate: failed (Query 400)']);
   });
 
   it('says only that it failed when the register can\'t be read', async () => {
     const logs: string[] = [];
-    const res = await handle(urlEvent(), { env, now: () => NOW, query: fakeQuery(items).query, scan: fakeRegister(registered, { failScan: true }).scan, log: (l) => logs.push(l) });
+    const res = await handle(direct, { env, now: () => NOW, query: fakeQuery(items).query, scan: fakeRegister(registered, { failScan: true }).scan, log: (l) => logs.push(l) });
     expect(res.statusCode).toBe(502);
     expect(logs).toEqual(['aggregate: failed (Scan 400)']);
     // DynamoDB's own failure, as `function/aws.mjs` throws it: the operation and AWS's code, nothing of its message.
     const awsLogs: string[] = [];
     const denied = async () => { throw new AwsError('Scan', 'AccessDeniedException'); };
-    await handle(urlEvent(), { env, now: () => NOW, query: fakeQuery(items).query, scan: denied, log: (l) => awsLogs.push(l) });
+    await handle(direct, { env, now: () => NOW, query: fakeQuery(items).query, scan: denied, log: (l) => awsLogs.push(l) });
     expect(awsLogs).toEqual(['aggregate: failed (Scan AccessDeniedException)']);
   });
 
-  it('refuses a malformed configuration or register rather than guess', async () => {
-    expect((await call(urlEvent(), { over: { INVOKER_KEYS: 'Al#pha' } })).status).toBe(500);
+  it('refuses a malformed register rather than guess', async () => {
     const relabel = (label: string) => registered.map((r) => (r.key === 'beta' ? { ...r, label } : r));
-    expect((await call(urlEvent(), { regs: relabel('alpha') })).status).toBe(502);
-    expect((await call(urlEvent(), { regs: relabel('kanon') })).status).toBe(502);
-    expect((await call(urlEvent(), { regs: relabel('Not A Label') })).status).toBe(502);
-    expect((await call(urlEvent(), { regs: [...registered, { repository_id: '9', key: 'Bad#Key' }] })).status).toBe(502);
-    expect(configOf(env)).toEqual({ invokers: ['alpha'] });
-  });
-
-  it('checks the caller by role name, account and invoker list', () => {
-    expect(callerAllowed(urlEvent(), env, ['alpha'])).toBe(true);
-    expect(callerAllowed(urlEvent(), env, [])).toBe(false);
-    expect(callerAllowed(urlEvent('kanon-telemetry-alpha-aggregates-x'), env, ['alpha'])).toBe(false);
+    expect((await call(direct, { regs: relabel('alpha') })).status).toBe(502);
+    expect((await call(direct, { regs: relabel('kanon') })).status).toBe(502);
+    expect((await call(direct, { regs: relabel('Not A Label') })).status).toBe(502);
+    expect((await call(direct, { regs: [...registered, { repository_id: '9', key: 'Bad#Key' }] })).status).toBe(502);
   });
 });
 
 describe('whose rows are read comes from the register table (plan 0008 §3.6, J4)', () => {
-  const env = { TABLE_NAME: TABLE, INVOKER_KEYS: '' };
+  const env = { TABLE_NAME: TABLE };
   const failed = { outcome: 'failed', reason: 'did_not_finish', failed_stage: 'agent' };
 
   it('takes active registrations\' keys and labels, and keeps every key to check labels against', () => {
@@ -621,7 +609,7 @@ describe('the token path (plan 0008 §3.6, J4): the Explorer at a release, on it
     return { status: res.statusCode, headers: res.headers, body: JSON.parse(res.body), logs, gets: register.gets };
   };
 
-  it('answers the Explorer\'s token from a registration whose aggregate_invoker is true, either view, as the IAM path does', async () => {
+  it('answers the Explorer\'s token from a registration whose aggregate_invoker is true, either view, as the direct invoke does', async () => {
     const { status, body, logs, gets } = await call(tokenEvent(token(NOW, '1')));
     expect(status).toBe(200);
     expect(body.cross_adopter).toEqual([{ lane: 'review', model: MODEL, runs: 3, median_cost_usd: 3, p90_cost_usd: 4 }]);
@@ -686,9 +674,10 @@ describe('the token path (plan 0008 §3.6, J4): the Explorer at a release, on it
     expect(logs).toEqual(['aggregate: failed (GetItem 400)']);
   });
 
-  it('tells the two URLs apart by the invoked ARN alone', () => {
+  it('tells the two ways in apart by the invoked ARN alone', () => {
     expect(pathOf(ALIAS_ARN)).toBe('token');
-    expect(pathOf(UNQUALIFIED_ARN)).toBe('iam');
+    expect(pathOf(UNQUALIFIED_ARN)).toBe('direct');
+    expect(pathOf(undefined)).toBe('direct');
     expect(pathOf(`${UNQUALIFIED_ARN}:$LATEST`)).toBe(null);
     expect(pathOf(`${UNQUALIFIED_ARN}:import`)).toBe(null);
     expect(pathOf('')).toBe(null);

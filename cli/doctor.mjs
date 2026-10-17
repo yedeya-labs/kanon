@@ -567,7 +567,8 @@ const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 /**
  * The strings `git grep` looks for in the tracked files before doctor reads any as JSON, so that
  * it parses only the files that can hold a register's shape (#1071): the register's owner ARN,
- * `render.mjs`'s `parameters.json` line for it, and its `template.json`'s writer keys.
+ * `render.mjs`'s `parameters.json` line for it, and its `template.json`'s writer keys. Plan 0008
+ * J9 removed `render.mjs`, but a render made before it can still be tracked, so both stay.
  */
 export const REGISTER_MARKERS = ['owner_principal_arn', 'OwnerPrincipalArn=', 'WRITER_KEYS'];
 
@@ -577,11 +578,12 @@ const placeholder = (v) => typeof v === 'string' && /<[^<>]+>/.test(v);
 /**
  * What a file holds of a telemetry register, by its shape and never its name (#1071): `register`,
  * a JSON object with an `owner_principal_arn` and `repositories` some entry of which pairs a `key`
- * with a `repository` (`infra/telemetry/register.example.json`'s shape); `render.mjs`'s output,
+ * with a `repository` (the shape of the register example Kanon shipped until plan 0008 J9); the
+ * output of `render.mjs`, which J9 removed,
  * `parameters.json`, an array of `Name=value` strings holding `OwnerPrincipalArn=`, or
  * `template.json`, whose ingest function holds writer keys; or null. A register or parameters
  * whose owner ARN is still a `<…>` placeholder is an example, which pairs no real key, and is
- * null: so Kanon's own example is exempt by what it holds, and doctor learns no repository's case.
+ * null: so an example is exempt by what it holds, and doctor learns no repository's case.
  * @param {string} text @returns {'register' | 'template' | 'parameters' | null}
  */
 export const registerShape = (text) => {
@@ -2369,15 +2371,33 @@ export const diagnose = async (deps, opts) => {
       });
     }
   }
+  // An input the collector does not declare at the checked release: GitHub refuses the call before
+  // the run starts, so every sweep fails. The SigV4 path's `writer-role` is one since plan 0008 J9.
+  // Read only against a release whose requirements list the collector's inputs.
+  /** @type {string[] | null} */
+  const collectorInputs = Array.isArray(req.telemetry?.inputs) ? req.telemetry.inputs : null;
+  if (collectorInputs) {
+    for (const file of collectorCallers) {
+      const wf = /** @type {Record<string, any>} */ (workflows.get(file));
+      const stale = [...new Set(Object.values(isMap(wf.jobs) ? wf.jobs : {}).filter((j) => isMap(j) && kanonCall(j.uses)?.workflow === collector && isMap(j.with))
+        .flatMap((j) => Object.keys(j.with).filter((k) => !collectorInputs.includes(k))))];
+      if (stale.length) {
+        findItems('caller.input-stale', file, stale, (xs) => [`passes ${xs.join(', ')}, which Kanon's telemetry collector does not declare at ${checked}; GitHub refuses a call that passes an input the called workflow does not declare, so every sweep fails before it starts.`, {
+          text: `Remove ${xs.map((k) => `\`${k}\``).join(', ')} from the job's with:${xs.includes('writer-role') ? ', and the repository variable it read (the SigV4 path\'s writer role, gone since plan 0008 J9)' : ''}.`,
+        }]);
+      }
+    }
+  }
   // Only against a release on the token path: before it, the collector waited on two variables the
   // operator gave, which this release of doctor no longer asks for.
   if (collectorCallers.length && req.telemetry?.token) {
     for (const file of collectorCallers) {
       // The SigV4 path's inputs without `audience` (Owner decision of 2026-10-14, #842): the
       // collector refuses them before any token, so the caller sends nothing and registers nothing.
+      // An input the checked release no longer declares is `caller.input-stale`'s, above.
       const wf = /** @type {Record<string, any>} */ (workflows.get(file));
       const legacy = [...new Set(Object.values(isMap(wf.jobs) ? wf.jobs : {}).filter((j) => isMap(j) && kanonCall(j.uses)?.workflow === collector && isMap(j.with) && !('audience' in j.with))
-        .flatMap((j) => ['url', 'writer-role'].filter((k) => k in j.with)))];
+        .flatMap((j) => ['url', 'writer-role'].filter((k) => k in j.with && (!collectorInputs || collectorInputs.includes(k)))))];
       if (legacy.length) {
         find('telemetry.legacy-inputs', file, `passes ${legacy.map((k) => `\`${k}:\``).join(' and ')} to Kanon's telemetry collector without \`audience:\`, the inputs of the SigV4 path ${checked} no longer takes. The collector refuses them before it mints a token, so every run is red, and nothing is sent or registered.`, {
           text: "Run kanon init again to write the new caller, which passes neither and sends to Kanon's hosted store: init never overwrites a workflow, so it lists this one as differing, with the new caller's content to write in its place. Then delete the repository variables the old lines read. Or, for a store of your own, add `audience:` beside `url:` and remove `writer-role:` (docs/telemetry.md, \"Collect the rows\").",

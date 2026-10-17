@@ -3,12 +3,11 @@
 // to the aggregate-only function's URL, and the answer checked and written to a file the agent's
 // job reads.
 //
-// TWO WAYS IN (plan 0008 §3.6, §9, step J5). From vM the Explorer calls the function's token URL
-// with a fresh GitHub OIDC token for the store's audience (`token`, below, through
-// `scripts/lib/telemetry-token.mjs`), and holds no AWS credential, and so, since J7 (plan 0008 §9
-// step 4a), does Kanon's metrics page (`page`). The SigV4 way, signed with an invoker role's
-// credentials, stays for the overlap, for a caller below vM, until the release after vM removes
-// it (J9).
+// ONE WAY IN: THE TOKEN URL (plan 0008 §3.6, §9, steps J5, J7 and J9). The Explorer calls the
+// function's token URL with a fresh GitHub OIDC token for the store's audience (`token`, below,
+// through `scripts/lib/telemetry-token.mjs`), and holds no AWS credential, and so, since J7 (plan
+// 0008 §9 step 4a), does Kanon's metrics page (`page`). The SigV4 way, signed with an invoker
+// role's credentials, is gone with the function's IAM URL (J9).
 //
 // WHAT LEAVES THIS STEP IS WHAT THE FUNCTION MAY PUBLISH, AND NOTHING ELSE. The function answers
 // only `cross_adopter` cells (at least three non-declaring adopters each), the `own` cells of
@@ -34,10 +33,6 @@
 //        GITHUB_STEP_SUMMARY
 //   writes: $OUT/aggregate.json; outputs `empty` (`true` when there is nothing to look at)
 //
-//   node "$KANON/scripts/aggregate-read.mjs"         the SigV4 way, for a caller below vM
-//   env: KANON_AGGREGATE_URL (the stack's `AggregateUrl` output), OUT, AWS_ACCESS_KEY_ID,
-//        AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN (the invoker role's, from the credentials step)
-//
 // THE METRICS PAGE'S READ (plan 0003 M7, kanon#661): `node "$KANON/scripts/aggregate-read.mjs"
 // page` asks the same function for its page view (`?view=page`), the declaring adopters' work-item
 // indicators, checks it as strictly (`checkPage`: exactly the page view's keys, codes, dates,
@@ -51,7 +46,6 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { sign } from '../infra/telemetry/function/sigv4.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { HOSTED_AGGREGATE_URL, TokenError, codeOf, runnerMask, storeOf, storeRequest } from './lib/telemetry-token.mjs';
 
@@ -66,7 +60,7 @@ const TOP = ['computed_at', 'min_adopters', 'signal_days', 'cross_adopter', 'own
 const CELL = ['lane', 'model', 'runs', 'median_cost_usd', 'p90_cost_usd'];
 const OWN = ['label', 'cells'];
 const SIGNAL = ['lane', 'reason', 'failed_stage', 'kanon_error', 'kanon_version', 'adopters_affected'];
-/** A label as the register holds it (`render.mjs`): the key's pattern. */
+/** A label as the register holds it (`publish_own_figures_as`): the key's pattern. */
 const LABEL = /^[a-z0-9][a-z0-9-]{0,31}$/;
 /** A lane, a reason, a stage or an error code: a short code, never prose. Not the schema's enums,
  * so a lane a later release adds doesn't refuse a whole answer here. */
@@ -76,21 +70,6 @@ const MODEL = /^[a-z0-9][a-z0-9.-]{0,63}(\[1m\])?$/;
 const VERSION = /^(\d+\.\d+\.\d+|dev)$/;
 
 export class AggregateError extends Error {}
-
-/**
- * The function URL's region: `https://<id>.lambda-url.<region>.on.aws/`, and nothing else.
- * @param {string} url
- * @returns {string | null}
- */
-export function regionOfAggregateUrl(url) {
-  try {
-    const u = new URL(url);
-    if (u.protocol !== 'https:' || u.search || u.hash || u.username || u.password || (u.pathname !== '/' && u.pathname !== '')) return null;
-    return /^[a-z0-9]+\.lambda-url\.([a-z0-9-]+)\.on\.aws$/.exec(u.host)?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
 
 /** @param {unknown} v */
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -272,40 +251,6 @@ export function checkPage(body) {
 /** Nothing to look at: no cell and no signal. @param {Aggregate} a */
 export const isEmpty = (a) => a.cross_adopter.length === 0 && a.signals.length === 0 && a.own.every((o) => o.cells.length === 0);
 
-/**
- * The read. Returns the checked aggregate; throws `AggregateError` naming what went wrong, with
- * no URL, credential or body in the message.
- * With `view: 'page'`, asks for the page view and checks it as one (`checkPage`).
- * @param {{ url: string, env: Record<string, string | undefined>, fetchImpl?: typeof fetch, now?: Date, view?: 'page' }} o
- * @returns {Promise<any>}
- */
-export async function readAggregate({ url, env, fetchImpl = fetch, now, view }) {
-  const region = regionOfAggregateUrl(url);
-  if (!region) throw new AggregateError("KANON_AGGREGATE_URL is not a Lambda function URL (https://<id>.lambda-url.<region>.on.aws/): set it to the telemetry stack's AggregateUrl output");
-  const credentials = { accessKeyId: env.AWS_ACCESS_KEY_ID ?? '', secretAccessKey: env.AWS_SECRET_ACCESS_KEY ?? '', sessionToken: env.AWS_SESSION_TOKEN };
-  if (!credentials.accessKeyId || !credentials.secretAccessKey) throw new AggregateError('no AWS credentials in the environment: the credentials step for the invoker role did not run');
-  const target = view === 'page' ? `${url.endsWith('/') ? url : `${url}/`}?view=page` : url;
-  /** @type {Response} */
-  let res;
-  try {
-    res = await fetchImpl(target, { method: 'GET', headers: sign({ method: 'GET', url: target, region, service: 'lambda', credentials, ...(now ? { now } : {}) }) });
-  } catch (e) {
-    throw new AggregateError(`the aggregate function could not be reached (${e instanceof Error ? e.name : 'error'})`);
-  }
-  if (res.status !== 200) {
-    const why = res.status === 403 ? ': the invoker role was refused. Check that KANON_AGGREGATE_ROLE names this repository\'s `AggregateInvokerRole<id>` output and that the register sets `aggregate_invoker`' : '';
-    throw new AggregateError(`the aggregate function answered ${res.status}${why}`);
-  }
-  /** @type {unknown} */
-  let body;
-  try {
-    body = JSON.parse(await res.text());
-  } catch {
-    throw new AggregateError('the aggregate function answered something that is not JSON');
-  }
-  return view === 'page' ? checkPage(body) : checkAggregate(body);
-}
-
 // ── The token way (plan 0008 §3.6, step J5) ──────────────────────────────────────────────────
 
 /** The variables that name a self-hosted store's aggregate, together or not at all (plan 0008 §2.1). */
@@ -341,7 +286,8 @@ export function tokenRefusal(status, code, view) {
 
 /**
  * The read on the token URL: a fresh OIDC token for the store's audience, sent to the store's
- * aggregate URL, and the answer checked as the SigV4 read checks it. Throws `AggregateError`
+ * aggregate URL, and the answer checked field by field (`checkAggregate`, or `checkPage` for the
+ * page view). Throws `AggregateError`
  * naming what went wrong, never with the URL, the token or the body in the message.
  * @param {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void, hostedUrl?: string, view?: 'page' }} o
  * @returns {Promise<any>}
@@ -394,7 +340,8 @@ if (isCliEntry(import.meta.url)) {
     process.exit(0);
   }
   try {
-    const a = process.argv[2] === 'token' ? await readAggregateToken({ env }) : await readAggregate({ url: env.KANON_AGGREGATE_URL ?? '', env });
+    // `token` names the read, as the Explorer's job has called it since J5; there is no other way in.
+    const a = await readAggregateToken({ env });
     mkdirSync(out, { recursive: true });
     writeFileSync(join(out, AGGREGATE_FILE), `${JSON.stringify(a, null, 2)}\n`);
     const empty = isEmpty(a);
