@@ -224,3 +224,24 @@ describe.skipIf(!hasYq)("the candidate's lane-check on the moved callers (kanon#
   });
 });
 
+// A crash before the script prints anything exits 1 with nothing listed: the step lists that it
+// named no problem, so the pull request still opens as a draft, never ready (K-PRIN-10).
+describe("the pin job's check step, when the script exits 1 and prints nothing", () => {
+  it('lists that it named no problem, in the step summary and as a warning, and succeeds', () => {
+    const wf = parse(readFileSync(join(ROOT, '.github/workflows/release-please.yml'), 'utf8')) as { jobs: { pins: { steps: { id?: string; run?: string }[] } } };
+    const check = wf.jobs.pins.steps.find((s) => s.id === 'callers');
+    const dir = mkdtempSync(join(tmpdir(), 'pin-job-crash-'));
+    roots.push(dir);
+    mkdirSync(join(dir, 'scripts'));
+    // A module that fails to load: Node exits 1 before the script writes a line.
+    writeFileSync(join(dir, 'scripts/pin-lane-check.mjs'), "import './missing.mjs';\n");
+    const summary = join(dir, 'summary');
+    const r = spawnSync('bash', ['-c', String(check?.run)], { cwd: dir, encoding: 'utf8', env: { ...process.env, TAG: RELEASE, RUNNER_TEMP: dir, GITHUB_STEP_SUMMARY: summary } });
+    expect(r.status, r.stderr).toBe(0);
+    const callers = readFileSync(join(dir, 'callers.md'), 'utf8');
+    expect(callers).toBe("- pin-lane-check exited 1 and named no problem: read the pin job's log\n");
+    expect(readFileSync(summary, 'utf8')).toContain(callers.trim());
+    expect(r.stdout).toMatch(/::warning title=pin job::/);
+  });
+});
+

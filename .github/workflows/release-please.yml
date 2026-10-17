@@ -133,6 +133,10 @@ jobs:
           case "$status" in
             0) echo "The candidate's lane-check passes on the moved callers." >> "$GITHUB_STEP_SUMMARY" ;;
             1)
+              # A crash before the script prints (a module that fails to load) still opens a draft.
+              if [[ ! -s "$RUNNER_TEMP/callers.md" ]]; then
+                echo "- pin-lane-check exited 1 and named no problem: read the pin job's log" > "$RUNNER_TEMP/callers.md"
+              fi
               {
                 echo "The candidate's lane-check fails on the moved callers, so the pin pull request opens as a draft. Each caller needs:"
                 echo
