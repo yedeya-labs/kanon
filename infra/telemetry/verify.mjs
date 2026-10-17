@@ -1,52 +1,57 @@
 #!/usr/bin/env node
-// Plan 0002 step S3's falsifiers, and plan 0006 F4's (checks 8 to 13), run by the Owner against
-// the deployed store.
+// Plan 0002 step S3's falsifiers, as plan 0008 J9 leaves them (§13), run by the Owner against the
+// deployed store.
 //
 //   node infra/telemetry/verify.mjs --key <key> [--profile kanon]
 //
-// The stack must be deployed with EnableVerify=true (render.mjs --verify), which lets the
-// Owner assume the key's writer and reader roles and creates the write probe (check 7), and with
-// EnableImporter=true (render.mjs --importer), which lets the Owner assume the importer (check
-// 11); redeploy without both afterwards. Every row it sends is `tag: test`, so it expires in 30
-// days and no read or aggregate counts it (§2.4).
+// The stack must be deployed with EnableVerify=true, which creates the write probe, and with
+// EnableImporter=true, which creates the importer role and its `import` alias; redeploy without
+// both afterwards. The key must have an `active` registration. Every row it sends is `tag: test`,
+// so it expires in 30 days and no read or aggregate counts it (plan 0002 §2.4).
 //
-// The finding checks (plan 0006 §8, F4): a valid finding is stored in `<key>#finding`; one with a
-// URL in its evidence, or holding the key, is refused; the importer may not send one; the
-// aggregate the Owner computes for the key is the same before and after a finding is stored; and
-// `erase.mjs`'s walk of the key reaches the stored finding. That walk is a dry run: verify never
-// erases a key. The erasure itself is held by the erase test.
+// SINCE J9 THERE IS NO WRITER ROLE TO SEND AS, so the row checks go through the importer's alias,
+// which stamps a row as the token path does, with the importer's limits (no `kanon_version`, no
+// finding); the expiry is read with the Owner's own profile. What a collector's token is refused,
+// and the finding checks that need one (plan 0006 F4), are `telemetry-verify.yml`'s and the unit
+// tests', since only Kanon's collector can mint a token the store accepts (plan 0008 §13).
 //
-// It prints PASS or FAIL per check and exits 1 on any FAIL. It never prints a credential, a
+// It checks, in order: both IAM URLs gone (J9); a valid row stored, a row with an extra field and a
+// row naming its partition refused, by field; the stored row's expiry; the table's resource policy
+// denying every write to a role allowed them (kanon#101); the importer refused a finding; the
+// unqualified function refusing a direct invocation; and the `backfill` alias refusing the importer
+// role, by IAM.
+//
+// It prints PASS or FAIL per check and exits 1 on any FAIL. It never prints a credential, a key, a
 // row, or a response body: only the check, and on a FAIL the status or error code it saw.
 
 import { spawnSync } from 'node:child_process';
 import { randomInt } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { aggregate, readAll } from './function/aggregate.mjs';
-import { keysOf, SHORT_RETENTION_MS } from './function/index.mjs';
+import { BACKFILL, IMPORT, keysOf, SHORT_RETENTION_MS } from './function/index.mjs';
 import { SCRUB_VERSION } from './function/scrub.mjs';
-import { sign } from './function/sigv4.mjs';
-import { cliQuery } from './aggregate.mjs';
-import { erase } from './erase.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 
 export const REGION = 'eu-central-1';
 export const STACK = 'kanon-telemetry';
-/** A key no register holds: the reader must be denied it by IAM, not find it empty. */
-export const OTHER_KEY = 'verify-other';
+/** The ingest function, whose aliases the Owner's roles invoke. */
+export const INGEST_FUNCTION = 'kanon-telemetry-ingest';
+/** Both functions: neither may have an `AWS_IAM` URL, nor a URL on the unqualified function (J9). */
+export const FUNCTIONS = /** @type {const} */ ([INGEST_FUNCTION, 'kanon-telemetry-aggregate']);
 
 /**
  * @typedef {{ code: number, stdout: string, stderr: string }} Run
  * @typedef {{ accessKeyId: string, secretAccessKey: string, sessionToken: string }} Creds
  * @typedef {{
  *   aws: (args: string[], creds?: Creds) => Run,
- *   post: (url: string, body: string, creds: Creds) => Promise<{ status: number, json: any }>,
  *   now: () => number,
  *   runId: () => number,
  * }} Deps
  */
 
-/** A valid version-2 run row, tagged `test`. */
+/** A valid version-2 run row, tagged `test`, as the importer may send it: no `kanon_version` (decision 17). */
 export function testRow(/** @type {number} */ now, /** @type {number} */ runId) {
   return {
     schema_version: 2,
@@ -59,7 +64,6 @@ export function testRow(/** @type {number} */ now, /** @type {number} */ runId) 
     lane: 'review',
     outcome: 'ok',
     reason: 'none',
-    kanon_version: 'dev',
   };
 }
 
@@ -113,6 +117,33 @@ export const PROBE_PK = 'verify-probe#none';
 const errorCode = (/** @type {Run} */ r) => r.code === 0 ? 'no error' : (/\(([A-Za-z]+)\)/.exec(r.stderr)?.[1] ?? `exit ${r.code}`);
 
 /**
+ * One direct invocation of the ingest function, on `alias`, or on the unqualified function when
+ * `alias` is null, with `creds` or else the profile in `args`. The event goes through a file,
+ * never the command line, since it names a key, and both files are removed after. Returns the
+ * CLI's run, and the function's answer (its status and parsed body) when it answered.
+ * @param {(args: string[], creds?: Creds) => Run | Promise<Run>} aws
+ * @param {{ alias: string | null, event: unknown, creds?: Creds, args?: string[] }} o
+ * @returns {Promise<{ run: Run, status: number | null, json: any }>}
+ */
+export async function invokeIngest(aws, { alias, event, creds, args = ['--region', REGION, '--output', 'json'] }) {
+  const dir = mkdtempSync(join(tmpdir(), 'kanon-invoke-'));
+  try {
+    const payload = join(dir, 'event.json');
+    const out = join(dir, 'answer.json');
+    writeFileSync(payload, JSON.stringify(event), { mode: 0o600 });
+    const run = await aws(['lambda', 'invoke', '--function-name', INGEST_FUNCTION, ...(alias ? ['--qualifier', alias] : []),
+      '--payload', `fileb://${payload}`, ...args, out], creds);
+    if (run.code !== 0 || json(run.stdout)?.FunctionError) return { run, status: null, json: null };
+    /** @type {any} */
+    let answer = null;
+    try { answer = json(readFileSync(out, 'utf8')); } catch { answer = null; }
+    return { run, status: typeof answer?.statusCode === 'number' ? answer.statusCode : null, json: typeof answer?.body === 'string' ? json(answer.body) : null };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
  * Run every check. Returns one result per check, in order.
  * @param {string} key
  * @param {string} profile
@@ -130,117 +161,87 @@ export async function runChecks(key, profile, deps) {
   const stack = json(deps.aws(['cloudformation', 'describe-stacks', '--stack-name', STACK, ...owner]).stdout);
   /** @type {Record<string, string>} */
   const outputs = Object.fromEntries((stack?.Stacks?.[0]?.Outputs ?? []).map((/** @type {any} */ o) => [o.OutputKey, o.OutputValue]));
-  if (!who?.Account || !outputs.IngestUrl || !outputs.TableName) {
+  if (!who?.Account || !outputs.TableName) {
     check('the stack and the Owner credentials are reachable', false, 'describe-stacks or get-caller-identity failed');
     return results;
   }
-  const assume = (/** @type {string} */ kind, arn = `arn:aws:iam::${who.Account}:role/kanon-telemetry-${key}-${kind}`) => {
-    const c = json(deps.aws(['sts', 'assume-role', '--role-arn', arn, '--role-session-name', 'kanon-verify', ...owner]).stdout)?.Credentials;
+  const assume = (/** @type {string} */ name) => {
+    const c = json(deps.aws(['sts', 'assume-role', '--role-arn', `arn:aws:iam::${who.Account}:role/kanon-telemetry-${name}`, '--role-session-name', 'kanon-verify', ...owner]).stdout)?.Credentials;
     return c ? { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken } : null;
   };
-  const writer = assume('writer');
-  const reader = assume('reader');
-  if (!writer || !reader) {
-    check('the Owner can assume the writer and reader roles', false, 'assume-role failed: is the stack deployed with --verify?');
-    return results;
-  }
-  const url = outputs.IngestUrl;
   const table = outputs.TableName;
   const now = deps.now();
+
+  // 1. Both functions' IAM URLs are gone (plan 0008 J9): no output names one, and each function's
+  // only URL is on an alias, with no IAM auth.
+  const left = [];
+  for (const o of ['IngestUrl', 'AggregateUrl']) if (outputs[o] !== undefined) left.push(`output ${o}`);
+  for (const fn of FUNCTIONS) {
+    const r = deps.aws(['lambda', 'list-function-url-configs', '--function-name', fn, ...owner]);
+    if (r.code !== 0) { left.push(`${fn}: ${errorCode(r)}`); continue; }
+    for (const c of json(r.stdout)?.FunctionUrlConfigs ?? []) {
+      const qualified = typeof c?.FunctionArn === 'string' && c.FunctionArn.split(':').length === 8;
+      if (c?.AuthType === 'AWS_IAM' || !qualified) left.push(`${fn}: a ${c?.AuthType ?? 'URL'} URL${qualified ? '' : ' on the unqualified function'}`);
+    }
+  }
+  check('both functions\' IAM URLs are gone', left.length === 0, left.join('; '));
+
+  const importer = assume('importer');
+  /** @param {unknown[]} rows */
+  const send = async (rows) => (importer ? invokeIngest(deps.aws, { alias: IMPORT, event: { key, rows }, creds: importer }) : null);
+  const errorsOf = (/** @type {{ json: any } | null} */ r) => (r?.json?.results?.[0]?.errors ?? []).map((/** @type {any} */ e) => `${e.field} (${e.problem})`);
+  const fieldsOf = (/** @type {{ json: any } | null} */ r) => (r?.json?.results?.[0]?.errors ?? []).map((/** @type {any} */ e) => e.field);
+  const statusOf = (/** @type {{ run: Run, status: number | null } | null} */ r) => (!r ? 'no importer' : r.status !== null ? `status ${r.status}` : errorCode(r.run));
+  const noImporter = 'assume-role failed for kanon-telemetry-importer: is the stack deployed with EnableImporter=true?';
+
+  // 2. A valid row is stored, through the importer's alias.
   const row = testRow(now, deps.runId());
+  const ok = await send([row]);
+  check('a valid row sent through the import alias gets 200', ok?.status === 200 && ok.json?.results?.[0]?.status === 'stored', importer ? statusOf(ok) : noImporter);
 
-  // 1. A valid row is stored.
-  const ok = await deps.post(url, JSON.stringify([row]), writer);
-  check('a valid row gets 200', ok.status === 200 && ok.json?.results?.[0]?.status === 'stored', `status ${ok.status}`);
+  // 3. An extra field rejects the row, by name.
+  const extra = await send([{ ...testRow(now, deps.runId()), surplus_field: 1 }]);
+  check('a row with an extra field gets 422 naming that field', extra?.status === 422 && fieldsOf(extra).includes('surplus_field'), importer ? statusOf(extra) : noImporter);
 
-  // 2. An extra field rejects the row, by name.
-  const extra = await deps.post(url, JSON.stringify([{ ...testRow(now, deps.runId()), surplus_field: 1 }]), writer);
-  const extraFields = (extra.json?.results?.[0]?.errors ?? []).map((/** @type {any} */ e) => e.field);
-  check('a row with an extra field gets 422 naming that field', extra.status === 422 && extraFields.includes('surplus_field'), `status ${extra.status}`);
+  // 4. A row can't name its partition.
+  const named = await send([{ ...testRow(now, deps.runId()), pk: 'verify-other#review' }]);
+  check('a row naming a partition gets 422', named?.status === 422 && fieldsOf(named).includes('pk'), importer ? statusOf(named) : noImporter);
 
-  // 3. A row can't name its partition.
-  const named = await deps.post(url, JSON.stringify([{ ...testRow(now, deps.runId()), pk: `${OTHER_KEY}#review` }]), writer);
-  const namedFields = (named.json?.results?.[0]?.errors ?? []).map((/** @type {any} */ e) => e.field);
-  check('a row naming a partition gets 422', named.status === 422 && namedFields.includes('pk'), `status ${named.status}`);
-
-  // 4. The reader is denied another key by IAM.
-  const other = deps.aws(['dynamodb', 'query', '--region', REGION, '--table-name', table,
-    '--key-condition-expression', 'pk = :p', '--expression-attribute-values', JSON.stringify({ ':p': { S: `${OTHER_KEY}#review` } })], reader);
-  check('the reader querying another key gets AccessDeniedException', denied(other), errorCode(other));
-
-  // 5. The writer can't write the table itself.
-  const direct = deps.aws(['dynamodb', 'put-item', '--region', REGION, '--table-name', table,
-    '--item', JSON.stringify({ pk: { S: `${key}#review` }, sk: { S: 'verify-direct' } })], writer);
-  check('a direct PutItem with the writer role is denied', denied(direct), errorCode(direct));
-
-  // 6. The stored row expires 30 days after it was recorded.
+  // 5. The stored row expires 30 days after it was recorded, read with the Owner's own profile.
   const { pk, sk } = keysOf(key, row);
-  const got = deps.aws(['dynamodb', 'get-item', '--region', REGION, '--table-name', table, '--output', 'json',
-    '--key', JSON.stringify({ pk: { S: pk }, sk: { S: sk } }), '--projection-expression', 'expires_at'], reader);
+  const got = deps.aws(['dynamodb', 'get-item', '--table-name', table,
+    '--key', JSON.stringify({ pk: { S: pk }, sk: { S: sk } }), '--projection-expression', 'expires_at', ...owner]);
   const expires = Number(json(got.stdout)?.Item?.expires_at?.N);
   const want = Math.floor((Date.parse(row.recorded_at) + SHORT_RETENTION_MS) / 1000);
   check("the stored row's expires_at is 30 days out", got.code === 0 && expires === want,
     got.code !== 0 ? errorCode(got) : Number.isFinite(expires) ? `off by ${expires - want} s` : 'no expires_at');
 
-  // 7. The table's resource policy denies every write (kanon#101). Check 5 can't show it: the
-  // writer holds no DynamoDB action, so IAM denies its PutItem before the table's policy is
-  // read, and a table with no resource policy passes check 5. The probe role (EnableVerify only)
-  // is ALLOWED all four writes by its own policy, so only the table's deny can stop it, and IAM's
-  // message must say so. Each write aims at a partition no register holds and carries an
+  // 6. The table's resource policy denies every write (kanon#101). The probe role (EnableVerify
+  // only) is ALLOWED all four writes by its own policy, so only the table's deny can stop it, and
+  // IAM's message must say so. Each write aims at a partition no register holds and carries an
   // expiry an hour out, so a write that lands (a FAIL) is gone by TTL.
-  const probe = assume('verify-probe', `arn:aws:iam::${who.Account}:role/kanon-telemetry-verify-probe`);
+  const probe = assume('verify-probe');
   const probeName = "every write by a role allowed them is denied by the table's resource policy";
-  if (!probe) check(probeName, false, 'assume-role failed for kanon-telemetry-verify-probe: is the stack deployed with --verify?');
+  if (!probe) check(probeName, false, 'assume-role failed for kanon-telemetry-verify-probe: is the stack deployed with EnableVerify=true?');
   else probeWrites(probe);
 
-  // 8. to 13. Plan 0006 F4: the finding row at intake.
-  const errorsOf = (/** @type {{ json: any }} */ r) => (r.json?.results?.[0]?.errors ?? []).map((/** @type {any} */ e) => `${e.field} (${e.problem})`);
-  // The Owner's aggregate for the key, as `aggregate.mjs` computes it, or null when it can't be.
-  const figures = () => readAll([key], cliQuery({ aws: deps.aws, profile }), table)
-    .then((rows) => JSON.stringify(aggregate(rows, { now })), () => null);
-  const before = await figures();
+  // 7. Only a collector stores a finding: never the importer (plan 0006 F4).
+  const finding = await send([testFinding(now, deps.runId())]);
+  check('the importer sending a finding gets 422', finding?.status === 422 && errorsOf(finding).includes('row_kind (not-allowed)'), importer ? statusOf(finding) : noImporter);
 
-  // 8. A valid finding is stored, in the key's finding partition.
-  const finding = testFinding(now, deps.runId());
-  const stored = await deps.post(url, JSON.stringify([finding]), writer);
-  const at = keysOf(key, finding);
-  const landed = deps.aws(['dynamodb', 'get-item', '--region', REGION, '--table-name', table, '--output', 'json',
-    '--key', JSON.stringify({ pk: { S: at.pk }, sk: { S: at.sk } }), '--projection-expression', 'row_kind'], reader);
-  check(`a valid finding gets 200 and lands in <key>#finding`,
-    stored.status === 200 && stored.json?.results?.[0]?.status === 'stored' && json(landed.stdout)?.Item?.row_kind?.S === 'finding',
-    stored.status !== 200 ? `status ${stored.status}` : landed.code !== 0 ? errorCode(landed) : 'not found in the finding partition');
+  // 8. The unqualified function, invoked directly with the Owner's own grant, refuses the event
+  // (plan 0008 §13, from vM+1): only an alias reaches the table.
+  const direct = await invokeIngest(deps.aws, { alias: null, event: { key, rows: [testRow(now, deps.runId())] }, args: owner });
+  check('a direct invocation of the unqualified ingest function is refused by the function', direct.status === 403 && direct.json?.error === 'path',
+    direct.status !== null ? `status ${direct.status}` : errorCode(direct.run));
 
-  // 9. A URL in the evidence is refused, by field and rule.
-  const withUrl = await deps.post(url, JSON.stringify([testFinding(now, deps.runId(), { evidence: 'Observed: the lane read https://example.com/run before it stopped.' })]), writer);
-  check('a finding with a URL in its evidence gets 422 naming evidence (url)', withUrl.status === 422 && errorsOf(withUrl).includes('evidence (url)'), `status ${withUrl.status}`);
-
-  // 10. A registered key is refused wherever it is.
-  const withKey = await deps.post(url, JSON.stringify([testFinding(now, deps.runId(), { evidence: `Observed: the row named ${key} as its partition.` })]), writer);
-  check('a finding holding a registered key gets 422', withKey.status === 422 && errorsOf(withKey).includes('evidence (key)'), `status ${withKey.status}`);
-
-  // 11. Only a writer stores a finding: never the importer.
-  const importer = assume('importer', `arn:aws:iam::${who.Account}:role/kanon-telemetry-importer`);
-  if (!importer) check('the importer sending a finding gets 422', false, 'assume-role failed for kanon-telemetry-importer: is the stack deployed with --importer?');
+  // 9. The importer role may invoke its own alias and nothing else: IAM refuses it `backfill`.
+  if (!importer) check('the importer role invoking the backfill alias is denied by IAM', false, noImporter);
   else {
-    const imported = await deps.post(`${url}?key=${encodeURIComponent(key)}`, JSON.stringify([testFinding(now, deps.runId())]), importer);
-    check('the importer sending a finding gets 422', imported.status === 422 && errorsOf(imported).includes('row_kind (not-allowed)'), `status ${imported.status}`);
+    const other = await invokeIngest(deps.aws, { alias: BACKFILL, event: { key, rows: [testRow(now, deps.runId())] }, creds: importer });
+    check('the importer role invoking the backfill alias is denied by IAM', denied(other.run),
+      other.status !== null ? `status ${other.status}` : errorCode(other.run));
   }
-
-  // 12. The aggregate never reads a finding.
-  const after = await figures();
-  check("the aggregate's answer is unchanged by a stored finding", before !== null && before === after,
-    before === null || after === null ? 'the aggregate could not be computed' : 'it changed');
-
-  // 13. Erasure walks the finding partition: a dry run of erase.mjs counts the stored finding.
-  const walked = () => {
-    try {
-      return erase(key, { aws: (args) => deps.aws(args), profile, apply: false }).find((c) => c.partition === `${key}#finding`)?.rows ?? 0;
-    } catch {
-      return -1;
-    }
-  };
-  const found = walked();
-  check("erase.mjs's walk of the key reaches the stored finding in <key>#finding", found >= 1, found < 0 ? 'a query failed' : 'the finding partition is not walked, or is empty');
   return results;
 
   /** @param {Creds} probeCreds */
@@ -275,24 +276,13 @@ export function aws(args, creds) {
   return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
-/** @type {Deps['post']} */
-export async function post(url, body, creds) {
-  const headers = { 'content-type': 'application/json' };
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { ...headers, ...sign({ method: 'POST', url, headers, body, region: REGION, service: 'lambda', credentials: creds }) },
-    body,
-  });
-  return { status: res.status, json: json(await res.text()) };
-}
-
 if (isCliEntry(import.meta.url)) {
   const { values } = parseArgs({ options: { key: { type: 'string' }, profile: { type: 'string', default: 'kanon' } } });
   if (!values.key) {
     console.error('usage: verify.mjs --key <key> [--profile kanon]');
     process.exit(2);
   }
-  const results = await runChecks(values.key, values.profile, { aws, post, now: Date.now, runId: () => randomInt(1, 2 ** 31 - 1) });
+  const results = await runChecks(values.key, values.profile, { aws, now: Date.now, runId: () => randomInt(1, 2 ** 31 - 1) });
   for (const r of results) console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.name}${r.pass ? '' : ` (${r.why})`}`);
   process.exit(results.length && results.every((r) => r.pass) ? 0 : 1);
 }

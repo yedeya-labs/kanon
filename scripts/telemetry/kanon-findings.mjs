@@ -13,7 +13,7 @@
 //   2. Reads every finding row of the asked tag, and checks each again (§6, item 2):
 //      - `validate`, the schema's own check, at this release;
 //      - `verify`, the scrub, on `evidence` and `suggested_fix`, with that key's name hashes
-//        (from the register, as `render.mjs` builds them for intake) and the release's tree;
+//        (from the register, as intake's scrub builds them) and the release's tree;
 //      - no adopter key: `assertNoKey` over every field, and each text searched for a key as a word;
 //      - each `kanon_paths` entry must be a file in the tree of the finding's `kanon_version`.
 //      A finding that fails any check is still filed, privately, marked `gate: failed` with the
@@ -38,7 +38,7 @@
 // release with no list (no such tag, or `dev`, which is no release) checks nothing against a tree,
 // so a finding of it with a path or a text fails the gate, `kanon_version (no-tree)`.
 //
-// THE KEYS AND THE NAMES. `--register` is the private register `render.mjs` reads: every key in it
+// THE KEYS AND THE NAMES. `--register` is the private register file (plan 0002 §5): every key in it
 // joins the keys the output is checked against, and each entry's repository gives that key's name
 // hashes through the scrub's `nameContext`, as intake has them (plan 0006 §4.2). A key with no
 // entry has no name context, so a text of it fails the gate, `evidence (no-sender-context)`.
@@ -178,7 +178,7 @@ export function readIssues(issues) {
 }
 
 /**
- * The register's keys and each key's name hashes, as `render.mjs` builds `NAME_HASHES` for intake:
+ * The register's keys and each key's name hashes, as intake has them (plan 0006 §4.2):
  * the words of the registered repository's owner and name, hashed. Reads nothing else of it.
  * @param {any} register
  * @returns {{ keys: string[], names: Record<string, string[]> }}

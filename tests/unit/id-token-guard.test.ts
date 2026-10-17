@@ -86,14 +86,15 @@ describe('every Kanon workflow', () => {
     expect(declared).toEqual(['deploy.yml:deploy ${{ needs.declare.outputs.environment }}']);
   });
 
-  it("and docs/telemetry.md's writers list doesn't say the store jobs declare one (kanon#549)", () => {
+  it("and docs/telemetry.md's holders list doesn't say the store jobs declare one (kanon#549)", () => {
     // The bullet once said the writer refused the store jobs while they declared the store's
-    // environment, after the case above had made that false.
+    // environment, after the case above had made that false. Since plan 0008 J9 there is no writer
+    // role for their token to reach, which the bullet says instead of "is admitted".
     const bullet = readFileSync('docs/telemetry.md', 'utf8').split('\n').filter((l) => l.startsWith("- **Kanon's own QA-store jobs**"));
     expect(bullet).toHaveLength(1);
-    expect(bullet[0]).not.toMatch(/`environment:|refuses/);
+    expect(bullet[0]).not.toMatch(/`environment:|refuses|is admitted/);
     expect(bullet[0]).toContain('declare no environment');
-    expect(bullet[0]).toContain('is admitted');
+    expect(bullet[0]).toContain('no write here');
   });
 
   it("and K-OBS-13's Enforced by doesn't say the store jobs declare none only from some later day (kanon#556)", () => {
@@ -135,7 +136,7 @@ describe('every Kanon workflow', () => {
     const listings = {
       "docs/qa-store.md's store job": paragraph('docs/qa-store.md', '- **A store job** declares'),
       "docs/qa-store.md's guard": paragraph('docs/qa-store.md', '`tests/unit/helpers/store-jobs.ts` checks this shape'),
-      "docs/telemetry.md's writers": paragraph('docs/telemetry.md', 'Each can write rows under its own adopter'),
+      "docs/telemetry.md's holders": paragraph('docs/telemetry.md', 'What is guarded is that set in Kanon'),
       // K-OBS-17's Enforced by (kanon#548). Its Rule isn't held: it speaks of the store-coupled
       // lanes alone, where only the Overseer's `telemetry` job holds the token besides store jobs.
       "K-OBS-17's Enforced by": paragraph('rulebook/08-observability-and-cost.md', '**Enforced by.** `tests/unit/qa-store-aws.test.ts`'),

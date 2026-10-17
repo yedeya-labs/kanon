@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -157,32 +157,61 @@ describe('§7 step 3: the dry run', () => {
   });
 });
 
+/** One `aws lambda invoke` as the CLI runs it: the event from the payload file, the answer to the last argument. */
+type Invoked = { alias: string | undefined, fn: string, event: { key: string, rows: unknown[] }, args: string[] };
+const lambdaInvoke = (args: string[], answer: (e: Invoked['event']) => { statusCode: number, body: string }, seen: Invoked[] = []) => {
+  const at = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
+  const event = JSON.parse(readFileSync(at('--payload')!.replace(/^fileb:\/\//, ''), 'utf8'));
+  seen.push({ alias: at('--qualifier'), fn: at('--function-name')!, event, args });
+  writeFileSync(args.at(-1)!, JSON.stringify(answer(event)));
+  return { code: 0, stdout: JSON.stringify({ StatusCode: 200, ExecutedVersion: '$LATEST' }), stderr: '' };
+};
+
 describe('§7 step 4: send', () => {
-  it('assumes the importer role, names the key, and sends 25 rows to a POST', async () => {
+  it("assumes the importer role, and invokes the `import` alias directly with 25 rows and the key in the event, never on the command line", async () => {
     const calls: string[][] = [];
+    const invoked: Invoked[] = [];
+    let n = 0;
     const aws = (args: string[]) => {
       calls.push(args);
+      if (args[0] === 'lambda') {
+        return lambdaInvoke(args, (e) => ({ statusCode: 200, body: JSON.stringify({ results: e.rows.map((_, i) => (i === 0 && ++n === 1 ? { status: 'rejected', errors: [{ field: 'recorded_at', problem: 'window' }] } : { status: 'stored' })) }) }), invoked);
+      }
       const out = args[1] === 'get-caller-identity' ? { Account: ACCOUNT }
-        : args[1] === 'describe-stacks' ? { Stacks: [{ Outputs: [{ OutputKey: 'IngestUrl', OutputValue: 'https://u.example/' }] }] }
+        : args[1] === 'describe-stacks' ? { Stacks: [{ StackName: 'kanon-telemetry' }] }
           : { Credentials: { AccessKeyId: 'a', SecretAccessKey: 's', SessionToken: 't' } };
       return { code: 0, stdout: JSON.stringify(out), stderr: '' };
     };
-    const posts: Array<{ url: string, n: number }> = [];
-    const post = async (url: string, body: string) => {
-      const rows = JSON.parse(body) as unknown[];
-      posts.push({ url, n: rows.length });
-      return { status: 200, json: { results: rows.map((_, i) => (i === 0 && posts.length === 1 ? { status: 'rejected', errors: [{ field: 'recorded_at', problem: 'window' }] } : { status: 'stored' })) } };
-    };
     const rows = Array.from({ length: 30 }, () => rowOf());
-    const r = await send(rows, 'k2', { aws, post, profile: 'kanon' });
-    expect(posts).toEqual([{ url: 'https://u.example/?key=k2', n: 25 }, { url: 'https://u.example/?key=k2', n: 5 }]);
+    const r = await send(rows, 'k2', { aws, profile: 'kanon' });
+    expect(invoked.map((x) => [x.fn, x.alias, x.event.key, x.event.rows.length])).toEqual([['kanon-telemetry-ingest', 'import', 'k2', 25], ['kanon-telemetry-ingest', 'import', 'k2', 5]]);
     expect(r).toEqual({ stored: 29, refused: { 'recorded_at (window)': 1 } });
     expect(calls.find((c) => c[1] === 'assume-role')).toContain(`arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-importer`);
+    // The key is in the payload file, which is gone once the call returns; no argument holds it.
+    for (const x of invoked) expect(x.args.join(' ')).not.toMatch(/\bk2\b/);
+    expect(invoked.every((x) => !x.args.includes('--profile'))).toBe(true);
   });
 
-  it('refuses to send when the importer role is not deployed', async () => {
-    const aws = (args: string[]) => ({ code: args[1] === 'assume-role' ? 254 : 0, stdout: args[1] === 'assume-role' ? '' : JSON.stringify({ Account: '1', Stacks: [{ Outputs: [{ OutputKey: 'IngestUrl', OutputValue: 'u' }] }] }), stderr: '' });
-    await expect(send([rowOf()], 'k2', { aws, post: async () => ({ status: 200, json: {} }), profile: 'kanon' })).rejects.toThrow(/--importer/);
+  it('refuses to send when the importer role is not deployed, naming the stack parameter', async () => {
+    const aws = (args: string[]) => ({ code: args[1] === 'assume-role' ? 254 : 0, stdout: args[1] === 'assume-role' ? '' : JSON.stringify({ Account: '1', Stacks: [{}] }), stderr: '' });
+    await expect(send([rowOf()], 'k2', { aws, profile: 'kanon' })).rejects.toThrow(/EnableImporter=true/);
+  });
+
+  it("stops on the function's refusal, naming its code alone", async () => {
+    const aws = (args: string[]) => (args[0] === 'lambda'
+      ? lambdaInvoke(args, () => ({ statusCode: 403, body: JSON.stringify({ error: 'suspended' }) }))
+      : { code: 0, stdout: JSON.stringify({ Account: ACCOUNT, Stacks: [{}], Credentials: { AccessKeyId: 'a', SecretAccessKey: 's', SessionToken: 't' } }), stderr: '' });
+    await expect(send([rowOf()], 'k2', { aws, profile: 'kanon' })).rejects.toThrow(/^the function answered 403 \(suspended\)$/);
+  });
+
+  it('names lambda invoke and the stack parameter when IAM refuses the alias, never the account or an ARN', async () => {
+    const aws = (args: string[]) => (args[0] === 'lambda'
+      ? { code: 254, stdout: '', stderr: `\nAn error occurred (AccessDeniedException) when calling the Invoke operation: User: arn:aws:sts::${ACCOUNT}:assumed-role/kanon-telemetry-importer/kanon-importer is not authorized to perform: lambda:InvokeFunction on resource: arn:aws:lambda:eu-central-1:${ACCOUNT}:function:kanon-telemetry-ingest:import\n` }
+      : { code: 0, stdout: JSON.stringify({ Account: ACCOUNT, Stacks: [{}], Credentials: { AccessKeyId: 'a', SecretAccessKey: 's', SessionToken: 't' } }), stderr: '' });
+    const message = await send([rowOf()], 'k2', { aws, profile: 'kanon' }).then(() => '', (e: Error) => e.message);
+    expect(message).toMatch(/^aws lambda invoke exited 254: .*AccessDeniedException.*EnableImporter=true/);
+    expect(message).not.toContain(ACCOUNT);
+    expect(message).not.toMatch(/arn:/);
   });
 });
 
@@ -199,15 +228,15 @@ const STDERR = {
 const failingAws = (failing: string, stderr: string, calls: string[] = []) => (args: string[]) => {
   calls.push(args[1] ?? '');
   if (args[1] === failing) return { code: 254, stdout: '', stderr };
+  if (args[0] === 'lambda') throw new Error('nothing may be sent');
   const out = args[1] === 'get-caller-identity' ? { Account: ACCOUNT }
-    : args[1] === 'describe-stacks' ? { Stacks: [{ Outputs: [{ OutputKey: 'IngestUrl', OutputValue: 'https://u.example/' }] }] }
+    : args[1] === 'describe-stacks' ? { Stacks: [{ StackName: 'kanon-telemetry' }] }
       : { Credentials: { AccessKeyId: 'a', SecretAccessKey: 's', SessionToken: 't' } };
   return { code: 0, stdout: JSON.stringify(out), stderr: '' };
 };
-const refusedPost = async () => { throw new Error('nothing may be posted'); };
 const reason = async (aws: ReturnType<typeof failingAws>) => {
   try {
-    await send([rowOf()], 'k2', { aws, post: refusedPost, profile: 'kanon' });
+    await send([rowOf()], 'k2', { aws, profile: 'kanon' });
   } catch (e) {
     return (e as Error).message;
   }
@@ -236,10 +265,10 @@ describe('§7 step 4: send says why it could not reach the store (kanon#693)', (
     expect(message).toMatch(/kanon-telemetry is not deployed/);
   });
 
-  it('names assume-role and the role flag, and never the account or the role\'s ARN', async () => {
+  it('names assume-role and the stack parameter, and never the account or the role\'s ARN', async () => {
     const message = await reason(failingAws('assume-role', STDERR.denied));
     expect(message).toMatch(/assume-role/);
-    expect(message).toMatch(/--importer/);
+    expect(message).toMatch(/EnableImporter=true/);
     expect(message).not.toContain(ACCOUNT);
     expect(message).not.toMatch(/arn:/);
   });
@@ -252,7 +281,7 @@ describe('§7 step 4: send says why it could not reach the store (kanon#693)', (
   });
 
   it('sendFailure is one line and never carries the key, the account or an ARN', () => {
-    const line = sendFailure(new Error(`posting to https://u.example/?key=s3cr3t-key failed for arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-importer\n    at post (verify.mjs:1:1)`), 's3cr3t-key');
+    const line = sendFailure(new Error(`invoking for s3cr3t-key failed for arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-importer\n    at send (import.mjs:1:1)`), 's3cr3t-key');
     expect(line.split('\n')).toHaveLength(1);
     expect(line).toMatch(/^send failed: /);
     for (const secret of ['s3cr3t-key', ACCOUNT, 'arn:']) expect(line).not.toContain(secret);

@@ -2,8 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
 
-import { nameHashesVariable } from '../../infra/telemetry/render.mjs';
 import { detect, parseRows, signature } from '../../scripts/telemetry/kanon-bugs.mjs';
 import {
   BODY_BUDGET, EARLIER, EXPIRED_HEAD, KeyRefusal, LABELS, assertNoKeyIn, holdsKey, main, plan, readFinding, registerContext, summary,
@@ -314,10 +314,10 @@ describe('nothing identifying leaves into the output', () => {
 });
 
 describe('the register gives the keys and the name hashes intake has', () => {
-  it('hashes each repository as render.mjs does for NAME_HASHES', () => {
+  it("hashes each repository as intake's scrub does: the words of its owner and name, sorted, never the words", () => {
     const { keys, names } = registerContext(REGISTER);
     expect(keys).toEqual(KEYS);
-    expect(Object.entries(names).map(([k, h]) => `${k}=${h.join(':')}`).join(',')).toBe(nameHashesVariable(REGISTER.repositories));
+    for (const e of REGISTER.repositories as Array<{ key: string, repository: string }>) expect(names[e.key]).toEqual([...nameContext({ repository: e.repository })].sort());
     expect(JSON.stringify(names)).not.toContain('widgets');
   });
 

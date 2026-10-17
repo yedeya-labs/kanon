@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { readRepositorySubject, subjectPrefix, subjectProblems } from '../../scripts/lib/oidc-subject.mjs';
 
-// The one reading of a GitHub OIDC subject, shared by the QA store's `provision.mjs` and the
-// telemetry store's `render.mjs` (kanon#295). The stores' own tests cover how each calls it.
+// The one reading of a GitHub OIDC subject, the QA store's `provision.mjs`'s, and the telemetry
+// store's `render.mjs`'s until plan 0008 J9 removed it (kanon#295). The store's own test covers how
+// it calls it.
 
 const IMMUTABLE = 'repo:yedeya-labs@335343289/qa-store-sandbox@1405862401';
 

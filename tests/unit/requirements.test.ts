@@ -33,7 +33,7 @@ describe('requirements.json', () => {
     expect(built.release).toEqual({ dcoExemptsReleaser: true });
   });
 
-  it("names the telemetry collector, no variable for its documented caller (plan 0008 J5), the token path, and the grant its caller must make", () => {
+  it("names the telemetry collector, no variable for its documented caller (plan 0008 J5), the token path, the inputs it declares (J9), and the grant its caller must make", () => {
     // `kanon init --telemetry` writes that caller, and `kanon doctor` lists its job as Kanon's
     // id-token holder, and, against a release on the token path, reads its last run. Doctor also
     // names a caller whose permissions: lack the grant: `contents: read` reads the adoption
@@ -42,6 +42,7 @@ describe('requirements.json', () => {
       collector: 'telemetry-collect',
       variables: [],
       token: true,
+      inputs: ['audience', 'erase', 'register', 'url', 'window_minutes'],
       grant: { actions: 'read', contents: 'read', 'id-token': 'write', issues: 'read', 'pull-requests': 'read' },
     });
   });

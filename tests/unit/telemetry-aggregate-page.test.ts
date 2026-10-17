@@ -155,10 +155,10 @@ describe("the page view's reads", () => {
 
 describe('the function answers the page view only when asked, and the default answer is unchanged', () => {
   const ACCOUNT = '5'.repeat(12);
-  const env = { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, INVOKER_KEYS: 'alpha' };
+  const env = { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT };
   const regs: Registration[] = [{ repository_id: '1', key: 'alpha', label: 'kanon', aggregate_invoker: true }, { repository_id: '2', key: 'beta' }];
+  // The Owner's direct invoke (plan 0008 J9): the token URL's own answers are telemetry-aggregate.test.ts's.
   const urlEvent = (query?: Record<string, string>) => ({
-    requestContext: { http: { method: 'GET' }, authorizer: { iam: { userArn: `arn:aws:sts::${ACCOUNT}:assumed-role/kanon-telemetry-alpha-aggregates/GitHubActions` } } },
     ...(query ? { queryStringParameters: query, rawQueryString: new URLSearchParams(query).toString() } : {}),
   });
   const call = async (event: unknown) => {
@@ -211,7 +211,7 @@ describe('the function answers the page view only when asked, and the default an
 });
 
 describe("the page view's partitions come from the register table (plan 0008 §3.6, J4)", () => {
-  const env = { TABLE_NAME: 'kanon-telemetry', INVOKER_KEYS: '' };
+  const env = { TABLE_NAME: 'kanon-telemetry' };
   const stored = [...items('alpha', 12), ...items('beta', 12, 100), ...items('gamma', 12, 200)];
   const read = async (regs: Registration[]) => {
     const { query, requests } = fakeQuery(stored);
