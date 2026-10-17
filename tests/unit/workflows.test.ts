@@ -438,6 +438,7 @@ describe("K-SHIP-7 Kanon's release caller", () => {
       return i;
     };
     const move = steps.find((s) => s.run?.includes('scripts/move-pins.mjs'));
+    const callers = steps.find((s) => s.id === 'callers');
     const mint = steps.find((s) => s.id === 'releaser');
     const open = steps.find((s) => s.id === 'open');
 
@@ -455,6 +456,14 @@ describe("K-SHIP-7 Kanon's release caller", () => {
       expect(at((s) => s === move)).toBeLessThan(at((s) => s === mint));
     });
 
+    // kanon#1074. tests/unit/pin-lane-check.test.ts runs the step on a fixture tree.
+    it("checks the moved callers with the candidate's lane-check, after the move and before any token is minted", () => {
+      expect(callers?.env).toEqual({ TAG: '${{ needs.candidate.outputs.tag }}' });
+      expect(callers?.run).toContain('node scripts/pin-lane-check.mjs "$TAG" > "$RUNNER_TEMP/callers.md"');
+      expect(at((s) => s === callers)).toBe(at((s) => s === move) + 1);
+      expect(at((s) => s === callers)).toBeLessThan(at((s) => s === mint));
+    });
+
     it("mints the Releaser's token, with the writes the commit and the pull request need, and Workflows write", () => {
       expect(mint?.uses).toBe('actions/create-github-app-token@v3');
       expect(mint?.if).toBeUndefined();
@@ -470,13 +479,14 @@ describe("K-SHIP-7 Kanon's release caller", () => {
     });
 
     // Runs the step's own script against a stub `gh` that logs every call.
-    const opener = (moved: string[], existing = '') => {
+    const opener = (moved: string[], existing = '', callers = '') => {
       const dir = mkdtempSync(join(tmpdir(), 'release-pins-'));
       try {
         const bin = join(dir, '.bin');
         mkdirSync(bin);
         const log = join(dir, 'calls');
         writeFileSync(log, '');
+        writeFileSync(join(dir, 'callers.md'), callers);
         for (const f of moved) {
           mkdirSync(join(dir, f, '..'), { recursive: true });
           writeFileSync(join(dir, f), `pin of ${f}\n`);
@@ -491,7 +501,7 @@ describe("K-SHIP-7 Kanon's release caller", () => {
             `  "pr list"*) echo "${existing}" ;;`,
             '  *matching-refs*) echo "" ;;',
             `  "api graphql"*) cp "$4" "${join(dir, 'commit.json')}"; echo "fff000" ;;`,
-            '  "pr create"*) echo "https://github.com/acme/widgets/pull/7" ;;',
+            `  "pr create"*) printf '%s\\0' "$@" > "${join(dir, 'create')}"; echo "https://github.com/acme/widgets/pull/7" ;;`,
             'esac',
             '',
           ].join('\n'),
@@ -502,7 +512,8 @@ describe("K-SHIP-7 Kanon's release caller", () => {
           env: { PATH: `${bin}:${process.env.PATH}`, TAG: 'candidate-v0.40.0', REPO: 'acme/widgets', SHA: 'abc123', BASE: 'main', RUNNER_TEMP: dir, GITHUB_STEP_SUMMARY: join(dir, 'summary'), GH_TOKEN: 't' },
         });
         const commit = existsSync(join(dir, 'commit.json')) ? (JSON.parse(readFileSync(join(dir, 'commit.json'), 'utf8')) as { variables: { input: Record<string, unknown> } }) : undefined;
-        return { status: r.status, err: r.stderr, calls: readFileSync(log, 'utf8').split('\n').filter(Boolean), commit };
+        const create = existsSync(join(dir, 'create')) ? readFileSync(join(dir, 'create'), 'utf8').split('\0') : [];
+        return { status: r.status, err: r.stderr, calls: readFileSync(log, 'utf8').split('\n').filter(Boolean), commit, create };
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -526,6 +537,26 @@ describe("K-SHIP-7 Kanon's release caller", () => {
       });
       const create = r.calls.find((c) => c.startsWith('pr create'));
       expect(create).toContain('--base main --head kanon/pins-candidate-v0.40.0 --title ci(deps): run Kanon on candidate v0.40.0 --body');
+    });
+
+    it('opens it ready for review when no caller needs a change', () => {
+      const r = opener(['.github/workflows/ci.yml']);
+      expect(r.status, r.err).toBe(0);
+      expect(r.create).not.toContain('--draft');
+      expect(r.create[r.create.indexOf('--body') + 1]).not.toContain('lane-check');
+    });
+
+    // kanon#1074: a candidate whose lane changes what a caller maps never opens a pin pull request
+    // that is red on `Lane check` without saying why.
+    it("opens it as a draft whose body lists what each caller needs, when the candidate's lane-check named one", () => {
+      const list = '- `.github/workflows/project-digest.yml`: maps secrets [CLAUDE_CODE_OAUTH_TOKEN,DIGEST_WEBHOOK]; the Kanon lane agent-project-digest takes exactly [KANON_CHAT_PROJECT_DIGEST]\n';
+      const r = opener(['.github/workflows/project-digest.yml'], '', list);
+      expect(r.status, r.err).toBe(0);
+      expect(r.create).toContain('--draft');
+      const body = r.create[r.create.indexOf('--body') + 1] ?? '';
+      expect(body).toContain("The candidate's `lane-check`");
+      expect(body).toContain(list.trim());
+      expect(body).toContain('mark it ready for review');
     });
 
     it('opens nothing when no pin moved, or when the pull request already exists', () => {

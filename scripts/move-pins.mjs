@@ -16,6 +16,10 @@
 // that is not an exact release (`@main`, a commit) is left alone, as is every other character of
 // every line. Prints each file it changed, one per line, relative to the root; exits 2 on a
 // release that is not exact.
+//
+// A caller the release's lanes need changed (a secret, an input, a permission) is not this
+// script's: the pin job checks the moved tree with `pin-lane-check.mjs` and lists each one in its
+// pull request, and the upgrade skill makes the change with `kanon init` (kanon#1074).
 
 import { lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
