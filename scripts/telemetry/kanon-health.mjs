@@ -3,11 +3,13 @@
 // view of `scripts/metrics/health.mjs`, which computes every figure. Reads only: one release list
 // and two issue searches, through `gh`.
 //
-//   node scripts/telemetry/kanon-health.mjs [--repo <owner>/<repo>] [--rows <file>] [--json]
+//   node scripts/telemetry/kanon-health.mjs [--repo <owner>/<repo>] [--rows <file> [--own <file>]] [--json]
 //   --repo: Kanon's repository (default yedeya-labs/kanon)
 //   --rows: run rows, a JSON array or one row per line, as `kanon-bugs.mjs` reads them; without
 //     it, upgrade lag is not computed. The rows are the Owner's: they never leave this process,
 //     and the lag is printed only as a distribution of at least three adopters
+//   --own: as `kanon-bugs.mjs`, each declaring adopter's key to its label; those adopters are
+//     left out of the lag (#1094). Read only with --rows
 //   --json: one document, `SCHEMA`, instead of the Markdown view
 //
 // WHAT IT READS. The releases; the issues whose body holds the "Dispute a rule" form's heading;
@@ -23,7 +25,7 @@ import { readFileSync } from 'node:fs';
 
 import { DISPUTE_FIELD, healthView, ruleDisputes, timeToFix, upgradeLag } from '../metrics/health.mjs';
 import { isCliEntry } from '../lib/cli-entry.mjs';
-import { parseRows } from './kanon-bugs.mjs';
+import { OWN_REFUSAL, isOwn, parseRows } from './kanon-bugs.mjs';
 import { LABELS } from './kanon-findings.mjs';
 
 /** The JSON output's contract. A breaking change to it changes this. */
@@ -31,7 +33,7 @@ export const SCHEMA = 'kanon-health/v1';
 /** Kanon's own repository, whose disputes, bugs and releases these are. */
 export const KANON_REPO = 'yedeya-labs/kanon';
 
-const USAGE = 'usage: kanon-health.mjs [--repo <owner>/<repo>] [--rows <file>] [--json]';
+const USAGE = 'usage: kanon-health.mjs [--repo <owner>/<repo>] [--rows <file> [--own <file>]] [--json]';
 const PAGE = 'pageInfo { hasNextPage endCursor }';
 
 /** The disputes: each issue's state and body, which holds the form's fields. */
@@ -121,24 +123,34 @@ export function main(argv, { gh = realGh, now = () => new Date() } = {}) {
   let repo = KANON_REPO;
   /** @type {string | null} */
   let rowsFile = null;
+  /** @type {string | null} */
+  let ownFile = null;
   let json = false;
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--json') { json = true; continue; }
-    if ((a === '--repo' || a === '--rows') && argv[i + 1] !== undefined) {
+    if ((a === '--repo' || a === '--rows' || a === '--own') && argv[i + 1] !== undefined) {
       const v = /** @type {string} */ (argv[i + 1]);
       if (a === '--repo') repo = v;
-      else rowsFile = v;
+      else if (a === '--rows') rowsFile = v;
+      else ownFile = v;
       i += 1;
       continue;
     }
     return { code: 2, out: USAGE };
   }
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return { code: 2, out: USAGE };
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || (ownFile !== null && rowsFile === null)) return { code: 2, out: USAGE };
   let rows = null;
+  /** @type {Record<string, string>} */
+  let own = {};
   if (rowsFile !== null) {
     try {
       rows = parseRows(readFileSync(rowsFile, 'utf8'));
+      if (ownFile !== null) {
+        const o = JSON.parse(readFileSync(ownFile, 'utf8'));
+        if (!isOwn(o)) return { code: 2, out: OWN_REFUSAL };
+        own = o;
+      }
     } catch (e) {
       // The error's name only: a message could quote a row, and a row holds what must not be printed.
       return { code: 2, out: `could not read the rows (${e instanceof Error ? e.name : 'error'})` };
@@ -155,7 +167,7 @@ export function main(argv, { gh = realGh, now = () => new Date() } = {}) {
     computed_at: at.toISOString(),
     disputes: ruleDisputes(input.disputes),
     fixes: timeToFix(input.bugs, input.releases, { now: at }),
-    lag: rows === null ? null : upgradeLag(rows, input.releases, { now: at }),
+    lag: rows === null ? null : upgradeLag(rows, input.releases, { now: at, own }),
   };
   if (json) {
     const { lag, ...rest } = health;

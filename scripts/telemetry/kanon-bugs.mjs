@@ -39,7 +39,12 @@
 //
 // PUBLIC OR PRIVATE (decision 2 on #41). A signal or a rise is `public` only when at least
 // `MIN_ADOPTERS` distinct adopters contributed to it: the aggregate's three-adopter rule (#449,
-// plan 0002 decision 7), imported, not restated. Everything else is `private`.
+// plan 0002 decision 7), imported, not restated. Everything else is `private`. An adopter that
+// declares its own figures (`publish_own_figures_as`, given as `own`, the map the aggregate
+// takes) is left out of that count, as the aggregate leaves it out of every cross-adopter cell:
+// the Owner's own projects declare it, Kanon, the operator's repository and the e2e harness
+// (plan 0012 §6.2), so they never make up the three (#1094). Its runs still count everywhere
+// else: in the signal, its classification and its adopter count, and in both rates of a rise.
 //
 // NOTHING IDENTIFYING LEAVES. A row's lane, stage, error and reason are read only when they are
 // in the schema's closed lists, and its version only when it matches the schema's pattern;
@@ -48,9 +53,11 @@
 // key, a repository, a run id, a login or a path. The output is also checked for every key the
 // input held (`assertNoKey`), and refused whole if one appears.
 //
-//   node scripts/telemetry/kanon-bugs.mjs --rows <file> [--known <file>] [--tag run|test|smoke] [--json]
+//   node scripts/telemetry/kanon-bugs.mjs --rows <file> [--known <file>] [--own <file>] [--tag run|test|smoke] [--json]
 //   --rows: a JSON array of rows, or one row per line (JSON lines)
 //   --known: a JSON array of signatures already filed; a signal not in it is `new`
+//   --own: a JSON object of each declaring adopter's key to its label, the aggregate's `own`;
+//     without it, every adopter counts toward the three-adopter rule
 //   prints: with --json, `{ signals, rises, skipped }`, each signal and rise with its `issue`
 //     (`signature`, `title`, `body`); without, a summary of counts
 //
@@ -165,18 +172,29 @@ const codeIn = (/** @type {unknown} */ v, /** @type {readonly string[]} */ list)
  */
 const adopterOf = (row) => (typeof row.adopter === 'string' && row.adopter !== '' ? row.adopter : keyOf(row.pk));
 
+/** What a CLI prints for an `--own` file of another shape. */
+export const OWN_REFUSAL = '--own is not a JSON object of adopter keys to labels';
+/**
+ * Whether a parsed `--own` file is the aggregate's `own` map: each declaring adopter's key to its label.
+ * @param {unknown} v
+ * @returns {v is Record<string, string>}
+ */
+export const isOwn = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every((l) => typeof l === 'string');
+
 /**
  * The signals and rises in a set of rows (the file's head says what each is).
  * @param {Row[]} rows
- * @param {{ known?: Iterable<string>, tag?: string }} [opts] `known`: the signatures already filed
+ * @param {{ known?: Iterable<string>, tag?: string, own?: Record<string, string> }} [opts] `known`: the
+ *   signatures already filed; `own`: each declaring adopter's key to its label, left out of the
+ *   three-adopter rule
  * @returns {{ signals: Signal[], rises: Rise[], skipped: Skipped }}
  */
-export function detect(rows, { known = [], tag = 'run' } = {}) {
+export function detect(rows, { known = [], tag = 'run', own = {} } = {}) {
   const knownSet = new Set(known);
   /** @type {Skipped} */
   const skipped = { not_run: 0, no_version: 0, no_adopter: 0, unknown_code: 0 };
   /** @type {Set<string>} */
-  const keys = new Set();
+  const keys = new Set(Object.keys(own));
   /** Every run, failed or not, by lane and version: the denominators. */
   /** @type {Map<string, { runs: number, failures: number, adopters: Set<string>, byAdopter: Map<string, number> }>} */
   const totals = new Map();
@@ -252,6 +270,8 @@ export function detect(rows, { known = [], tag = 'run' } = {}) {
     }
     return null;
   };
+  /** Adopters that count toward the three-adopter rule: every one but a declaring one, as `aggregate` counts a cell's. */
+  const counted = (/** @type {Set<string>} */ adopters) => [...adopters].filter((k) => !Object.hasOwn(own, k)).length;
   const visibility = (/** @type {number} */ n) => (n >= MIN_ADOPTERS ? 'public' : 'private');
 
   /** @type {Signal[]} */
@@ -269,7 +289,7 @@ export function detect(rows, { known = [], tag = 'run' } = {}) {
       kanon_version: g.kanon_version, runs: g.runs, adopters: g.adopters.size, first_seen: g.first, last_seen: g.last,
       api_error_status: Object.fromEntries(Object.entries(g.statuses).sort(([a], [b]) => Number(a) - Number(b))),
       starts_at_release: startsAtRelease, classification,
-      visibility: /** @type {'public' | 'private'} */ (visibility(g.adopters.size)),
+      visibility: /** @type {'public' | 'private'} */ (visibility(counted(g.adopters))),
     };
     const signature = signalSignature(base);
     const s = { ...base, signature, new: !knownSet.has(signature) };
@@ -293,7 +313,7 @@ export function detect(rows, { known = [], tag = 'run' } = {}) {
       runs: t.runs, failures: t.failures, rate: round(rate), previous_runs: p.runs, previous_failures: p.failures,
       previous_rate: round(previousRate), adopters: t.adopters.size, previous_adopters: p.adopters.size,
       // Both rates combine adopters' runs, so each must clear the three-adopter rule.
-      visibility: /** @type {'public' | 'private'} */ (visibility(Math.min(t.adopters.size, p.adopters.size))),
+      visibility: /** @type {'public' | 'private'} */ (visibility(Math.min(counted(t.adopters), counted(p.adopters)))),
     };
     const signature = riseSignature(base);
     const r = { ...base, signature, new: !knownSet.has(signature) };
@@ -396,14 +416,14 @@ export function summary(r) {
  * @returns {{ code: number, out: string }}
  */
 export function main(argv) {
-  const usage = 'usage: kanon-bugs.mjs --rows <file> [--known <file>] [--tag run|smoke|test] [--json]';
+  const usage = 'usage: kanon-bugs.mjs --rows <file> [--known <file>] [--own <file>] [--tag run|smoke|test] [--json]';
   /** @type {Record<string, string>} */
   const opts = {};
   let json = false;
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--json') { json = true; continue; }
-    if ((a === '--rows' || a === '--known' || a === '--tag') && argv[i + 1] !== undefined) { opts[a.slice(2)] = /** @type {string} */ (argv[i + 1]); i += 1; continue; }
+    if ((a === '--rows' || a === '--known' || a === '--own' || a === '--tag') && argv[i + 1] !== undefined) { opts[a.slice(2)] = /** @type {string} */ (argv[i + 1]); i += 1; continue; }
     return { code: 2, out: usage };
   }
   if (!opts.rows) return { code: 2, out: usage };
@@ -411,6 +431,8 @@ export function main(argv) {
   let rows;
   /** @type {string[]} */
   let known = [];
+  /** @type {Record<string, string>} */
+  let own = {};
   try {
     rows = parseRows(readFileSync(opts.rows, 'utf8'));
     if (opts.known) {
@@ -418,13 +440,18 @@ export function main(argv) {
       if (!Array.isArray(k) || !k.every((s) => typeof s === 'string')) return { code: 2, out: '--known is not a JSON array of signatures' };
       known = k;
     }
+    if (opts.own) {
+      const o = JSON.parse(readFileSync(opts.own, 'utf8'));
+      if (!isOwn(o)) return { code: 2, out: OWN_REFUSAL };
+      own = o;
+    }
   } catch (e) {
     // The error's name only: a message could quote a row, and a row holds what must not be printed.
     return { code: 2, out: `could not read the input (${e instanceof Error ? e.name : 'error'})` };
   }
   let r;
   try {
-    r = detect(rows, { known, tag: opts.tag ?? 'run' });
+    r = detect(rows, { known, own, tag: opts.tag ?? 'run' });
   } catch {
     // `assertNoKey`'s refusal: the output would hold an adopter key as a value, so none is printed.
     return { code: 2, out: 'refused: the signals would hold an adopter key, so nothing is printed' };

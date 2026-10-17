@@ -105,6 +105,14 @@ describe("F5's check: one private issue per signature, beside the signal (plan 0
     for (const s of r.signals) expect(s.issue.body).not.toContain('Upstream findings');
   });
 
+  it("hands detect the declaring adopters, so a signal's visibility is kanon-bugs.mjs's with the same `own` (#1094)", () => {
+    const rows = [failedRun('a1b2c3d4'), failedRun('e5f6a7b8'), failedRun('kfixture3')];
+    expect(plan(rows as never, CTX).signals[0]?.visibility).toBe('public');
+    const own = { a1b2c3d4: 'kanon' };
+    expect(plan(rows as never, { ...CTX, own }).signals).toEqual(detect(rows as never, { tag: 'test', own }).signals);
+    expect(plan(rows as never, { ...CTX, own }).signals[0]?.visibility).toBe('private');
+  });
+
   it('a code-less finding signs by its rules and paths, so two such findings on a release stay apart', () => {
     const a = finding('a1b2c3d4', { subject: 'guard', lane: undefined, failed_stage: undefined, reason: undefined, rules: 'K-MERGE-10', fix_category: 'guard' });
     const b = finding('a1b2c3d4', { subject: 'rule', lane: undefined, failed_stage: undefined, reason: undefined, rules: 'K-OBS-16', fix_category: 'rule-text' });
@@ -365,6 +373,18 @@ describe('the CLI', () => {
     const known = join(dir, 'known.json');
     writeFileSync(known, '{}');
     expect(main([...args, '--known', known]).out).toBe('--known is not a JSON array of signatures');
+    const own = join(dir, 'own.json');
+    writeFileSync(own, '["a1b2c3d4"]');
+    expect(main([...args, '--own', own])).toEqual({ code: 2, out: '--own is not a JSON object of adopter keys to labels' });
+  });
+
+  it('reads --own and hands it to detect (#1094)', () => {
+    const rows = join(dir, 'own-rows.jsonl');
+    writeFileSync(rows, ['a1b2c3d4', 'e5f6a7b8', 'kfixture3'].map((k) => JSON.stringify(failedRun(k))).join('\n'));
+    const own = join(dir, 'own.json');
+    writeFileSync(own, JSON.stringify({ a1b2c3d4: 'kanon' }));
+    expect(main(['--rows', rows, '--tag', 'test']).out).toContain('1 new, 1 public.');
+    expect(main(['--rows', rows, '--tag', 'test', '--own', own]).out).toContain('1 new, 0 public.');
   });
 
   it('refuses to print anything when the output would hold a key', () => {

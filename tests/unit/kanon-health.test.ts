@@ -233,6 +233,20 @@ describe("upgradeLag: each adopter's newest version against the release list", (
     expect(upgradeLag([...rows, edge], RELEASES, { now: NOW })).toMatchObject({ adopters: 4, on_latest: 2 });
   });
 
+  // #1094: the Owner's own projects declare their own figures (`publish_own_figures_as`), and plan
+  // 0012 §6.2 says their rows never count toward the rule. `own` is the map `aggregate` takes.
+  it('leaves declaring adopters out, as the cross-adopter cells do, so they never make up the three', () => {
+    const owner = [run('o1#review', '0.38.0'), run('o2#review', '0.38.0')];
+    const own = { o1: 'kanon', o2: 'operator', aaaa1111: 'harness' };
+    // Two of the Owner's projects and one adopter: three keys, one of them an adopter's.
+    expect(upgradeLag([...owner, rows[3]!], RELEASES, { now: NOW, own })).toEqual({ withheld: true, min_adopters: MIN_ADOPTERS });
+    expect(upgradeLag([...owner, rows[3]!], RELEASES, { now: NOW })).toMatchObject({ withheld: false, adopters: 3 });
+    // A declaring key is out of the distribution too, not only out of the count.
+    const others = [run('dddd4444#review', '0.38.0'), run('eeee5555#review', '0.35.0')];
+    expect(upgradeLag([...owner, ...rows, ...others], RELEASES, { now: NOW, own }))
+      .toEqual(upgradeLag([...rows.slice(1), ...others], RELEASES, { now: NOW }));
+  });
+
   it('never holds an adopter key', () => {
     const r = upgradeLag(rows.map((x) => ({ ...x, pk: undefined, adopter: String(x.pk).slice(0, 8) })), RELEASES, { now: NOW });
     const text = JSON.stringify(r);
@@ -331,6 +345,20 @@ describe('kanon-health.mjs: reads Kanon from GitHub and prints the view', () => 
     expect(doc).toMatchObject({ schema: SCHEMA, computed_at: NOW.toISOString(), disputes: { disputes: 1 }, fixes: { filed: 2 } });
     expect(doc.upgrade_lag).toMatchObject({ withheld: false, adopters: 3, on_latest: 0, releases_behind: { median: 1 } });
     expect(out).not.toContain('aaaa1111');
+  });
+
+  it('with --own, leaves the declaring adopters out of the upgrade lag (#1094)', () => {
+    const file = join(dir, 'rows.jsonl');
+    writeFileSync(file, ['aaaa1111', 'bbbb2222', 'cccc3333'].map((k) => JSON.stringify(run(`${k}#review`, '0.37.0'))).join('\n'));
+    const own = join(dir, 'own.json');
+    writeFileSync(own, JSON.stringify({ aaaa1111: 'kanon' }));
+    const { code, out } = main(['--json', '--rows', file, '--own', own], deps([]));
+    expect(code).toBe(0);
+    expect(JSON.parse(out).upgrade_lag).toEqual({ withheld: true, min_adopters: MIN_ADOPTERS });
+    writeFileSync(own, '["aaaa1111"]');
+    expect(main(['--rows', file, '--own', own], deps([]))).toEqual({ code: 2, out: '--own is not a JSON object of adopter keys to labels' });
+    // The map is read only for the rows' lag, so it needs --rows.
+    expect(main(['--own', own], deps([])).code).toBe(2);
   });
 
   it('exits 3 when GitHub fails, and 2 on a bad argument', () => {
