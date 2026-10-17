@@ -4,7 +4,7 @@
       "source": {
         "source": "github",
         "repo": "yedeya-labs/kanon",
-        "ref": "candidate-v0.41.0"
+        "ref": "candidate-v0.42.0"
       }
     }
   },

@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.42.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.41.0...candidate-v0.42.0) (2026-10-17)
+
+
+### Features
+
+* **doctor:** flag a telemetry register tracked in a repository where Kanon's lanes run ([#1072](https://github.com/yedeya-labs/kanon/issues/1072)) ([6d44ecb](https://github.com/yedeya-labs/kanon/commit/6d44ecb5e25fb5651bcc30293920cf5ce21e6b45))
+* **metrics:** move the metrics page to the token path (plan 0008 step 4a) ([#1079](https://github.com/yedeya-labs/kanon/issues/1079)) ([0545496](https://github.com/yedeya-labs/kanon/commit/0545496abb89b5601aa71baa29d00adcbe8448dd))
+
+
+### Bug Fixes
+
+* **pins:** accept a candidate pin wherever an exact release is accepted ([#1073](https://github.com/yedeya-labs/kanon/issues/1073)) ([6dca70f](https://github.com/yedeya-labs/kanon/commit/6dca70fc617ad9fa1d87188e09ce93118ff8878e))
+* **release:** the pin job lists the caller changes a candidate needs, in a draft pin PR ([#1075](https://github.com/yedeya-labs/kanon/issues/1075)) ([3a33cf7](https://github.com/yedeya-labs/kanon/commit/3a33cf7d53657bb7b4be52fccc7ac585ce7c12c4))
+* **telemetry:** a cold intake container retries its first JWKS fetch instead of answering 503 for a minute ([#1070](https://github.com/yedeya-labs/kanon/issues/1070)) ([1c478c6](https://github.com/yedeya-labs/kanon/commit/1c478c638c737d6d91ab4398b65bb6f17412b426))
+
+
+### Documentation
+
+* **apps:** register the end-to-end Reporter as an Other App ([#1083](https://github.com/yedeya-labs/kanon/issues/1083)) ([257b6cc](https://github.com/yedeya-labs/kanon/commit/257b6cc03cff9d1655a3c9c6a9cc1fdbe1e1d32d))
+* **metrics:** refresh the public metrics page ([#1084](https://github.com/yedeya-labs/kanon/issues/1084)) ([b802cda](https://github.com/yedeya-labs/kanon/commit/b802cdab1c56110645e338de53a4041ea0341529))
+* **plans:** plan 0012 takes decision 23's fallback, a read-only kanon job ([#1088](https://github.com/yedeya-labs/kanon/issues/1088)) ([5497e14](https://github.com/yedeya-labs/kanon/commit/5497e14f27dd0d2e03e6e7e8366e1a7b8c5358ab))
+* **plans:** run plan 0012's real-model tier on the Owner's subscription token ([#1082](https://github.com/yedeya-labs/kanon/issues/1082)) ([ff1f521](https://github.com/yedeya-labs/kanon/commit/ff1f5215d75c483b3e6c2d9439cb8c57878f3413))
+
+
+### CI
+
+* **deps:** run Kanon on candidate v0.41.0 ([#1067](https://github.com/yedeya-labs/kanon/issues/1067)) ([632a1df](https://github.com/yedeya-labs/kanon/commit/632a1dfd7e07d7a60f8fe694e9948fb0ad711e97))
+
+
+### Chores
+
+* **adoption:** clear what doctor reports about Kanon's own adoption at v0.40.2 ([#1066](https://github.com/yedeya-labs/kanon/issues/1066)) ([7eb92dc](https://github.com/yedeya-labs/kanon/commit/7eb92dc223770edef65003fb142ddf38ac94004a))
+
 ## [0.41.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.40.0...candidate-v0.41.0) (2026-10-16)
 
 
