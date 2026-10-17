@@ -194,7 +194,7 @@ export function detect(rows, { known = [], tag = 'run', own = {} } = {}) {
   /** @type {Skipped} */
   const skipped = { not_run: 0, no_version: 0, no_adopter: 0, unknown_code: 0 };
   /** @type {Set<string>} */
-  const keys = new Set(Object.keys(own));
+  const keys = new Set();
   /** Every run, failed or not, by lane and version: the denominators. */
   /** @type {Map<string, { runs: number, failures: number, adopters: Set<string>, byAdopter: Map<string, number> }>} */
   const totals = new Map();
