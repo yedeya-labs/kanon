@@ -360,7 +360,7 @@ The bulk, and every scenario of the gate's first version. Each scenario is a rep
 
 A run classified `unavailable` (the model was never reached, plan 0009 §2) is `infra`, which is retried, not failed.
 
-**No telemetry is sent** (decision 8, changed). The scenario repositories decline sharing and install no collector, so no test row reaches the hosted store. The collector's end-to-end path stays covered by its own tests.
+**No telemetry is sent from a scenario** (decision 8, changed). The scenario repositories decline sharing and install no collector, so no test row reaches the hosted store. **The harness itself sends telemetry** (the Owner, 2026-10-17): it is a long-lived adopter whose own lanes do real work, so it opts in as any adopter does, `kanon init --telemetry`, and its collector registers it on its first run (harness#11). Its rows are Kanon's own, like Kanon's repository's, and are counted apart from adopters' wherever adoption is reported. The collector's end-to-end path stays covered by its own tests.
 
 ## 7. Triggers
 
@@ -615,7 +615,7 @@ All taken by the Owner on 2026-10-14, and decision 16 changed by the Owner on 20
 5. **`init` pins the release it runs from:** `vX.Y.Z` if that tag exists, else `candidate-vX.Y.Z`, else it refuses. As recommended: "a product bug fix". E1.
 6. **No stubbed or replayed model** (**changed**, under the no-leak rule). No `Agent replay` choice, and no change to `agent-run`, doctor or comment markers. "Model lanes are tested only by the few real-model scenarios. No-model scenarios cover the rest." [§6](#6-two-tiers).
 7. **The cap** (**changed**, under the no-leak rule). No `Run ceiling` choice. "The cost cap is the spend-limited key's monthly limit (hard per month) plus the runner's ledger, which refuses to start a run that could pass the cap (soft per run). Each lane's own ceiling still bounds one run." A per-run hard cap comes only later, as the adopter feature #891 describes, judged on its own merit. Decision 16's change of 2026-10-16 removed the spend-limited key: the month's hard bound is now the subscription's usage limits, and the ledger and each lane's ceiling hold as before. [§6.2](#62-a-real-model-under-2).
-8. **Telemetry** (**changed**, under the no-leak rule). No `Telemetry tag` choice: "scenario repositories don't send telemetry". The collector's end-to-end path stays covered by its own tests. [§6.2](#62-a-real-model-under-2).
+8. **Telemetry** (**changed**, under the no-leak rule). No `Telemetry tag` choice: "scenario repositories don't send telemetry". The harness itself does, as an adopter that opts in (the Owner, 2026-10-17, [§6.2](#62-a-real-model-under-2)). The collector's end-to-end path stays covered by its own tests. [§6.2](#62-a-real-model-under-2).
 9. **The deploy scenario's approval:** (a), the Owner approves on candidates, on a release the test Releaser published, and nightly runs cancel at the wait. As recommended. [§9](#9-the-first-scenarios).
 10. **The test Apps' keys** go in each scenario repository's own secrets. As recommended. [§5.2](#52-the-jobs-and-which-secret-each-holds).
 11. **No quarantine** (**changed**). "A broken scenario blocks releases until it is fixed." Real-model scenarios gate only on model-independent facts: the run completed, posted, recorded, and stayed under its ceiling. A model outage is `infra`, which is retried, not failed. That half is as recommended. [§10](#10-flakiness).
