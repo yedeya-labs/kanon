@@ -89,13 +89,16 @@ laneCheck(() => {
     const pinHook = (t: Tree) => t.edit(HOOK, (d) => {
       (d.runs as { steps: unknown[] }).steps.unshift({ uses: 'yedeya-labs/kanon/actions/kanon-path@v1.2.3' });
     });
+    // The finding names the entry it means, by its place in `updates` and what tells it apart
+    // (kanon#1111): with more than one entry that proposes Kanon, "the Kanon entry" is ambiguous.
+    const stuck = (at: number, ...said: string[]) => `its Kanon entry at \`updates[${at}]\` (${said.map((x) => `\`${x}\``).join(', ')}) doesn't reach ${HOOK}`;
     const directories = (dirs: string[]) => (t: Tree) => t.edit(DEP, (d) => {
       const u = (d as Dep).updates[0]!;
       delete u.directory;
       u.directories = dirs;
     });
     it("refuses an entry that doesn't reach a composite action pinning Kanon, naming it and the line that does (kanon#1105)", () => {
-      const r = red(pinHook, `its Kanon entry doesn't reach ${HOOK}`);
+      const r = red(pinHook, stuck(0, 'directory: /'));
       expect(r.out).toContain('directories: ["/", "/.github/actions/*"]');
       expect(r.out).not.toMatch(/Kanon references pin .*,/);
     });
@@ -109,14 +112,14 @@ laneCheck(() => {
       }
     });
     it('refuses directories that name another action', () =>
-      red((t) => { pinHook(t); directories(['/', '/.github/actions/notify'])(t); }, `its Kanon entry doesn't reach ${HOOK}`));
+      red((t) => { pinHook(t); directories(['/', '/.github/actions/notify'])(t); }, stuck(0, 'directories: ["/","/.github/actions/notify"]')));
     // Dependabot groups an entry's updates into one pull request, across its directories, never
     // across entries: two entries open two pull requests, each with a mix of pins.
     it("refuses a second entry for the action's directory, which opens a pull request of its own", () =>
       red((t) => {
         pinHook(t);
         t.edit(DEP, (d) => { (d as Dep).updates.push({ ...(d as Dep).updates[0]!, directory: '/.github/actions/project-setup' }); });
-      }, `its Kanon entry doesn't reach ${HOOK}`));
+      }, stuck(0, 'directory: /')));
     it("refuses a second Kanon entry that doesn't reach it, though the first does: each opens its own upgrade pull request", () =>
       red((t) => {
         pinHook(t);
@@ -126,7 +129,7 @@ laneCheck(() => {
           delete u.directories;
           (d as Dep).updates.push(u);
         });
-      }, `its Kanon entry doesn't reach ${HOOK}`));
+      }, stuck(1, 'target-branch: release', 'directory: /')));
     // kanon#1111: an entry is held to the reach when it would open a Kanon upgrade pull request,
     // which needs no cooldown, `ci` prefix or Kanon group, the same set `kanon doctor` holds.
     const second = (more: Record<string, unknown>, drop: string[] = []) => (t: Tree) => {
@@ -139,11 +142,11 @@ laneCheck(() => {
       });
     };
     it("refuses a second entry that doesn't reach a pin, though it lacks a cooldown or the `ci` prefix (kanon#1111)", () => {
-      red(second({ directory: '/', allow: [{ 'dependency-name': 'yedeya-labs/kanon*' }] }, ['cooldown']), `its Kanon entry doesn't reach ${HOOK}`);
-      red(second({ directory: '/', 'commit-message': { prefix: 'build' } }), `its Kanon entry doesn't reach ${HOOK}`);
+      red(second({ directory: '/', allow: [{ 'dependency-name': 'yedeya-labs/kanon*' }] }, ['cooldown']), stuck(1, 'target-branch: release', 'directory: /'));
+      red(second({ directory: '/', 'commit-message': { prefix: 'build' } }), stuck(1, 'target-branch: release', 'directory: /'));
     });
     it("refuses a second entry with no Kanon group that doesn't reach a pin: it still proposes Kanon, alone (kanon#1111)", () =>
-      red(second({ directory: '/' }, ['groups', 'cooldown', 'commit-message']), `its Kanon entry doesn't reach ${HOOK}`));
+      red(second({ directory: '/' }, ['groups', 'cooldown', 'commit-message']), stuck(1, 'target-branch: release', 'directory: /')));
     it('passes a second entry that proposes no Kanon upgrade: it reaches no pin, allows no Kanon dependency, or ignores Kanon (kanon#1111)', () => {
       for (const more of [
         { directory: '/infra' },

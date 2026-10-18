@@ -112,3 +112,19 @@ export const proposesKanon = (entry, files) => {
  * @param {unknown} doc @param {string[]} files @returns {unknown[]}
  */
 export const kanonEntries = (doc, files) => (isMap(doc) && Array.isArray(doc.updates) ? doc.updates : []).filter((e) => proposesKanon(e, files));
+
+/**
+ * How a finding names `entry`, one of the parsed `doc`'s `updates`: its place in the list, with
+ * its `target-branch` and the directories it names as written, since a second entry that proposes
+ * Kanon often differs from the first only there (kanon#1111).
+ * @param {unknown} doc @param {unknown} entry @returns {string}
+ */
+export const entryName = (doc, entry) => {
+  const at = isMap(doc) && Array.isArray(doc.updates) ? doc.updates.indexOf(entry) : -1;
+  const said = [
+    ...(isMap(entry) && typeof entry['target-branch'] === 'string' ? [`target-branch: ${entry['target-branch']}`] : []),
+    ...(isMap(entry) && typeof entry.directory === 'string' ? [`directory: ${entry.directory}`] : []),
+    ...(isMap(entry) && Array.isArray(entry.directories) ? [`directories: ${JSON.stringify(entry.directories)}`] : []),
+  ];
+  return `at \`updates[${at}]\`${said.length ? ` (${said.map((s) => `\`${s}\``).join(', ')})` : ''}`;
+};

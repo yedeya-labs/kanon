@@ -27,7 +27,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FIXED_CALLERS, callerNameFindings, kanonVersion } from './caller-names.mjs';
 import { declarationFindings } from './declarations.mjs';
-import { directoriesLine, kanonEntries, unreached, updatedFrom } from './dependabot-reach.mjs';
+import { directoriesLine, entryName, kanonEntries, unreached, updatedFrom } from './dependabot-reach.mjs';
 import { pullRequestMovesOnlyKanonRefs } from './refs-only.mjs';
 import { LEDGER, readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
 
@@ -792,7 +792,7 @@ if (!isFile(DEP)) {
     for (const e of kanonEntries(dep, files)) {
       const left = unreached(e, files).filter((f) => !nowhere.includes(f));
       if (!left.length) continue;
-      fail(DEP, `its Kanon entry doesn't reach ${left.join(', ')}, which ${left.length > 1 ? 'pin' : 'pins'} Kanon: Dependabot reads .github/workflows/ from \`/\`, and a composite action only from its own directory, so the upgrade pull request leaves ${left.length > 1 ? 'them' : 'it'} at the old release and fails the one-version rule. Write the entry's directories as \`${directoriesLine(e, files)}\`, in place of any \`directory:\` (K-ADOPT-11)`);
+      fail(DEP, `its Kanon entry ${entryName(dep, e)} doesn't reach ${left.join(', ')}, which ${left.length > 1 ? 'pin' : 'pins'} Kanon: Dependabot reads .github/workflows/ from \`/\`, and a composite action only from its own directory, so the upgrade pull request leaves ${left.length > 1 ? 'them' : 'it'} at the old release and fails the one-version rule. Write that entry's directories as \`${directoriesLine(e, files)}\`, in place of any \`directory:\` (K-ADOPT-11)`);
     }
   }
 }

@@ -125,6 +125,7 @@ describe('kanon doctor on what an installation lacks', () => {
       expect(ids(r)).toEqual(['pin.dependabot-unreached .github/dependabot.yml']);
       expect(r.json.findings[0]).toMatchObject({ category: 'pin', blocking: true });
       expect(r.json.findings[0].message).toContain(REQ.hook.path);
+      expect(r.json.findings[0].message).toContain("Kanon entry at `updates[0]` (`directory: /`) doesn't reach");
       expect(r.json.findings[0].fix.commands).toEqual(['directories: ["/", "/.github/actions/*"]']);
       expect(r.status).toBe(EXIT.findings);
     });
@@ -162,6 +163,8 @@ describe('kanon doctor on what an installation lacks', () => {
       files['.github/dependabot.yml'] = withEntry(files, ['  - package-ecosystem: github-actions', '    directory: /', '    target-branch: release', '    schedule:', '      interval: daily', ''].join('\n'));
       const r = await run(checkout(files), fakeGitHub(), ['--json']);
       expect(ids(r)).toEqual(['pin.dependabot-unreached .github/dependabot.yml']);
+      // The first entry already reaches the hook, so the finding names the one to change (kanon#1111).
+      expect(r.json.findings[0].message).toContain("Kanon entry at `updates[1]` (`target-branch: release`, `directory: /`) doesn't reach");
       expect(r.json.findings[0].fix.commands).toEqual(['directories: ["/", "/.github/actions/*"]']);
     });
 
