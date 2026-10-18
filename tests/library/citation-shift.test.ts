@@ -565,3 +565,86 @@ describe('the docs it maps are the guard\'s `--path` list, `docs/**/*.md` by def
     expect(r.stderr).toContain('citation-shift: `--path rulbook/**/*.md` selected no tracked Markdown file it reads');
   });
 });
+
+/**
+ * kanon#1108 — a coordinate into a path a file-system router produces (`app/[id]/page.tsx`,
+ * `(group)`, `[...slug]`, `@slot`) was not read, so a diff that moved lines in one reported
+ * "none left behind by a move" over six stale coordinates in an adopter's `[confirmed]` clauses.
+ */
+describe("a coordinate into a file-system router's path moves like any other (kanon#1108)", () => {
+  const ROUTES = [
+    'src/app/x/page.tsx',
+    'src/app/[id]/page.tsx',
+    'src/app/[...slug]/page.tsx',
+    'src/app/[[...opt]]/page.tsx',
+    'src/app/(group)/page.tsx',
+    'src/app/@slot/page.tsx',
+    'src/app/@modal/(..)photo/[id]/page.tsx',
+    'src/routes/[[lang=locale]]/+page.ts',
+    'app/routes/($lang).posts.$postId.tsx',
+  ];
+  const insert3After5 = (path: string) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -5,0 +6,3 @@ ctx\n+a\n+b\n+c\n`;
+
+  it.each(ROUTES)('reports a doc coordinate into `%s` the diff moved, and its replacement', (path) => {
+    const r = run({ 'docs/a.md': `The page loads it at \`${path}:12\`, \`:3\`, and \`${path}\` L9-10.\n` }, insert3After5(path), [path, 'src/other.ts']);
+    expect(r.moved.map((m) => [m.citation, m.replacement])).toEqual([
+      [`\`${path}:12\``, `\`${path}:15\``],
+      [`\`${path}\` L9-10`, `\`${path}\` L12-13`],
+    ]);
+  });
+
+  it.each(ROUTES)('reports a code-comment coordinate into `%s` the diff moved', (path) => {
+    const r = shiftedCoordinates({
+      docs: [],
+      code: ['e2e/helpers.ts'],
+      readHead: () => `// bails at ${path}:12 (see \`${path}:3\`)\nexport const x = 1;\n`,
+      trackedHead: [path, 'e2e/helpers.ts'],
+      trackedBase: [path, 'e2e/helpers.ts'],
+      diff: parseDiff(insert3After5(path)),
+    });
+    expect(r.moved.map((m) => [m.citation, m.replacement])).toEqual([[`${path}:12`, `${path}:15`]]);
+    expect(r.pointingCode).toBe(2);
+  });
+
+  it('still reads the prose around a coordinate in a code comment as prose', () => {
+    const texts = (line: string) => commentCoordinates(line).map((c: { text: string }) => c.text);
+    expect(texts('// checkout (wizard.tsx:9, #253)')).toEqual(['wizard.tsx:9']);
+    expect(texts('// checkout (src/app/(group)/page.tsx:9)')).toEqual(['src/app/(group)/page.tsx:9']);
+    expect(texts('// file=src/a.ts:3')).toEqual(['src/a.ts:3']);
+    expect(texts('// see app/@modal/page.tsx:3')).toEqual(['app/@modal/page.tsx:3']);
+    expect(texts('// @scope/pkg.ts:3 and @/lib/a.ts:4')).toEqual([]);
+  });
+});
+
+// Its cases run the CLI in `node`, with `git`, so the block takes the spawn budget (#436).
+describe('the CLI moves a coordinate into a dynamic route end to end (kanon#1108)', SPAWNS, () => {
+  it('fails on `app/[id]/page.tsx` and `app/(group)/[...slug]/page.tsx` coordinates the working tree moved, and --fix re-points them', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cshift-route-'));
+    const sh = (...a: string[]) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+    const w = (f: string, t: string) => { mkdirSync(join(dir, f, '..'), { recursive: true }); writeFileSync(join(dir, f), t); };
+    const lines = Array.from({ length: 20 }, (_, i) => `line${i + 1}`);
+    sh('init', '-q');
+    sh('config', 'user.email', 't@t');
+    sh('config', 'user.name', 't');
+    w('src/app/[id]/page.tsx', lines.join('\n') + '\n');
+    w('src/app/(group)/[...slug]/page.tsx', lines.join('\n') + '\n');
+    w('docs/qa/specs/tenants.md', '# Tenants\n\nThe page reads it at `src/app/[id]/page.tsx:12` and `src/app/(group)/[...slug]/page.tsx:15`.\n');
+    w('docs/qa/escalation-paths.md', '## Escalation paths\n\n## Pipeline code\n');
+    sh('add', '.');
+    sh('commit', '-qm', 'base');
+    const moved = ['line1', 'line2', 'new-a', 'new-b', ...lines.slice(2)].join('\n') + '\n';
+    w('src/app/[id]/page.tsx', moved);
+    w('src/app/(group)/[...slug]/page.tsx', moved);
+    const cli = join(ROOT, 'scripts/citation-shift.mjs');
+    const env = { ...process.env, GITHUB_ACTIONS: '' };
+    const r = spawnSync(process.execPath, [cli, '--base', 'HEAD'], { cwd: dir, encoding: 'utf8', env });
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stderr).toContain('docs/qa/specs/tenants.md:3  `src/app/[id]/page.tsx:12`  ->  `src/app/[id]/page.tsx:14`');
+    expect(r.stderr).toContain('`src/app/(group)/[...slug]/page.tsx:15`  ->  `src/app/(group)/[...slug]/page.tsx:17`');
+    const f = spawnSync(process.execPath, [cli, '--base', 'HEAD', '--fix'], { cwd: dir, encoding: 'utf8', env });
+    expect(f.status, f.stdout + f.stderr).toBe(0);
+    expect(readFileSync(join(dir, 'docs/qa/specs/tenants.md'), 'utf8')).toContain('at `src/app/[id]/page.tsx:14` and `src/app/(group)/[...slug]/page.tsx:17`.');
+    const again = spawnSync(process.execPath, [cli, '--base', 'HEAD'], { cwd: dir, encoding: 'utf8', env });
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+  });
+});

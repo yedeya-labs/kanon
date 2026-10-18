@@ -1409,3 +1409,65 @@ describe('the Markdown a run reads is a list of globs, `docs/**/*.md` by default
     expect(bare.out).toContain('--path needs a glob');
   });
 });
+
+/**
+ * kanon#1108 — a coordinate into a path a file-system router produces was not read at all.
+ * `CITATION` allowed `[\w./-]` alone, so `` `src/app/[id]/page.tsx:52` `` matched nothing, and
+ * the bare-path forms took the path but `citation-shift` dropped `page.tsx` as an ambiguous
+ * basename. Every route-segment coordinate fell through one hole or the other, and both checks
+ * reported clean over six stale ones in an adopter's `[confirmed]` clauses.
+ */
+describe("a coordinate into a file-system router's path is read like any other (kanon#1108)", () => {
+  // Next.js, Nuxt, SvelteKit, Remix and TanStack Router: dynamic, catch-all, optional,
+  // matched and escaped segments, route groups, parallel and intercepting routes.
+  const ROUTES = [
+    'src/app/[id]/page.tsx',
+    'src/app/[...slug]/page.tsx',
+    'src/app/[[...opt]]/page.tsx',
+    'src/app/(group)/page.tsx',
+    'src/app/@slot/page.tsx',
+    'src/app/@modal/(..)(..)photo/[id]/page.tsx',
+    'src/app/(.)photo/page.tsx',
+    'src/app/(...)photo/page.tsx',
+    'src/routes/[[lang=locale]]/+page.ts',
+    'src/routes/api/+server.ts',
+    'app/routes/posts.$postId.tsx',
+    'app/routes/($lang)._index.tsx',
+    'app/routes/[sitemap.xml].ts',
+  ];
+  const src = ['export function other() {', '  return 0;', '}', 'export function loadTenant() {', '  return 1;', '}'].join('\n');
+
+  it.each(ROUTES)('extracts `%s:N` as a full citation, as for a plain path', (path) => {
+    expect(coordinatesIn('`src/app/x/page.tsx:52`')).toHaveLength(1);
+    const cs = coordinatesIn(`\`loadTenant\` (\`${path}:4-6\`, \`:5\`).`);
+    expect(cs.map((c) => [c.file, c.a, c.b])).toEqual([[path, 4, 6], [path, 5, 5]]);
+  });
+
+  it.each(ROUTES)('extracts `%s` L-form and bare-path antecedent forms', (path) => {
+    expect(coordinatesIn(`\`${path}\` L4-6`).map((c) => [c.file, c.a, c.b])).toEqual([[path, 4, 6]]);
+    expect(coordinatesIn(`see \`${path}\` at \`:5\``).map((c) => [c.file, c.a])).toEqual([[path, 5]]);
+  });
+
+  it.each(ROUTES)('range-checks and anchor-checks a coordinate into `%s`', (path) => {
+    const ok = audit(doc(`\`loadTenant\` reads it (\`${path}:4-6\`).`), { [path]: src, 'src/app/x/page.tsx': src });
+    expect(ok.findings).toEqual([]);
+    expect(ok.checked).toBe(1);
+    const stale = audit(doc(`\`loadTenant\` reads it (\`${path}:1-3\`).`), { [path]: src, 'src/app/x/page.tsx': src });
+    expect(stale.findings).toHaveLength(1);
+    expect(stale.findings[0].citation).toContain(path);
+    const past = audit(doc(`\`loadTenant\` reads it (\`${path}:40\`).`), { [path]: src });
+    expect(past.findings).toHaveLength(1);
+  });
+
+  it('takes the parenthesis that wraps a citation for prose, not for a route group', () => {
+    expect(coordinatesIn('(`src/a.ts:3`)').map((c) => c.file)).toEqual(['src/a.ts']);
+    expect(coordinatesIn('`fn(src/a.ts:3`').map((c) => c.file)).toEqual([]);
+  });
+
+  it.each(ROUTES)('never takes `%s` for an anchor, as it never takes a plain path', (path) => {
+    for (const cited of [path, `${path}:198`]) {
+      const line = `rendered at \`${cited}\` and \`course-wizard.tsx:797-800\`.`;
+      expect(anchorsFor(line, line.indexOf('`course-wizard.tsx:797-800`')).anchors).toEqual([]);
+    }
+  });
+});
