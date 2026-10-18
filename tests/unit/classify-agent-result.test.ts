@@ -491,6 +491,18 @@ describe('renderNotice', () => {
     expect(n.body).not.toMatch(/DECOMPOSE the issue/);
   });
 
+  it('names no re-dispatch on a lane no dispatch can raise, the deploy-diagnose lane (kanon#1009)', () => {
+    // ADR 0005 as amended by #1001: `max_turns` is raised only for one dispatched run, and the
+    // deploy-diagnose lane's caller has no dispatch (docs/lanes.md, "The turn budget").
+    const n = renderNotice('exhausted', 'x', { arm: 'deploy diagnose agent', raisable: false });
+    expect(n.body).not.toMatch(/re-dispatch|max_turns/);
+    expect(n.body).toMatch(/This lane's limit can't be raised for one run, since no dispatch starts it, so split the work if it divides/);
+    expect(n.body).toMatch(/that is Kanon's to change \(docs\/lanes\.md, "The turn budget"\)/);
+    expect(n.body).toMatch(/telemetry row shows the turns it took/);
+    // Non-vacuity: the default is a lane that takes the raise.
+    expect(renderNotice('exhausted', 'x', { arm: 'deploy diagnose agent' }).body).toMatch(/re-dispatch this run with a higher `max_turns`/);
+  });
+
   it('frames a recovery command instead of appending it bare after "do not re-run"', () => {
     // ROUND 1 FINDING. `agent-review.yml` is the only arm passing `--recover`, and its
     // value IS a re-dispatch command — so appending it unframed produced "a re-run
@@ -691,7 +703,7 @@ describe('the CLI, run as the workflow runs it', SPAWNS, () => {
 describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS, () => {
   const block = readBlock('agent-classify');
   const step = block.runs.steps[0]!;
-  type Inputs = { arm?: string; recover?: string; nonFatal?: string; claudeArgs?: string; agentOutcome?: string };
+  type Inputs = { arm?: string; recover?: string; nonFatal?: string; claudeArgs?: string; agentOutcome?: string; raisable?: string };
   const run = (result: unknown, inputs: Inputs = {}) => {
     const temp = mkdtempSync(join(tmpdir(), 'classify-block-'));
     if (result !== null) writeFileSync(join(temp, 'claude-execution-output.json'), JSON.stringify(result));
@@ -705,6 +717,7 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS
         NON_FATAL: inputs.nonFatal ?? 'false',
         CLAUDE_ARGS: inputs.claudeArgs ?? '',
         AGENT_OUTCOME: inputs.agentOutcome ?? '',
+        RAISABLE: inputs.raisable ?? 'true',
       },
     });
   };
@@ -716,6 +729,7 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS
     expect(step.env).toEqual({
       ARM: '${{ inputs.arm }}', RECOVER: '${{ inputs.recover }}', NON_FATAL: '${{ inputs.non-fatal }}',
       CLAUDE_ARGS: '${{ inputs.claude-args }}', AGENT_OUTCOME: '${{ inputs.agent-outcome }}',
+      RAISABLE: '${{ inputs.raisable }}',
     });
     expect(String(step.run), 'no input is spliced into the script text').not.toMatch(/\$\{\{/);
     expect(block.outputs?.kind?.value).toBe('${{ steps.classify.outputs.kind }}');
@@ -724,11 +738,17 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS
     // three, because nothing asserted the SET: the third, `code`, was read by no caller and
     // its description sent the reader to `agent-telemetry`, which derives that value itself.
     expect(Object.keys(block.outputs ?? {})).toEqual(['kind', 'retry']);
-    expect(Object.keys(block.inputs ?? {}).sort()).toEqual(['agent-outcome', 'arm', 'claude-args', 'non-fatal', 'recover']);
+    expect(Object.keys(block.inputs ?? {}).sort()).toEqual(['agent-outcome', 'arm', 'claude-args', 'non-fatal', 'raisable', 'recover']);
     expect(block.inputs?.recover?.default).toBe('');
     expect(block.inputs?.['non-fatal']?.default).toBe('false');
     expect(block.inputs?.['claude-args']?.default).toBe('');
     expect(block.inputs?.['agent-outcome']?.default).toBe('');
+    expect(block.inputs?.raisable?.default).toBe('true');
+  });
+
+  it('names no re-dispatch with `max_turns` when the lane is not raisable, and does by default (kanon#1009)', () => {
+    expect(run(EXHAUSTED, { raisable: 'false' }).stdout).not.toMatch(/re-dispatch|max_turns/);
+    expect(run(EXHAUSTED).stdout).toMatch(/re-dispatch this run with a higher `max_turns`/);
   });
 
   it('calls a run the action failed past its turn cap `exhausted`, from the flags and the outcome it is handed (kanon#1015)', () => {

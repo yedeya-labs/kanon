@@ -338,8 +338,12 @@ export function readResult(path, { read = readFileSync } = {}) {
  *
  * The level drops to `warning` because an `::error` on a job that finishes GREEN reads
  * as the thing that failed, and nothing here did.
+ *
+ * `raisable` — false for a lane whose turn limit no dispatch can raise. Today that is the
+ * deploy-diagnose lane: its caller has no dispatch, since it reads the failed deploy from the
+ * event (docs/lanes.md, "The turn budget"). Its turn-cap notice then names no re-dispatch.
  */
-export function renderNotice(kind, why, { arm = 'agent', recover = '', nonFatal = false } = {}) {
+export function renderNotice(kind, why, { arm = 'agent', recover = '', nonFatal = false, raisable = true } = {}) {
   const soften = (n) => (nonFatal
     ? {
       ...n,
@@ -390,10 +394,12 @@ export function renderNotice(kind, why, { arm = 'agent', recover = '', nonFatal 
     });
   }
   if (kind === 'exhausted') {
-    // TRUE FOR EVERY ARM THAT CAN EMIT IT, which is all of them — each sets its own
-    // `--max-turns` (15 weekly digest … 300 implement), so each can reach this. The remedy names
-    // the re-dispatch with `max_turns` and a `reason` (kanon#891): until it existed an adopter
-    // could not raise a cap without a Kanon release, so the advice was one they could not follow. The first cut
+    // EVERY ARM CAN EMIT IT — each sets its own `--max-turns` (15 weekly digest … 300
+    // implement), so each can reach this. The remedy names the re-dispatch with `max_turns` and
+    // a `reason` (kanon#891) on a lane that takes them: until it existed an adopter could not
+    // raise a cap without a Kanon release, so the advice was one they could not follow. That is
+    // still so on a lane no dispatch can raise (`raisable` false, the deploy-diagnose lane), so
+    // there the notice names splitting the work and says the limit is Kanon's (kanon#1009). The first cut
     // of this body asserted implement-lane facts ("no PR and no branch", "DECOMPOSE the
     // issue") and would have printed them on the Overseer and the two digests, where
     // there is no issue being built and the durable artifact is an issue or a comment.
@@ -419,10 +425,14 @@ export function renderNotice(kind, why, { arm = 'agent', recover = '', nonFatal 
         + 'one run (the implement lane — RA-1781, with RA-1694 as the worked example), or the '
         + "arm's budget is genuinely too small and its turn cap is the thing to raise "
         + '(the Overseer and the code audit both record that conclusion on this path — '
-        + 'RA-846). So either re-dispatch this run with a higher `max_turns` and a `reason`, '
-        + "up to Kanon's ceiling for the lane, which raises the limit for that one run and the "
-        + 'dollar cap with it, or split the work (docs/lanes.md, "The turn budget"). This '
-        + "run's telemetry row shows the turns it took against its limit, and the lane's earlier "
+        + (raisable
+          ? 'RA-846). So either re-dispatch this run with a higher `max_turns` and a `reason`, '
+            + "up to Kanon's ceiling for the lane, which raises the limit for that one run and the "
+            + 'dollar cap with it, or split the work (docs/lanes.md, "The turn budget"). '
+          : "RA-846). This lane's limit can't be raised for one run, since no dispatch starts it, "
+            + 'so split the work if it divides; if it does not, the limit itself is too small, '
+            + "and that is Kanon's to change (docs/lanes.md, \"The turn budget\"). ")
+        + "This run's telemetry row shows the turns it took against its limit, and the lane's earlier "
         + 'rows show whether its runs keep ending at the cap. '
         + `Decide which before re-triggering.${recover ? ` Once it is done: ${recover}` : ''} (RA-1781)`,
     });
@@ -471,7 +481,7 @@ export function renderNotice(kind, why, { arm = 'agent', recover = '', nonFatal 
 /**
  * CLI: `node classify-agent-result.mjs [--arm <name>] [--recover <cmd>] [--file <path>]
  *                                       [--non-fatal] [--claude-args <flags>]
- *                                       [--agent-outcome <outcome>]`
+ *                                       [--agent-outcome <outcome>] [--not-raisable]`
  *
  * Emits the annotation, appends a line to `$GITHUB_STEP_SUMMARY`, and writes
  * `kind=<kind>` to `$GITHUB_OUTPUT` so a later step can branch on it.
@@ -480,6 +490,9 @@ export function renderNotice(kind, why, { arm = 'agent', recover = '', nonFatal 
  * `outcome`: with both, a run the action failed past its `--max-turns` gets the turn-cap
  * notice rather than "finished cleanly" (kanon#1015). Without them it is classified by its
  * terminal reason alone, as before.
+ *
+ * `--not-raisable` is for a lane whose turn limit no dispatch can raise: its turn-cap notice
+ * names no re-dispatch with `max_turns` (kanon#1009).
  *
  * ALWAYS EXITS 0. This step explains a red run; it must not be the thing that makes one,
  * or a classifier bug would turn a healthy agent arm red and this would be a new failure
@@ -495,13 +508,14 @@ function cli() {
   const arm = arg('arm', 'agent');
   const recover = arg('recover');
   const nonFatal = process.argv.includes('--non-fatal');
+  const raisable = !process.argv.includes('--not-raisable');
   const maxTurns = parseMaxTurns(arg('claude-args'));
   const stepFailed = arg('agent-outcome') === 'failure';
 
   const result = readResult(file);
   const model = readConfiguredModel(file);
   const { kind, why } = classifyResult(result, model, { maxTurns, stepFailed });
-  const { level, title, body } = renderNotice(kind, why, { arm, recover, nonFatal });
+  const { level, title, body } = renderNotice(kind, why, { arm, recover, nonFatal, raisable });
 
   console.log(`::${level} title=${title}::${body}`);
   if (process.env.GITHUB_OUTPUT) {

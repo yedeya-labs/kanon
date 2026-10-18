@@ -65,6 +65,12 @@ inputs:
       left the run's clean finish standing, whatever reddened the job after it.
     required: false
     default: ""
+  raisable:
+    description: >-
+      'false' for a lane whose turn limit no dispatch can raise (the deploy-diagnose lane). Its
+      turn-cap notice then names no re-dispatch with `max_turns` (kanon#1009).
+    required: false
+    default: "true"
 
 outputs:
   kind:
@@ -100,10 +106,12 @@ runs:
         NON_FATAL: ${{ inputs.non-fatal }}
         CLAUDE_ARGS: ${{ inputs.claude-args }}
         AGENT_OUTCOME: ${{ inputs.agent-outcome }}
+        RAISABLE: ${{ inputs.raisable }}
       run: |
         set -- --arm "$ARM"
         if [ -n "$RECOVER" ]; then set -- "$@" --recover "$RECOVER"; fi
         if [ "$NON_FATAL" = "true" ]; then set -- "$@" --non-fatal; fi
         if [ -n "$CLAUDE_ARGS" ]; then set -- "$@" --claude-args "$CLAUDE_ARGS"; fi
         if [ -n "$AGENT_OUTCOME" ]; then set -- "$@" --agent-outcome "$AGENT_OUTCOME"; fi
+        if [ "$RAISABLE" = "false" ]; then set -- "$@" --not-raisable; fi
         node "$GITHUB_ACTION_PATH/classify-agent-result.mjs" "$@"

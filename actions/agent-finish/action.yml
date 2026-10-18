@@ -84,6 +84,12 @@ inputs:
       its `retry` output from its own call. Leaving this on would print a second annotation.
     required: false
     default: "true"
+  raisable:
+    description: >-
+      'false' for a lane whose turn limit no dispatch can raise, passed to agent-classify: its
+      turn-cap notice then names no re-dispatch with `max_turns` (kanon#1009).
+    required: false
+    default: "true"
   outcome-label:
     description: >-
       The lane's own result column for the row (`outcome_label` on agent-telemetry) — the
@@ -190,6 +196,7 @@ runs:
         # stage's conclusion is the step's outcome.
         claude-args: ${{ inputs.claude-args-ran || inputs.claude_args }}
         agent-outcome: ${{ inputs.agent-outcome || contains(inputs.stages, 'agent=failure') && 'failure' || '' }}
+        raisable: ${{ inputs.raisable }}
 
     # WHAT THIS RUN OPENED (RA-1627), for a lane that opts in with `quality-pr-label`.
     # Derived from GitHub, never from the agent — asking the agent to report it would

@@ -301,4 +301,19 @@ describe('every model lane a person can dispatch takes max_turns and reason, at 
     const finish = readFileSync(join(ROOT, 'actions/agent-finish/action.yml'), 'utf8');
     expect(finish).toContain('claude_args: ${{ inputs.claude-args-ran || inputs.claude_args }}');
   });
+
+  // kanon#1009. The turn-cap notice tells a person to re-dispatch with a higher `max_turns`, which
+  // the deploy-diagnose lane can't take. The spine knows a lane takes it by its ceiling, and says
+  // so down to the classifier, so that lane's notice names no re-dispatch.
+  it('a lane with no ceiling, the deploy-diagnose lane, reaches the classifier as not raisable', () => {
+    const diagnose = doc('agent-deploy-diagnose.yml').jobs?.diagnose;
+    expect(diagnose?.uses).toBe('$/.github/workflows/agent-lane.yml');
+    expect(diagnose?.with?.['max-turns-ceiling']).toBeUndefined();
+    const steps = doc('lane-agent-job.yml').jobs!.run!.steps!;
+    expect(steps.find((s) => s.uses === '$/actions/agent-finish')?.with?.raisable).toBe("${{ inputs.max-turns-ceiling != '' }}");
+    const finish = parse(readFileSync(join(ROOT, 'actions/agent-finish/action.yml'), 'utf8'));
+    expect(finish.inputs?.raisable?.default).toBe('true');
+    const classify = (finish.runs.steps as { uses?: string; with?: Record<string, string> }[]).find((s) => s.uses === '$/actions/agent-classify');
+    expect(classify?.with?.raisable).toBe('${{ inputs.raisable }}');
+  });
 });

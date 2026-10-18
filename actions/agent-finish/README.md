@@ -38,6 +38,7 @@ Call it with `id: finish`, `if: always()` and `continue-on-error: true`, and han
 | `issue-number`, `pr-number` | no | The issue or pull request the run was for, recorded on the row. |
 | `quality-pr-label`, `started-at`, `github-token` | no | Opt-in: count the pull requests with this label that reference `issue-number` and were opened after `started-at`. |
 | `classify` | no | `"false"` for a lane that calls `agent-classify` itself. Default `"true"`. |
+| `raisable` | no | `"false"` for a lane whose turn limit no dispatch can raise, passed to `agent-classify`. Default `"true"`. |
 | `outcome-label`, `artifacts-filed`, `severities` | no | Result columns a lane computes itself. Empty adds no column. |
 | `lane`, `tag` | no | Kanon's lane name and the row's tag. `lane` turns on the version-2 row (see [`agent-telemetry`](../agent-telemetry/README.md)). |
 | `stages` | no | The lane's stages in the order it runs them, as `stage=conclusion` pairs: `token`, `checkout`, `hook`, `setup`, `agent`. The block adds `finish`. The row's `failed_stage` is the first that ended the run. Pass conclusions, so a stage the lane runs on past is never blamed, and pass nothing else: a hook failure is recorded as `hook`, never by the hook's own step names. |

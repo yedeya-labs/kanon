@@ -62,8 +62,9 @@ describe('telemetry-collect.yml, the lane', () => {
     expect(name({ url: '', audience: '', 'writer-role': '', erase: 'yes', window_minutes: '' })).toBe(ERASE_JOB);
   });
 
-  // The job's name is evaluated before the script runs, so the workflow holds its own literal for
-  // the unpublished case: this holds it to the script's own judgement, on every input it reads.
+  // The job's name is evaluated before the script runs, so while the hosted URL is empty the
+  // workflow holds its own literal for the unpublished case: this holds the name to the script's
+  // own judgement, on every input it reads, whichever way the constant is set.
   it('names the job a sweep exactly when the collector sends, and the unpublished skip exactly when the hosted URL is empty and no store is named (#843)', () => {
     const SELF = 'https://abc.lambda-url.eu-central-1.on.aws/';
     for (const url of ['', SELF]) {

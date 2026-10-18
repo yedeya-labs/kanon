@@ -508,6 +508,9 @@ jobs:
           arm: ${{ inputs.arm }}
           agent: ${{ inputs.agent }}
           job-status: ${{ job.status }}
+          # A lane with no ceiling takes no raised limit, so its turn-cap notice names no
+          # re-dispatch with `max_turns`: the deploy-diagnose lane, which no one dispatches (kanon#1009).
+          raisable: ${{ inputs.max-turns-ceiling != '' }}
           claude_args: ${{ inputs.claude_args }}
           claude-args-ran: ${{ steps.agent.outputs.claude-args }}
           execution_file: ${{ steps.agent.outputs.execution_file }}
