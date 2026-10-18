@@ -164,7 +164,7 @@ export const TRIGGERS = Object.freeze([
  */
 export const ESCALATION_REASONS = Object.freeze([
   'checks-cancelled', 'checks-failed', 'closes-unverifiable', 'contradictory-verdicts',
-  'escalating-label', 'escalating-path', 'files-unreadable', 'merge-state', 'never-started',
+  'escalating-label', 'escalating-path', 'files-unreadable', 'merge-state', 'never-started', 'queue-ejected',
   'spec-diff-unreadable', 'spec-promotion', 'undeclared-closes',
 ]);
 

@@ -247,11 +247,14 @@ export const startupFailuresIn = (runs = []) =>
  *     verdict on a pipeline or schema change whatever commit it is on.
  *   · `escalating-label` — a human's `sev:critical` / `blocked` / `qa:needs-info` is a
  *     statement about the work, not about a commit, and is re-read every sweep anyway.
+ *
+ * `queue-ejected` is here (kanon#1104): the queue removed the head the Merger queued, and a new
+ * head is a new question for the queue too.
  */
 export const LAPSES_WITH_HEAD = new Set([
   'workflow-startup-failure', 'files-unreadable', 'never-started', 'contradictory-verdicts',
   'checks-cancelled', 'checks-failed', 'undeclared-closes', 'closes-unverifiable', 'merge-state',
-  'spec-diff-unreadable',
+  'spec-diff-unreadable', 'queue-ejected',
 ]);
 
 // The line under the Merger's persona header in every escalation comment it posts (plan 0005
@@ -457,6 +460,10 @@ export function checkPartition(checks) {
  * `workflowRuns` IS REQUIRED TOO, and `null` is a value, not an omission (RA-2256): it
  * means the Actions listing could not be read, and anything that is not an array is
  * treated the same way — a `wait`, never "no startup failure".
+ *
+ * `mergeQueue` is `mergeQueueOn`'s answer, read for `apply` and for one gate here: a head the
+ * queue already removed after the Merger queued it escalates rather than merging (kanon#1104).
+ * Absent or `null`, that gate doesn't apply, as it doesn't on a base without a queue.
  *
  * `hold` is read only when `needs:human` is on the PR: who applied that label last, and
  * which (rule, head) pairs the Merger's own escalation comments name. Absent or `null` means
@@ -1034,6 +1041,30 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
     return stop('merge-state', `GitHub reports \`${pr.mergeStateStatus}\`, not CLEAN — the ruleset is not satisfied`);
   }
 
+  // ── A HEAD THE QUEUE ALREADY TURNED AWAY (kanon#1104) ─────────────────────────
+  // Everything above is green on the PR's own head, and stays green after the merge queue
+  // ejects it: the queue's `merge_group` checks run on the PR on top of `main` and whatever is
+  // ahead of it, which is exactly what the PR's checks don't see. So `merge` again meant queuing
+  // it again on every sweep, each attempt re-running the queue's CI, until a person stepped in.
+  // A person decides instead: queue it again by hand, or push a fix, a new head the Merger
+  // judges from scratch. LAST, so it only ever replaces a `merge`: a conflict is still the
+  // rebase lane's first, and every other gate still speaks first.
+  //
+  // `queuedHere` is the Merger's own record, a marker on the PR naming the head it queued. The
+  // queue's removal event can't say which head it turned away: on Kanon's queue a merge's
+  // `beforeCommit` is the merge commit on `main`, and a conflict's is empty. Read only when the
+  // queue has removed the PR at least once and it isn't queued now, and `null` when the comments
+  // couldn't be read, which waits rather than queuing on an unread answer.
+  const q = pr.mergeQueue;
+  if (q?.enabled === true && !q.queued && q.removed) {
+    if (q.queuedHere === null) {
+      return wait('queue-history-unread', 'the merge queue has removed this PR before, and whether the Merger queued this head could not be read — not queuing it again on an unread answer');
+    }
+    if (q.queuedHere === true) {
+      return stop('queue-ejected', `the Merger added \`${String(pr.headSha).slice(0, 7)}\` to the merge queue, and the queue removed it (reason \`${q.removed.reason ?? 'unknown'}\`), though its own checks are green: the queue's checks run it on top of \`main\` and the PRs ahead of it. Not queuing it again on every sweep. Queue it again yourself if it was a flake, or push a fix, and the Merger judges the new head from scratch`);
+    }
+  }
+
   return { action: 'merge', rule: 'green-zone', quiet: false, why: `approved by ${reviewer} on \`${pr.headSha.slice(0, 7)}\`, all checks green, no escalating path or label${unstableIsUs ? '; GitHub\'s `UNSTABLE` is this Merger run\'s own job, still running' : ''}` };
 }
 
@@ -1240,7 +1271,7 @@ export function readPr(number, repo, opts = {}) {
     // which `mergeVerdict` waits on rather than reading as "no promotion" (kanon#273).
     specDiff: files.some(isSpecFile) ? specDiffOn(number, repo, gh) : undefined,
     // WHETHER A MERGE QUEUE SETS THE STRATEGY ON THIS PR'S BASE (kanon#1102), for `apply`.
-    mergeQueue: mergeQueueOn(number, repo, gh),
+    mergeQueue: mergeQueueOn(number, repo, gh, meta.headRefOid),
   };
 }
 
@@ -1254,25 +1285,50 @@ export function readPr(number, repo, opts = {}) {
  * did before: where a queue sets the strategy GitHub refuses that, and the PR lands under
  * "could not be considered" by name, rather than a guess deciding how it merges.
  *
- * @returns {{enabled: boolean, queued: boolean, id: string}|null}
+ * THE SAME READ CARRIES THE QUEUE'S LAST REMOVAL OF THE PR (kanon#1104), its `reason` and time,
+ * or `null` if the queue never removed it. Only then, and only while the PR is out of the queue,
+ * does `queuedHere` ask whether the Merger queued THIS head, from its own marker comment; it is
+ * `null` when the comments couldn't be read. The removal alone can't answer that: its
+ * `beforeCommit` names the merge commit on a merge and nothing on a conflict (measured on
+ * Kanon's queue), so it doesn't say which head was turned away.
+ *
+ * @returns {{enabled: boolean, queued: boolean, id: string, removed: {reason: string|null, at: string}|null, queuedHere?: boolean|null}|null}
  */
-function mergeQueueOn(number, repo, gh) {
+function mergeQueueOn(number, repo, gh, head) {
   const [owner, name] = repo.split('/');
+  let found;
   try {
     const q = JSON.parse(gh([
       'api', 'graphql',
-      '-f', 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id isMergeQueueEnabled isInMergeQueue}}}',
+      '-f', 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id isMergeQueueEnabled isInMergeQueue timelineItems(itemTypes:[REMOVED_FROM_MERGE_QUEUE_EVENT],last:1){nodes{... on RemovedFromMergeQueueEvent{createdAt reason}}}}}}',
       '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${number}`,
       '--jq', '.data.repository.pullRequest',
     ]));
-    if (typeof q?.isMergeQueueEnabled !== 'boolean' || typeof q.isInMergeQueue !== 'boolean' || typeof q.id !== 'string') {
+    if (typeof q?.isMergeQueueEnabled !== 'boolean' || typeof q.isInMergeQueue !== 'boolean' || typeof q.id !== 'string'
+      || !Array.isArray(q.timelineItems?.nodes)) {
       throw new Error(`no merge-queue state in ${JSON.stringify(q)}`);
     }
-    return { enabled: q.isMergeQueueEnabled, queued: q.isInMergeQueue, id: q.id };
+    const last = q.timelineItems.nodes.at(-1);
+    found = {
+      enabled: q.isMergeQueueEnabled, queued: q.isInMergeQueue, id: q.id,
+      removed: last ? { reason: last.reason ?? null, at: last.createdAt } : null,
+    };
   } catch (e) {
     console.log(`::warning title=merge-gate::#${number}: whether a merge queue sets the strategy could not be read, so a merge squashes as before (merge-queue-unread): ${String(e?.stderr || e?.message || e).trim().slice(0, 200)}`);
     return null;
   }
+  if (!found.enabled || found.queued || !found.removed) return found;
+  try {
+    const said = gh(['api', `repos/${repo}/issues/${number}/comments?per_page=100`, '--paginate', '--jq',
+      '.[] | {login: .user.login, body: .body} | @json'])
+      .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    const spellings = mergerMarkerSpellings(QUEUED, head);
+    found.queuedHere = said.some((c) => asRole('Merger', { login: c.login, expected: MERGER_LOGIN, body: c.body })
+      && spellings.some((m) => String(c.body).includes(m)));
+  } catch {
+    found.queuedHere = null;
+  }
+  return found;
 }
 
 /**
@@ -1367,6 +1423,12 @@ function rebaseAttemptedOn(meta, repo, gh) {
  */
 const marker = mergerMarker;
 
+/** The marker rule of the Merger's record that it added a head to the merge queue (kanon#1104). */
+const QUEUED = 'queued';
+
+/** The marker rule of its comment that a merge left a declared issue open, so it is said once. */
+const UNCLOSED = 'issues-unclosed';
+
 // A marker in an old spelling (#53) says the same thing, so it counts as said.
 const alreadySaid = (number, repo, rule, sha) => {
   try {
@@ -1429,6 +1491,9 @@ export function verifyClosed(pr, repo, say, { retries = 3, waitMs = 4000, sleep 
 
   if (!open.length) return say(`closed #${declared.join(', #')}`);
   say(`MERGED but #${open.join(', #')} did not close`);
+  // ONCE PER PR. The sweep checks a PR the queue merged on every run for a day after
+  // (`followQueueMerges`), so without the marker a miss would be said on every sweep.
+  if (alreadySaid(pr.number, repo, UNCLOSED, pr.headSha)) return say(`said so on #${pr.number} already`);
   // GUARDED. This is the only call site that can throw AFTER a merge has happened, so
   // an unhandled failure here ends the tick with the merge done and nothing recorded —
   // the worst combination available. RA-1122 covers the loop; this site cannot wait for
@@ -1443,12 +1508,22 @@ export function verifyClosed(pr, repo, say, { retries = 3, waitMs = 4000, sleep 
       'project as unfinished.',
       '',
       'Close it by hand, and grant the scope so the next one closes itself.',
+      '',
+      marker(UNCLOSED, pr.headSha),
     ].join('\n'), 'Merger', appPersona('Merger'))]);
   } catch (e) {
     say(`could not comment about the unclosed issue: ${e.message}`);
   }
 }
 
+/**
+ * Act on one verdict. On a `merge` verdict it returns what happened, which is what the sweep
+ * counts (kanon#1104): `merged` (squashed, or would be on a dry run), `queued` (added to the
+ * merge queue, or already in it), or `waited` (the head moved before the merge). A queued PR
+ * is not merged yet, and a moved head merged nothing. Every other verdict returns nothing.
+ *
+ * @returns {'merged'|'queued'|'waited'|undefined}
+ */
 export function apply(pr, verdict, repo, { dryRun = true, json = readJson } = {}) {
   const say = (msg) => console.log(`  ${dryRun ? 'would ' : ''}${msg}`);
   if (verdict.action === 'merge') {
@@ -1458,14 +1533,20 @@ export function apply(pr, verdict, repo, { dryRun = true, json = readJson } = {}
     // too ("Auto merge is not allowed for this repository"): both left an approved, green PR
     // under "could not be considered" (#1098, #1091). `enqueuePullRequest` adds it directly.
     const queue = pr.mergeQueue?.enabled === true;
-    if (queue && pr.mergeQueue.queued) return say(`leave #${pr.number} where it is: it is already in the merge queue`);
-    if (queue && dryRun) return say(`queue #${pr.number} (the merge queue sets the strategy)`);
+    if (queue && pr.mergeQueue.queued) {
+      say(`leave #${pr.number} where it is: it is already in the merge queue`);
+      return 'queued';
+    }
+    if (queue && dryRun) {
+      say(`queue #${pr.number} (the merge queue sets the strategy)`);
+      return 'queued';
+    }
     if (!queue) say(`merge #${pr.number} (squash)`);
     // NOT the default GITHUB_TOKEN. A merge pushed by it triggers NO workflows, so
     // release-please would never see the commit, no release PR would open, and
     // nothing would deploy — a silent break of the whole release chain. The workflow
     // hands this an App installation token, which does trigger them.
-    if (dryRun) return;
+    if (dryRun) return 'merged';
     // Pinned to the head the verdict was computed on (RA-1177): the checks excluded as
     // review-event racers could still push a commit, and GitHub then refuses the merge
     // rather than squashing a head nobody reviewed. The enqueue keeps the same pin.
@@ -1483,15 +1564,34 @@ export function apply(pr, verdict, repo, { dryRun = true, json = readJson } = {}
       // put the PR under "could not be considered" and failed the run red.
       if (/head branch was modified/i.test(`${e?.message ?? ''}${e?.stderr ?? ''}`)) {
         say(`not merging #${pr.number}: the head moved since \`${String(pr.headSha).slice(0, 7)}\` was read — the next event re-evaluates it`);
-        return;
+        return 'waited';
       }
       throw e;
     }
-    // A queued PR is not merged yet, so there is no close to check: the queue merges it, and
-    // its linked issue closes then, as a PR a person queued does.
-    if (queue) return say(`queued #${pr.number} (the merge queue sets the strategy)`);
+    if (queue) {
+      // THE RECORD OF THE HEAD IT QUEUED (kanon#1104). If the queue later removes the PR, this
+      // is what tells the next sweep that it already tried this head, so it escalates rather
+      // than queuing it again (`queue-ejected`). Written after the enqueue, so it never claims a
+      // head the queue didn't take. A record that can't be written fails by name: without it, an
+      // ejection would be queued again on every sweep, the loop this record exists to stop.
+      try {
+        gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body', signed([
+          `🚦 Added \`${String(pr.headSha).slice(0, 7)}\` to the merge queue, which sets the strategy here. The queue merges it once its checks pass on top of \`main\`.`,
+          '',
+          'If the queue removes it, the Merger asks a person to decide rather than adding this head again.',
+          '',
+          marker(QUEUED, pr.headSha),
+        ].join('\n'), 'Merger', appPersona('Merger'))], { stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) {
+        throw new Error(`queued #${pr.number}, but could not record the head it queued: ${String(e?.stderr || e?.message || e).trim().slice(0, 200)}`);
+      }
+      // Not merged yet, so no close to check here: `followQueueMerges` checks it once the queue
+      // has merged it.
+      say(`queued #${pr.number} (the merge queue sets the strategy)`);
+      return 'queued';
+    }
     verifyClosed(pr, repo, say);
-    return;
+    return 'merged';
   }
   if (verdict.action === 'escalate') {
     // A quiet escalation still refuses; it just does not announce itself again.
@@ -1615,11 +1715,17 @@ export function skipSummary(skips) {
  * IT COLLECTS RATHER THAN SWALLOWS. The caller re-throws once the sweep is done, so the
  * run is still red; a `try` that exited 0 would turn a broken sweep into a silent one.
  *
+ * IT COUNTS WHAT HAPPENED, NOT WHAT WAS DECIDED (kanon#1104). A `merge` verdict carries `apply`'s
+ * `outcome`: only `merged` is a merge; `queued` is listed apart, since the queue merges it later
+ * or turns it away; and `waited`, a head that moved before the merge, is a wait like any other.
+ * A `merge` with no outcome counts as merged, the reading before outcomes existed.
+ *
  * @param {string[]} numbers
- * @param {{consider: (n: string) => {action: string, rule: string}}} io
+ * @param {{consider: (n: string) => {action: string, rule: string, outcome?: string}}} io
  */
 export function sweep(numbers, { consider }) {
   let merged = 0;
+  const queued = [];
   const escalated = [];
   const waiting = [];
   const released = [];
@@ -1628,7 +1734,11 @@ export function sweep(numbers, { consider }) {
   for (const n of numbers ?? []) {
     try {
       const verdict = consider(n);
-      if (verdict.action === 'merge') merged += 1;
+      if (verdict.action === 'merge') {
+        if (verdict.outcome === 'queued') queued.push(`#${n}`);
+        else if (verdict.outcome === 'waited') waiting.push(`#${n} — head-moved`);
+        else merged += 1;
+      }
       if (verdict.action === 'escalate') escalated.push(`#${n} — ${verdict.rule}`);
       if (verdict.action === 'wait') waiting.push(`#${n} — ${verdict.rule}`);
       if (verdict.action === 'release') released.push(`#${n} — ${verdict.rule}`);
@@ -1639,7 +1749,7 @@ export function sweep(numbers, { consider }) {
       failed.push(`#${n} — ${why}`);
     }
   }
-  return { merged, escalated, waiting, released, skips, failed };
+  return { merged, queued, escalated, waiting, released, skips, failed };
 }
 
 /**
@@ -1655,14 +1765,18 @@ export function sweep(numbers, { consider }) {
  * rule, in run after run, is the finding — and one sweep's summary beside the last is
  * enough to see it without any state this stateless script would have to keep.
  *
- * @param {{considered: number, dryRun: boolean, merged: number, escalated: string[],
+ * `queued` is its own line, apart from `merged` (kanon#1104): a PR in the merge queue is not merged
+ * yet. Shown only when the sweep queued something, like the other optional lines.
+ *
+ * @param {{considered: number, dryRun: boolean, merged: number, escalated: string[], queued?: string[],
  *          waiting?: string[], released?: string[], failed?: string[], skips?: Map<string, number>}} s
  */
-export function summaryLines({ considered, dryRun, merged, escalated, waiting = [], released = [], failed = [], skips = new Map() }) {
+export function summaryLines({ considered, dryRun, merged, escalated, queued = [], waiting = [], released = [], failed = [], skips = new Map() }) {
   return [
     '### The Merger', '',
     `Considered ${considered} PR(s)${dryRun ? ' — DRY RUN' : ''}.`, '',
     `- merged: ${merged}`,
+    ...(queued.length ? [`- queued (in the merge queue, which merges them): ${queued.length}`, ...queued.map((q) => `  - ${q}`)] : []),
     `- waiting on you: ${escalated.length}`,
     ...escalated.map((e) => `  - ${e}`),
     ...(waiting.length ? [`- waiting on the pipeline (re-checked next sweep; the same PR here run after run is stuck): ${waiting.length}`, ...waiting.map((w) => `  - ${w}`)] : []),
@@ -1672,6 +1786,49 @@ export function summaryLines({ considered, dryRun, merged, escalated, waiting = 
     ...(failed.length ? [`- could not be considered: ${failed.length}`, ...failed.map((f) => `  - ${f}`)] : []),
     ...skipSummary(skips),
   ];
+}
+
+/**
+ * How long after a merge the sweep still checks the PR's declared issues closed (kanon#1104).
+ * With a merge queue the sweep runs on a review and on the hourly schedule, not on the queue's
+ * merge (its push is the queue's, which the lane's gate turns away), so a day spans many sweeps.
+ */
+export const FOLLOW_UP_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * CHECK THE CLOSE THE QUEUE'S MERGE WAS SUPPOSED TO MAKE (kanon#1104). `apply` runs `verifyClosed`
+ * right after a squash, but a PR it queues merges later, in the queue, and nothing else of the
+ * Merger's sees it again: the sweep reads open PRs only. So each sweep lists the PRs merged in
+ * the last `FOLLOW_UP_MS`, in one read, keeps those merged as the Merger, and hands each to
+ * `verifyClosed`. Through a queue the merge is recorded as its enqueuer's, measured on Kanon's
+ * queue (`mergedBy` is the member who queued it), and GitHub closes the issue as that actor, so
+ * the scope `verifyClosed` exists to catch is the Merger's either way.
+ *
+ * Why not the merge-reconcile lane, the one reader of a merged PR already there: it is the
+ * Reviewer's lane, its filter holds only the workflow's read token, and the comment this posts
+ * is the Merger's, so it would need the Merger's token minted in another role's lane.
+ *
+ * A PR the Merger squashed itself is checked again too, which costs one read per declared issue
+ * and says nothing new: a miss it already reported is said once (`verifyClosed`'s marker). No
+ * retries, since the close happened long before the sweep. A list that can't be read throws, so
+ * the run says so by name rather than reading as nothing to check.
+ *
+ * @param {string} repo
+ * @param {{run?: (args: string[]) => string, verify?: typeof verifyClosed, now?: number, say?: (m: string) => void}} [io]
+ * @returns {number[]} the PRs whose issues were checked
+ */
+export function followQueueMerges(repo, { run = gh, verify = verifyClosed, now = Date.now(), say = (m) => console.log(`  ${m}`) } = {}) {
+  const since = now - FOLLOW_UP_MS;
+  const listed = JSON.parse(run(['pr', 'list', '--repo', repo, '--state', 'merged', '--search', `merged:>=${new Date(since).toISOString()}`,
+    '--limit', '100', '--json', 'number,headRefOid,mergedAt,mergedBy,closingIssuesReferences']));
+  if (!Array.isArray(listed)) throw new Error(`the merged PRs could not be listed: ${JSON.stringify(listed).slice(0, 200)}`);
+  const slug = (s) => String(s ?? '').replace(/^app\//, '').replace(/\[bot\]$/, '');
+  const ours = listed.filter((p) => slug(p?.mergedBy?.login) === MERGER_LOGIN && Date.parse(p.mergedAt) >= since);
+  for (const p of ours) {
+    verify({ number: p.number, headSha: p.headRefOid, closing: { willClose: (p.closingIssuesReferences ?? []).map((r) => r.number) } },
+      repo, (m) => say(`#${p.number}: ${m}`), { retries: 0 });
+  }
+  return ours.map((p) => p.number);
 }
 
 /**
@@ -1736,20 +1893,34 @@ async function main() {
     gh(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', 'number']),
   ).map((p) => String(p.number));
 
-  const { merged, escalated, waiting, released, skips, failed } = sweep(numbers, {
+  const { merged, queued, escalated, waiting, released, skips, failed } = sweep(numbers, {
     consider: (n) => {
       const pr = readPr(n, repo);
       const verdict = mergeVerdict(pr, { escalations, ownRunId: process.env.GITHUB_RUN_ID || null });
       // Skips are the majority and are not findings. Printed at one line so a run is
       // still auditable, but never summarised as if something happened.
       console.log(`#${n} → ${verdict.action} (${verdict.rule}): ${verdict.why}`);
-      apply(pr, verdict, repo, { dryRun });
-      return verdict;
+      const outcome = apply(pr, verdict, repo, { dryRun });
+      return { ...verdict, outcome };
     },
   });
 
+  // The PRs the queue has merged since, whose declared issues nothing else checks (kanon#1104).
+  // The sweep's, as it is the heartbeat; a review's run on one PR leaves it to the next sweep.
+  // A dry run changes nothing, and `verifyClosed` comments, so it is skipped there too.
+  if (!dryRun && !explicit) {
+    console.log('PRs merged in the last day as the Merger: checking their declared issues closed');
+    try {
+      followQueueMerges(repo);
+    } catch (err) {
+      const why = String(err?.stderr || err?.message || err).trim().slice(0, 300);
+      console.log(`::error title=merge-gate::the merged PRs' declared issues could not be checked: ${why}`);
+      failed.push(`merged PRs' declared issues — ${why}`);
+    }
+  }
+
   if (process.env.GITHUB_STEP_SUMMARY) {
-    const lines = [...summaryLines({ considered: numbers.length, dryRun, merged, escalated, waiting, released, failed, skips }), ...defaults.map((d) => `- ${d}`)];
+    const lines = [...summaryLines({ considered: numbers.length, dryRun, merged, queued, escalated, waiting, released, failed, skips }), ...defaults.map((d) => `- ${d}`)];
     execFileSync('bash', ['-c', `cat >> "$GITHUB_STEP_SUMMARY"`], { input: lines.join('\n') + '\n' });
   }
 

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-const { ESCALATION_HEADER, IMPLEMENTER_LABELS, IMPLEMENTER_LOGIN: MERGE_GATE_IMPLEMENTER, LAPSES_WITH_HEAD, MERGER_LOGIN, SELF_CHECKS, UNSTABLE_SETTLE_MS, apply, checkPartition, mergeVerdict: kanonMergeVerdict, readPr, sweep, summaryLines, verifyClosed, skipSummary, startupFailuresIn} = await import('../../scripts/merge-gate.mjs');
+const { ESCALATION_HEADER, FOLLOW_UP_MS, followQueueMerges, IMPLEMENTER_LABELS, IMPLEMENTER_LOGIN: MERGE_GATE_IMPLEMENTER, LAPSES_WITH_HEAD, MERGER_LOGIN, SELF_CHECKS, UNSTABLE_SETTLE_MS, apply, checkPartition, mergeVerdict: kanonMergeVerdict, readPr, sweep, summaryLines, verifyClosed, skipSummary, startupFailuresIn} = await import('../../scripts/merge-gate.mjs');
 const { CONFLICT_WHY } = await import('../../scripts/conflict-state.mjs');
 const { IMPLEMENTER_LOGIN: LANE_IMPLEMENTER, PIPELINE_LABELS: LANE_LABELS } = await import('../../scripts/rebase-lane.mjs');
 import { writeStub } from '../unit/helpers/stub-bin.js';
@@ -2561,8 +2561,8 @@ esac
   };
 
   it('readPr reads whether the PR\'s base has a merge queue, for this PR', () => {
-    const { read, calls } = readWith('{"id":"PR_kwDOnode","isMergeQueueEnabled":true,"isInMergeQueue":false}');
-    expect(read.mergeQueue).toEqual({ enabled: true, queued: false, id: 'PR_kwDOnode' });
+    const { read, calls } = readWith('{"id":"PR_kwDOnode","isMergeQueueEnabled":true,"isInMergeQueue":false,"timelineItems":{"nodes":[]}}');
+    expect(read.mergeQueue).toEqual({ enabled: true, queued: false, id: 'PR_kwDOnode', removed: null });
     const q = calls.split('\n').find((c) => c.includes('isMergeQueueEnabled')) ?? '';
     expect(q).toContain('number=1234');
     expect(q).toContain('owner=o');
@@ -2570,13 +2570,315 @@ esac
   });
 
   it('readPr reads a base without a queue as no queue', () => {
-    const { read } = readWith('{"id":"PR_kwDOnode","isMergeQueueEnabled":false,"isInMergeQueue":false}');
-    expect(read.mergeQueue).toEqual({ enabled: false, queued: false, id: 'PR_kwDOnode' });
+    const { read } = readWith('{"id":"PR_kwDOnode","isMergeQueueEnabled":false,"isInMergeQueue":false,"timelineItems":{"nodes":[]}}');
+    expect(read.mergeQueue).toEqual({ enabled: false, queued: false, id: 'PR_kwDOnode', removed: null });
   });
 
   it('readPr carries a failed or malformed queue read as null, not as "no queue"', () => {
     expect(readWith('fail').read.mergeQueue).toBeNull();
     expect(readWith('null').read.mergeQueue).toBeNull();
     expect(readWith('{"id":"PR_kwDOnode"}').read.mergeQueue).toBeNull();
+  });
+});
+
+describe('the Merger follows a queued PR to its outcome (kanon#1104)', () => {
+  /**
+   * Adding a PR to a merge queue is not merging it (kanon#1102). Three things that held for a
+   * squash stopped holding for a queued PR: an ejected PR was queued again on every sweep, the
+   * summary counted a queued PR as merged, and nothing checked that its linked issues closed.
+   *
+   * MEASURED on Kanon's own queue (2026-10-18, the last 60 PRs' timelines): a PR the queue merges
+   * gets a `RemovedFromMergeQueueEvent` with reason `merged` whose `beforeCommit` is the merge
+   * commit on `main`, and one it ejected on a conflict has reason `merge_conflict` and no
+   * `beforeCommit` at all. So the event can't say which head was ejected, and the Merger's own
+   * record of the head it queued, a marker comment, is what ties the ejection to the head.
+   */
+  const merge = { action: 'merge', rule: 'green-zone', why: 'ok', quiet: false };
+  const QUEUE = (over: Record<string, unknown> = {}) => ({ enabled: true, queued: false, id: 'PR_kwDOnode', removed: null, ...over });
+  const EJECTED = { reason: 'failed_checks', at: '2026-10-18T10:00:00Z' };
+
+  describe('a PR the queue ejected on this head is escalated, not queued again', () => {
+    it('escalates when the Merger queued this head and the queue removed it', () => {
+      const v = mergeVerdict(pr({ mergeQueue: QUEUE({ removed: EJECTED, queuedHere: true }) }));
+      expect(v.action).toBe('escalate');
+      expect(v.rule).toBe('queue-ejected');
+      expect(v.why).toContain('failed_checks');
+      expect(v.why).toContain(HEAD.slice(0, 7));
+      expect(v.quiet).toBe(false);
+    });
+
+    it('is head-scoped: a push answers it afresh, so the Merger\'s label lapses with the head', () => {
+      expect(LAPSES_WITH_HEAD.has('queue-ejected')).toBe(true);
+      const v = mergeVerdict(pr({
+        labels: ['agent:implement', 'needs:human'],
+        hold: { labeledBy: `${MERGER_LOGIN}[bot]`, escalations: [{ rule: 'queue-ejected', sha: OLD.slice(0, 12) }] },
+        mergeQueue: QUEUE({ removed: EJECTED, queuedHere: false }),
+      }));
+      expect(v.action).toBe('release');
+    });
+
+    it('merges (leaves it queued) while the PR is still in the queue', () => {
+      // A person re-added it, or the Merger did and it hasn't come out: apply leaves it there.
+      const v = mergeVerdict(pr({ mergeQueue: QUEUE({ queued: true, removed: EJECTED, queuedHere: true }) }));
+      expect(v.action).toBe('merge');
+    });
+
+    it('queues a head the Merger never queued, though an earlier one was removed', () => {
+      const v = mergeVerdict(pr({ mergeQueue: QUEUE({ removed: EJECTED, queuedHere: false }) }));
+      expect(v.action).toBe('merge');
+    });
+
+    it('waits when whether it queued this head could not be read', () => {
+      const v = mergeVerdict(pr({ mergeQueue: QUEUE({ removed: EJECTED, queuedHere: null }) }));
+      expect(v.action).toBe('wait');
+      expect(v.rule).toBe('queue-history-unread');
+    });
+
+    it('never asks without a queue, or before any removal', () => {
+      expect(mergeVerdict(pr({ mergeQueue: QUEUE({ enabled: false, removed: EJECTED, queuedHere: true }) })).action).toBe('merge');
+      expect(mergeVerdict(pr({ mergeQueue: QUEUE() })).action).toBe('merge');
+      expect(mergeVerdict(pr({ mergeQueue: null })).action).toBe('merge');
+    });
+
+    it('comes after every other gate, so a conflict is still the rebase lane\'s first', () => {
+      const v = mergeVerdict(pr({ mergeStateStatus: 'DIRTY', mergeable: 'CONFLICTING', mergeQueue: QUEUE({ removed: EJECTED, queuedHere: true }) }));
+      expect(v.action).toBe('wait');
+      expect(v.rule).toBe('merge-state-rebasing');
+    });
+  });
+
+  /** `readPr` against a stubbed `gh`: the queue read prints `queue`, the comments read `comments` or fails. */
+  const readQueue = (queue: string, comments: string | null = '') => {
+    const dir = mkdtempSync(join(tmpdir(), 'merge-gate-ejected-'));
+    const meta = {
+      number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,
+      labels: [{ name: 'agent:implement' }], headRefOid: HEAD,
+      statusCheckRollup: [{ name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE', title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`,
+      closingIssuesReferences: [{ number: 1 }], commits: [{ messageHeadline: 'x', messageBody: '' }],
+    };
+    writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${dir}/calls"
+case "$*" in
+  "pr view"*)              printf '%s' '${JSON.stringify(meta)}' ;;
+  *"isMergeQueueEnabled"*) printf '%s' '${queue}' ;;
+  *"/1234/comments"*)      ${comments === null ? 'exit 1' : `cat <<'__OUT__'\n${comments}\n__OUT__\n`} ;;
+  *"/statuses"*)           printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
+  *"/files"*)              printf '%s\\n' 'src/a.ts' ;;
+  *"/reviews"*)            printf '%s' '[]' ;;
+  *"issues?per_page"*)     printf '%s' '0' ;;
+  "run list"*)             printf '%s' '[]' ;;
+esac
+`);
+    const log = console.log;
+    console.log = () => {};
+    try {
+      const read = readPr(1234, 'o/r', { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+      return { read, calls: readFileSync(join(dir, 'calls'), 'utf8').split('\n').filter(Boolean) };
+    } finally {
+      console.log = log;
+    }
+  };
+  const removedQueue = (queued = false) => JSON.stringify({
+    id: 'PR_kwDOnode', isMergeQueueEnabled: true, isInMergeQueue: queued,
+    timelineItems: { nodes: [{ createdAt: EJECTED.at, reason: EJECTED.reason }] },
+  });
+  /** One comment as the comments read's `--jq` prints it. */
+  const MERGER_SAID = (body: string, login = `${MERGER_LOGIN}[bot]`) =>
+    JSON.stringify({ login, body: `${headerLine('Merger')}\n\n${body}` });
+
+  describe('readPr reads the last removal, and whether the Merger queued this head', () => {
+    it('carries the last removal\'s reason and time from the queue read', () => {
+      const { read } = readQueue(removedQueue(), MERGER_SAID(`queued <!-- merger:queued:${HEAD.slice(0, 12)} -->`));
+      expect(read.mergeQueue?.removed).toEqual(EJECTED);
+      expect(read.mergeQueue?.queuedHere).toBe(true);
+    });
+
+    it('a marker for an older head, or one someone else wrote, is not this head queued', () => {
+      expect(readQueue(removedQueue(), MERGER_SAID(`<!-- merger:queued:${OLD.slice(0, 12)} -->`)).read.mergeQueue?.queuedHere).toBe(false);
+      expect(readQueue(removedQueue(), MERGER_SAID(`<!-- merger:queued:${HEAD.slice(0, 12)} -->`, 'someone')).read.mergeQueue?.queuedHere).toBe(false);
+    });
+
+    it('reads no comments for a PR never removed, or one in the queue now', () => {
+      const never = readQueue(JSON.stringify({ id: 'PR_kwDOnode', isMergeQueueEnabled: true, isInMergeQueue: false, timelineItems: { nodes: [] } }));
+      expect(never.read.mergeQueue?.removed).toBeNull();
+      expect(never.calls.some((c) => c.includes('/comments')), 'comments were read for a PR never removed').toBe(false);
+      const inQueue = readQueue(removedQueue(true));
+      expect(inQueue.calls.some((c) => c.includes('/comments')), 'comments were read for a PR in the queue').toBe(false);
+    });
+
+    it('carries an unread comment list as null, which waits', () => {
+      expect(readQueue(removedQueue(), null).read.mergeQueue?.queuedHere).toBeNull();
+    });
+
+    it('a queue read without its timeline is malformed, so null, as before', () => {
+      expect(readQueue(JSON.stringify({ id: 'PR_kwDOnode', isMergeQueueEnabled: true, isInMergeQueue: false })).read.mergeQueue).toBeNull();
+    });
+  });
+
+  /** `apply` against a stubbed `gh`: `fail` makes the named call exit 1 with that stderr. */
+  const run = (state: Record<string, unknown>, { dryRun = false, fail = {} as Record<string, string> } = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'apply-outcome-'));
+    const arm = (key: string, ok: string) => (fail[key] ? `printf '%s' '${fail[key]}' >&2; exit 1` : ok);
+    writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${dir}/calls"
+case "$*" in
+  *"enqueuePullRequest"*) ${arm('enqueue', `printf '%s' '{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"position":1}}}}'`)} ;;
+  "pr merge"*)            ${arm('merge', 'true')} ;;
+  "pr comment"*)          ${arm('comment', 'true')} ;;
+  *"issues/1049"*)        printf '%s' 'closed' ;;
+esac
+`);
+    const said: string[] = [];
+    const log = console.log;
+    console.log = (m: string) => { said.push(String(m)); };
+    const prev = process.env.PATH;
+    process.env.PATH = `${dir}:${prev}`;
+    let outcome: unknown;
+    try {
+      outcome = apply({ number: 7, headSha: HEAD, labels: ['agent:implement'], closing: { willClose: [1049] }, ...state }, merge, 'o/r', { dryRun });
+    } finally {
+      process.env.PATH = prev;
+      console.log = log;
+    }
+    let calls: string[];
+    try { calls = readFileSync(join(dir, 'calls'), 'utf8').split('\n').filter(Boolean); } catch { calls = []; }
+    return { said, calls, outcome };
+  };
+
+  describe('apply records the head it queued, and returns its outcome', () => {
+    it('after the enqueue, leaves a signed comment with the queued marker for this head', () => {
+      const { calls } = run({ mergeQueue: QUEUE() });
+      const enqueue = calls.findIndex((c) => c.includes('enqueuePullRequest'));
+      const comment = calls.findIndex((c) => c.startsWith('pr comment 7'));
+      expect(enqueue).toBeGreaterThan(-1);
+      expect(comment, 'no record of the head it queued, after the enqueue').toBeGreaterThan(enqueue);
+      // The body spans lines of the call log, so read the comment's call to the end.
+      const body = calls.slice(comment).join('\n');
+      expect(body).toContain(`<!-- merger:queued:${HEAD.slice(0, 12)} -->`);
+      expect(body).toContain(headerLine('Merger'));
+    });
+
+    it('leaves no record when the enqueue did not happen', () => {
+      const { calls } = run({ mergeQueue: QUEUE() }, { fail: { enqueue: 'GraphQL: Head branch was modified.' } });
+      expect(calls.some((c) => c.startsWith('pr comment'))).toBe(false);
+    });
+
+    it('a record it could not write fails by name, rather than leaving the PR to be queued again', () => {
+      expect(() => run({ mergeQueue: QUEUE() }, { fail: { comment: 'HTTP 403' } })).toThrow(/queued #7/);
+    });
+
+    it('returns merged, queued or waited', () => {
+      expect(run({ mergeQueue: QUEUE() }).outcome).toBe('queued');
+      expect(run({ mergeQueue: QUEUE({ queued: true }) }).outcome).toBe('queued');
+      expect(run({ mergeQueue: QUEUE() }, { dryRun: true }).outcome).toBe('queued');
+      expect(run({ mergeQueue: QUEUE({ enabled: false }) }).outcome).toBe('merged');
+      expect(run({ mergeQueue: QUEUE({ enabled: false }) }, { dryRun: true }).outcome).toBe('merged');
+      expect(run({ mergeQueue: QUEUE() }, { fail: { enqueue: 'GraphQL: Head branch was modified.' } }).outcome).toBe('waited');
+      expect(run({ mergeQueue: QUEUE({ enabled: false }) }, { fail: { merge: 'Head branch was modified' } }).outcome).toBe('waited');
+    });
+  });
+
+  describe('the sweep tallies outcomes, not verdicts', () => {
+    const v = (outcome: string) => ({ ...merge, outcome });
+
+    it('a queued PR is queued, a head-moved wait is waiting, and only a merge is merged', () => {
+      const verdicts: Record<string, ReturnType<typeof v>> = { 1: v('queued'), 2: v('waited'), 3: v('merged') };
+      const out = sweep(['1', '2', '3'], { consider: (n: string) => verdicts[n] });
+      expect(out.merged).toBe(1);
+      expect(out.queued).toEqual(['#1']);
+      expect(out.waiting).toEqual(['#2 — head-moved']);
+    });
+
+    it('prints a separate queued line, naming each PR, and none when nothing was queued', () => {
+      const lines = summaryLines({ considered: 2, dryRun: false, merged: 0, escalated: [], queued: ['#1', '#4'] });
+      expect(lines).toContain('- merged: 0');
+      expect(lines.some((l: LibraryValue) => l.startsWith('- queued') && l.endsWith(': 2'))).toBe(true);
+      expect(lines).toContain('  - #1');
+      expect(summaryLines({ considered: 1, dryRun: false, merged: 1, escalated: [] }).some((l: LibraryValue) => l.startsWith('- queued'))).toBe(false);
+    });
+
+    it('is what main writes: apply\'s outcome reaches the sweep, and the queued line the summary', () => {
+      const src = readFileSync(join(ROOT, 'scripts/merge-gate.mjs'), 'utf8');
+      const tail = src.slice(src.indexOf('async function main() {'));
+      expect(tail).toMatch(/const outcome = apply\(pr, verdict, repo, \{ dryRun \}\);\s*\n\s*return \{ \.\.\.verdict, outcome \};/);
+      expect(tail).toMatch(/summaryLines\(\{[^}]*queued[^}]*\}\)/);
+    });
+  });
+
+  describe('the linked issues of a PR the queue merged are checked once it merges', () => {
+    const NOW = Date.parse('2026-10-18T12:00:00Z');
+    const listed = (over: Record<string, unknown>[]) => JSON.stringify(over.map((o) => ({
+      number: 7, headRefOid: HEAD, mergedAt: '2026-10-18T11:00:00Z', mergedBy: { login: MERGER_LOGIN },
+      closingIssuesReferences: [{ number: 1049 }], ...o,
+    })));
+    const follow = (out: string | Error) => {
+      const asked: string[][] = [];
+      const verified: Array<{ pr: LibraryValue, opts: LibraryValue }> = [];
+      const followed = followQueueMerges('o/r', {
+        run: (args: string[]) => { asked.push(args); if (out instanceof Error) throw out; return out; },
+        verify: (p: LibraryValue, _repo: string, _say: unknown, opts: LibraryValue) => { verified.push({ pr: p, opts }); },
+        now: NOW,
+        say: () => {},
+      });
+      return { asked, verified, followed };
+    };
+
+    it('checks the declared issues of each PR the Merger merged in the last day', () => {
+      const { asked, verified, followed } = follow(listed([{}, { number: 8, mergedBy: { login: `${MERGER_LOGIN}[bot]` }, closingIssuesReferences: [] }]));
+      expect(followed).toEqual([7, 8]);
+      expect(verified[0].pr).toEqual({ number: 7, headSha: HEAD, closing: { willClose: [1049] } });
+      // One read for the whole list, bounded to the window in the search's own terms.
+      expect(asked).toHaveLength(1);
+      expect(asked[0].join(' ')).toContain('--state merged');
+      expect(asked[0].join(' ')).toContain(`merged:>=${new Date(NOW - FOLLOW_UP_MS).toISOString()}`);
+    });
+
+    it('leaves a PR someone else merged, and one merged before the window', () => {
+      const { followed } = follow(listed([{ mergedBy: { login: 'a-person' } }, { number: 9, mergedAt: '2026-10-16T11:00:00Z' }]));
+      expect(followed).toEqual([]);
+    });
+
+    it('a list it could not read fails by name, rather than reading as nothing to check', () => {
+      expect(() => follow(new Error('HTTP 403'))).toThrow(/403/);
+      expect(() => follow('{"not":"a list"}')).toThrow();
+    });
+
+    it('is run by the sweep, with --apply, and not on a single PR', () => {
+      const src = readFileSync(join(ROOT, 'scripts/merge-gate.mjs'), 'utf8');
+      const tail = src.slice(src.indexOf('async function main() {'));
+      expect(tail).toMatch(/if \(!dryRun && !explicit\)[^]*?followQueueMerges\(repo/);
+    });
+
+    /** `verifyClosed` on a still-open #1049, against a stubbed `gh` whose comments read prints `said`. */
+    const unclosed = (said: string) => {
+      const dir = mkdtempSync(join(tmpdir(), 'verify-once-'));
+      writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${dir}/calls"
+case "$*" in
+  *"issues/1049"*)  printf '%s' 'open' ;;
+  *"/7/comments"*)  printf '%s' '${said}' ;;
+esac
+`);
+      const prev = process.env.PATH;
+      process.env.PATH = `${dir}:${prev}`;
+      const told: string[] = [];
+      try {
+        verifyClosed({ number: 7, headSha: HEAD, closing: { willClose: [1049] } }, 'o/r', (m: string) => told.push(m), { retries: 0 });
+      } finally {
+        process.env.PATH = prev;
+      }
+      return { told, calls: readFileSync(join(dir, 'calls'), 'utf8') };
+    };
+
+    it('verifyClosed says a miss once per PR, not once per sweep', () => {
+      const { told, calls } = unclosed(`<!-- merger:issues-unclosed:${HEAD.slice(0, 12)} -->`);
+      expect(calls, 'it said the miss again').not.toContain('pr comment');
+      expect(told.some((m) => m.includes('did not close'))).toBe(true);
+    });
+
+    it('verifyClosed\'s comment carries the marker that dedupes it', () => {
+      expect(unclosed('').calls).toContain(`<!-- merger:issues-unclosed:${HEAD.slice(0, 12)} -->`);
+    });
   });
 });
