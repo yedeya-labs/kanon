@@ -1811,7 +1811,8 @@ export const FOLLOW_UP_MS = 24 * 60 * 60 * 1000;
  * A PR the Merger squashed itself is checked again too, which costs one read per declared issue
  * and says nothing new: a miss it already reported is said once (`verifyClosed`'s marker). No
  * retries, since the close happened long before the sweep. A list that can't be read throws, so
- * the run says so by name rather than reading as nothing to check.
+ * the run says so by name rather than reading as nothing to check, and a list it read is
+ * counted in one line, so a sweep that matched nothing says so too (kanon#1117).
  *
  * @param {string} repo
  * @param {{run?: (args: string[]) => string, verify?: typeof verifyClosed, now?: number, say?: (m: string) => void}} [io]
@@ -1823,7 +1824,20 @@ export function followQueueMerges(repo, { run = gh, verify = verifyClosed, now =
     '--limit', '100', '--json', 'number,headRefOid,mergedAt,mergedBy,closingIssuesReferences']));
   if (!Array.isArray(listed)) throw new Error(`the merged PRs could not be listed: ${JSON.stringify(listed).slice(0, 200)}`);
   const slug = (s) => String(s ?? '').replace(/^app\//, '').replace(/\[bot\]$/, '');
-  const ours = listed.filter((p) => slug(p?.mergedBy?.login) === MERGER_LOGIN && Date.parse(p.mergedAt) >= since);
+  const recent = listed.filter((p) => Date.parse(p?.mergedAt) >= since);
+  const ours = recent.filter((p) => slug(p?.mergedBy?.login) === MERGER_LOGIN);
+  // SAID EVERY TIME, matched or not (kanon#1117). The rule above that a queue merge is recorded
+  // as its enqueuer's was measured only for a person who queued. If GitHub records an App's as
+  // another actor, nothing here matches, so the line names who merged the rest: an empty check
+  // reads as one, not as the absence of `#n: closed` lines.
+  const others = new Map();
+  for (const p of recent.filter((q) => !ours.includes(q))) {
+    const by = p?.mergedBy?.login || 'an unknown actor';
+    others.set(by, (others.get(by) ?? 0) + 1);
+  }
+  const rest = others.size === 0 ? ''
+    : `; the other${recent.length - ours.length === 1 ? '' : 's'} by ${[...others].map(([by, n]) => `${by} (${n})`).join(', ')}`;
+  say(`${recent.length} PR${recent.length === 1 ? '' : 's'} merged in the last day, ${ours.length} as the Merger (${MERGER_LOGIN}): ${ours.length === 0 ? 'nothing to check' : `checking ${ours.map((p) => `#${p.number}`).join(', ')}`}${rest}`);
   for (const p of ours) {
     verify({ number: p.number, headSha: p.headRefOid, closing: { willClose: (p.closingIssuesReferences ?? []).map((r) => r.number) } },
       repo, (m) => say(`#${p.number}: ${m}`), { retries: 0 });
