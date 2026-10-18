@@ -32,12 +32,13 @@
 // "Only the collector reaches the store" (`K-OBS-13`) is then held by which jobs hold
 // `id-token: write`, not by an environment.
 //
-// THE SENDER'S NAME HASHES (plan 0006 §4.2, F4). The ingest function checks a finding row's text
-// with the scrub's `verify`, in the context of the repository that sent it: the words of its owner
-// and name. It is told them as `NAME_HASHES`, `<key>=<hash>:<hash>…` per key, the SHA-256 of each
-// lowercase `[a-z0-9]` run, as the scrub's `nameContext` hashes them, NEVER THE WORDS, so the
-// function's configuration names no repository. Lambda holds a function's whole environment to
-// 4 KB, so a register too large for it is refused here, before a deploy.
+// NO NAME HASHES IN THE ENVIRONMENT (plan 0006 §4.2, F4; plan 0008 J3; kanon#607). The ingest
+// function checks a finding row's text with the scrub's `verify`, in the context of the repository
+// that sent it: the SHA-256 of each word of its owner and name, never the words. Since J3 it reads
+// them from the sender's registration in the register table, so this writes them nowhere: per key
+// they took about 65 bytes a word, and capped the register at about 13 to 25 repositories. Lambda
+// holds a function's whole environment to 4 KB, so a register whose keys alone would pass it, in
+// either function, is still refused here, before a deploy.
 //
 // THE TOKEN PATH'S TWO PARAMETERS (plan 0008 §9 step 3a, step J5). `--min-token-version` writes
 // `MinTokenVersion`, the lowest Kanon release whose workflows both functions' token URLs admit;
@@ -57,7 +58,6 @@ import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 import { readRepositorySubject, subjectProblems } from '../../scripts/lib/oidc-subject.mjs';
 import { addMonths, RETENTION_MONTHS } from './function/index.mjs';
 import { ISO_UTC } from '../../actions/agent-telemetry/schema.mjs';
-import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const TEMPLATE_PATH = join(HERE, 'template.yaml');
@@ -166,15 +166,6 @@ const logicalId = (/** @type {string} */ key) => key.replace(/[^A-Za-z0-9]/g, ''
 export const LAMBDA_ENV_BYTES = 4096;
 /** What a value CloudFormation resolves at deploy time (an account id, a role name) is allowed. */
 const RESOLVED_VALUE_BYTES = 64;
-
-/**
- * `NAME_HASHES` for the ingest function: per key, the SHA-256 of each word of its repository's
- * owner and name, sorted, never the words, and none of Kanon's own vocabulary, which `nameContext`
- * leaves out for the lanes too (plan 0006 §4.2, kanon#612).
- * @param {Entry[]} entries
- */
-export const nameHashesVariable = (entries) =>
-  entries.map((e) => `${e.key}=${[...nameContext({ repository: e.repository })].sort().join(':')}`).join(',');
 
 /**
  * The size Lambda counts for an environment: each name and value, a value CloudFormation resolves
@@ -389,11 +380,6 @@ export function render(register, opts = {}) {
   const fn = template.Resources.IngestFunction.Properties;
   fn.Code = opts.functionDir ?? FUNCTION_DIR;
   fn.Environment.Variables.WRITER_KEYS = register.repositories.map((r) => r.key).join(',');
-  fn.Environment.Variables.NAME_HASHES = nameHashesVariable(register.repositories);
-  const bytes = environmentBytes(fn.Environment.Variables);
-  if (bytes > LAMBDA_ENV_BYTES) {
-    throw new Error(`register: the ingest function's environment would be ${bytes} bytes for ${register.repositories.length} repositories, past Lambda's ${LAMBDA_ENV_BYTES}`);
-  }
   const invokePolicy = template.Resources.ImporterRole.Properties.Policies[0].PolicyDocument;
   for (const entry of register.repositories) Object.assign(template.Resources, repositoryResources(entry, invokePolicy, /** @type {Subjects} */ (subjects[entry.key])));
   const agg = template.Resources.AggregateFunction.Properties;
@@ -402,6 +388,12 @@ export function render(register, opts = {}) {
   agg.Environment.Variables.OWN_FIGURES = register.repositories.filter((r) => r.publish_own_figures_as !== undefined)
     .map((r) => `${r.key}=${r.publish_own_figures_as}`).join(',');
   agg.Environment.Variables.INVOKER_KEYS = register.repositories.filter((r) => r.aggregate_invoker === true).map((r) => r.key).join(',');
+  for (const [name, props] of [['ingest', fn], ['aggregate', agg]]) {
+    const bytes = environmentBytes(props.Environment.Variables);
+    if (bytes > LAMBDA_ENV_BYTES) {
+      throw new Error(`register: the ${name} function's environment would be ${bytes} bytes for ${register.repositories.length} repositories, past Lambda's ${LAMBDA_ENV_BYTES}`);
+    }
+  }
   for (const entry of register.repositories) Object.assign(template.Resources, invokerResources(entry, invokePolicy, /** @type {Subjects} */ (subjects[entry.key])));
   for (const entry of register.repositories) {
     const id = logicalId(entry.key);

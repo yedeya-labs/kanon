@@ -5,15 +5,14 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
-import { FUNCTION_DIR, registerProblems, render, TEMPLATE_PATH } from '../../infra/telemetry/render.mjs';
+import { environmentBytes, FUNCTION_DIR, registerProblems, render, TEMPLATE_PATH } from '../../infra/telemetry/render.mjs';
 import { ATTRIBUTES, TOKEN_ALIAS } from '../../infra/telemetry/function/aggregate.mjs';
-import { nameHashesOf } from '../../infra/telemetry/function/index.mjs';
 import {
   AGGREGATE_GET, AGGREGATE_SCAN, FUNCTION_FIELDS, INGEST_SCAN, KEY_ITEM_PREFIX, OPERATOR_FIELDS, REGISTER_TABLE, REGISTRATION_PREFIX,
   TOMBSTONE_FIELDS,
 } from '../../infra/telemetry/function/register-fields.mjs';
 import { sha256 } from '../../actions/agent-telemetry/public-words.mjs';
-import { KANON_WORDS, nameContext } from '../../actions/agent-telemetry/scrub.mjs';
+import { KANON_WORDS } from '../../actions/agent-telemetry/scrub.mjs';
 import { writeStub } from './helpers/stub-bin.js';
 
 /**
@@ -253,22 +252,41 @@ describe('the ingest function and its URL (§4)', () => {
     expect(fn.Environment.Variables.IMPORTER_ROLE).toEqual({ 'Fn::If': ['ImporterOn', 'kanon-telemetry-importer', ''] });
     expect(fn.Environment.Variables.BACKFILL_ROLE).toEqual({ 'Fn::If': ['BackfillOn', 'kanon-telemetry-backfill', ''] });
   });
-  it("is told each key's repository as the hashes of its words, never the words, and none of Kanon's own (plan 0006 §4.2, F4; kanon#612)", () => {
+  it("holds no repository's words and no hashes of them, in either function: intake reads the registration's (plan 0008 J3; kanon#607)", () => {
     const words = repo.toLowerCase().match(/[a-z0-9]+/g)!.filter((w) => !KANON_WORDS.has(w));
-    expect(fn.Environment.Variables.NAME_HASHES).toBe(`${key}=${[...new Set(words.map(sha256))].sort().join(':')}`);
-    for (const w of words) expect(fn.Environment.Variables.NAME_HASHES).not.toContain(w);
-    // The function reads back exactly the scrub's context for that repository.
-    expect(nameHashesOf({ NAME_HASHES: fn.Environment.Variables.NAME_HASHES }, key))
-      .toEqual(nameContext({ repository: repo }));
-    const two = render({ ...register, repositories: [{ key: 'k1', repository: 'o/r', readers: ['ref:refs/heads/main'] }, { key: 'k2', repository: 'o/s', readers: ['ref:refs/heads/main'] }] }, { gh });
-    expect(two.template.Resources.IngestFunction.Properties.Environment.Variables.NAME_HASHES)
-      .toBe(`k1=${[sha256('o'), sha256('r')].sort().join(':')},k2=${[sha256('o'), sha256('s')].sort().join(':')}`);
+    for (const f of ['IngestFunction', 'AggregateFunction']) {
+      const variables = R[f]!.Properties.Environment.Variables;
+      expect(variables, f).not.toHaveProperty('NAME_HASHES');
+      const text = JSON.stringify(variables);
+      for (const w of words) {
+        expect(text, `${f}: ${w}`).not.toContain(sha256(w));
+        expect(text, `${f}: ${w}`).not.toMatch(new RegExp(`\\b${w}\\b`));
+      }
+    }
   });
-  it("refuses a register whose environment would pass Lambda's 4 KB", () => {
-    const many = Array.from({ length: 20 }, (_, i) => ({ key: `k${i}`, repository: `owner${i}/name${i}-and-more-words`, readers: ['ref:refs/heads/main'] }));
-    const lots = fakeGh(Object.fromEntries(many.map((e) => [e.repository, {}])));
-    expect(() => render({ ...register, repositories: many }, { gh: lots })).toThrow(/environment would be \d+ bytes for 20 repositories, past Lambda's 4096/);
-    expect(() => render({ ...register, repositories: many.slice(0, 5) }, { gh: lots })).not.toThrow();
+  // kanon#607: with each key's name hashes in its environment, about 13 to 25 repositories ran
+  // the ingest function past Lambda's 4 KB, and the whole register was refused.
+  const entries = (n: number, key: (i: number) => string, repository: (i: number) => string) =>
+    Array.from({ length: n }, (_, i) => ({ key: key(i), repository: repository(i), readers: ['ref:refs/heads/main'] }));
+  const rendering = (repositories: { repository: string }[]) =>
+    render({ ...register, repositories }, { gh: fakeGh(Object.fromEntries(repositories.map((e) => [e.repository, {}]))) });
+  const ingestBytes = (t: J) => environmentBytes(t.Resources.IngestFunction.Properties.Environment.Variables);
+  it("renders 100 repositories of five words each: a repository's name never grows the environment (kanon#607)", () => {
+    const keyOf = (i: number) => `k${String(i).padStart(8, '0')}`;
+    const long = entries(100, keyOf, (i) => `owner${i}/name${i}-and-more-words`);
+    expect(() => rendering(long)).not.toThrow();
+    const short = entries(100, keyOf, (i) => `o${i}/r${i}`);
+    expect(ingestBytes(rendering(long).template)).toBe(ingestBytes(rendering(short).template));
+    // One more repository adds its key and a comma, and nothing else.
+    expect(ingestBytes(rendering(entries(101, keyOf, (i) => `o${i}/r${i}`)).template) - ingestBytes(rendering(short).template)).toBe(keyOf(100).length + 1);
+  });
+  it("still refuses a register whose keys alone would run either function's environment past Lambda's 4 KB", () => {
+    const keyOf = (i: number) => `k${String(i).padStart(31, '0')}`;
+    expect(() => rendering(entries(130, keyOf, (i) => `o${i}/r${i}`))).toThrow(/the ingest function's environment would be \d+ bytes for 130 repositories, past Lambda's 4096/);
+    // The aggregate function holds the keys twice when every one is an invoker, so it fills first.
+    const seventy = entries(70, keyOf, (i) => `o${i}/r${i}`);
+    expect(() => rendering(seventy)).not.toThrow();
+    expect(() => rendering(seventy.map((e) => ({ ...e, aggregate_invoker: true })))).toThrow(/the aggregate function's environment would be \d+ bytes for 70 repositories, past Lambda's 4096/);
   });
 });
 

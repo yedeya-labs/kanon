@@ -13,8 +13,9 @@
 //      with the declaring adopters (`--own`) it leaves out of the three-adopter rule (#1094).
 //   2. Reads every finding row of the asked tag, and checks each again (§6, item 2):
 //      - `validate`, the schema's own check, at this release;
-//      - `verify`, the scrub, on `evidence` and `suggested_fix`, with that key's name hashes
-//        (from the register, as `render.mjs` builds them for intake) and the release's tree;
+//      - `verify`, the scrub, on `evidence` and `suggested_fix`, with that key's name hashes (from
+//        the register, as intake holds them in each registration's `name_hashes`) and the release's
+//        tree;
 //      - no adopter key: `assertNoKey` over every field, and each text searched for a key as a word;
 //      - each `kanon_paths` entry must be a file in the tree of the finding's `kanon_version`.
 //      A finding that fails any check is still filed, privately, marked `gate: failed` with the
@@ -179,8 +180,9 @@ export function readIssues(issues) {
 }
 
 /**
- * The register's keys and each key's name hashes, as `render.mjs` builds `NAME_HASHES` for intake:
- * the words of the registered repository's owner and name, hashed. Reads nothing else of it.
+ * The register's keys and each key's name hashes, as intake holds them in each registration's
+ * `name_hashes`: the words of the registered repository's owner and name, hashed. Reads nothing
+ * else of it.
  * @param {any} register
  * @returns {{ keys: string[], names: Record<string, string[]> }}
  */
