@@ -108,6 +108,42 @@ describe('kanon doctor on what an installation lacks', () => {
     expect(r.json.releases.pinned).toBe(PINNED);
   });
 
+  // kanon#1105: Dependabot reads a composite action only from the action's own directory, so an
+  // entry for `/` alone leaves a hook's Kanon pin behind on every upgrade pull request.
+  describe("the Dependabot entry's reach (K-ADOPT-11, kanon#1105)", () => {
+    const pinnedHook = (files: Record<string, string>) =>
+      files[REQ.hook.path]!.replace('  steps:\n', `  steps:\n    - uses: yedeya-labs/kanon/actions/kanon-path@${PINNED}\n`);
+    const forRootAlone = (files: Record<string, string>) =>
+      files['.github/dependabot.yml']!.replace(/ {4}directories:\n( {6}- .*\n)+/, '    directory: /\n');
+
+    it("reports an entry that doesn't reach a composite action pinning Kanon, with the line that does", async () => {
+      const files = healthyFiles();
+      files[REQ.hook.path] = pinnedHook(files);
+      files['.github/dependabot.yml'] = forRootAlone(files);
+      expect(files['.github/dependabot.yml']).toContain('    directory: /\n');
+      const r = await run(checkout(files), fakeGitHub(), ['--json']);
+      expect(ids(r)).toEqual(['pin.dependabot-unreached .github/dependabot.yml']);
+      expect(r.json.findings[0]).toMatchObject({ category: 'pin', blocking: true });
+      expect(r.json.findings[0].message).toContain(REQ.hook.path);
+      expect(r.json.findings[0].fix.commands).toEqual(['directories: ["/", "/.github/actions/*"]']);
+      expect(r.status).toBe(EXIT.findings);
+    });
+
+    it('passes the entry kanon init writes, which reaches the hook', async () => {
+      const files = healthyFiles();
+      files[REQ.hook.path] = pinnedHook(files);
+      const r = await run(checkout(files), fakeGitHub(), ['--json']);
+      expect(ids(r)).toEqual([]);
+    });
+
+    it('passes an entry for `/` alone while no composite action pins Kanon', async () => {
+      const files = healthyFiles();
+      files['.github/dependabot.yml'] = forRootAlone(files);
+      const r = await run(checkout(files), fakeGitHub(), ['--json']);
+      expect(ids(r)).toEqual([]);
+    });
+  });
+
   // Plan 0009 S2: a candidate, `candidate-vX.Y.Z`, is an exact release (K-ADOPT-11). Doctor reads
   // its requirements at the candidate's tag and notes it, with the latest stable release beside it.
   describe('a candidate pin (plan 0009 S2)', () => {

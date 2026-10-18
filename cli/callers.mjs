@@ -358,11 +358,15 @@ export const laneCheckFile = (release) =>
  * entry actions/pr-title/README.md gives adopters ("Upgrades: Dependabot"), which
  * tests/unit/kanon-init.test.ts holds this to. Daily, since a weekly entry reaches a Kanon release
  * up to a week late (#332), and allowing only Kanon's dependencies, so it proposes no third-party
- * action (#360).
+ * action (#360). For `/` and every composite action under `.github/actions/`: from `/` Dependabot
+ * reads only `.github/workflows/`, and a hook that pins Kanon, the project-setup hook among them,
+ * would stay behind on every upgrade pull request, which lane-check then fails (#1105).
  */
 export const DEPENDABOT_ENTRY = [
   '  - package-ecosystem: github-actions',
-  '    directory: /',
+  '    directories:',
+  '      - /',
+  '      - /.github/actions/*',
   '    schedule:',
   '      interval: daily',
   '    allow:',

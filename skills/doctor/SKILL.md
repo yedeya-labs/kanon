@@ -138,6 +138,7 @@ Propose the bullet and ask for the reason; never invent one. Write it only once 
 | Id | Who | What you do |
 |---|---|---|
 | `pin.mixed` | agent | Make every `yedeya-labs/kanon` reference under `.github/` name the one release the person chooses (`.releases.pins` lists them). |
+| `pin.dependabot-unreached` | agent | Write the Kanon entry's `directories:` in `.github/dependabot.yml` as the fix's line, in place of its `directory:`, changing nothing else, and show the diff. For a file the fix says Dependabot never updates, move its Kanon reference into a workflow or a composite action. |
 | `pin.candidate` | decision | Doesn't block. Say the repository runs ahead of stable on a candidate, and name the latest stable release (`.releases.stable`, null when doctor couldn't read it). Ask whether the person means to; to follow stable instead, they move the pins with `/kanon:upgrade`. Change nothing on your own. |
 | `notify.hook-pin-behind` | agent | Doesn't block. Move the hook's one `uses:` line in `.github/actions/notify/action.yml` to the fix's line, the callers' pin, changing nothing else, and show the diff. The upgrade skill does it with the pin bump. |
 | `notify.hook-pin-ahead` | agent, decision | Blocks: `lane-check` fails a prebuilt hook pinned ahead of the callers. Ask whether to move the hook back to the callers' pin, the fix's line, or the callers forward to the hook's release with `/kanon:upgrade`; write what they choose, changing nothing else, and show the diff. |

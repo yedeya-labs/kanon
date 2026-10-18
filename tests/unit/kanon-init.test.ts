@@ -16,6 +16,7 @@ import { codeownersOf, DIAGNOSE_DROPPED, CONSENT_LEVELS, CONSENT_OPTIONS, CONSEN
 import { parseUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { KEYS_HELP } from '../../cli/apps.mjs';
+import { unreached } from '../../actions/lane-check/dependabot-reach.mjs';
 
 // Its cases run `kanon init` against a real git checkout, and several run lane-check, so every
 // case takes the spawn budget (#436).
@@ -343,6 +344,18 @@ describe('kanon init, on an empty repository with every default (plan 0005 L9)',
     const r = await run(other, github);
     expect(r.out).toContain(DEPENDABOT_ENTRY.join('\n   '));
     expect(parseYaml(['updates:', ...DEPENDABOT_ENTRY].join('\n'))).toEqual({ updates: documented.updates });
+  });
+
+  // kanon#1105: an entry for `/` alone reaches the workflows, never a composite action, so a hook
+  // that pinned Kanon stayed behind on every upgrade pull request and lane-check failed the mix.
+  it('writes a Dependabot entry that reaches the workflows and every hook under .github/actions/ (K-ADOPT-11, kanon#1105)', async () => {
+    const dir = checkout();
+    await run(dir, fakeGitHub());
+    const entry = parseYaml(read(dir, '.github/dependabot.yml')).updates[0];
+    const req = loadRequirements();
+    const reached = ['.github/workflows/ci.yml', req.hook.path, '.github/actions/notify/action.yml', '.github/actions/a-hook-of-your-own/action.yaml'];
+    expect(reached).toContain('.github/actions/project-setup/action.yml');
+    expect(unreached(entry, reached)).toEqual([]);
   });
 
   it('creates the taxonomy, the buckets, the merge setting and the ruleset, and runs kanon apps for the Judge, the Reviewer\'s App', async () => {
