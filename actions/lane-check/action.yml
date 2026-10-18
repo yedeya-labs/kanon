@@ -22,6 +22,11 @@
 #     K-LAYOUT-15; kanon#153), and a missing one is Kanon's default, named in a notice;
 #   - `.github/dependabot.yml` has the entry that proposes Kanon upgrades.
 #
+# On a red pull request that only moves Kanon's `uses:` refs, such as Dependabot's upgrade, it
+# also says to run /kanon:upgrade on the branch, with the steps only a person can do apart
+# (kanon#1106). It reads the base from the event's payload, and the runner's own variables reach
+# a composite action's steps, so the action still takes no inputs.
+#
 # What a lane declares (its inputs, secrets and permissions, and the hook's inputs) is read
 # from Kanon's own files at the pinned version, through $GITHUB_ACTION_PATH, never restated.
 #

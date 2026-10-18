@@ -24,6 +24,13 @@ Fails unless the repository's Kanon lane callers, project-setup hook, App regist
 
 What a lane declares, and what the hook must accept, is read from Kanon's own files at the version you pinned, so the check and the lanes can't disagree.
 
+**A red pull request that only moves Kanon's references points to `/kanon:upgrade`** ([#1106](https://github.com/yedeya-labs/kanon/issues/1106)). Dependabot's upgrade pull request moves only the `uses:` refs, so when a release changes what the callers need, such as a secret, a permission, an input or a trigger, it opens red. On such a pull request, after the failures, lane-check says that the release changes what your callers need and to run `/kanon:upgrade` on the branch. It then lists the changes in two parts: what only a person can do (a repository secret to add, or to store under its new name, and any App permission the release adds, which `kanon doctor` names), and what the upgrade skill does (the failures themselves: the mappings, the `permissions:` blocks, the inputs, the triggers). It prints one more `::error` that says the same in a line, and writes the same to the job's summary, which the pull request's checks show. How it knows the pull request only moves Kanon's references:
+
+- **From the diff, first.** It reads the pull request's base from the event's payload (`GITHUB_EVENT_PATH`) and diffs it against the checkout. `actions/checkout` leaves one commit, so when the base isn't there it fetches that one commit from `origin`, with the token the checkout already keeps for `contents: read`, or none on a public repository. No new permission or input is needed. The pull request only moves the references when, in every file it changes, each line it removes or adds is the `uses:` line of a Kanon action or workflow, and the lines it adds are the lines it removes with other refs. A file added, deleted, renamed or binary, or any other line, and it doesn't.
+- **From the branch, when the base can't be read.** A pull request from a Dependabot branch for GitHub Actions (`GITHUB_HEAD_REF` starting with `dependabot/github_actions/`) counts, since Dependabot changes only the refs.
+
+On a `pull_request` or `pull_request_target` run and nowhere else. A pull request that changes anything else, a run that passes, and a `merge_group` or `push` run print what they always printed.
+
 ## Use it
 
 <!-- x-release-please-start-version -->

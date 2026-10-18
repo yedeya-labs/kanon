@@ -13,7 +13,7 @@ Read [who Kanon is for](../rulebook/00-principles.md) first, and the [adoption c
 
 ## Ways to install
 
-Every way ends in the same place: Kanon's code used by reference, pinned to one exact release, with Dependabot proposing upgrades ([`K-ADOPT-11`](../rulebook/10-adoption.md)). The pieces are:
+Every way ends in the same place: Kanon's code used by reference, pinned to one exact release, with Dependabot proposing upgrades ([`K-ADOPT-11`](../rulebook/10-adoption.md)). Dependabot's upgrade pull request moves only the pins, so when a release changes what your callers need, it opens red, and `lane-check` says so on it: run `/kanon:upgrade` on that branch, which makes the caller changes, and do the steps it lists as only yours, such as a repository secret to add or rename ([#1106](https://github.com/yedeya-labs/kanon/issues/1106)). The pieces are:
 
 <!-- x-release-please-start-version -->
 

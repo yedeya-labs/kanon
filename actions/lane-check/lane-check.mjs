@@ -15,16 +15,20 @@
 //
 // ENV  KANON_ROOT   Kanon's tree (default: this script's ../..)
 //      ACTION_REF   the ref this action was called at
+//      GITHUB_EVENT_NAME, GITHUB_EVENT_PATH, GITHUB_HEAD_REF, GITHUB_STEP_SUMMARY
+//                   the runner's own, read only on a red run, to tell a pull request that only
+//                   moves Kanon's references and point it to /kanon:upgrade (refs-only.mjs)
 //
 // Prints one `::error` per violation and exits 1 if there is any; exits 2 when it cannot run. A
 // rule in its release of warning (caller-names.mjs) prints a `::warning` and does not fail.
 import { spawnSync } from 'node:child_process';
-import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { appendFileSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FIXED_CALLERS, callerNameFindings, kanonVersion } from './caller-names.mjs';
 import { declarationFindings } from './declarations.mjs';
 import { directoriesLine, unreached, updatedFrom } from './dependabot-reach.mjs';
+import { pullRequestMovesOnlyKanonRefs } from './refs-only.mjs';
 import { LEDGER, readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -50,10 +54,19 @@ const die = (msg) => {
 let ERRORS = 0;
 let DEFAULTS = 0;
 let WARNINGS = 0;
+/** Each failure, for the upgrade pointer below (kanon#1106). @type {Array<{ file: string, msg: string }>} */
+const FAILURES = [];
+/**
+ * What only a person can do about the failures, keyed by the repository secret it is about, so a
+ * secret two callers need is asked for once, and a rename replaces the plain ask for its new name.
+ * @type {Map<string, string>}
+ */
+const PERSON = new Map();
 /** @param {string} file @param {string} msg */
 const fail = (file, msg) => {
   out(`::error file=${file},title=lane-check::${msg}`);
   ERRORS += 1;
+  FAILURES.push({ file, msg });
 };
 /** A rule in its release of warning before it fails (kanon#728). @param {string} file @param {string} msg */
 const warn = (file, msg) => {
@@ -520,6 +533,10 @@ for (const f of WORKFLOWS) {
     if (want !== got.join(',')) {
       const may = optional.length ? `, and may leave out [${optional.join(',')}]` : '';
       fail(f, `maps secrets [${got.join(',')}]; the Kanon lane ${lane} takes exactly [${declaredKeys.join(',')}]${may}`);
+      // Mapping it is the upgrade's; the repository secret itself only a person can add.
+      for (const k of want.split(',').filter((k) => k && !got.includes(k) && !PERSON.has(k))) {
+        PERSON.set(k, `Add the repository secret \`${tsv(k)}\`, which the Kanon lane ${lane} takes, unless the repository has it already`);
+      }
     }
     // THE PAIR IS ONE CHOICE (plan 0009 §10, step A3): of the names a lane's `# ONE OF SECRETS:`
     // line gives, and declares, a caller maps exactly one, the credential it runs on. Both or
@@ -540,6 +557,7 @@ for (const f of WORKFLOWS) {
       const author = /^(EXPLORER|IMPLEMENTER|LEAD|OVERSEER)_/.test(old);
       const rest = old.slice(old.indexOf('_') + 1);
       fail(f, `maps the role-named secret \`${old}\`; since plan 0005's two Apps the lane takes \`${author ? 'AUTHOR' : 'JUDGE'}_${rest}\` (the ${author ? 'Author' : 'Judge'} App's). Rename the secret and its mapping (docs/apps.md)`);
+      PERSON.set(`${author ? 'AUTHOR' : 'JUDGE'}_${rest}`, `Store the ${author ? 'Author' : 'Judge'} App's ${rest === 'APP_ID' ? 'id' : 'private key'} as the repository secret \`${author ? 'AUTHOR' : 'JUDGE'}_${rest}\`, in place of \`${old}\` (docs/apps.md)`);
     }
     for (const [rk, rv] of Object.entries(secrets)) {
       const k = tsv(rk);
@@ -779,6 +797,40 @@ if (!isFile(DEP)) {
 
 if (ERRORS > 0) {
   out(`lane-check: ${ERRORS} problem(s) in ${CALLERS} lane caller(s)`);
+  upgradePointer();
   process.exit(1);
 }
 out(`lane-check: ${CALLERS} lane caller(s) pass, with ${DEFAULTS} documented default(s) taken${WARNINGS ? ` and ${WARNINGS} warning(s) that fail in a later release` : ''}`);
+
+// ── A red pull request that only moves Kanon's references (K-ADOPT-11, kanon#1106) ──────
+// Dependabot's upgrade moves only the `uses:` refs, so when the release it moves to changes what
+// the callers need (secrets, permissions, inputs, triggers), its pull request opens red, and the
+// failures above don't say what to do. On such a pull request, and only there, they are followed
+// by the way through: /kanon:upgrade on the branch, with what only a person can do apart. The
+// same goes to the job's summary, which the pull request's checks show. Any other run prints
+// nothing more.
+function upgradePointer() {
+  let refsOnly;
+  try { refsOnly = pullRequestMovesOnlyKanonRefs(process.env); } catch { refsOnly = false; }
+  if (!refsOnly) return;
+  const person = [
+    ...PERSON.values(),
+    "Grant any App permission the release adds: `kanon doctor`, which the upgrade skill runs, names it, and only a person can widen an App's permissions and accept the change on its installation (docs/apps.md)",
+  ];
+  const lines = [
+    '',
+    'This release changes what your callers need. Run `/kanon:upgrade` on this branch: it makes the changes the upgrade skill does below, and walks you through the ones only a person can do (K-ADOPT-11).',
+    '',
+    'Only a person can do these:',
+    ...person.map((p) => `- ${p}`),
+    '',
+    'The upgrade skill does these:',
+    ...FAILURES.map(({ file, msg }) => `- ${file}: ${msg}`),
+  ];
+  out("::error title=lane-check::This pull request only moves Kanon's references, and the release it moves to changes what your callers need. Run /kanon:upgrade on this branch; the lines after the failures, and the job's summary, list the changes and which only a person can do (K-ADOPT-11)");
+  for (const l of lines) out(l);
+  const summary = process.env.GITHUB_STEP_SUMMARY;
+  if (summary) {
+    try { appendFileSync(summary, `## Kanon upgrade\n${lines.join('\n')}\n`); } catch { /* the summary is a copy of what was printed */ }
+  }
+}
