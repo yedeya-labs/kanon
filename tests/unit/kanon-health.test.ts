@@ -233,6 +233,20 @@ describe("upgradeLag: each adopter's newest version against the release list", (
     expect(upgradeLag([...rows, edge], RELEASES, { now: NOW })).toMatchObject({ adopters: 4, on_latest: 2 });
   });
 
+  // #1094: the Owner's own projects declare their own figures (`publish_own_figures_as`), and plan
+  // 0012 §6.2 says their rows never count toward the rule. `own` is the map `aggregate` takes.
+  it('leaves declaring adopters out, as the cross-adopter cells do, so they never make up the three', () => {
+    const owner = [run('o1#review', '0.38.0'), run('o2#review', '0.38.0')];
+    const own = { o1: 'kanon', o2: 'operator', aaaa1111: 'harness' };
+    // Two of the Owner's projects and one adopter: three keys, one of them an adopter's.
+    expect(upgradeLag([...owner, rows[3]!], RELEASES, { now: NOW, own })).toEqual({ withheld: true, min_adopters: MIN_ADOPTERS });
+    expect(upgradeLag([...owner, rows[3]!], RELEASES, { now: NOW })).toMatchObject({ withheld: false, adopters: 3 });
+    // A declaring key is out of the distribution too, not only out of the count.
+    const others = [run('dddd4444#review', '0.38.0'), run('eeee5555#review', '0.35.0')];
+    expect(upgradeLag([...owner, ...rows, ...others], RELEASES, { now: NOW, own }))
+      .toEqual(upgradeLag([...rows.slice(1), ...others], RELEASES, { now: NOW }));
+  });
+
   it('never holds an adopter key', () => {
     const r = upgradeLag(rows.map((x) => ({ ...x, pk: undefined, adopter: String(x.pk).slice(0, 8) })), RELEASES, { now: NOW });
     const text = JSON.stringify(r);
@@ -325,12 +339,40 @@ describe('kanon-health.mjs: reads Kanon from GitHub and prints the view', () => 
   it('with --json, prints one document; with --rows, the upgrade lag', () => {
     const file = join(dir, 'rows.jsonl');
     writeFileSync(file, ['aaaa1111', 'bbbb2222', 'cccc3333'].map((k) => JSON.stringify(run(`${k}#review`, '0.37.0'))).join('\n'));
-    const { code, out } = main(['--json', '--rows', file, '--repo', 'acme/kanon-fork'], deps([]));
+    const none = join(dir, 'none.json');
+    writeFileSync(none, '{}');
+    const { code, out } = main(['--json', '--rows', file, '--own', none, '--repo', 'acme/kanon-fork'], deps([]));
     expect(code).toBe(0);
     const doc = JSON.parse(out);
     expect(doc).toMatchObject({ schema: SCHEMA, computed_at: NOW.toISOString(), disputes: { disputes: 1 }, fixes: { filed: 2 } });
     expect(doc.upgrade_lag).toMatchObject({ withheld: false, adopters: 3, on_latest: 0, releases_behind: { median: 1 } });
     expect(out).not.toContain('aaaa1111');
+  });
+
+  it('with --own, leaves the declaring adopters out of the upgrade lag (#1094)', () => {
+    const file = join(dir, 'rows.jsonl');
+    writeFileSync(file, ['aaaa1111', 'bbbb2222', 'cccc3333'].map((k) => JSON.stringify(run(`${k}#review`, '0.37.0'))).join('\n'));
+    const own = join(dir, 'own.json');
+    writeFileSync(own, JSON.stringify({ aaaa1111: 'kanon' }));
+    const { code, out } = main(['--json', '--rows', file, '--own', own], deps([]));
+    expect(code).toBe(0);
+    expect(JSON.parse(out).upgrade_lag).toEqual({ withheld: true, min_adopters: MIN_ADOPTERS });
+    writeFileSync(own, '["aaaa1111"]');
+    expect(main(['--rows', file, '--own', own], deps([]))).toEqual({ code: 2, out: '--own is not a JSON object of adopter keys to labels' });
+    // The map is read only for the rows' lag, so it needs --rows.
+    expect(main(['--own', own], deps([])).code).toBe(2);
+  });
+
+  it('refuses --rows without --own, naming the flag and nothing of the files; without --rows nothing changes (#1094)', () => {
+    const file = join(dir, 'secret.jsonl');
+    writeFileSync(file, JSON.stringify({ ...run('aaaa1111#review', '0.37.0'), repository: 'acme-corp/secret-repo' }));
+    const refusal = { code: 2, out: '--own is required: a JSON object of adopter keys to labels, {} when none declares its own figures' };
+    expect(main(['--rows', file], deps([]))).toEqual(refusal);
+    expect(main(['--json', '--rows', file], deps([]))).toEqual(refusal);
+    // As `metrics-page.yml` runs it: no rows, so no `--own`, and the document is printed.
+    const { code, out } = main(['--json'], deps([]));
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toMatchObject({ schema: SCHEMA, upgrade_lag: null });
   });
 
   it('exits 3 when GitHub fails, and 2 on a bad argument', () => {
@@ -342,6 +384,8 @@ describe('kanon-health.mjs: reads Kanon from GitHub and prints the view', () => 
     expect(main([], deps([], { gh: releasesFail })).code).toBe(3);
     expect(main(['--nope'], deps([])).code).toBe(2);
     expect(main(['--repo', 'not a repo'], deps([])).code).toBe(2);
-    expect(main(['--rows', join(dir, 'missing.json')], deps([])).code).toBe(2);
+    const none = join(dir, 'none.json');
+    writeFileSync(none, '{}');
+    expect(main(['--rows', join(dir, 'missing.json'), '--own', none], deps([]))).toEqual({ code: 2, out: 'could not read the rows (Error)' });
   });
 });

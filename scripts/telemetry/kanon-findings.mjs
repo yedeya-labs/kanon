@@ -9,7 +9,8 @@
 // filing stays the signals' and rises' own (`kanon-bugs.mjs`), whose bodies never hold a finding.
 //
 // WHAT IT DOES.
-//   1. Runs `kanon-bugs.mjs`'s `detect` over the run rows, unchanged, for the signals and rises.
+//   1. Runs `kanon-bugs.mjs`'s `detect` over the run rows, unchanged, for the signals and rises,
+//      with the declaring adopters (`--own`) it leaves out of the three-adopter rule (#1094).
 //   2. Reads every finding row of the asked tag, and checks each again (§6, item 2):
 //      - `validate`, the schema's own check, at this release;
 //      - `verify`, the scrub, on `evidence` and `suggested_fix`, with that key's name hashes
@@ -50,10 +51,10 @@
 // input and the register held, as a value and as a word inside any string, and refused whole if
 // one appears.
 //
-//   node scripts/telemetry/kanon-findings.mjs --rows <file> [--known <file>] [--tag run|smoke|test]
+//   node scripts/telemetry/kanon-findings.mjs --rows <file> --own <file> [--known <file>] [--tag run|smoke|test]
 //     [--trees <file>] [--register <file>] [--issues <file>] [--json]
 //   --rows: run rows and finding rows together, a JSON array or one row per line
-//   --known, --tag: as `kanon-bugs.mjs`
+//   --known, --own, --tag: as `kanon-bugs.mjs`; `--own` is required there and here
 //   --issues: the open issues, as `gh issue list --label kanon-bug --state open --limit 1000
 //     --json title,body` prints them. `gh` stops at 30 without `--limit`, and at the limit without
 //     a word, so the job fails when it gets exactly 1000: an issue left out loses what it held.
@@ -71,7 +72,7 @@ import { KANON_PATH, nameContext, verify } from '../../actions/agent-telemetry/s
 import { keyOf } from '../../infra/telemetry/function/aggregate.mjs';
 import { isCliEntry } from '../lib/cli-entry.mjs';
 import { holdsKey } from './holds-key.mjs';
-import { MARKER, detect, parseRows, signature, summary as signalSummary } from './kanon-bugs.mjs';
+import { MARKER, OWN_REFUSAL, OWN_REQUIRED, detect, isOwn, parseRows, signature, summary as signalSummary } from './kanon-bugs.mjs';
 
 export { holdsKey };
 
@@ -127,7 +128,7 @@ export class KeyRefusal extends Error {
  * @typedef {{ title: string, counts: string | null, classification: string | null, findings: boolean }} Prior
  * @typedef {{ not_finding: number, no_version: number, no_adopter: number }} FindingSkipped
  * @typedef {{ trees?: Record<string, readonly string[]>, names?: Record<string, Iterable<string>>, keys?: Iterable<string>,
- *   known?: Iterable<string>, tag?: string, issues?: readonly { title: string, body: string }[] }} Options
+ *   known?: Iterable<string>, tag?: string, own?: Record<string, string>, issues?: readonly { title: string, body: string }[] }} Options
  */
 
 /** A code read only when it is in Kanon's list; absent or anything else is `null`. */
@@ -367,10 +368,10 @@ export function renderFindingIssue(sig, findings, signal, prior) {
  * @param {Row[]} rows run rows and finding rows together
  * @param {Options} [opts]
  */
-export function plan(rows, { trees = {}, names = {}, keys = [], known = [], tag = 'run', issues = [] } = {}) {
+export function plan(rows, { trees = {}, names = {}, keys = [], known = [], tag = 'run', own = {}, issues = [] } = {}) {
   const runRows = rows.filter((r) => r?.row_kind !== 'finding');
   const findingRows = rows.filter((r) => r?.row_kind === 'finding');
-  const bugs = detect(runRows, { known, tag });
+  const bugs = detect(runRows, { known, tag, own });
   /** @type {Set<string>} */
   const allKeys = new Set(keys);
   for (const r of rows) {
@@ -415,18 +416,19 @@ export function summary(r) {
  * @returns {{ code: number, out: string }}
  */
 export function main(argv) {
-  const usage = 'usage: kanon-findings.mjs --rows <file> [--known <file>] [--tag run|smoke|test] [--trees <file>] [--register <file>] [--issues <file>] [--json]';
+  const usage = 'usage: kanon-findings.mjs --rows <file> --own <file> [--known <file>] [--tag run|smoke|test] [--trees <file>] [--register <file>] [--issues <file>] [--json]';
   /** @type {Record<string, string>} */
   const opts = {};
   let json = false;
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--json') { json = true; continue; }
-    if (['--rows', '--known', '--tag', '--trees', '--register', '--issues'].includes(String(a)) && argv[i + 1] !== undefined) { opts[String(a).slice(2)] = /** @type {string} */ (argv[i + 1]); i += 1; continue; }
+    if (['--rows', '--known', '--own', '--tag', '--trees', '--register', '--issues'].includes(String(a)) && argv[i + 1] !== undefined) { opts[String(a).slice(2)] = /** @type {string} */ (argv[i + 1]); i += 1; continue; }
     return { code: 2, out: usage };
   }
   if (!opts.rows) return { code: 2, out: usage };
   if (opts.tag && !['run', 'smoke', 'test'].includes(opts.tag)) return { code: 2, out: usage };
+  if (opts.own === undefined) return { code: 2, out: OWN_REQUIRED };
   /** @type {Options} */
   const o = { tag: opts.tag ?? 'run' };
   let rows;
@@ -437,6 +439,9 @@ export function main(argv) {
       if (!Array.isArray(k) || !k.every((s) => typeof s === 'string')) return { code: 2, out: '--known is not a JSON array of signatures' };
       o.known = k;
     }
+    const w = JSON.parse(readFileSync(opts.own, 'utf8'));
+    if (!isOwn(w)) return { code: 2, out: OWN_REFUSAL };
+    o.own = w;
     if (opts.trees) {
       const t = JSON.parse(readFileSync(opts.trees, 'utf8'));
       if (!t || typeof t !== 'object' || Array.isArray(t) || !Object.values(t).every((l) => Array.isArray(l) && l.every((p) => typeof p === 'string'))) {

@@ -20,6 +20,8 @@ const DIR = 'tests/fixtures/telemetry/kanon-findings';
 const ROWS = parseRows(readFileSync(join(DIR, 'rows.jsonl'), 'utf8')) as Row[];
 const TREES = JSON.parse(readFileSync(join(DIR, 'trees.json'), 'utf8')) as Record<string, string[]>;
 const REGISTER = JSON.parse(readFileSync(join(DIR, 'register.json'), 'utf8'));
+// The CLI's required `--own` (#1094), naming no declaring adopter.
+const OWN_NONE = join(DIR, 'own-none.json');
 const CTX = { ...registerContext(REGISTER), trees: TREES, tag: 'test' };
 const KEYS = ['a1b2c3d4', 'e5f6a7b8', 'kfixture3'];
 
@@ -103,6 +105,14 @@ describe("F5's check: one private issue per signature, beside the signal (plan 0
     const bugs = detect(ROWS.filter((x) => x.row_kind !== 'finding') as never, { tag: 'test' });
     expect({ signals: r.signals, rises: r.rises, skipped: r.skipped }).toEqual(bugs);
     for (const s of r.signals) expect(s.issue.body).not.toContain('Upstream findings');
+  });
+
+  it("hands detect the declaring adopters, so a signal's visibility is kanon-bugs.mjs's with the same `own` (#1094)", () => {
+    const rows = [failedRun('a1b2c3d4'), failedRun('e5f6a7b8'), failedRun('kfixture3')];
+    expect(plan(rows as never, CTX).signals[0]?.visibility).toBe('public');
+    const own = { a1b2c3d4: 'kanon' };
+    expect(plan(rows as never, { ...CTX, own }).signals).toEqual(detect(rows as never, { tag: 'test', own }).signals);
+    expect(plan(rows as never, { ...CTX, own }).signals[0]?.visibility).toBe('private');
   });
 
   it('a code-less finding signs by its rules and paths, so two such findings on a release stay apart', () => {
@@ -331,7 +341,7 @@ describe('the register gives the keys and the name hashes intake has', () => {
 describe('the CLI', () => {
   const dir = mkdtempSync(join(tmpdir(), 'kanon-findings-'));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
-  const args = ['--rows', join(DIR, 'rows.jsonl'), '--tag', 'test', '--trees', join(DIR, 'trees.json'), '--register', join(DIR, 'register.json')];
+  const args = ['--rows', join(DIR, 'rows.jsonl'), '--own', OWN_NONE, '--tag', 'test', '--trees', join(DIR, 'trees.json'), '--register', join(DIR, 'register.json')];
 
   it('prints the plan as JSON, and a summary of counts without --json', () => {
     const json = main([...args, '--json']);
@@ -346,7 +356,7 @@ describe('the CLI', () => {
   });
 
   it('without a tree or a register, every finding with a path or a text fails the gate', () => {
-    const r = JSON.parse(main(['--rows', join(DIR, 'rows.jsonl'), '--tag', 'test', '--json']).out);
+    const r = JSON.parse(main(['--rows', join(DIR, 'rows.jsonl'), '--own', OWN_NONE, '--tag', 'test', '--json']).out);
     expect(r.findings.gate_failed).toBe(2);
   });
 
@@ -354,7 +364,7 @@ describe('the CLI', () => {
     expect(main([]).code).toBe(2);
     expect(main(['--rows']).code).toBe(2);
     expect(main([...args, '--tag', 'other']).code).toBe(2);
-    expect(main(['--rows', join(dir, 'missing.jsonl')]).out).toBe('could not read the input (Error)');
+    expect(main(['--rows', join(dir, 'missing.jsonl'), '--own', OWN_NONE]).out).toBe('could not read the input (Error)');
     const trees = join(dir, 'trees.json');
     writeFileSync(trees, '{"0.37.0": "scripts/x.mjs"}');
     expect(main([...args, '--trees', trees]).out).toBe('--trees is not a JSON object of path lists');
@@ -365,12 +375,33 @@ describe('the CLI', () => {
     const known = join(dir, 'known.json');
     writeFileSync(known, '{}');
     expect(main([...args, '--known', known]).out).toBe('--known is not a JSON array of signatures');
+    const own = join(dir, 'own.json');
+    writeFileSync(own, '["a1b2c3d4"]');
+    expect(main([...args, '--own', own])).toEqual({ code: 2, out: '--own is not a JSON object of adopter keys to labels' });
+  });
+
+  it('reads --own and hands it to detect (#1094)', () => {
+    const rows = join(dir, 'own-rows.jsonl');
+    writeFileSync(rows, ['a1b2c3d4', 'e5f6a7b8', 'kfixture3'].map((k) => JSON.stringify(failedRun(k))).join('\n'));
+    const own = join(dir, 'own.json');
+    writeFileSync(own, JSON.stringify({ a1b2c3d4: 'kanon' }));
+    expect(main(['--rows', rows, '--tag', 'test', '--own', OWN_NONE]).out).toContain('1 new, 1 public.');
+    expect(main(['--rows', rows, '--tag', 'test', '--own', own]).out).toContain('1 new, 0 public.');
+  });
+
+  it('refuses to run without --own, naming the flag and nothing of the files (#1094)', () => {
+    const refusal = { code: 2, out: '--own is required: a JSON object of adopter keys to labels, {} when none declares its own figures' };
+    const without = args.filter((a, i) => a !== '--own' && args[i - 1] !== '--own');
+    expect(without).not.toContain(OWN_NONE);
+    expect(main(without)).toEqual(refusal);
+    expect(main([...without, '--json'])).toEqual(refusal);
+    expect(main(args).code).toBe(0);
   });
 
   it('refuses to print anything when the output would hold a key', () => {
     const rows = join(dir, 'rows.jsonl');
     writeFileSync(rows, JSON.stringify({ ...finding('guard', { subject: 'guard', fix_category: 'guard' }), lane: undefined }));
-    const r = main(['--rows', rows, '--tag', 'test']);
+    const r = main(['--rows', rows, '--own', OWN_NONE, '--tag', 'test']);
     expect(r).toEqual({ code: 2, out: 'refused: the output would hold an adopter key, so nothing is printed' });
   });
 
@@ -409,7 +440,7 @@ describe('an error is reported as what it is (#611)', () => {
     }));
     try {
       const fresh = await import('../../scripts/telemetry/kanon-findings.mjs');
-      const r = fresh.main(['--rows', join(DIR, 'rows.jsonl'), '--tag', 'test']);
+      const r = fresh.main(['--rows', join(DIR, 'rows.jsonl'), '--own', OWN_NONE, '--tag', 'test']);
       expect(r).toEqual({ code: 1, out: 'could not plan the issues (TypeError)' });
       expect(r.out).not.toContain('adopter key');
     } finally {

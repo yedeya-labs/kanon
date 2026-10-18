@@ -208,6 +208,35 @@ describe('public or private (the Owner, 2026-10-07 on #41: the three-adopter rul
   it('counts distinct adopters, not runs', () => {
     expect(detect(many(50, () => failed('k1')).concat(failed('k2'))).signals[0]).toMatchObject({ runs: 51, adopters: 2, visibility: 'private' });
   });
+
+  // #1094: the Owner's own projects (Kanon, the operator's repository, the e2e harness) declare
+  // their own figures (`publish_own_figures_as`), and plan 0012 §6.2 says their rows never count
+  // toward the rule. `own` is the map `aggregate` takes: each declaring key to its label.
+  const own = { o1: 'kanon', o2: 'operator', o3: 'harness' };
+
+  it("leaves declaring adopters out of the count, so the Owner's projects and one adopter stay private", () => {
+    const owner = ['o1', 'o2', 'o3'].map((k) => failed(k));
+    expect(detect([...owner, failed('k1')], { own }).signals[0]).toMatchObject({ adopters: 4, classification: 'kanon', visibility: 'private' });
+    expect(detect([...owner.slice(0, 2), ...many(MIN_ADOPTERS - 1, (i) => failed(`k${i}`))], { own }).signals[0]?.visibility).toBe('private');
+    expect(detect(owner, { own }).signals[0]?.visibility).toBe('private');
+    expect(detect([...owner, ...many(MIN_ADOPTERS, (i) => failed(`k${i}`))], { own }).signals[0])
+      .toMatchObject({ adopters: MIN_ADOPTERS + 3, visibility: 'public' });
+    // Without `own`, the same rows reach the rule: what the map changes is the count, nothing else.
+    expect(detect([...owner, failed('k1')]).signals[0]?.visibility).toBe('public');
+  });
+
+  it('leaves declaring adopters out of both rates of a rise', () => {
+    const at = (v: string, keys: string[], fail: number) =>
+      many(20, (i) => (i < fail ? failed : row)(keys[i % keys.length]!, { kanon_version: v }));
+    const mixed = ['o1', 'o2', 'k1', 'k2', 'k3'];
+    expect(detect([...at('0.35.0', mixed, 0), ...at('0.36.0', mixed, 10)], { own }).rises[0])
+      .toMatchObject({ adopters: 5, previous_adopters: 5, visibility: 'public' });
+    // Three adopters on the newer release, but two of them the Owner's on the older one.
+    expect(detect([...at('0.35.0', ['o1', 'o2', 'k1'], 0), ...at('0.36.0', mixed, 10)], { own }).rises[0])
+      .toMatchObject({ previous_adopters: 3, visibility: 'private' });
+    expect(detect([...at('0.35.0', mixed, 0), ...at('0.36.0', ['o1', 'o2', 'o3', 'k1'], 10)], { own }).rises[0])
+      .toMatchObject({ adopters: 4, visibility: 'private' });
+  });
 });
 
 describe('new, and the signature', () => {
@@ -411,11 +440,13 @@ describe('the CLI', () => {
   const dir = mkdtempSync(join(tmpdir(), 'kanon-bugs-'));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const file = (name: string, text: string) => { const p = join(dir, name); writeFileSync(p, text); return p; };
+  // `--own` is required (#1094); `{}` says no adopter declares its own figures.
+  const none = file('none.json', '{}');
 
   it('reads a JSON array or JSON lines, and prints the signals as JSON', () => {
     const rs = [failed('k1'), failed('k2')];
     for (const p of [file('rows.json', JSON.stringify(rs)), file('rows.jsonl', `${rs.map((r) => JSON.stringify(r)).join('\n')}\n`)]) {
-      const r = main(['--rows', p, '--json']);
+      const r = main(['--rows', p, '--own', none, '--json']);
       expect(r.code).toBe(0);
       const out = JSON.parse(r.out);
       expect(Object.keys(out)).toEqual(['signals', 'rises', 'skipped']);
@@ -428,10 +459,25 @@ describe('the CLI', () => {
   it('marks known signatures, and prints a summary of counts without --json', () => {
     const rows = file('r.json', JSON.stringify([failed('k1'), failed('k1', { failed_stage: 'hook' })]));
     const sig = detect([failed('k1')]).signals[0]!.signature;
-    const r = main(['--rows', rows, '--known', file('known.json', JSON.stringify([sig]))]);
+    const r = main(['--rows', rows, '--own', none, '--known', file('known.json', JSON.stringify([sig]))]);
     expect(r).toEqual({ code: 0, out: '2 signal(s): 0 kanon, 2 adopter, 0 platform; 1 new, 0 public. 0 rise(s) after a release.' });
-    expect(main(['--rows', file('t.json', JSON.stringify([failed('k1', { tag: 'test' })])), '--tag', 'test']).out).toMatch(/^1 signal/);
-    expect(main(['--rows', file('s.json', JSON.stringify([failed('k1', { tag: 'smoke' })]))]).out).toContain('Rows skipped: 1 not run.');
+    expect(main(['--rows', file('t.json', JSON.stringify([failed('k1', { tag: 'test' })])), '--own', none, '--tag', 'test']).out).toMatch(/^1 signal/);
+    expect(main(['--rows', file('s.json', JSON.stringify([failed('k1', { tag: 'smoke' })])), '--own', none]).out).toContain('Rows skipped: 1 not run.');
+  });
+
+  it("reads the declaring adopters from --own, and leaves them out of the three-adopter rule (#1094)", () => {
+    const rows = file('owner.json', JSON.stringify([failed('o1'), failed('o2'), failed('k1')]));
+    expect(main(['--rows', rows, '--own', none]).out).toContain('1 new, 1 public.');
+    expect(main(['--rows', rows, '--own', file('own.json', JSON.stringify({ o1: 'kanon', o2: 'operator' }))]).out)
+      .toContain('1 new, 0 public.');
+  });
+
+  it('refuses to run without --own, naming the flag and nothing of the files (#1094)', () => {
+    const rows = file('secret.json', JSON.stringify([failed('o1', { repository: 'acme-corp/secret-repo' })]));
+    const refusal = { code: 2, out: '--own is required: a JSON object of adopter keys to labels, {} when none declares its own figures' };
+    expect(main(['--rows', rows])).toEqual(refusal);
+    expect(main(['--rows', rows, '--known', file('known-none.json', '[]'), '--json'])).toEqual(refusal);
+    expect(main(['--rows', rows, '--own', none]).code).toBe(0);
   });
 
   it('refuses bad arguments and unreadable input, without echoing the input', () => {
@@ -439,12 +485,17 @@ describe('the CLI', () => {
     expect(main(['--rows']).code).toBe(2);
     expect(main(['--rows', 'x', '--wat']).code).toBe(2);
     expect(main(['--rows', 'x', '--tag', 'prod']).code).toBe(2);
-    expect(main(['--rows', join(dir, 'missing.json')])).toEqual({ code: 2, out: 'could not read the input (Error)' });
-    const bad = main(['--rows', file('bad.json', '{"repository":"acme-corp/secret-repo"')]);
+    expect(main(['--rows', join(dir, 'missing.json'), '--own', none])).toEqual({ code: 2, out: 'could not read the input (Error)' });
+    const bad = main(['--rows', file('bad.json', '{"repository":"acme-corp/secret-repo"'), '--own', none]);
     expect(bad).toEqual({ code: 2, out: 'could not read the input (SyntaxError)' });
-    expect(main(['--rows', file('obj.json', '[1]'), '--known', file('k.json', '{"a":1}')]).code).toBe(2);
+    expect(main(['--rows', file('obj.json', '[1]'), '--own', none, '--known', file('k.json', '{"a":1}')]).out).toBe('--known is not a JSON array of signatures');
+    for (const own of ['["o1"]', '{"o1":1}', 'null']) {
+      expect(main(['--rows', file('obj.json', '[1]'), '--own', file('own.json', own)]))
+        .toEqual({ code: 2, out: '--own is not a JSON object of adopter keys to labels' });
+    }
+    expect(main(['--rows', file('obj.json', '[1]'), '--own'])).toMatchObject({ code: 2 });
     // A key that is also a lane's name would reach the output: refused, not thrown, and not printed.
-    expect(main(['--rows', file('key.json', JSON.stringify([failed('review')])), '--json']))
+    expect(main(['--rows', file('key.json', JSON.stringify([failed('review')])), '--own', none, '--json']))
       .toEqual({ code: 2, out: 'refused: the signals would hold an adopter key, so nothing is printed' });
   });
 });

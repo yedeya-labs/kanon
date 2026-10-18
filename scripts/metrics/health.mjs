@@ -25,7 +25,11 @@
 //    at the window's edge is kept. Across adopters it is a cross-adopter figure, so it is
 //    shown only as a distribution, and only at `MIN_ADOPTERS` adopters or more (plan 0002
 //    decision 7, imported from the aggregate, not restated); below, it is withheld without
-//    saying how many there are. Its output holds numbers only, so no key can reach it.
+//    saying how many there are. An adopter that declares its own figures (`publish_own_figures_as`,
+//    given as `own`, the map the aggregate takes) is left out of it, count and distribution, as
+//    the aggregate leaves it out of every cross-adopter cell: the Owner's own projects declare it,
+//    Kanon, the operator's repository and the e2e harness (plan 0012 §6.2), so they never make up
+//    the three (#1094). Its output holds numbers only, so no key can reach it.
 
 import { RULE_IDS } from '../../actions/agent-telemetry/schema.mjs';
 import { MIN_ADOPTERS, keyOf, median, percentile } from '../../infra/telemetry/function/aggregate.mjs';
@@ -164,13 +168,14 @@ export function timeToFix(issues, releases, { now }) {
 /**
  * Upgrade lag across adopters, from run rows: a row's adopter is `adopter`, or its stored
  * partition's key. Only active adopters are measured: a key whose newest run row, of any
- * version, was recorded before `now` less `days` is left out.
+ * version, was recorded before `now` less `days` is left out, and so is a declaring one.
  * @param {Record<string, unknown>[]} rows
  * @param {Release[]} releases
- * @param {{ now: Date, tag?: string, days?: number }} opts `days`: the aggregate's window
+ * @param {{ now: Date, tag?: string, days?: number, own?: Record<string, string> }} opts `days`: the
+ *   aggregate's window; `own`: each declaring adopter's key to its label
  * @returns {Lag}
  */
-export function upgradeLag(rows, releases, { now, tag = 'run', days: window = WINDOW_DAYS }) {
+export function upgradeLag(rows, releases, { now, tag = 'run', days: window = WINDOW_DAYS, own = {} }) {
   const list = releaseList(releases, now);
   const activeFrom = now.getTime() - window * DAY_MS;
   /** @type {Map<string, string>} */
@@ -180,7 +185,7 @@ export function upgradeLag(rows, releases, { now, tag = 'run', days: window = WI
   for (const row of rows) {
     if (row === null || typeof row !== 'object' || row.row_kind !== 'run' || row.tag !== tag) continue;
     const key = typeof row.adopter === 'string' && row.adopter !== '' ? row.adopter : keyOf(row.pk);
-    if (!key) continue;
+    if (!key || Object.hasOwn(own, key)) continue;
     const recorded = Date.parse(typeof row.recorded_at === 'string' ? row.recorded_at : '');
     if (!(recorded <= now.getTime())) continue;
     lastRun.set(key, Math.max(lastRun.get(key) ?? -Infinity, recorded));
