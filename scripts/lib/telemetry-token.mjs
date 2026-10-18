@@ -6,10 +6,10 @@
 // is named by a URL and an audience together, never one without the other, and never with the
 // hosted audience: so no input can point a token minted for Kanon's store at another host.
 //
-// THE HOSTED URLS ARE EMPTY UNTIL THE OPERATOR PUBLISHES THEM (Owner decision 10 of 2026-10-12):
-// they go into the public tree only once both functions' reserved concurrency is in place. Until
-// then a job with no URL of its own says the hosted store isn't published and sends nothing, as
-// the collector skipped before its variables were set.
+// THE HOSTED URLS WERE PUBLISHED ON 2026-10-16 (Owner decision 10 of 2026-10-12): they went into
+// the public tree only once both functions' reserved concurrency was in place. An empty value is
+// what a release from before then holds: there a job with no URL of its own says the hosted store
+// isn't published and sends nothing, as the collector skipped before its variables were set.
 //
 // A FRESH TOKEN PER REQUEST (§2.1), from the runner's OIDC endpoint (`ACTIONS_ID_TOKEN_REQUEST_URL`
 // with `&audience=`, which is what `core.getIDToken(audience)` calls), so each one is well inside
@@ -31,14 +31,17 @@ export const UNPUBLISHED_JOB = 'Collect telemetry rows (hosted store unpublished
 /** The hosted store's audience (plan 0008 §5.1, Owner decision 3 of 2026-10-10). */
 export const HOSTED_AUDIENCE = 'kanon-telemetry';
 /**
- * The hosted ingest function's token URL, the `live` alias's (`IngestTokenUrl`), and the hosted
- * aggregate function's (`AggregateTokenUrl`), published on 2026-10-16 after the store's first
- * deploy through the operator's deployment lane, with reserved concurrency in place first (Owner
- * decision 10 of 2026-10-12; docs/telemetry.md, "Publish the hosted URLs").
+ * The hosted ingest function's token URL, the `live` alias's (`IngestTokenUrl`), published on
+ * 2026-10-16 after the store's first deploy through the operator's deployment lane, with reserved
+ * concurrency in place first (Owner decision 10 of 2026-10-12;
+ * docs/telemetry.md, "Publish the hosted URLs").
+ * @type {string}
  */
-/** @type {string} */
 export const HOSTED_INGEST_URL = 'https://doepcoqbpivm2b7x2rxiwitsn40tawde.lambda-url.eu-central-1.on.aws/';
-/** @type {string} */
+/**
+ * The hosted aggregate function's token URL (`AggregateTokenUrl`), published with the ingest URL.
+ * @type {string}
+ */
 export const HOSTED_AGGREGATE_URL = 'https://swfz3z5qop5g7zcpole6xegf540ukewv.lambda-url.eu-central-1.on.aws/';
 
 /** An audience as a store's `Audience` parameter takes it: a short token, never a URL. */

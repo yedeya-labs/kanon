@@ -29,6 +29,7 @@ The block has no `if:` of its own, because the right gate depends on the lane. G
 | `non-fatal` | no | `"true"` for an agent step whose failure leaves the job green. The annotation is then a warning. |
 | `claude-args` | no | The flags the agent ran with: `agent-run`'s `claude-args` output. Only `--max-turns` is read. |
 | `agent-outcome` | no | The agent step's `outcome`. With `claude-args`, a run `claude-code-action` failed past its `--max-turns` gets the turn-cap notice. Without them it gets the clean-finish notice, since its result says `completed` (#1015). |
+| `raisable` | no | `"false"` for a lane whose turn limit no dispatch can raise, such as the deploy-diagnose lane. Its turn-cap notice then names splitting the work and no re-dispatch with `max_turns` (#1009). Default `"true"`. |
 
 | Output | Meaning |
 |---|---|
