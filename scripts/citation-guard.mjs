@@ -75,7 +75,26 @@ import { STATUSES } from './spec-lib.mjs';
 export const SOURCE_EXT =
   '(?:ts|tsx|mjs|cjs|js|json|yml|yaml|sql|sh|py|go|rs|java|kt|kts|rb|php|cs|swift|scala|ex|exs|toml)';
 
-const CITATION = new RegExp(String.raw`\x60([\w./-]+\.${SOURCE_EXT}):(\d+)(?:-(\d+))?\x60`, 'g');
+/**
+ * THE PATH A COORDINATE MAY NAME, before its extension: any path a framework's file-system
+ * router produces (kanon#1108). Next.js, Nuxt, SvelteKit, Remix and TanStack Router name files
+ * `app/[id]/page.tsx`, `[...slug]`, `[[...opt]]`, `(group)`, `@slot`, `(..)photo`,
+ * `[[lang=locale]]`, `+page.ts`, `posts.$postId.tsx` and `($lang)._index.tsx`. `CITATION`
+ * allowed `[\w./-]` alone while the bare-path forms allowed brackets too, so an adopter's
+ * coordinate into `src/app/[id]/page.tsx` was not read as a full citation, and its `page.tsx`
+ * L-form was dropped by `citation-shift` as an ambiguous basename: six stale coordinates in two
+ * `[confirmed]` clauses passed both checks. One pattern for every form now, so they can't drift.
+ *
+ * Three characters are bounded, because prose and code use them too. A `(` counts only as a
+ * whole `(…)` with no `/` inside, so the parenthesis around `(wizard.tsx:9, #253)` in a code
+ * comment is still prose. An `=` counts only inside brackets, as a SvelteKit matcher, so
+ * `file=src/a.ts:3` still names `src/a.ts`. And a path never STARTS with `@`: that is a package
+ * scope (`@scope/pkg.ts`) or an import alias (`@/lib/a.ts`), never a path in the repository;
+ * a slot is cited with the directory above it (`app/@modal/page.tsx`).
+ */
+export const PATH = String.raw`(?!@)(?:\[\[?[\w.$-]*=[\w.$-]*\]\]?|\([\w.@+$-]*\)|[\w./[\]@+$-])+`;
+
+const CITATION = new RegExp(String.raw`\x60(${PATH}\.${SOURCE_EXT}):(\d+)(?:-(\d+))?\x60`, 'g');
 // THE CONTINUATION SHORTHAND, which the docs use constantly and the first version of
 // this guard could not see: a full citation, then bare `:NNN` for further coordinates
 // in the same file — "`storefront.ts:752`, `:945`, `:1333`". 73 of the 238 coordinates
@@ -90,7 +109,7 @@ const BARE = /`:(\d+)(?:-(\d+))?`/g;
 // A file named WITHOUT a line — `tests/unit/order-status-writers.test.ts` followed by
 // `` (`:123`, `:212`) ``. Both coordinates are correct and both were dropped, because
 // an antecedent had to carry a `:NNN` of its own (RA-1212).
-const BARE_PATH = new RegExp(String.raw`\x60([\w./[\]-]+\.${SOURCE_EXT})\x60`, 'g');
+const BARE_PATH = new RegExp(String.raw`\x60(${PATH}\.${SOURCE_EXT})\x60`, 'g');
 // THE LINE NUMBER WRITTEN OUTSIDE THE BACKTICKS — `` `tenancy.ts` L179-214 `` (RA-2224).
 // Before this it was not a citation at all: `BARE_PATH` took the path as an antecedent
 // and the numbers were dropped without being counted, so `[SUPER-10]` — a `[confirmed]`
@@ -104,7 +123,7 @@ const BARE_PATH = new RegExp(String.raw`\x60([\w./[\]-]+\.${SOURCE_EXT})\x60`, '
 // nineteenth there named the same kind of file by basename alone and is qualified in the
 // change that added this. The other three are in `superadmin.md`, one of which named
 // `page.tsx` bare — 67 files match — and is qualified likewise.
-const LINE_AFTER = new RegExp(String.raw`\x60([\w./[\]-]+\.${SOURCE_EXT})\x60\s*L(\d+)(?:-(\d+))?\b`, 'g');
+const LINE_AFTER = new RegExp(String.raw`\x60(${PATH}\.${SOURCE_EXT})\x60\s*L(\d+)(?:-(\d+))?\b`, 'g');
 
 /**
  * A coordinate into a dependency, which this guard cannot and should not judge (RA-2224).
@@ -387,7 +406,7 @@ const STATUS_TAG = new RegExp(`^\\[(${STATUSES.join('|')})\\]$`);
 const looksLikeCode = (s) =>
   !/\s{2,}/.test(s) &&
   (/[.(){}[\]<>=]/.test(s) || /[a-z][A-Z]/.test(s) || /_/.test(s)) &&
-  !new RegExp(String.raw`^[\w./-]+\.${SOURCE_EXT}:\d+(-\d+)?$`).test(s) &&
+  !new RegExp(String.raw`^${PATH}\.${SOURCE_EXT}:\d+(-\d+)?$`).test(s) &&
   // The clause's OWN prefix is not evidence about the code. Every clause line opens
   // with `[AREA-N]` `[seed|confirmed]`, so without this every citation on a clause
   // inherits two anchors that can never appear in a source file — and then reports
@@ -402,7 +421,7 @@ const looksLikeCode = (s) =>
   // coordinate answer for the OTHER file's path, which no line of the wizard contains.
   // The `:NNN` form is already excluded above; this is the same rule for a path cited
   // without one, which the sentence-splitting cannot separate.
-  !new RegExp(String.raw`^[\w./[\]-]+\.(?:${SOURCE_EXT}|md)(:\d+(-\d+)?)?$`).test(s);
+  !new RegExp(String.raw`^${PATH}\.(?:${SOURCE_EXT}|md)(:\d+(-\d+)?)?$`).test(s);
 
 /** Split a markdown line into sentences, keeping the citation's own sentence. */
 const sentenceAround = (line, index) => {

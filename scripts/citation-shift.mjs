@@ -102,7 +102,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { SOURCE_EXT, anchorFound, anchorsFor, coordinatesIn, docPatternsFrom, isOracleSpec, resolvePath, selectDocs, unmatchedMessage } from './citation-guard.mjs';
+import { PATH, SOURCE_EXT, anchorFound, anchorsFor, coordinatesIn, docPatternsFrom, isOracleSpec, resolvePath, selectDocs, unmatchedMessage } from './citation-guard.mjs';
 import { qaToolingImport } from './spec-lib.mjs';
 import { ESCALATION_FILE, defaultEscalationFile, inPipelineCode, parseEscalationFile, printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
 import { STACK_FILE, UNDECLARED, codeAreasDefaults, codeTrees, isCodePath, isTestPath, parseCodeAreas, readCodeAreas } from './lib/code-areas.mjs';
@@ -151,8 +151,9 @@ export const readsCodeComments = (path, text, pipelineDirs, areas) => {
 // A coordinate in a code comment is written with or without backticks — the corpus has
 // both (`// checkout (storefront.ts:1155, RA-253)`) — so the path is matched on its own,
 // bounded so it cannot start inside a longer token.
-// The extensions are `citation-guard`'s, so a comment can point into any file a doc can.
-const CODE_COORD = new RegExp(String.raw`(?<![\w./[\]@-])([\w./[\]-]+\.${SOURCE_EXT}):(\d+)(?:-(\d+))?(?![\w-])`, 'g');
+// The extensions and the path are `citation-guard`'s (`PATH`, kanon#1108), so a comment can
+// point into any file a doc can, a dynamic route's `app/[id]/page.tsx` included.
+const CODE_COORD = new RegExp(String.raw`(?<![\w./[\]@-])(${PATH}\.${SOURCE_EXT}):(\d+)(?:-(\d+))?(?![\w-])`, 'g');
 
 /**
  * The coordinates in the COMMENT part of one line of code: a line that opens a comment
