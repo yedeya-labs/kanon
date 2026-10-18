@@ -56,7 +56,11 @@ Add this entry to `.github/dependabot.yml`. It watches only Kanon's actions, gro
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    # From `/` Dependabot reads only .github/workflows/; a composite action, such as
+    # Kanon's project-setup hook, it reads from the action's own directory.
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: daily
     allow:

@@ -81,5 +81,60 @@ laneCheck(() => {
       t.edit(DEP, (d) => { (d as Dep).updates[0]!.cooldown = { 'default-days': 3, exclude: ['yedeya-labs/kanon*'] }; });
       expect(check(t).status).toBe(0);
     });
+
+    // kanon#1105: Dependabot reads `.github/workflows/` from `/`, and a composite action only from
+    // the action's own directory. An adopter's project-setup hook that pinned Kanon stayed at the
+    // old release on every upgrade pull request, which this check's one-version rule then failed.
+    const HOOK = '.github/actions/project-setup/action.yml';
+    const pinHook = (t: Tree) => t.edit(HOOK, (d) => {
+      (d.runs as { steps: unknown[] }).steps.unshift({ uses: 'yedeya-labs/kanon/actions/kanon-path@v1.2.3' });
+    });
+    const directories = (dirs: string[]) => (t: Tree) => t.edit(DEP, (d) => {
+      const u = (d as Dep).updates[0]!;
+      delete u.directory;
+      u.directories = dirs;
+    });
+    it("refuses an entry that doesn't reach a composite action pinning Kanon, naming it and the line that does (kanon#1105)", () => {
+      const r = red(pinHook, `its Kanon entry doesn't reach ${HOOK}`);
+      expect(r.out).toContain('directories: ["/", "/.github/actions/*"]');
+      expect(r.out).not.toMatch(/Kanon references pin .*,/);
+    });
+    it("accepts the action's directories, by glob or written out", () => {
+      for (const dirs of [['/', '/.github/actions/*'], ['/', '/.github/actions/project-setup']]) {
+        const t = adopter();
+        pinHook(t);
+        directories(dirs)(t);
+        const r = check(t);
+        expect(r.status, r.out).toBe(0);
+      }
+    });
+    it('refuses directories that name another action', () =>
+      red((t) => { pinHook(t); directories(['/', '/.github/actions/notify'])(t); }, `its Kanon entry doesn't reach ${HOOK}`));
+    // Dependabot groups an entry's updates into one pull request, across its directories, never
+    // across entries: two entries open two pull requests, each with a mix of pins.
+    it("refuses a second entry for the action's directory, which opens a pull request of its own", () =>
+      red((t) => {
+        pinHook(t);
+        t.edit(DEP, (d) => { (d as Dep).updates.push({ ...(d as Dep).updates[0]!, directory: '/.github/actions/project-setup' }); });
+      }, `its Kanon entry doesn't reach ${HOOK}`));
+    it("refuses a second Kanon entry that doesn't reach it, though the first does: each opens its own upgrade pull request", () =>
+      red((t) => {
+        pinHook(t);
+        directories(['/', '/.github/actions/*'])(t);
+        t.edit(DEP, (d) => {
+          const u: Record<string, unknown> = { ...(d as Dep).updates[0]!, directory: '/', 'target-branch': 'release' };
+          delete u.directories;
+          (d as Dep).updates.push(u);
+        });
+      }, `its Kanon entry doesn't reach ${HOOK}`));
+    it('passes a composite action that pins no Kanon reference, which the entry for `/` leaves alone', () => {
+      const t = adopter();
+      expect(t.read(HOOK)).not.toContain('yedeya-labs/kanon/');
+      expect(t.read(DEP)).toContain('directory: /');
+      expect(check(t).status).toBe(0);
+    });
+    it('refuses a Kanon reference in a file Dependabot updates under no directory', () =>
+      red((t) => { directories(['/', '/.github/**'])(t); t.write('.github/kanon.yml', 'uses: yedeya-labs/kanon/actions/kanon-path@v1.2.3\n'); },
+        /file=\.github\/kanon\.yml,title=lane-check::pins Kanon, but Dependabot updates no such file/));
   });
 });

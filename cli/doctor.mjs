@@ -72,6 +72,7 @@ import { ARTIFACT_FILE, LISTING_SLACK, listTelemetryArtifacts, MAX_PAGES, readZi
 import { LANES as TELEMETRY_LANES, TERMINAL_REASONS } from '../actions/agent-telemetry/schema.mjs';
 import { defaultEscalationFile, ESCALATION_FILE, inPipelineCode, parseEscalationFile } from '../scripts/lib/escalation-paths.mjs';
 import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
+import { directoriesLine, unreached, updatedFrom } from '../actions/lane-check/dependabot-reach.mjs';
 import { renderNotice } from '../actions/agent-classify/classify-agent-result.mjs';
 
 // The reporter check lives in its own module, which `kanon init` shares (#444).
@@ -123,6 +124,8 @@ export const UNREACHABLE_TITLE = storedTitle(renderNotice('unavailable', '').tit
 /** Where an Anthropic API key is made. */
 export const CONSOLE_KEYS = 'https://console.anthropic.com/settings/keys';
 const DAY = 86_400_000;
+/** The Dependabot file, whose Kanon entry proposes every upgrade (`K-ADOPT-11`). */
+const DEPENDABOT = '.github/dependabot.yml';
 
 // ── Chat notifications (plan 0011 §9) ──────────────────────────────────────────────────────
 
@@ -336,6 +339,7 @@ export const CATEGORIES = ['pin', 'app', 'secret', 'declaration', 'caller', 'lab
 export const FINDINGS = {
   'pin.mixed': { category: 'pin', blocking: true },
   'pin.candidate': { category: 'pin', blocking: false },
+  'pin.dependabot-unreached': { category: 'pin', blocking: true },
   'plugin.version-mismatch': { category: 'pin', blocking: false },
   'notify.hook-pin-behind': { category: 'pin', blocking: false },
   'notify.hook-pin-ahead': { category: 'pin', blocking: true },
@@ -1361,6 +1365,32 @@ export const diagnose = async (deps, opts) => {
     const list = [...pins].map(([r, files]) => `${r} (${files.join(', ')})`).join('; ');
     find('pin.mixed', '.github', `Kanon's references pin more than one release, or a ref that is not an exact release: ${list}. lane-check requires one exact release everywhere (K-ADOPT-11).`, {
       text: `Pin every yedeya-labs/kanon reference under .github/ to ${checked}.`,
+    });
+  }
+
+  // ── The Dependabot entry's reach (K-ADOPT-11, kanon#1105) ──────────────────────────────
+  // Dependabot reads .github/workflows/ from `/`, and a composite action only from its own
+  // directory, so an entry that doesn't reach a file pinning Kanon leaves it at the old release on
+  // every upgrade pull request, and lane-check fails the mix. Each Kanon entry has to reach them
+  // all: its updates are one pull request, and another entry's are another.
+  const pinning = [...new Set([...pins.values()].flat())].sort();
+  /** @type {any} */
+  let dependabot = null;
+  try { dependabot = parseYaml(texts.get(DEPENDABOT) ?? ''); } catch { /* lane-check names a file it can't read */ }
+  const kanonEntries = (Array.isArray(dependabot?.updates) ? dependabot.updates : []).filter((/** @type {any} */ u) => isMap(u) && u['package-ecosystem'] === 'github-actions'
+    && isMap(u.groups) && Object.values(u.groups).some((g) => isMap(g) && Array.isArray(g.patterns) && g.patterns.includes('yedeya-labs/kanon*')));
+  /** @type {{ e: unknown, left: string[] } | undefined} */
+  const reach = kanonEntries.map((/** @type {unknown} */ e) => ({ e, left: unreached(e, pinning) })).find((/** @type {{ left: string[] }} */ r) => r.left.length);
+  if (reach) {
+    const nowhere = reach.left.filter((f) => updatedFrom(f) === null);
+    const fixable = reach.left.filter((f) => !nowhere.includes(f));
+    const line = directoriesLine(reach.e, pinning);
+    find('pin.dependabot-unreached', DEPENDABOT, `${DEPENDABOT}'s Kanon entry doesn't reach ${reach.left.join(', ')}, which ${reach.left.length > 1 ? 'pin' : 'pins'} Kanon: Dependabot reads .github/workflows/ from \`/\`, and a composite action only from its own directory${nowhere.length ? ', and no other file at all' : ''}. Its upgrade pull request leaves ${reach.left.length > 1 ? 'them' : 'it'} at the old release, and lane-check fails the mix (K-ADOPT-11).`, {
+      text: [
+        ...(fixable.length ? [`Write the Kanon entry's directories as this line, in place of any \`directory:\`.`] : []),
+        ...(nowhere.length ? [`Move the Kanon reference${nowhere.length > 1 ? 's' : ''} in ${nowhere.join(', ')} into a workflow or a composite action: Dependabot updates no other file.`] : []),
+      ].join(' '),
+      commands: fixable.length ? [line] : [],
     });
   }
 

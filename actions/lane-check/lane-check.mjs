@@ -24,6 +24,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FIXED_CALLERS, callerNameFindings, kanonVersion } from './caller-names.mjs';
 import { declarationFindings } from './declarations.mjs';
+import { directoriesLine, unreached, updatedFrom } from './dependabot-reach.mjs';
 import { LEDGER, readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -168,13 +169,18 @@ const NOTIFY_HOOK = typeof NOTIFY?.hook?.path === 'string' ? NOTIFY.hook.path : 
 const PREBUILT = new Map(Object.entries(isObject(NOTIFY?.prebuilt) ? NOTIFY.prebuilt : {}).map(([n, p]) => [`yedeya-labs/kanon/${tostring(p?.action)}`, n]));
 /** @type {Array<{ name: string, tag: string }>} */
 const HOOK_PINS = [];
+/** The files that hold a reference counted toward the one version, which Dependabot must reach. @type {Set<string>} */
+const PINNING = new Set();
 const TAGS = sortU(ymlFiles('.github').flatMap((f) => readFileSync(f, 'utf8').split('\n')
   .filter((l) => l.includes('yedeya-labs/kanon/') && !new RegExp(`^${SP}*#`).test(l))
   .flatMap((l) => [...l.matchAll(REF)].flatMap((m) => {
     const at = m[0].lastIndexOf('@');
     const tag = m[0].slice(at + 1);
     const name = f === NOTIFY_HOOK ? PREBUILT.get(m[0].slice(0, at)) : undefined;
-    if (name === undefined) return [tag];
+    if (name === undefined) {
+      PINNING.add(f);
+      return [tag];
+    }
     HOOK_PINS.push({ name, tag });
     return [];
   }))));
@@ -725,7 +731,8 @@ if (!isFile(DEP)) {
 } else {
   const dep = /** @type {any} */ (json(DEP));
   if (dep === undefined) fail(DEP, 'is not valid YAML');
-  let ok;
+  /** @type {any[]} */
+  let entries;
   try {
     const updates = dep === undefined || dep === null ? [] : isObject(dep) ? dep.updates : null;
     const list = Array.isArray(updates) ? updates : isObject(updates) ? Object.values(updates) : [];
@@ -734,7 +741,7 @@ if (!isFile(DEP)) {
       if (v !== null && v !== undefined && !isObject(v)) throw new Error('jq: cannot index');
       return /** @type {any} */ (v ?? {});
     };
-    ok = list.filter((entry) => {
+    entries = list.filter((entry) => {
       const u = obj(entry);
       if (u['package-ecosystem'] !== 'github-actions') return false;
       if (!(alt(u.directory, '') === '/' || has(alt(u.directories, []), '/'))) return false;
@@ -749,12 +756,25 @@ if (!isFile(DEP)) {
         return n.startsWith('yedeya-labs/kanon');
       }))) return false;
       return has(alt(obj(u.cooldown).exclude, []), 'yedeya-labs/kanon*');
-    }).length;
+    });
   } catch {
     // jq stopped on a value of the wrong type, and printed nothing: no entry.
-    ok = 0;
+    entries = [];
   }
-  if (!(ok > 0)) fail(DEP, "has no github-actions entry for `/` that groups yedeya-labs/kanon*, prefixes its commits `ci`, and excludes yedeya-labs/kanon* from its cooldown: with no `cooldown` at all, Dependabot's default of 3 days holds every Kanon release back (K-ADOPT-11)");
+  if (!entries.length) fail(DEP, "has no github-actions entry for `/` that groups yedeya-labs/kanon*, prefixes its commits `ci`, and excludes yedeya-labs/kanon* from its cooldown: with no `cooldown` at all, Dependabot's default of 3 days holds every Kanon release back (K-ADOPT-11)");
+  else {
+    // Each Kanon entry has to reach every file the one-version rule above counts, or its upgrade
+    // pull request leaves one behind and fails that rule (kanon#1105). Each on its own: Dependabot
+    // groups an entry's updates into one pull request across its directories, never across entries.
+    const files = sortU([...PINNING]);
+    const nowhere = files.filter((f) => updatedFrom(f) === null);
+    for (const f of nowhere) fail(f, 'pins Kanon, but Dependabot updates no such file: it moves a Kanon pin only in a workflow directly in .github/workflows/ and in a composite action\'s action.yml, so this one stays at the old release on every upgrade pull request and fails the one-version rule. Move the reference into a workflow or a composite action (K-ADOPT-11)');
+    for (const e of entries) {
+      const left = unreached(e, files).filter((f) => !nowhere.includes(f));
+      if (!left.length) continue;
+      fail(DEP, `its Kanon entry doesn't reach ${left.join(', ')}, which ${left.length > 1 ? 'pin' : 'pins'} Kanon: Dependabot reads .github/workflows/ from \`/\`, and a composite action only from its own directory, so the upgrade pull request leaves ${left.length > 1 ? 'them' : 'it'} at the old release and fails the one-version rule. Write the entry's directories as \`${directoriesLine(e, files)}\`, in place of any \`directory:\` (K-ADOPT-11)`);
+    }
+  }
 }
 
 if (ERRORS > 0) {
