@@ -599,7 +599,7 @@ node scripts/telemetry/kanon-findings.mjs --rows <run and finding rows> --own <o
 - **One issue per signature.** It runs `detect` over the run rows, unchanged, with the same `--own`, required here as there, and groups the findings by the signals' own `signature()` (§2.4). A finding with a signal's signature goes on that signal's issue, below its counts, so the job updates the one issue and files no second. Every later finding with the signature is one more entry on it. A finding with no signal gets an issue of its own, with a title built from its codes. Each issue is labelled `kanon-bug` and `finding`, plus the signal's class label (`platform` or `adopter`) when it has one.
 - **The gate.** Each finding is checked again at the release the job pins:
   - `validate`;
-  - the scrub's `verify` on its text, with that key's name hashes (from the register, as `render.mjs` builds them for intake) and the release's tree;
+  - the scrub's `verify` on its text, with that key's name hashes (as intake holds them in each registration's `name_hashes`) and the release's tree;
   - an adopter key, as a field's value or as a word in it;
   - each `kanon_paths` entry against the file list of its `kanon_version`.
 
