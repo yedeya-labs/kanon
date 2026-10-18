@@ -31,16 +31,33 @@
 //            by itself (`status=failure`, …): GitHub's filter matches the latest attempt, so a run
 //            re-run green drops out, and the green runs are counted, never read. A red listing
 //            GitHub truncates (more runs than were read, or its 1,000-result cap) holds.
+//   e2e      the end-to-end gate (plan 0012 §8.2, its step E11): the candidate's commit carries a
+//            completed `kanon-e2e` check run by the Reporter App, matched by its App id
+//            (`REPORTER_APP_ID`, the id the App register records), and the latest one concluded
+//            `success`; and the harness run it links by its `external_id` (`<run id>-<attempt>`)
+//            is a run of the harness's `e2e.yml` on the harness's default branch, recorded for
+//            this candidate's tag and commit (in its `start` job's name, `startJobName`), whose
+//            `verdict` job, at that attempt, succeeded. The run's own conclusion is never read: a non-gating job can fail
+//            it while the verdict is green. A check run of the same name by any other App is
+//            ignored, so a token that can post check runs can't pass it, and a leaked Reporter
+//            key can't either without a green `verdict` job in the harness (decision 18).
 // What a candidate contains is every pull request since the newest STABLE tag below it, so the
 // pull requests of a candidate held and never promoted count against the next one.
 // `urgent` (plan 0009 §7) skips the soak and the six-day spacing, and asks instead that a review
 // ran at the candidate (`review`): a run that called the review lane at the candidate's tag, by
 // its `referenced_workflows`, and whose `review` job itself succeeded (a run the filter declined
-// reviewed nothing). A gate added later (plan 0012's end-to-end gate, its
-// step E11) is one more entry in `GATES`: the summary, the decision and the plan read the table.
+// reviewed nothing). `urgent` doesn't skip the end-to-end gate (plan 0012 decision 12), and no
+// input overrides it: the only way past a red one is a fix and a new candidate. Each gate is one
+// entry in `GATES`: the summary, the decision and the plan read the table.
+//
+// A THIRD MODE, FOR THE PIN JOB (plan 0012 §8.1, decision 2):
+//   gate   reads the end-to-end gate alone for the candidate `TAG`, with a read-only token, and
+//          writes `pass=true|false` to GITHUB_OUTPUT and its verdict to the step summary.
+//          `release-please.yml`'s pin job opens the pin pull request only on `pass=true`, so
+//          Kanon's pins, and the soak, start only on a candidate the harness passed.
 //
 // Env: GH_TOKEN, GITHUB_REPOSITORY, DEFAULT_BRANCH (default `main`), HOLD, URGENT, REASON, PLAN,
-// GITHUB_OUTPUT, GITHUB_STEP_SUMMARY. Node built-ins and `gh` only.
+// TAG (gate), GITHUB_OUTPUT, GITHUB_STEP_SUMMARY. Node built-ins and `gh` only.
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -66,6 +83,33 @@ export const REVIEW_LANE = 'agent-review.yml';
 export const REVIEW_JOB = 'review';
 /** The most results GitHub's run listing returns for one query, however many pages are read. */
 export const RUN_LISTING_CAP = 1000;
+
+/** The end-to-end check run's name, which the harness's `start` job creates (plan 0012 §5.2). */
+export const E2E_CHECK = 'kanon-e2e';
+/**
+ * The Reporter App's id (`kanon-e2e-reporter`, plan 0012 decision 18): the one App whose
+ * `kanon-e2e` check run counts. The App register, `docs/qa/agent-identities.md`, records it in
+ * its `Other App` row's note, which a test holds this to.
+ */
+export const REPORTER_APP_ID = 5349415;
+/** The harness repository (public), whose `e2e.yml` run a check run must link. */
+export const HARNESS = 'kanon-e2e/harness';
+/** The harness's workflow whose run judges a candidate, as a run's `path` names it. */
+export const HARNESS_WORKFLOW = '.github/workflows/e2e.yml';
+/** The harness run's job whose conclusion is the gate's answer, not the run's (plan 0012 §5.2). */
+export const VERDICT_JOB = 'verdict';
+/**
+ * The name of the harness run's `start` job, which records the candidate the run tested: its tag
+ * and its full commit. The gate reads it from the run's public jobs listing, since a run's
+ * artifacts can't be downloaded without a token. The harness's `start` job must carry exactly this
+ * name (plan 0012 E8); a run whose `start` job names another candidate, or none, holds.
+ * @param {string} tag @param {string} sha
+ */
+export const startJobName = (tag, sha) => `start (the Reporter's check run: ${tag} at ${sha})`;
+/** What every `start` job's name begins with, to say what a mismatched one records. */
+const START_PREFIX = 'start (';
+/** The red issue the harness's `verdict` files for a candidate (plan 0012 §8.3). @param {string} tag */
+export const redIssueTitle = (tag) => `e2e: ${tag} is red`;
 
 /** Kanon's own manifest, whose version release-please's `node` type writes at each release. */
 export const MANIFEST = 'package.json';
@@ -220,7 +264,7 @@ function commitsBetween(api, repo, base, head) {
   });
 }
 
-/** The gates, in the order the summary shows them. Plan 0012's end-to-end gate (E11) is one more entry. @type {Gate[]} */
+/** The gates, in the order the summary shows them. @type {Gate[]} */
 export const GATES = [
   {
     id: 'soak',
@@ -308,6 +352,13 @@ export const GATES = [
     },
   },
   {
+    id: 'e2e',
+    title: 'End to end',
+    // `always`: `urgent` doesn't skip it (plan 0012 decision 12).
+    when: 'always',
+    check: ({ api, repo, candidate }) => endToEnd(api, repo, candidate),
+  },
+  {
     id: 'review',
     title: 'A review ran green',
     when: 'urgent',
@@ -326,6 +377,139 @@ export const GATES = [
     },
   },
 ];
+
+/**
+ * The end-to-end gate (plan 0012 §8.2): the Reporter's latest `kanon-e2e` check run on the
+ * candidate's commit, and the harness run it links, read from GitHub. Every hold names the check
+ * run, when there is one, and the harness's red issue for the candidate (§8.3, `[ETE-34]`). A
+ * read that fails throws, as the other gates' reads do, except a linked run that doesn't exist,
+ * which holds.
+ * @param {Api} api @param {string} repo @param {Tag} candidate
+ * @returns {Verdict}
+ */
+export function endToEnd(api, repo, candidate) {
+  // A candidate cut before this gate was built is not gated by it (plan 0012 decision 3): its own
+  // commit's promotion carries no end-to-end gate.
+  if (!carriesGate(api, repo, candidate)) {
+    return { pass: true, evidence: `not gated: ${candidate.name}'s commit ${candidate.sha} predates the end-to-end gate, since its ${SELF} names no \`${E2E_CHECK}\` check (plan 0012 decision 3)` };
+  }
+  /** @param {string} why @param {any} [run] @returns {Verdict} */
+  const hold = (why, run) => ({ pass: false, evidence: `${why}${run?.html_url ? `; the check run: ${run.html_url}` : ''}; ${redIssueOf(api, candidate.name)}` });
+  /** @type {any[]} */
+  const listed = pages(api, `repos/${repo}/commits/${candidate.sha}/check-runs?check_name=${E2E_CHECK}&app_id=${REPORTER_APP_ID}&filter=all`, (p) => p?.check_runs);
+  // The App id, read on each check run: one of the same name from any other App or token is ignored.
+  const mine = listed.filter((c) => c?.name === E2E_CHECK && c?.head_sha === candidate.sha && Number(c?.app?.id) === REPORTER_APP_ID);
+  const others = listed.length - mine.length;
+  const ignored = others ? `; ${others} more by another App or on another commit, ignored` : '';
+  if (mine.length === 0) return hold(`no \`${E2E_CHECK}\` check run by the Reporter (App id ${REPORTER_APP_ID}) on ${candidate.name}'s commit ${candidate.sha}${ignored}`);
+  const latest = [...mine].sort((a, b) => Number(b.id) - Number(a.id))[0];
+  const named = `the Reporter's latest \`${E2E_CHECK}\` check run, ${latest.id},`;
+  if (latest.status !== 'completed') return hold(`${named} is ${latest.status}, not completed`, latest);
+  if (latest.conclusion !== 'success') return hold(`${named} concluded ${latest.conclusion}`, latest);
+  const link = /^(\d+)-(\d+)$/.exec(String(latest.external_id ?? ''));
+  if (!link) return hold(`${named} links no harness run: its external_id is ${JSON.stringify(latest.external_id ?? null)}, not <run id>-<attempt>`, latest);
+  const [, id, attempt] = link;
+  let run;
+  try {
+    run = api(`repos/${HARNESS}/actions/runs/${id}`);
+  } catch (e) {
+    if (notFound(e)) return hold(`${named} links the harness run ${id}, which ${HARNESS} doesn't have`, latest);
+    throw e;
+  }
+  const where = `the harness run ${run?.html_url ?? id}`;
+  if (run?.path !== HARNESS_WORKFLOW) return hold(`${named} links ${where}, a run of ${run?.path ?? 'no workflow'}, not ${HARNESS_WORKFLOW}`, latest);
+  const branch = String(api(`repos/${HARNESS}`)?.default_branch ?? '');
+  if (!branch || run?.head_branch !== branch || run?.head_repository?.full_name !== HARNESS) {
+    return hold(`${named} links ${where}, on ${run?.head_repository?.full_name ?? '?'}'s ${run?.head_branch ?? '?'}, not ${HARNESS}'s default branch ${branch || '(unread)'}`, latest);
+  }
+  /** @type {any[]} */
+  const jobs = pages(api, `repos/${HARNESS}/actions/runs/${id}/attempts/${attempt}/jobs`, (p) => p?.jobs);
+  // The candidate the run recorded, its tag and its commit, in its `start` job's name.
+  const want = startJobName(candidate.name, candidate.sha);
+  if (!jobs.some((j) => j?.name === want)) {
+    const starts = jobs.map((j) => String(j?.name ?? '')).filter((n) => n.startsWith(START_PREFIX));
+    return hold(`${named} links ${where}, attempt ${attempt}, whose \`start\` job records ${starts.length ? starts.map((n) => JSON.stringify(n)).join(', ') : 'nothing'}, not ${JSON.stringify(want)}`, latest);
+  }
+  // The verdict job's own conclusion, at the attempt the check run names: never the run's.
+  const verdict = jobs.find((j) => j?.name === VERDICT_JOB);
+  if (verdict?.conclusion !== 'success') {
+    return hold(`${named} links ${where}, attempt ${attempt}, whose \`${VERDICT_JOB}\` job ${verdict ? `concluded ${verdict.conclusion ?? verdict.status}` : 'is missing'}`, latest);
+  }
+  return { pass: true, evidence: `the Reporter's latest \`${E2E_CHECK}\` check run, ${latest.html_url ?? latest.id}, concluded success, linking ${where}, attempt ${attempt}, of ${HARNESS_WORKFLOW} on ${branch} for ${candidate.name}, whose \`${VERDICT_JOB}\` job succeeded` };
+}
+
+/** This script, as the candidate's commit holds it. */
+const SELF = 'scripts/promote.mjs';
+/** What marks a commit's promotion as carrying the end-to-end gate: the check run's name, declared. */
+const GATE_MARK = /^export const E2E_CHECK = 'kanon-e2e';$/m;
+
+/**
+ * Whether the candidate's own commit carries the end-to-end gate, in its `scripts/promote.mjs`.
+ * A file the commit doesn't have carries none; any other failed read throws.
+ * @param {Api} api @param {string} repo @param {Tag} candidate
+ */
+function carriesGate(api, repo, candidate) {
+  try {
+    return GATE_MARK.test(String(api(`repos/${repo}/contents/${SELF}?ref=${candidate.sha}`, { raw: true })));
+  } catch (e) {
+    if (notFound(e)) return false;
+    throw e;
+  }
+}
+
+/**
+ * The harness's red issue for a candidate, `e2e: <tag> is red`, as a phrase for a hold's
+ * evidence, an open one first. A search that fails says so: the gate holds either way.
+ * @param {Api} api @param {string} tag
+ */
+function redIssueOf(api, tag) {
+  const title = redIssueTitle(tag);
+  try {
+    /** @type {any[]} */
+    const items = api(`search/issues?q=${encodeURIComponent(`repo:${HARNESS} is:issue in:title "${title}"`)}&per_page=100`)?.items ?? [];
+    const hit = items.filter((i) => i?.title === title).sort((a, b) => Number(a?.state !== 'open') - Number(b?.state !== 'open'))[0];
+    return hit ? `the red issue: ${hit.html_url} (${hit.state})` : `no red issue \`${title}\` in ${HARNESS}`;
+  } catch (e) {
+    return `the red issue \`${title}\` in ${HARNESS} couldn't be searched: ${String(/** @type {Error} */ (e)?.message ?? e).split('\n')[0]}`;
+  }
+}
+
+/**
+ * The pin job's reading (plan 0012 §8.1): the end-to-end gate alone, for the candidate `TAG`.
+ * @param {Record<string, string | undefined>} env
+ * @param {{ api?: Api }} [deps]
+ * @returns {{ candidate: string } & Verdict}
+ */
+export function gate(env, { api = ghApi } = {}) {
+  if (!env.GITHUB_REPOSITORY) throw new Refusal('GITHUB_REPOSITORY must be set');
+  const repo = String(env.GITHUB_REPOSITORY);
+  const name = String(env.TAG ?? '');
+  if (!CANDIDATE.test(name)) throw new Refusal(`TAG must be a candidate tag, candidate-vX.Y.Z (got ${JSON.stringify(name)})`);
+  const all = tagsOf(api, repo, 'candidate-v', CANDIDATE);
+  const candidate = all.find((t) => t.name === name);
+  if (!candidate) throw new Refusal(`no tag ${name}`);
+  // A check run completed on an older candidate, a re-run's, never moves the pins back.
+  const newer = all.filter((t) => compareParts(t.parts, candidate.parts) > 0).sort((a, b) => compareParts(b.parts, a.parts))[0];
+  if (newer) return { candidate: name, pass: false, evidence: `${newer.name} is a newer candidate, so ${name} is superseded: Kanon's pins never move back to it` };
+  return { candidate: name, ...endToEnd(api, repo, candidate) };
+}
+
+/** The pin job's step summary. @param {{ candidate: string } & Verdict} g */
+export function gateSummary(g) {
+  const title = GATES.find((x) => x.id === 'e2e')?.title ?? 'End to end';
+  return [
+    `## The end-to-end gate: \`${g.candidate}\``,
+    '',
+    '| Gate | Verdict | Evidence |',
+    '|---|---|---|',
+    `| ${title} | ${g.pass ? 'pass' : '**hold**'} | ${g.evidence.replace(/\|/g, '\\|')} |`,
+    '',
+    g.pass
+      ? `**Pass:** the pin job moves Kanon's pins to \`${g.candidate}\`.`
+      : `**Held:** Kanon's pins stay where they are. The pin job runs again when a \`${E2E_CHECK}\` check run on \`${g.candidate}\`'s commit completes.`,
+    '',
+  ].join('\n');
+}
 
 /**
  * Whether a run's review job succeeded: a run the filter declined concludes `success` with that
@@ -623,11 +807,15 @@ function main() {
       say(summary(o));
       if (o.plan && env.PLAN) writeFileSync(env.PLAN, JSON.stringify(o.plan));
       if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `decision=${o.decision}\n`);
+    } else if (mode === 'gate') {
+      const g = gate(env);
+      say(gateSummary(g));
+      if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `pass=${g.pass}\n`);
     } else if (mode === 'apply') {
       const plan = /** @type {Plan} */ (JSON.parse(readFileSync(String(env.PLAN), 'utf8')));
       say(`${apply(plan, { repo: String(env.GITHUB_REPOSITORY) }).map((l) => `- ${l}`).join('\n')}\n`);
     } else {
-      throw new Refusal(`usage: promote.mjs check|apply (got ${mode ?? 'nothing'})`);
+      throw new Refusal(`usage: promote.mjs check|gate|apply (got ${mode ?? 'nothing'})`);
     }
   } catch (e) {
     const message = String(/** @type {Error} */ (e)?.message ?? e);

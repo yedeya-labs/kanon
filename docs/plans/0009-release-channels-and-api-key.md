@@ -57,6 +57,8 @@
 
 The four are a floor, not a ritual: three days on Kanon is short, and Kanon's lanes don't exercise an adopter's stack. They catch what Kanon's own runs can catch, which on the record above is most of what broke.
 
+**A fifth gate, end to end** ([plan 0012](0012-end-to-end-tests.md) §8.2, its step E11, built): the candidate's commit carries a green `kanon-e2e` check run by the end-to-end harness's Reporter App, by its App id, and the harness run it links has its `verdict` job succeeded. It is the one gate that drives an adopter's install, in throwaway repositories. `urgent` doesn't skip it, and nothing overrides it ([`docs/release.md`](../release.md#the-promotion)).
+
 **What stable doesn't mean.** It doesn't mean "no breaking change": a breaking candidate can be stable. It means the breaking change has run on Kanon, its release notes say what to change, and the adopter meets it at most once a week, as one Dependabot pull request that `kanon doctor --to` explains first.
 
 ## 3. The mechanism: candidates, and stable tags on the same commit
@@ -139,6 +141,8 @@ Kanon's own Dependabot entry stays as it is, and `lane-check` keeps requiring th
 **Kanon pins each candidate, the day it is cut,** so every candidate runs on Kanon before any adopter sees it. That is ADR 0011's rule unchanged in spirit: Kanon's pull requests are judged by the last cut, never by their own code. Only the tag form differs.
 
 **How Kanon's pins move.** Today Dependabot proposes each release to Kanon's own callers. It won't propose a candidate ([§5](#5-dependabot-the-upgrade-skill-and-the-adopt-skill)), so `release.yml`'s caller in Kanon, `release-please.yml`, gains a job that runs after a candidate is created: it opens `ci(deps): run Kanon on candidate vX.Y.Z` as the Releaser, moving every Kanon reference under `.github/` and the plugin's `ref` in `.claude/settings.json`, with the same edit the upgrade skill's step 4 describes. The edit is a script, `scripts/move-pins.mjs`, so the skill and the job make the same one. The Owner merges it, as every Kanon pull request; its merge time starts the soak.
+
+**The pin job runs after the end-to-end gate** ([plan 0012](0012-end-to-end-tests.md) §8.1, its step E11, built): it opens its pull request only once the fifth gate passes on the candidate, which the Reporter's completed check run, hours after the cut, starts the release caller again to read. So the soak starts on a candidate the harness passed.
 
 **This job is Kanon's, not the reusable release workflow's.** It lives in Kanon's own caller, as `metrics-page.yml` lives in Kanon, because it moves Kanon's own pins to Kanon's own candidates. It doesn't teach any check about Kanon.
 

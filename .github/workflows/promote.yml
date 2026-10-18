@@ -9,6 +9,9 @@
 #   - `urgent` with a `reason` (plan 0009 §7): skips the soak and the six-day spacing, asks that a
 #     review run at the candidate succeeded, and writes the reason into the stable Release's
 #     notes. `urgent` without a reason is refused.
+# No input overrides a gate: `urgent` doesn't skip the end-to-end gate, the fifth (plan 0012
+# §8.2, decision 12), whose evidence in the summary names the Reporter's `kanon-e2e` check run
+# and the harness's red issue whenever it holds a candidate.
 #
 # `scripts/promote.mjs check` reads the gates with this job's read-only token and writes each
 # one's verdict and evidence to the step summary, so a held promotion says which gate held it.
@@ -53,7 +56,9 @@ jobs:
     timeout-minutes: 15
     # Reads only: the tags, the candidate's package.json and Release (`contents`), the pull
     # requests it contains and the pin pull request (`pull-requests`), the open bugs (`issues`),
-    # the lane callers' runs and jobs (`actions`) and their failed jobs' annotations (`checks`).
+    # the lane callers' runs and jobs (`actions`) and their failed jobs' annotations (`checks`),
+    # and the Reporter's `kanon-e2e` check runs on the candidate's commit (`checks`). The harness
+    # run a check run links is in a public repository, read with the same token.
     # The writes use the Releaser's token, minted below.
     permissions:
       contents: read

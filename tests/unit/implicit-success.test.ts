@@ -47,7 +47,8 @@ const silentlySkipped = (wf: Workflow): string[] => {
   });
 };
 
-const LANES = readdirSync(WORKFLOWS).filter((f) => /^agent-.*\.yml$/.test(f)).sort();
+// The lanes, and the release caller, whose `check_run` path skips `release` (kanon#985).
+const LANES = readdirSync(WORKFLOWS).filter((f) => /^agent-.*\.yml$/.test(f) || f === 'release-please.yml').sort();
 
 describe('kanon#261: no lane job is silently skipped by the transitive implicit success()', () => {
   it('reads lanes', () => {
