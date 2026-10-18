@@ -127,6 +127,35 @@ laneCheck(() => {
           (d as Dep).updates.push(u);
         });
       }, `its Kanon entry doesn't reach ${HOOK}`));
+    // kanon#1111: an entry is held to the reach when it would open a Kanon upgrade pull request,
+    // which needs no cooldown, `ci` prefix or Kanon group, the same set `kanon doctor` holds.
+    const second = (more: Record<string, unknown>, drop: string[] = []) => (t: Tree) => {
+      pinHook(t);
+      directories(['/', '/.github/actions/*'])(t);
+      t.edit(DEP, (d) => {
+        const u: Record<string, unknown> = { ...(d as Dep).updates[0]!, 'target-branch': 'release', ...more };
+        for (const k of ['directories', ...drop]) delete u[k];
+        (d as Dep).updates.push(u);
+      });
+    };
+    it("refuses a second entry that doesn't reach a pin, though it lacks a cooldown or the `ci` prefix (kanon#1111)", () => {
+      red(second({ directory: '/', allow: [{ 'dependency-name': 'yedeya-labs/kanon*' }] }, ['cooldown']), `its Kanon entry doesn't reach ${HOOK}`);
+      red(second({ directory: '/', 'commit-message': { prefix: 'build' } }), `its Kanon entry doesn't reach ${HOOK}`);
+    });
+    it("refuses a second entry with no Kanon group that doesn't reach a pin: it still proposes Kanon, alone (kanon#1111)", () =>
+      red(second({ directory: '/' }, ['groups', 'cooldown', 'commit-message']), `its Kanon entry doesn't reach ${HOOK}`));
+    it('passes a second entry that proposes no Kanon upgrade: it reaches no pin, allows no Kanon dependency, or ignores Kanon (kanon#1111)', () => {
+      for (const more of [
+        { directory: '/infra' },
+        { directory: '/', allow: [{ 'dependency-name': 'actions/*' }] },
+        { directory: '/', ignore: [{ 'dependency-name': 'yedeya-labs/kanon*' }] },
+      ]) {
+        const t = adopter();
+        second(more)(t);
+        const r = check(t);
+        expect(r.status, `${JSON.stringify(more)}\n${r.out}`).toBe(0);
+      }
+    });
     it('passes a composite action that pins no Kanon reference, which the entry for `/` leaves alone', () => {
       const t = adopter();
       expect(t.read(HOOK)).not.toContain('yedeya-labs/kanon/');

@@ -27,7 +27,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FIXED_CALLERS, callerNameFindings, kanonVersion } from './caller-names.mjs';
 import { declarationFindings } from './declarations.mjs';
-import { directoriesLine, unreached, updatedFrom } from './dependabot-reach.mjs';
+import { directoriesLine, kanonEntries, unreached, updatedFrom } from './dependabot-reach.mjs';
 import { pullRequestMovesOnlyKanonRefs } from './refs-only.mjs';
 import { LEDGER, readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
 
@@ -781,13 +781,15 @@ if (!isFile(DEP)) {
   }
   if (!entries.length) fail(DEP, "has no github-actions entry for `/` that groups yedeya-labs/kanon*, prefixes its commits `ci`, and excludes yedeya-labs/kanon* from its cooldown: with no `cooldown` at all, Dependabot's default of 3 days holds every Kanon release back (K-ADOPT-11)");
   else {
-    // Each Kanon entry has to reach every file the one-version rule above counts, or its upgrade
-    // pull request leaves one behind and fails that rule (kanon#1105). Each on its own: Dependabot
-    // groups an entry's updates into one pull request across its directories, never across entries.
+    // Each entry that opens a Kanon upgrade pull request has to reach every file the one-version
+    // rule above counts, or its pull request leaves one behind and fails that rule (kanon#1105).
+    // Each on its own: Dependabot groups an entry's updates into one pull request across its
+    // directories, never across entries. That is every such entry, not only the ones the test
+    // above passes, and the same ones `kanon doctor` holds (kanon#1111).
     const files = sortU([...PINNING]);
     const nowhere = files.filter((f) => updatedFrom(f) === null);
     for (const f of nowhere) fail(f, 'pins Kanon, but Dependabot updates no such file: it moves a Kanon pin only in a workflow directly in .github/workflows/ and in a composite action\'s action.yml, so this one stays at the old release on every upgrade pull request and fails the one-version rule. Move the reference into a workflow or a composite action (K-ADOPT-11)');
-    for (const e of entries) {
+    for (const e of kanonEntries(dep, files)) {
       const left = unreached(e, files).filter((f) => !nowhere.includes(f));
       if (!left.length) continue;
       fail(DEP, `its Kanon entry doesn't reach ${left.join(', ')}, which ${left.length > 1 ? 'pin' : 'pins'} Kanon: Dependabot reads .github/workflows/ from \`/\`, and a composite action only from its own directory, so the upgrade pull request leaves ${left.length > 1 ? 'them' : 'it'} at the old release and fails the one-version rule. Write the entry's directories as \`${directoriesLine(e, files)}\`, in place of any \`directory:\` (K-ADOPT-11)`);

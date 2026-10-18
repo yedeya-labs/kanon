@@ -61,3 +61,54 @@ export const directoriesLine = (entry, files) => {
   const dirs = [...new Set([...named(entry).map((n) => n.dir), ...add])];
   return `directories: [${dirs.map((d) => JSON.stringify(d)).join(', ')}]`;
 };
+
+// Which entries are held to that reach (kanon#1111): each one that would open a Kanon upgrade pull
+// request, whatever else it sets. A github-actions entry proposes an update to every dependency it
+// finds in the directories it reads, grouped or not, unless `allow` leaves the dependency out,
+// `ignore` takes in all its updates, or `open-pull-requests-limit: 0` turns version updates off.
+// So it proposes Kanon when it reaches a file that pins Kanon and none of those holds. lane-check
+// and `kanon doctor` both ask this, so they hold the same entries.
+
+/** @param {unknown} v @returns {v is Record<string, any>} */
+const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** Kanon's dependency name: Dependabot names an action `owner/repo`, whatever the path after it. */
+const KANON = 'yedeya-labs/kanon';
+
+/**
+ * Whether a `dependency-name` matches Kanon's, `*` matching any run of characters, as Dependabot
+ * matches it, and without case, as GitHub names a repository.
+ * @param {unknown} name
+ */
+const namesKanon = (name) => typeof name === 'string'
+  && new RegExp(`^${name.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 'i').test(KANON);
+
+/** The update types that, ignored together, are every update. */
+const EVERY_UPDATE = ['version-update:semver-major', 'version-update:semver-minor', 'version-update:semver-patch'];
+
+/**
+ * Whether the parsed Dependabot entry `entry` would open a Kanon upgrade pull request, given
+ * `files`, the files that pin Kanon. Where a setting's effect on Kanon is unclear it holds the
+ * entry: an `allow` item that names a path under Kanon's repository or no dependency, and an empty
+ * `allow`.
+ * @param {unknown} entry @param {string[]} files @returns {boolean}
+ */
+export const proposesKanon = (entry, files) => {
+  if (!isMap(entry) || entry['package-ecosystem'] !== 'github-actions') return false;
+  if (entry['open-pull-requests-limit'] === 0) return false;
+  const updated = files.filter((f) => updatedFrom(f) !== null);
+  if (unreached(entry, updated).length === updated.length) return false;
+  const allow = entry.allow;
+  if (Array.isArray(allow) && allow.length && !allow.some((a) => !isMap(a) || typeof a['dependency-name'] !== 'string'
+    || namesKanon(a['dependency-name']) || a['dependency-name'].toLowerCase().startsWith(`${KANON}/`))) return false;
+  const ignore = Array.isArray(entry.ignore) ? entry.ignore : [];
+  return !ignore.some((i) => isMap(i) && namesKanon(i['dependency-name']) && i.versions === undefined
+    && (i['update-types'] === undefined || (Array.isArray(i['update-types']) && EVERY_UPDATE.every((t) => i['update-types'].includes(t)))));
+};
+
+/**
+ * The entries of the parsed `.github/dependabot.yml`, `doc`, that would open a Kanon upgrade pull
+ * request, in order. None when `updates` isn't a list, which Dependabot refuses.
+ * @param {unknown} doc @param {string[]} files @returns {unknown[]}
+ */
+export const kanonEntries = (doc, files) => (isMap(doc) && Array.isArray(doc.updates) ? doc.updates : []).filter((e) => proposesKanon(e, files));
