@@ -105,7 +105,7 @@ export const VERDICT_JOB = 'verdict';
  * name (plan 0012 E8); a run whose `start` job names another candidate, or none, holds.
  * @param {string} tag @param {string} sha
  */
-export const startJobName = (tag, sha) => `start (the Reporter's check run): ${tag} at ${sha}`;
+export const startJobName = (tag, sha) => `start (the Reporter's check run: ${tag} at ${sha})`;
 /** What every `start` job's name begins with, to say what a mismatched one records. */
 const START_PREFIX = 'start (';
 /** The red issue the harness's `verdict` files for a candidate (plan 0012 §8.3). @param {string} tag */
