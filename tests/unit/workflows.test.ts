@@ -371,7 +371,7 @@ describe("K-SHIP-7 Kanon's release caller", () => {
 
     it('reads the gate with `promote.mjs gate`, a read-only token and the candidate\'s tag, and hands on its answer', () => {
       expect(gateJob?.needs).toBe('candidate');
-      expect(gateJob?.if).toBe("needs.candidate.outputs.tag != ''");
+      expect(gateJob?.if).toBe("${{ !cancelled() && needs.candidate.result == 'success' && needs.candidate.outputs.tag != '' }}");
       expect(gateJob?.outputs).toEqual({ pass: '${{ steps.gate.outputs.pass }}' });
       expect(read?.run).toBe('node scripts/promote.mjs gate');
       expect(read?.env).toEqual({ GH_TOKEN: '${{ github.token }}', TAG: '${{ needs.candidate.outputs.tag }}' });
@@ -380,7 +380,7 @@ describe("K-SHIP-7 Kanon's release caller", () => {
 
     it('opens nothing while the gate holds: the pin job needs the gate, and runs only on its `pass=true`', () => {
       expect(pins?.needs).toEqual(['candidate', 'gate']);
-      expect(pins?.if).toBe("needs.candidate.outputs.tag != '' && needs.gate.outputs.pass == 'true'");
+      expect(pins?.if).toBe("${{ !cancelled() && needs.gate.result == 'success' && needs.candidate.outputs.tag != '' && needs.gate.outputs.pass == 'true' }}");
     });
 
     // The step's own command, against a stub `gh`: a candidate with no check run, the push that

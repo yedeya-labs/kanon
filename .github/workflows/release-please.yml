@@ -105,7 +105,9 @@ jobs:
   gate:
     name: Read the end-to-end gate
     needs: candidate
-    if: needs.candidate.outputs.tag != ''
+    # A status function, or GitHub's implicit success() skips this on a check run, where
+    # `release` is skipped (kanon#261).
+    if: ${{ !cancelled() && needs.candidate.result == 'success' && needs.candidate.outputs.tag != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -148,7 +150,7 @@ jobs:
   pins:
     name: Open the pin pull request
     needs: [candidate, gate]
-    if: needs.candidate.outputs.tag != '' && needs.gate.outputs.pass == 'true'
+    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.candidate.outputs.tag != '' && needs.gate.outputs.pass == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -232,7 +234,8 @@ jobs:
             echo "The pin pull request for $TAG already exists: $existing" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # The branch starts at the candidate's commit; one left by a failed run is reset.
+          # The branch starts at the commit this run checked out (on a check run, the default
+          # branch's head); one left by a failed run is reset.
           if gh api "repos/$REPO/git/matching-refs/heads/$branch" --jq '.[].ref' | grep -qx "refs/heads/$branch"; then
             gh api -X PATCH "repos/$REPO/git/refs/heads/$branch" -f sha="$SHA" -F force=true > /dev/null
           else
