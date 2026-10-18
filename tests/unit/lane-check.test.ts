@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { actionFiles } from './helpers/actions.js';
 import { RELEASE_REF } from './helpers/release-ref.js';
+import { movesOnlyKanonRefs } from '../../actions/lane-check/refs-only.mjs';
 import { ROOT, SCRIPT, TRIAGE, IMPL, adopter, check, red, job, type Caller, type Tree, laneCheck } from './helpers/lane-check.js';
 
 /**
@@ -126,6 +127,174 @@ laneCheck(() => {
       const r = check(t);
       expect(r.status, r.out).toBe(0);
     });
+  });
+});
+
+// kanon#1106, proposal 1: a Dependabot pull request that moves Kanon's pins across a release that
+// changes what the callers need opens red, and nothing told the adopter what to do. On a pull
+// request whose diff changes only Kanon's `uses:` refs, a red run now says to run /kanon:upgrade
+// on the branch, and lists the changes, the ones only a person can do apart. Every other run's
+// output is unchanged.
+laneCheck(() => {
+  describe('a red pull request that only moves Kanon\'s references points to /kanon:upgrade (kanon#1106)', () => {
+    const git = (dir: string, ...args: string[]) => {
+      const r = spawnSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: dir, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    /** Move every Kanon reference in the fixture's workflows, as Dependabot's pull request does. */
+    const moveRefs = (t: Tree) => {
+      for (const f of readdirSync(join(t.dir, '.github/workflows'))) {
+        const rel = `.github/workflows/${f}`;
+        t.write(rel, t.read(rel).replaceAll('@v1.2.3', '@v1.3.0'));
+      }
+    };
+    /** The callers as an older release wrote them: the role-named App secrets, and no `statuses: read`. */
+    const oldCallers = (t: Tree) => t.edit(IMPL, (d) => {
+      const s = job(d).secrets as Record<string, string>;
+      delete s.AUTHOR_APP_ID;
+      delete s.AUTHOR_APP_PRIVATE_KEY;
+      s.IMPLEMENTER_APP_ID = '${{ secrets.IMPLEMENTER_APP_ID }}';
+      s.IMPLEMENTER_APP_PRIVATE_KEY = '${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}';
+      delete (d as Caller).permissions!.statuses;
+    });
+    type Opts = { headRef?: string; base?: 'committed' | 'unknown' | 'remote'; event?: string };
+    /**
+     * Run lane-check on a pull request: the base as `before` leaves the fixture, committed, and the
+     * head as `after` then leaves it, committed on top, with the event's payload naming the base.
+     * Returns the output and the job summary it wrote.
+     */
+    const onPullRequest = (before: (t: Tree) => void, after: (t: Tree) => void, opts: Opts = {}) => {
+      const t = adopter();
+      before(t);
+      git(t.dir, 'init', '-q', '-b', 'main');
+      git(t.dir, 'add', '-A');
+      git(t.dir, 'commit', '-q', '-m', 'base');
+      const base = opts.base === 'unknown' ? 'f'.repeat(40) : git(t.dir, 'rev-parse', 'HEAD');
+      after(t);
+      git(t.dir, 'add', '-A');
+      git(t.dir, 'commit', '-q', '--allow-empty', '-m', 'head');
+      const side = mkdtempSync(join(tmpdir(), 'lane-check-pr-'));
+      let cwd = t.dir;
+      if (opts.base === 'remote') {
+        // actions/checkout's default: one commit deep, the base fetched only on demand from `origin`.
+        git(side, 'clone', '-q', '--depth', '1', `file://${t.dir}`, 'checkout');
+        cwd = join(side, 'checkout');
+      }
+      const event = join(side, 'event.json');
+      const summary = join(side, 'summary.md');
+      writeFileSync(event, JSON.stringify({ pull_request: { base: { sha: base } } }));
+      const r = spawnSync('bash', [SCRIPT], {
+        cwd,
+        encoding: 'utf8',
+        env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '', GITHUB_EVENT_NAME: opts.event ?? 'pull_request', GITHUB_EVENT_PATH: event, GITHUB_HEAD_REF: opts.headRef ?? 'kanon-bump', GITHUB_STEP_SUMMARY: summary },
+      });
+      const written = existsSync(summary) ? readFileSync(summary, 'utf8') : '';
+      rmSync(t.dir, { recursive: true, force: true });
+      rmSync(side, { recursive: true, force: true });
+      return { status: r.status, out: `${r.stdout}${r.stderr}`, summary: written };
+    };
+    /** The same tree's output off any pull request: what every run printed before kanon#1106. */
+    const offPullRequest = (change: (t: Tree) => void) => {
+      const t = adopter();
+      change(t);
+      return check(t);
+    };
+    const PERSON = 'Only a person can do these:';
+    const SKILL = 'The upgrade skill does these:';
+    const between = (out: string, from: string, to: string) => out.slice(out.indexOf(from), to ? out.indexOf(to) : undefined);
+
+    it('says to run /kanon:upgrade on this branch, and splits the person\'s steps from the skill\'s', () => {
+      const r = onPullRequest(oldCallers, moveRefs);
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain('This release changes what your callers need. Run `/kanon:upgrade` on this branch');
+      expect(r.out).toContain('::error title=lane-check::This pull request only moves Kanon\'s references');
+      const person = between(r.out, PERSON, SKILL);
+      const skill = between(r.out, SKILL, '');
+      // A renamed repository secret is the person's: lane-check names both names, and never a value.
+      expect(person).toContain('- Store the Author App\'s id as the repository secret `AUTHOR_APP_ID`, in place of `IMPLEMENTER_APP_ID` (docs/apps.md)');
+      expect(person).toContain('- Store the Author App\'s private key as the repository secret `AUTHOR_APP_PRIVATE_KEY`, in place of `IMPLEMENTER_APP_PRIVATE_KEY` (docs/apps.md)');
+      expect(person).toContain('App permission');
+      expect(person).not.toContain('statuses');
+      // The mapping and the permissions block are the skill's.
+      expect(skill).toContain('- .github/workflows/agent-implement-revise.yml: grants statuses: none; the Kanon lane agent-implement-revise needs statuses: read');
+      expect(skill).toContain('- .github/workflows/agent-implement-revise.yml: maps the role-named secret `IMPLEMENTER_APP_ID`');
+      expect(skill).toContain('maps secrets [CLAUDE_CODE_OAUTH_TOKEN,IMPLEMENTER_APP_ID,IMPLEMENTER_APP_PRIVATE_KEY]');
+      // And the job's summary on the pull request says the same.
+      expect(r.summary).toContain('Run `/kanon:upgrade` on this branch');
+      expect(r.summary).toContain('`AUTHOR_APP_ID`, in place of `IMPLEMENTER_APP_ID`');
+      expect(r.summary).toContain('grants statuses: none');
+    });
+
+    it('asks the person to add a secret the release\'s lane takes and no caller maps', () => {
+      const r = onPullRequest((t) => t.edit(TRIAGE, (d) => { delete (job(d).secrets as Record<string, string>).AUTHOR_APP_ID; }), moveRefs);
+      expect(r.status, r.out).toBe(1);
+      expect(between(r.out, PERSON, SKILL)).toContain('- Add the repository secret `AUTHOR_APP_ID`, which the Kanon lane agent-triage takes, unless the repository has it already');
+      expect(between(r.out, SKILL, '')).toContain('maps secrets [AUTHOR_APP_PRIVATE_KEY,CLAUDE_CODE_OAUTH_TOKEN]');
+    });
+
+    it('reads the base from origin when the checkout is one commit deep, as actions/checkout leaves it', () => {
+      const r = onPullRequest(oldCallers, moveRefs, { base: 'remote' });
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain('Run `/kanon:upgrade` on this branch');
+    });
+
+    it('takes a Dependabot branch as moving only the references when it can\'t read the base', () => {
+      const r = onPullRequest(oldCallers, moveRefs, { base: 'unknown', headRef: 'dependabot/github_actions/kanon-0123abcd' });
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain('Run `/kanon:upgrade` on this branch');
+    });
+
+    it('prints what it always printed on a pull request that changes more than Kanon\'s references', () => {
+      const more = (t: Tree) => { moveRefs(t); t.write(TRIAGE, `${t.read(TRIAGE)}# and a line of the person's own\n`); };
+      const r = onPullRequest(oldCallers, more);
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).not.toContain('/kanon:upgrade');
+      expect(r.out).toBe(offPullRequest(oldCallers).out);
+      expect(r.summary).toBe('');
+    });
+
+    it('prints what it always printed when it can\'t read the base of a branch that isn\'t Dependabot\'s', () => {
+      const r = onPullRequest(oldCallers, moveRefs, { base: 'unknown' });
+      expect(r.out).not.toContain('/kanon:upgrade');
+      expect(r.out).toBe(offPullRequest(oldCallers).out);
+    });
+
+    it('says nothing of the upgrade off a pull request, or on one that passes', () => {
+      const merge = onPullRequest(oldCallers, moveRefs, { event: 'merge_group' });
+      expect(merge.out).not.toContain('/kanon:upgrade');
+      const green = onPullRequest(() => {}, moveRefs);
+      expect(green.status, green.out).toBe(0);
+      expect(green.out).not.toContain('/kanon:upgrade');
+      expect(green.summary).toBe('');
+    });
+  });
+});
+
+describe('which diffs only move Kanon\'s references (kanon#1106)', () => {
+  const file = (body: string, name = '.github/workflows/review.yml') =>
+    `diff --git a/${name} b/${name}\nindex 1111111..2222222 100644\n--- a/${name}\n+++ b/${name}\n${body}`;
+  const bump = '@@ -18 +18 @@ jobs:\n-    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.23.0\n+    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.39.0\n';
+
+  it('takes a diff that moves the refs of `uses:` lines, in a job or a step, in any number of files', () => {
+    expect(movesOnlyKanonRefs(file(bump))).toBe(true);
+    expect(movesOnlyKanonRefs(file(bump) + file('@@ -9 +9 @@\n-      - uses: yedeya-labs/kanon/actions/lane-check@v0.23.0\n+      - uses: yedeya-labs/kanon/actions/lane-check@v0.39.0\n', '.github/workflows/ci.yml'))).toBe(true);
+    expect(movesOnlyKanonRefs(file('@@ -9 +9 @@\n-      - uses: "yedeya-labs/kanon/actions/dco@v0.23.0" # v0.23.0\n+      - uses: "yedeya-labs/kanon/actions/dco@v0.39.0" # v0.39.0\n'))).toBe(true);
+  });
+
+  it('refuses any other change beside them, or none at all', () => {
+    expect(movesOnlyKanonRefs('')).toBe(false);
+    expect(movesOnlyKanonRefs(file(`${bump}@@ -30,0 +31 @@\n+      statuses: read\n`))).toBe(false);
+    expect(movesOnlyKanonRefs(file('@@ -18 +18 @@\n-    uses: actions/checkout@v6\n+    uses: actions/checkout@v7\n'))).toBe(false);
+    // A ref moved onto another lane is a change of the caller, not of the pin.
+    expect(movesOnlyKanonRefs(file('@@ -18 +18 @@\n-    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.23.0\n+    uses: yedeya-labs/kanon/.github/workflows/agent-merge.yml@v0.39.0\n'))).toBe(false);
+    expect(movesOnlyKanonRefs(file('@@ -18 +17,0 @@\n-    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.23.0\n'))).toBe(false);
+  });
+
+  it('refuses a file added, deleted or renamed, or a binary one', () => {
+    const added = 'diff --git a/x.yml b/x.yml\nnew file mode 100644\nindex 0000000..2222222\n--- /dev/null\n+++ b/x.yml\n@@ -0,0 +1 @@\n+    uses: yedeya-labs/kanon/actions/dco@v0.39.0\n';
+    expect(movesOnlyKanonRefs(added)).toBe(false);
+    expect(movesOnlyKanonRefs(`${file(bump)}diff --git a/a.png b/a.png\nindex 1111111..2222222 100644\nBinary files a/a.png and b/a.png differ\n`)).toBe(false);
   });
 });
 

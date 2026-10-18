@@ -48,8 +48,15 @@ export const adopter = (): Tree => {
   };
 };
 
+/**
+ * The runner's variables that say which pull request a run is on, blanked, so a case run in
+ * Kanon's own CI never reads Kanon's pull request as the fixture's (kanon#1106). A case that is
+ * on a pull request sets them.
+ */
+export const NO_PULL_REQUEST = { GITHUB_EVENT_NAME: '', GITHUB_EVENT_PATH: '', GITHUB_HEAD_REF: '', GITHUB_STEP_SUMMARY: '' };
+
 export const check = (tree: Tree, env: Record<string, string> = {}) => {
-  const r = spawnSync('bash', [SCRIPT], { cwd: tree.dir, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '', ...env } });
+  const r = spawnSync('bash', [SCRIPT], { cwd: tree.dir, encoding: 'utf8', env: { ...process.env, ...NO_PULL_REQUEST, KANON_ROOT: ROOT, ACTION_REF: '', ...env } });
   rmSync(tree.dir, { recursive: true, force: true });
   return { status: r.status, out: `${r.stdout}${r.stderr}` };
 };
