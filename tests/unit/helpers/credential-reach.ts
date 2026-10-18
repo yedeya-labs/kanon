@@ -53,7 +53,8 @@ import { RELEASE_REF } from './release-ref.js';
  * composite actions. From each entry it follows, transitively: every string in a module's code,
  * never its comments, that is a relative specifier it imports, requires or resolves, or that
  * names a code file next to it or at the root (a script it spawns); and a shell script's tokens,
- * its comment lines aside, naming a code file next to it or at the root. It over-approximates on
+ * its comment lines aside, naming a code file next to it or at the root, or under a variable it
+ * sets to its own directory, or one above it, from `dirname` (kanon#1076). It over-approximates on
  * purpose: a string that names a file it never runs still counts.
  *
  * A package-manager command in such a job's `run:`, or in a shell script it reaches, reads
@@ -209,6 +210,12 @@ export function fileEntries(abs: string, tree: Tree = treeOf()): string[] {
     for (const m of code.matchAll(/((?:\.{1,2}\/)*[\w@-][\w.@/-]*\.(?:mjs|cjs|js|sh|awk))\b/g)) {
       add(here, m[1]!);
       add(ROOT, m[1]!);
+    }
+    // kanon#1076: a path under a variable it sets to its own directory, or one above it
+    // (`HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`, then `node "$HERE/lane-check.mjs"`).
+    for (const m of code.matchAll(/^\s*(?:(?:export|local|readonly|declare)\s+)?([A-Za-z_]\w*)=.*\$\(\s*dirname\s+"?(?:\$\{BASH_SOURCE(?:\[0\])?\}|\$BASH_SOURCE|\$\{0\}|\$0)"?\s*\)((?:\/\.{1,2})*)/gm)) {
+      const dir = join(here, m[2]!);
+      for (const p of code.matchAll(new RegExp(String.raw`\$\{?${m[1]!}\}?/([\w.@/-]+)`, 'g'))) add(dir, p[1]!);
     }
     for (const f of runEntries(code, here, tree)) out.add(f);
     return [...out];

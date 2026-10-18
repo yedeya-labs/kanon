@@ -1,7 +1,8 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { escalatingPaths, readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
-import { credentialProblems, credentialReach as reachOf, evaluateIf, type Reach } from './helpers/credential-reach.js';
+import { credentialProblems, credentialReach as reachOf, evaluateIf, fileEntries, ROOT, type Reach } from './helpers/credential-reach.js';
 import { RELEASE_REF } from './helpers/release-ref.js';
 
 /**
@@ -80,6 +81,16 @@ describe("this tree's credential-holding runs", () => {
     expect([...new Set(REACH.filter((r) => r.file !== 'package.json').map((r) => r.workflow))].sort()).toEqual(['agent-lanes-smoke.yml', 'apps-check.yml', 'metrics-page.yml', 'promote.yml', 'release-please.yml']);
   });
 
+  it("a shell script's run through its own directory is followed: the pin job reaches lane-check's Node and what it imports (kanon#1076)", () => {
+    const pins = REACH.filter((r) => r.workflow === 'release-please.yml' && r.job === 'pins');
+    const node = pins.find((r) => r.file === 'actions/lane-check/lane-check.mjs');
+    expect(node?.via.at(-1), 'lane-check.sh runs it as `node "$HERE/lane-check.mjs"`').toBe('actions/lane-check/lane-check.sh');
+    const files = pins.map((r) => r.file);
+    for (const lib of ['capability-watch', 'declarations', 'deploy-declaration', 'digest-audience', 'exemptions', 'overseer-install', 'reference-deploy', 'upstream-findings']) {
+      expect(files, lib).toContain(`scripts/lib/${lib}.mjs`);
+    }
+  });
+
   it("a pinned lane's `uses: ./` runs this tree: the project-setup hook's `npm ci` reads package.json, which declares no install hook", () => {
     const r = reached(REACH);
     for (const hit of ['implement.yml:implement package.json', 'rebase.yml:rebase package.json', 'lead-split.yml:split package.json']) expect(r, hit).toContain(hit);
@@ -99,6 +110,12 @@ describe('the guard goes red', { timeout: 30_000 }, () => {
   it('when the metrics page imports one, through the library it reaches', () => {
     const problems = credentialProblems(credentialReach(withImport('scripts/metrics/indicators.mjs', `export { LABELS } from '../lib/labels.mjs';`)), ESCALATIONS);
     expect(problems.map((p) => p.split(',')[0])).toEqual([`${GREEN}: metrics-page.yml`]);
+  });
+
+  it('when a file a shell script runs through its own directory imports one: lane-check, which the pin job runs (kanon#1076)', () => {
+    const problems = credentialProblems(credentialReach(withImport('actions/lane-check/lane-check.mjs', `import '../../${GREEN}';`)), ESCALATIONS);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(new RegExp(`^${GREEN}: release-please\\.yml, job pins, .*actions/lane-check/lane-check\\.sh > actions/lane-check/lane-check\\.mjs\\)`));
   });
 
   it('when a credential-holding job gains a step that runs a green-zone file', () => {
@@ -328,6 +345,29 @@ ${mapping}
 
   it('but not for a file a comment names', () => {
     expect(credentialProblems(credentialReach(withImport('cli/apps.mjs', `// import '../${GREEN}';\n/* require('../${GREEN}') */`)), ESCALATIONS)).toEqual([]);
+  });
+});
+
+describe("fileEntries follows a shell script's own directory (kanon#1076)", () => {
+  const script = join(ROOT, 'actions/lane-check/fixture-1076.sh');
+  const entries = (text: string) => fileEntries(script, {
+    isFile: (abs) => abs === script || (existsSync(abs) && statSync(abs).isFile()),
+    text: (abs) => (abs === script ? text : readFileSync(abs, 'utf8')),
+  }).map((abs) => relative(ROOT, abs).split(sep).join('/'));
+  const SELF = 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"';
+
+  it('a path under a variable set to it, written `$VAR/` or `${VAR}/`, from `${BASH_SOURCE[0]}` or `$0`', () => {
+    expect(entries(`${SELF}\nexec node "$HERE/lane-check.mjs" "$@"`)).toContain('actions/lane-check/lane-check.mjs');
+    expect(entries(`${SELF}\nnode "\${HERE}/lane-check.mjs"`)).toContain('actions/lane-check/lane-check.mjs');
+    expect(entries('here=$(dirname "$0")\nnode "$here/lane-check.mjs"')).toContain('actions/lane-check/lane-check.mjs');
+  });
+
+  it('and one set to a directory above it, as `$(dirname …)/..`', () => {
+    expect(entries('UP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\nnode "$UP/qa-store/qa-store.mjs"')).toContain('actions/qa-store/qa-store.mjs');
+  });
+
+  it('but not from a comment line', () => {
+    expect(entries(`${SELF}\n# exec node "$HERE/lane-check.mjs"`)).toEqual([]);
   });
 });
 
