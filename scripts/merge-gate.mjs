@@ -1239,7 +1239,40 @@ export function readPr(number, repo, opts = {}) {
     // THE SPEC PATCHES, read only when a spec changed (K-SPEC-9). `null` on a failed read,
     // which `mergeVerdict` waits on rather than reading as "no promotion" (kanon#273).
     specDiff: files.some(isSpecFile) ? specDiffOn(number, repo, gh) : undefined,
+    // WHETHER A MERGE QUEUE SETS THE STRATEGY ON THIS PR'S BASE (kanon#1102), for `apply`.
+    mergeQueue: mergeQueueOn(number, repo, gh),
   };
+}
+
+/**
+ * Whether the PR's base merges through a merge queue, whether the PR is in it already, and the
+ * PR's node id, which the enqueue takes. `isMergeQueueEnabled` is the field `gh pr merge` reads
+ * for the same question, and it answers for a queue a ruleset sets and one branch protection
+ * sets alike; the rules endpoint answers only for the first.
+ *
+ * `null` on a failed or malformed read, which `apply` takes as "no queue" and squashes as it
+ * did before: where a queue sets the strategy GitHub refuses that, and the PR lands under
+ * "could not be considered" by name, rather than a guess deciding how it merges.
+ *
+ * @returns {{enabled: boolean, queued: boolean, id: string}|null}
+ */
+function mergeQueueOn(number, repo, gh) {
+  const [owner, name] = repo.split('/');
+  try {
+    const q = JSON.parse(gh([
+      'api', 'graphql',
+      '-f', 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id isMergeQueueEnabled isInMergeQueue}}}',
+      '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${number}`,
+      '--jq', '.data.repository.pullRequest',
+    ]));
+    if (typeof q?.isMergeQueueEnabled !== 'boolean' || typeof q.isInMergeQueue !== 'boolean' || typeof q.id !== 'string') {
+      throw new Error(`no merge-queue state in ${JSON.stringify(q)}`);
+    }
+    return { enabled: q.isMergeQueueEnabled, queued: q.isInMergeQueue, id: q.id };
+  } catch (e) {
+    console.log(`::warning title=merge-gate::#${number}: whether a merge queue sets the strategy could not be read, so a merge squashes as before (merge-queue-unread): ${String(e?.stderr || e?.message || e).trim().slice(0, 200)}`);
+    return null;
+  }
 }
 
 /**
@@ -1419,7 +1452,15 @@ export function verifyClosed(pr, repo, say, { retries = 3, waitMs = 4000, sleep 
 export function apply(pr, verdict, repo, { dryRun = true, json = readJson } = {}) {
   const say = (msg) => console.log(`  ${dryRun ? 'would ' : ''}${msg}`);
   if (verdict.action === 'merge') {
-    say(`merge #${pr.number} (squash)`);
+    // WHERE A MERGE QUEUE SETS THE STRATEGY, THE PR GOES INTO THE QUEUE (kanon#1102). GitHub
+    // refuses `--squash` there, and `gh pr merge` with no strategy adds the PR through
+    // `enablePullRequestAutoMerge`, which a repository with auto-merge switched off refuses
+    // too ("Auto merge is not allowed for this repository"): both left an approved, green PR
+    // under "could not be considered" (#1098, #1091). `enqueuePullRequest` adds it directly.
+    const queue = pr.mergeQueue?.enabled === true;
+    if (queue && pr.mergeQueue.queued) return say(`leave #${pr.number} where it is: it is already in the merge queue`);
+    if (queue && dryRun) return say(`queue #${pr.number} (the merge queue sets the strategy)`);
+    if (!queue) say(`merge #${pr.number} (squash)`);
     // NOT the default GITHUB_TOKEN. A merge pushed by it triggers NO workflows, so
     // release-please would never see the commit, no release PR would open, and
     // nothing would deploy — a silent break of the whole release chain. The workflow
@@ -1427,9 +1468,15 @@ export function apply(pr, verdict, repo, { dryRun = true, json = readJson } = {}
     if (dryRun) return;
     // Pinned to the head the verdict was computed on (RA-1177): the checks excluded as
     // review-event racers could still push a commit, and GitHub then refuses the merge
-    // rather than squashing a head nobody reviewed.
+    // rather than squashing a head nobody reviewed. The enqueue keeps the same pin.
     try {
-      gh(['pr', 'merge', String(pr.number), '--repo', repo, '--squash', '--match-head-commit', pr.headSha]);
+      if (queue) {
+        gh(['api', 'graphql',
+          '-f', 'query=mutation($id:ID!,$head:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head}){mergeQueueEntry{position}}}',
+          '-f', `id=${pr.mergeQueue.id}`, '-f', `head=${pr.headSha}`], { stdio: ['ignore', 'pipe', 'pipe'] });
+      } else {
+        gh(['pr', 'merge', String(pr.number), '--repo', repo, '--squash', '--match-head-commit', pr.headSha]);
+      }
     } catch (e) {
       // The pin doing its job is a WAIT, not a failure: the head moved between the read
       // and the merge, and the next event re-evaluates the new head. Letting it throw
@@ -1440,6 +1487,9 @@ export function apply(pr, verdict, repo, { dryRun = true, json = readJson } = {}
       }
       throw e;
     }
+    // A queued PR is not merged yet, so there is no close to check: the queue merges it, and
+    // its linked issue closes then, as a PR a person queued does.
+    if (queue) return say(`queued #${pr.number} (the merge queue sets the strategy)`);
     verifyClosed(pr, repo, say);
     return;
   }
