@@ -2422,3 +2422,161 @@ esac
     expect(v.rule).toBe('checks-failed');
   });
 });
+
+describe('a merge queue sets the strategy: the Merger adds the PR to it (kanon#1102)', () => {
+  /**
+   * MEASURED on #1098 and #1091: on a base whose merge queue sets the strategy, GitHub refuses
+   * `gh pr merge --squash`, and so does `gh pr merge` with no strategy flag. `gh` adds a PR to a
+   * queue through `enablePullRequestAutoMerge`, which a repository with auto-merge switched off
+   * refuses ("Auto merge is not allowed for this repository"), as Kanon's is. The approved, green
+   * PR landed under "could not be considered" and the run went red.
+   */
+  const merge = { action: 'merge', rule: 'green-zone', why: 'ok', quiet: false };
+  const QUEUE = (over: Record<string, unknown> = {}) => ({ enabled: true, queued: false, id: 'PR_kwDOnode', ...over });
+
+  /** `apply` against a stubbed `gh`: `fail` makes the named call exit 1 with that stderr. */
+  const run = (state: Record<string, unknown>, { dryRun = false, fail = {} as Record<string, string> } = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'apply-queue-'));
+    const arm = (key: string, ok: string) => (fail[key] ? `printf '%s' '${fail[key]}' >&2; exit 1` : ok);
+    writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${dir}/calls"
+case "$*" in
+  *"enqueuePullRequest"*) ${arm('enqueue', `printf '%s' '{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"position":1}}}}'`)} ;;
+  "pr merge"*)            ${arm('merge', 'true')} ;;
+  *"issues/1049"*)        printf '%s' 'closed' ;;
+esac
+`);
+    const said: string[] = [];
+    const log = console.log;
+    console.log = (m: string) => { said.push(String(m)); };
+    const prev = process.env.PATH;
+    process.env.PATH = `${dir}:${prev}`;
+    try {
+      apply({ number: 7, headSha: HEAD, labels: ['agent:implement'], closing: { willClose: [1049] }, ...state }, merge, 'o/r', { dryRun });
+    } finally {
+      process.env.PATH = prev;
+      console.log = log;
+    }
+    let calls: string[];
+    try { calls = readFileSync(join(dir, 'calls'), 'utf8').split('\n').filter(Boolean); } catch { calls = []; }
+    return { said, calls };
+  };
+
+  it('adds the PR to the queue, pinned to the head it read, and merges nothing itself', () => {
+    const { said, calls } = run({ mergeQueue: QUEUE() });
+    const enqueue = calls.filter((c) => c.includes('enqueuePullRequest'));
+    expect(enqueue, 'the PR was not added to the queue').toHaveLength(1);
+    expect(enqueue[0]).toContain('id=PR_kwDOnode');
+    expect(enqueue[0], 'the head pin was dropped').toContain(`head=${HEAD}`);
+    expect(calls.some((c) => c.startsWith('pr merge')), 'it asked for a strategy the queue sets').toBe(false);
+    expect(said.map((s) => s.trim())).toContain('queued #7 (the merge queue sets the strategy)');
+    expect(said.some((s) => s.includes('(squash)'))).toBe(false);
+  });
+
+  it('does not check the linked issue closed: a queued PR is not merged yet', () => {
+    const { said, calls } = run({ mergeQueue: QUEUE() });
+    expect(calls.some((c) => c.includes('issues/1049')), 'verifyClosed ran on a PR that is only queued').toBe(false);
+    expect(said.some((s) => s.includes('did not close') || s.includes('closed #'))).toBe(false);
+  });
+
+  it('a PR already in the queue is left there, not added again', () => {
+    const { said, calls } = run({ mergeQueue: QUEUE({ queued: true }) });
+    expect(calls).toEqual([]);
+    expect(said.some((s) => s.includes('already in the merge queue'))).toBe(true);
+  });
+
+  it('says what it would do on a dry run, and does nothing', () => {
+    const { said, calls } = run({ mergeQueue: QUEUE() }, { dryRun: true });
+    expect(calls).toEqual([]);
+    expect(said.map((s) => s.trim())).toContain('would queue #7 (the merge queue sets the strategy)');
+  });
+
+  it('without a merge queue, squashes pinned to the head and checks the linked issue closed, as before', () => {
+    const { said, calls } = run({ mergeQueue: QUEUE({ enabled: false }) });
+    expect(calls[0]).toBe(`pr merge 7 --repo o/r --squash --match-head-commit ${HEAD}`);
+    expect(calls.some((c) => c.includes('enqueuePullRequest'))).toBe(false);
+    expect(calls.some((c) => c.includes('issues/1049')), 'verifyClosed was skipped').toBe(true);
+    expect(said.map((s) => s.trim())).toEqual(['merge #7 (squash)', 'closed #1049']);
+  });
+
+  it('an unread queue state squashes as before, so GitHub, not a guess, refuses it', () => {
+    const { calls } = run({ mergeQueue: null });
+    expect(calls[0]).toBe(`pr merge 7 --repo o/r --squash --match-head-commit ${HEAD}`);
+  });
+
+  it('any other enqueue failure still throws, and lands under "could not be considered"', () => {
+    expect(() => run({ mergeQueue: QUEUE() }, { fail: { enqueue: 'GraphQL: Pull request is not mergeable' } }))
+      .toThrow();
+    const log = console.log;
+    console.log = () => {};
+    try {
+      const { failed } = sweep(['7'], { consider: () => run({ mergeQueue: QUEUE() }, { fail: { enqueue: 'GraphQL: Pull request is not mergeable' } }) as never });
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toContain('#7');
+    } finally {
+      console.log = log;
+    }
+  });
+
+  it('any other squash failure still throws, as before', () => {
+    expect(() => run({ mergeQueue: QUEUE({ enabled: false }) }, { fail: { merge: 'GraphQL: Pull Request is not mergeable' } }))
+      .toThrow();
+  });
+
+  it('a head that moved before the enqueue is a wait, the same as before a squash', () => {
+    const { said } = run({ mergeQueue: QUEUE() }, { fail: { enqueue: 'GraphQL: Head branch was modified. Review and try the merge again.' } });
+    expect(said.some((s) => s.includes('the head moved'))).toBe(true);
+  });
+
+  /** `readPr` against a stubbed `gh` whose queue read prints `queue`, or fails. */
+  const readWith = (queue: string | 'fail') => {
+    const dir = mkdtempSync(join(tmpdir(), 'merge-gate-queue-'));
+    const meta = {
+      number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,
+      labels: [{ name: 'agent:implement' }], headRefOid: HEAD,
+      statusCheckRollup: [{ name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE', title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`,
+      closingIssuesReferences: [{ number: 1 }], commits: [{ messageHeadline: 'x', messageBody: '' }],
+    };
+    writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${dir}/calls"
+case "$*" in
+  "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"isMergeQueueEnabled"*) ${queue === 'fail' ? 'exit 1' : `printf '%s' '${queue}'`} ;;
+  *"/statuses"*)        printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
+  *"/files"*)           printf '%s\\n' 'src/a.ts' ;;
+  *"/reviews"*)         printf '%s' '[]' ;;
+  *"issues?per_page"*)  printf '%s' '0' ;;
+  "run list"*)          printf '%s' '[]' ;;
+esac
+`);
+    const log = console.log;
+    console.log = () => {};
+    try {
+      const read = readPr(1234, 'o/r', { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+      return { read, calls: readFileSync(join(dir, 'calls'), 'utf8') };
+    } finally {
+      console.log = log;
+    }
+  };
+
+  it('readPr reads whether the PR\'s base has a merge queue, for this PR', () => {
+    const { read, calls } = readWith('{"id":"PR_kwDOnode","isMergeQueueEnabled":true,"isInMergeQueue":false}');
+    expect(read.mergeQueue).toEqual({ enabled: true, queued: false, id: 'PR_kwDOnode' });
+    const q = calls.split('\n').find((c) => c.includes('isMergeQueueEnabled')) ?? '';
+    expect(q).toContain('number=1234');
+    expect(q).toContain('owner=o');
+    expect(q).toContain('name=r');
+  });
+
+  it('readPr reads a base without a queue as no queue', () => {
+    const { read } = readWith('{"id":"PR_kwDOnode","isMergeQueueEnabled":false,"isInMergeQueue":false}');
+    expect(read.mergeQueue).toEqual({ enabled: false, queued: false, id: 'PR_kwDOnode' });
+  });
+
+  it('readPr carries a failed or malformed queue read as null, not as "no queue"', () => {
+    expect(readWith('fail').read.mergeQueue).toBeNull();
+    expect(readWith('null').read.mergeQueue).toBeNull();
+    expect(readWith('{"id":"PR_kwDOnode"}').read.mergeQueue).toBeNull();
+  });
+});
