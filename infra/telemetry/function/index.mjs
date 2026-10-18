@@ -12,8 +12,9 @@
 // THE SIGV4 PATH. Every request is SigV4-signed by a role, and Lambda puts that role in
 // `requestContext.authorizer.iam`. The function maps the role to the adopter's key, and since
 // plan 0008 J3 that key must have an `active` registration in the register table (§9): a
-// suspended key is refused here as on the token path, and `WRITER_KEYS` and `NAME_HASHES` are no
-// longer read. The sender's name hashes, for a finding, are its registration's `name_hashes`.
+// suspended key is refused here as on the token path, and `WRITER_KEYS` is no longer read. The
+// sender's name hashes, for a finding, are its registration's `name_hashes`, and are in no
+// environment (kanon#607).
 // The rows are checked and stamped by `rows.mjs`, as on the token path.
 //
 // LOGS HOLD KEYS AND FIELD NAMES ONLY (§9, §10). A rejected row may carry content, so nothing
@@ -37,7 +38,7 @@ const ASSUMED_ROLE = /^arn:aws[a-z-]*:sts::(\d+):assumed-role\/([^/]+)\/[^/]+$/;
 
 /**
  * @typedef {import('./rows.mjs').Caller} Caller
- * @typedef {import('./token.mjs').TokenEnv & { IMPORTER_ROLE?: string, BACKFILL_ROLE?: string, NAME_HASHES?: string }} Env
+ * @typedef {import('./token.mjs').TokenEnv & { IMPORTER_ROLE?: string, BACKFILL_ROLE?: string }} Env
  */
 
 /**
@@ -57,27 +58,6 @@ export function callerOf(event, env) {
   if (env.BACKFILL_ROLE && role === env.BACKFILL_ROLE) return { kind: 'backfill', key: null };
   const w = WRITER_ROLE.exec(role);
   return w ? { kind: 'writer', key: /** @type {string} */ (w[1]) } : null;
-}
-
-/** A SHA-256, as `render.mjs` writes each word's. */
-const HASH = /^[0-9a-f]{64}$/;
-
-/**
- * `render.mjs`'s `NAME_HASHES`, `<key>=<hash>:<hash>…` per key, read back. THE HANDLER NO LONGER
- * READS IT (plan 0008 J3: the hashes come from the token, or on the SigV4 path from the
- * registration); it stays, with the variable, until J9 removes `render.mjs`.
- * @param {{ NAME_HASHES?: string }} env
- * @param {string} key
- * @returns {Set<string> | null}
- */
-export function nameHashesOf(env, key) {
-  for (const entry of (env.NAME_HASHES ?? '').split(',')) {
-    const at = entry.indexOf('=');
-    if (at < 0 || entry.slice(0, at) !== key) continue;
-    const hashes = entry.slice(at + 1).split(':');
-    return hashes.length && hashes.every((h) => HASH.test(h)) ? new Set(hashes) : null;
-  }
-  return null;
 }
 
 /**

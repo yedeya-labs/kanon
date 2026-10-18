@@ -362,15 +362,13 @@ Resources:
         Variables:
           TABLE_NAME: kanon-telemetry
           ACCOUNT_ID: { Ref: AWS::AccountId }
-          # Set by render.mjs from the register: every key; and per key, the SHA-256 of each word
-          # of its repository's owner and name, never the words, which a finding row's text is
-          # checked against (plan 0006 §4.2).
+          # Set by render.mjs from the register: every key. No repository's name hashes: a finding
+          # row's text is checked against its sender's registration's (plan 0006 §4.2, kanon#607).
           WRITER_KEYS: ''
-          NAME_HASHES: ''
           IMPORTER_ROLE: { 'Fn::If': [ImporterOn, kanon-telemetry-importer, ''] }
           BACKFILL_ROLE: { 'Fn::If': [BackfillOn, kanon-telemetry-backfill, ''] }
           # The token path (plan 0008 J3). Since J3 the SigV4 path reads its keys and name hashes
-          # from the register too; WRITER_KEYS and NAME_HASHES stay, unread, until J9.
+          # from the register too; WRITER_KEYS stays, unread, until J9.
           REGISTER_TABLE: kanon-telemetry-register
           AUDIENCE: { Ref: Audience }
           MIN_TOKEN_VERSION: { Ref: MinTokenVersion }

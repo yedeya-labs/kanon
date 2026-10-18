@@ -179,8 +179,9 @@ export function readIssues(issues) {
 }
 
 /**
- * The register's keys and each key's name hashes, as `render.mjs` builds `NAME_HASHES` for intake:
- * the words of the registered repository's owner and name, hashed. Reads nothing else of it.
+ * The register's keys and each key's name hashes, as intake holds them in each registration's
+ * `name_hashes`: the words of the registered repository's owner and name, hashed. Reads nothing
+ * else of it.
  * @param {any} register
  * @returns {{ keys: string[], names: Record<string, string[]> }}
  */

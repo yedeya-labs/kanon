@@ -247,8 +247,8 @@ describe('the name context (§4.2)', () => {
 });
 
 // kanon#612, the Owner's decision: Kanon's own vocabulary is never a name, from any source of the
-// context, so the evidence can describe Kanon. The lanes' context and intake's `NAME_HASHES` both
-// come from `nameContext`, so both read this one list.
+// context, so the evidence can describe Kanon. The lanes' context and intake's registrations'
+// `name_hashes` both come from `nameContext`, so both read this one list.
 describe('Kanon\'s own vocabulary is never a name (kanon#612)', () => {
   const PLATFORM = ['kanon', 'app', 'bot', 'github', 'actions'];
   const words = (list: Iterable<string>) => [...list].flatMap((w) => w.toLowerCase().match(/[a-z0-9]+/g) ?? []);

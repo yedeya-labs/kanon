@@ -5,7 +5,6 @@ import {
   handle,
   keysOf,
   MAX_ROWS,
-  nameHashesOf,
   PARTITIONS,
   putItem,
   stamp,
@@ -452,15 +451,11 @@ describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
   it("stores no finding for a key without name hashes, or with malformed ones: the sender's check can't run", async () => {
     const hashes = (repository: string) => [...nameContext({ repository })].sort();
     for (const over of [{}, { name_hashes: [] }, { name_hashes: ['not-a-hash'] }, { name_hashes: [...hashes('acme-corp/widget-shop'), 'x'] }, { name_hashes: 'abc' }]) {
-      // `render.mjs`'s NAME_HASHES no longer counts: only the registration's hashes do.
+      // Hashes in the environment, as `render.mjs` wrote them before kanon#607, never count: only the registration's do.
       const r = await call(event([findingRow()]), { NAME_HASHES: `k1=${hashes('acme-corp/widget-shop').join(':')}` }, (f) => register(f, 'k1', '1', over));
       expect(r.status).toBe(422);
       expect(errorsOf(r)).toEqual([{ field: 'row_kind', problem: 'no-sender-context' }]);
     }
-    // render.mjs's variable still reads back (its template test uses it) until J9 removes it.
-    const variable = { NAME_HASHES: `k1=${hashes('acme-corp/widget-shop').join(':')}` };
-    expect(nameHashesOf(variable, 'k1')?.size).toBe(4);
-    expect(nameHashesOf(variable, 'k3')).toBeNull();
   });
 
   it("refuses a registered key held in the text as a word, whoever's it is, naming the field and never the key", async () => {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
-import { nameHashesVariable } from '../../infra/telemetry/render.mjs';
+import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
 import { detect, parseRows, signature } from '../../scripts/telemetry/kanon-bugs.mjs';
 import {
   BODY_BUDGET, EARLIER, EXPIRED_HEAD, KeyRefusal, LABELS, assertNoKeyIn, holdsKey, main, plan, readFinding, registerContext, summary,
@@ -324,10 +324,11 @@ describe('nothing identifying leaves into the output', () => {
 });
 
 describe('the register gives the keys and the name hashes intake has', () => {
-  it('hashes each repository as render.mjs does for NAME_HASHES', () => {
+  it("hashes each repository as intake's registration holds it, its `name_hashes`", () => {
     const { keys, names } = registerContext(REGISTER);
     expect(keys).toEqual(KEYS);
-    expect(Object.entries(names).map(([k, h]) => `${k}=${h.join(':')}`).join(',')).toBe(nameHashesVariable(REGISTER.repositories));
+    // `register.mjs import` and the token path both store `nameContext`'s hashes, sorted.
+    expect(names).toEqual(Object.fromEntries(REGISTER.repositories.map((e: { key: string, repository: string }) => [e.key, [...nameContext({ repository: e.repository })].sort()])));
     expect(JSON.stringify(names)).not.toContain('widgets');
   });
 
