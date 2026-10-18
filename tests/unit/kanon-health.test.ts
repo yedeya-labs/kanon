@@ -339,7 +339,9 @@ describe('kanon-health.mjs: reads Kanon from GitHub and prints the view', () => 
   it('with --json, prints one document; with --rows, the upgrade lag', () => {
     const file = join(dir, 'rows.jsonl');
     writeFileSync(file, ['aaaa1111', 'bbbb2222', 'cccc3333'].map((k) => JSON.stringify(run(`${k}#review`, '0.37.0'))).join('\n'));
-    const { code, out } = main(['--json', '--rows', file, '--repo', 'acme/kanon-fork'], deps([]));
+    const none = join(dir, 'none.json');
+    writeFileSync(none, '{}');
+    const { code, out } = main(['--json', '--rows', file, '--own', none, '--repo', 'acme/kanon-fork'], deps([]));
     expect(code).toBe(0);
     const doc = JSON.parse(out);
     expect(doc).toMatchObject({ schema: SCHEMA, computed_at: NOW.toISOString(), disputes: { disputes: 1 }, fixes: { filed: 2 } });
@@ -361,6 +363,18 @@ describe('kanon-health.mjs: reads Kanon from GitHub and prints the view', () => 
     expect(main(['--own', own], deps([])).code).toBe(2);
   });
 
+  it('refuses --rows without --own, naming the flag and nothing of the files; without --rows nothing changes (#1094)', () => {
+    const file = join(dir, 'secret.jsonl');
+    writeFileSync(file, JSON.stringify({ ...run('aaaa1111#review', '0.37.0'), repository: 'acme-corp/secret-repo' }));
+    const refusal = { code: 2, out: '--own is required: a JSON object of adopter keys to labels, {} when none declares its own figures' };
+    expect(main(['--rows', file], deps([]))).toEqual(refusal);
+    expect(main(['--json', '--rows', file], deps([]))).toEqual(refusal);
+    // As `metrics-page.yml` runs it: no rows, so no `--own`, and the document is printed.
+    const { code, out } = main(['--json'], deps([]));
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toMatchObject({ schema: SCHEMA, upgrade_lag: null });
+  });
+
   it('exits 3 when GitHub fails, and 2 on a bad argument', () => {
     const failing = deps([], { gh: () => ({ status: 1, stdout: '', stderr: 'HTTP 502' }) });
     expect(main([], failing).code).toBe(3);
@@ -370,6 +384,8 @@ describe('kanon-health.mjs: reads Kanon from GitHub and prints the view', () => 
     expect(main([], deps([], { gh: releasesFail })).code).toBe(3);
     expect(main(['--nope'], deps([])).code).toBe(2);
     expect(main(['--repo', 'not a repo'], deps([])).code).toBe(2);
-    expect(main(['--rows', join(dir, 'missing.json')], deps([])).code).toBe(2);
+    const none = join(dir, 'none.json');
+    writeFileSync(none, '{}');
+    expect(main(['--rows', join(dir, 'missing.json'), '--own', none], deps([]))).toEqual({ code: 2, out: 'could not read the rows (Error)' });
   });
 });

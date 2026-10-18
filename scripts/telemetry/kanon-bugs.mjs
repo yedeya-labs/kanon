@@ -53,11 +53,12 @@
 // key, a repository, a run id, a login or a path. The output is also checked for every key the
 // input held (`assertNoKey`), and refused whole if one appears.
 //
-//   node scripts/telemetry/kanon-bugs.mjs --rows <file> [--known <file>] [--own <file>] [--tag run|test|smoke] [--json]
+//   node scripts/telemetry/kanon-bugs.mjs --rows <file> --own <file> [--known <file>] [--tag run|test|smoke] [--json]
 //   --rows: a JSON array of rows, or one row per line (JSON lines)
 //   --known: a JSON array of signatures already filed; a signal not in it is `new`
-//   --own: a JSON object of each declaring adopter's key to its label, the aggregate's `own`;
-//     without it, every adopter counts toward the three-adopter rule
+//   --own: required, a JSON object of each declaring adopter's key to its label, the aggregate's
+//     `own`; `{}` when none declares. Without it the CLI refuses to run, so a job that leaves it
+//     out never counts the Owner's projects toward the three-adopter rule (#1094)
 //   prints: with --json, `{ signals, rises, skipped }`, each signal and rise with its `issue`
 //     (`signature`, `title`, `body`); without, a summary of counts
 //
@@ -172,6 +173,8 @@ const codeIn = (/** @type {unknown} */ v, /** @type {readonly string[]} */ list)
  */
 const adopterOf = (row) => (typeof row.adopter === 'string' && row.adopter !== '' ? row.adopter : keyOf(row.pk));
 
+/** What a CLI prints when `--own` is left out: it is required, so the Owner's projects never count by omission. */
+export const OWN_REQUIRED = '--own is required: a JSON object of adopter keys to labels, {} when none declares its own figures';
 /** What a CLI prints for an `--own` file of another shape. */
 export const OWN_REFUSAL = '--own is not a JSON object of adopter keys to labels';
 /**
@@ -416,7 +419,7 @@ export function summary(r) {
  * @returns {{ code: number, out: string }}
  */
 export function main(argv) {
-  const usage = 'usage: kanon-bugs.mjs --rows <file> [--known <file>] [--own <file>] [--tag run|smoke|test] [--json]';
+  const usage = 'usage: kanon-bugs.mjs --rows <file> --own <file> [--known <file>] [--tag run|smoke|test] [--json]';
   /** @type {Record<string, string>} */
   const opts = {};
   let json = false;
@@ -428,6 +431,7 @@ export function main(argv) {
   }
   if (!opts.rows) return { code: 2, out: usage };
   if (opts.tag && !['run', 'smoke', 'test'].includes(opts.tag)) return { code: 2, out: usage };
+  if (opts.own === undefined) return { code: 2, out: OWN_REQUIRED };
   let rows;
   /** @type {string[]} */
   let known = [];
@@ -440,11 +444,9 @@ export function main(argv) {
       if (!Array.isArray(k) || !k.every((s) => typeof s === 'string')) return { code: 2, out: '--known is not a JSON array of signatures' };
       known = k;
     }
-    if (opts.own) {
-      const o = JSON.parse(readFileSync(opts.own, 'utf8'));
-      if (!isOwn(o)) return { code: 2, out: OWN_REFUSAL };
-      own = o;
-    }
+    const o = JSON.parse(readFileSync(opts.own, 'utf8'));
+    if (!isOwn(o)) return { code: 2, out: OWN_REFUSAL };
+    own = o;
   } catch (e) {
     // The error's name only: a message could quote a row, and a row holds what must not be printed.
     return { code: 2, out: `could not read the input (${e instanceof Error ? e.name : 'error'})` };

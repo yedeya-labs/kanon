@@ -51,10 +51,10 @@
 // input and the register held, as a value and as a word inside any string, and refused whole if
 // one appears.
 //
-//   node scripts/telemetry/kanon-findings.mjs --rows <file> [--known <file>] [--tag run|smoke|test]
-//     [--own <file>] [--trees <file>] [--register <file>] [--issues <file>] [--json]
+//   node scripts/telemetry/kanon-findings.mjs --rows <file> --own <file> [--known <file>] [--tag run|smoke|test]
+//     [--trees <file>] [--register <file>] [--issues <file>] [--json]
 //   --rows: run rows and finding rows together, a JSON array or one row per line
-//   --known, --own, --tag: as `kanon-bugs.mjs`
+//   --known, --own, --tag: as `kanon-bugs.mjs`; `--own` is required there and here
 //   --issues: the open issues, as `gh issue list --label kanon-bug --state open --limit 1000
 //     --json title,body` prints them. `gh` stops at 30 without `--limit`, and at the limit without
 //     a word, so the job fails when it gets exactly 1000: an issue left out loses what it held.
@@ -72,7 +72,7 @@ import { KANON_PATH, nameContext, verify } from '../../actions/agent-telemetry/s
 import { keyOf } from '../../infra/telemetry/function/aggregate.mjs';
 import { isCliEntry } from '../lib/cli-entry.mjs';
 import { holdsKey } from './holds-key.mjs';
-import { MARKER, OWN_REFUSAL, detect, isOwn, parseRows, signature, summary as signalSummary } from './kanon-bugs.mjs';
+import { MARKER, OWN_REFUSAL, OWN_REQUIRED, detect, isOwn, parseRows, signature, summary as signalSummary } from './kanon-bugs.mjs';
 
 export { holdsKey };
 
@@ -416,7 +416,7 @@ export function summary(r) {
  * @returns {{ code: number, out: string }}
  */
 export function main(argv) {
-  const usage = 'usage: kanon-findings.mjs --rows <file> [--known <file>] [--own <file>] [--tag run|smoke|test] [--trees <file>] [--register <file>] [--issues <file>] [--json]';
+  const usage = 'usage: kanon-findings.mjs --rows <file> --own <file> [--known <file>] [--tag run|smoke|test] [--trees <file>] [--register <file>] [--issues <file>] [--json]';
   /** @type {Record<string, string>} */
   const opts = {};
   let json = false;
@@ -428,6 +428,7 @@ export function main(argv) {
   }
   if (!opts.rows) return { code: 2, out: usage };
   if (opts.tag && !['run', 'smoke', 'test'].includes(opts.tag)) return { code: 2, out: usage };
+  if (opts.own === undefined) return { code: 2, out: OWN_REQUIRED };
   /** @type {Options} */
   const o = { tag: opts.tag ?? 'run' };
   let rows;
@@ -438,11 +439,9 @@ export function main(argv) {
       if (!Array.isArray(k) || !k.every((s) => typeof s === 'string')) return { code: 2, out: '--known is not a JSON array of signatures' };
       o.known = k;
     }
-    if (opts.own) {
-      const w = JSON.parse(readFileSync(opts.own, 'utf8'));
-      if (!isOwn(w)) return { code: 2, out: OWN_REFUSAL };
-      o.own = w;
-    }
+    const w = JSON.parse(readFileSync(opts.own, 'utf8'));
+    if (!isOwn(w)) return { code: 2, out: OWN_REFUSAL };
+    o.own = w;
     if (opts.trees) {
       const t = JSON.parse(readFileSync(opts.trees, 'utf8'));
       if (!t || typeof t !== 'object' || Array.isArray(t) || !Object.values(t).every((l) => Array.isArray(l) && l.every((p) => typeof p === 'string'))) {
