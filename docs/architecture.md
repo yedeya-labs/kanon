@@ -100,3 +100,5 @@ A rule whose "Enforced by" says *prose only* has no check yet. Those rules are K
 | [`skills/`](../skills/) | The Claude Code skills: `/kanon:adopt`, `/kanon:doctor`, `/kanon:upgrade`. |
 | [`infra/`](../infra/) | The QA store's and the telemetry store's cloud templates. |
 | [`tests/`](../tests/) | Kanon's own tests, run on every pull request. |
+
+**Kanon's end-to-end tests live outside this repository,** in the public harness repository [`kanon-e2e/harness`](https://github.com/kanon-e2e/harness), which installs each of Kanon's release candidates in throwaway repositories and drives them as an adopter would ([plan 0012](plans/0012-end-to-end-tests.md)). Its verdict, the `kanon-e2e` check run on the candidate's commit, gates Kanon's own promotion of that candidate to a stable release, and the move of Kanon's own pins to it ([release.md](release.md#the-promotion)). It adds nothing to an adopter's repository.

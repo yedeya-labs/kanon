@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { auditAreas, readCodeAreas } from '../../scripts/lib/code-areas.mjs';
+import { E2E_CHECK, REPORTER_APP_ID } from '../../scripts/promote.mjs';
 import { actionFiles } from './helpers/actions.js';
 import { releasedUses } from './helpers/release-ref.js';
 import { writeStub } from './helpers/stub-bin.js';
@@ -324,33 +325,104 @@ describe('K-SHIP-7 the reusable release workflow', () => {
 
 describe("K-SHIP-7 Kanon's release caller", () => {
   const { wf, text } = load('release-please.yml');
-  type CallerJob = Job & { needs?: string; outputs?: Record<string, string>; 'timeout-minutes'?: number };
+  type CallerJob = Job & { needs?: string | string[]; outputs?: Record<string, string>; 'timeout-minutes'?: number };
   const jobs = wf.jobs as Record<string, CallerJob>;
   const release = jobs.release;
   const candidate = jobs.candidate;
+  const gateJob = jobs.gate;
   const pins = jobs.pins;
 
-  it('runs on every push to main, and nowhere else', () => {
-    expect(wf.on).toEqual({ push: { branches: ['main'] } });
+  it('runs on every push to main, and on a completed check run for the pin job alone (plan 0012 E11)', () => {
+    expect(wf.on).toEqual({ push: { branches: ['main'] }, check_run: { types: ['completed'] } });
+    expect(release?.if).toBe("github.event_name == 'push'");
   });
 
-  it('calls the reusable workflow through `$/`, and adds only the pin job (plan 0009 S4)', () => {
-    expect(Object.keys(jobs)).toEqual(['release', 'candidate', 'pins']);
+  it('calls the reusable workflow through `$/`, and adds only the pin job and its gate (plan 0009 S4, plan 0012 E11)', () => {
+    expect(Object.keys(jobs)).toEqual(['release', 'candidate', 'gate', 'pins']);
     expect(release?.uses).toBe('$/.github/workflows/release.yml');
     expect(release?.steps).toBeUndefined();
   });
 
-  it('grants nothing at the top, the two writes on the calling job only, and contents: read elsewhere', () => {
+  it('grants nothing at the top, the two writes on the calling job only, and reads elsewhere', () => {
     expect(wf.permissions).toEqual({});
     expect(release?.permissions).toEqual({ contents: 'write', 'pull-requests': 'write' });
     expect(candidate?.permissions).toEqual({ contents: 'read' });
+    expect(gateJob?.permissions).toEqual({ contents: 'read', checks: 'read' });
     expect(pins?.permissions).toEqual({ contents: 'read' });
   });
 
   it('interpolates no expression into any run line, and bounds every job it runs', () => {
     for (const s of stepsOf(wf)) expect(s.run ?? '').not.toContain('${{');
     expect(candidate?.['timeout-minutes']).toBeGreaterThan(0);
+    expect(gateJob?.['timeout-minutes']).toBeGreaterThan(0);
     expect(pins?.['timeout-minutes']).toBeGreaterThan(0);
+  });
+
+  // Plan 0012 §8.1, decision 2, step E11 (`[ETE-33]`): Kanon's pins move only to a candidate the
+  // end-to-end gate passed. tests/unit/promote.test.ts holds the gate's reading itself.
+  describe('the pin job waits for the end-to-end gate ([ETE-33])', () => {
+    const read = gateJob?.steps.find((s) => s.id === 'gate');
+
+    it('a check run starts the candidate job only when it is the Reporter\'s green `kanon-e2e`, by its App id; a push only after the release', () => {
+      expect(candidate?.needs).toBe('release');
+      const cond = String(candidate?.if).replace(/\s+/g, ' ');
+      expect(cond).toBe(`!cancelled() && (needs.release.result == 'success' || (github.event_name == 'check_run' && github.event.check_run.name == '${E2E_CHECK}' && github.event.check_run.conclusion == 'success' && github.event.check_run.app.id == ${REPORTER_APP_ID}))`);
+    });
+
+    it('reads the gate with `promote.mjs gate`, a read-only token and the candidate\'s tag, and hands on its answer', () => {
+      expect(gateJob?.needs).toBe('candidate');
+      expect(gateJob?.if).toBe("needs.candidate.outputs.tag != ''");
+      expect(gateJob?.outputs).toEqual({ pass: '${{ steps.gate.outputs.pass }}' });
+      expect(read?.run).toBe('node scripts/promote.mjs gate');
+      expect(read?.env).toEqual({ GH_TOKEN: '${{ github.token }}', TAG: '${{ needs.candidate.outputs.tag }}' });
+      expect(gateJob?.steps.some((s) => s.uses?.startsWith('actions/create-github-app-token'))).toBe(false);
+    });
+
+    it('opens nothing while the gate holds: the pin job needs the gate, and runs only on its `pass=true`', () => {
+      expect(pins?.needs).toEqual(['candidate', 'gate']);
+      expect(pins?.if).toBe("needs.candidate.outputs.tag != '' && needs.gate.outputs.pass == 'true'");
+    });
+
+    // The step's own command, against a stub `gh`: a candidate with no check run, the push that
+    // cut it, writes `pass=false`, and so the pin job is skipped.
+    const gateRun = (checkRuns: unknown[]) => {
+      const dir = mkdtempSync(join(tmpdir(), 'release-gate-'));
+      try {
+        const bin = join(dir, '.bin');
+        mkdirSync(bin);
+        const out = join(dir, 'out');
+        writeFileSync(out, '');
+        writeStub(join(bin, 'gh'), [
+          '#!/usr/bin/env bash',
+          'case "$4" in',
+          `  repos/acme/widgets/git/matching-refs/tags/candidate-v) echo '[{"ref":"refs/tags/candidate-v0.40.0","object":{"sha":"abc123","type":"commit"}}]' ;;`,
+          `  repos/acme/widgets/commits/abc123/check-runs*) echo '${JSON.stringify({ check_runs: checkRuns })}' ;;`,
+          `  search/issues*) echo '{"items":[]}' ;;`,
+          // The candidate's commit carries the gate (plan 0012 decision 3).
+          "  repos/acme/widgets/contents/scripts/promote.mjs?ref=abc123) echo \"export const E2E_CHECK = 'kanon-e2e';\" ;;",
+          '  *) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;',
+          'esac',
+          '',
+        ].join('\n'));
+        const r = spawnSync('bash', ['-c', String(read?.run)], {
+          cwd: fileURLToPath(new URL('../..', import.meta.url)),
+          encoding: 'utf8',
+          env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: 'acme/widgets', TAG: 'candidate-v0.40.0', GITHUB_OUTPUT: out, GH_TOKEN: 't' },
+        });
+        return { status: r.status, err: r.stderr, stdout: r.stdout, out: readFileSync(out, 'utf8') };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    it('writes `pass=false` for a candidate with no check run, or only another App\'s green one, and exits 0', () => {
+      for (const runs of [[], [{ id: 1, name: E2E_CHECK, head_sha: 'abc123', status: 'completed', conclusion: 'success', external_id: '9-1', app: { id: 15368 } }]]) {
+        const r = gateRun(runs);
+        expect(r.status, r.err).toBe(0);
+        expect(r.out).toBe('pass=false\n');
+        expect(r.stdout).toContain('| End to end | **hold** |');
+      }
+    });
   });
 
   // Plan 0009 S4. The reusable workflow declares no outputs, so the caller can't read
@@ -393,10 +465,10 @@ describe("K-SHIP-7 Kanon's release caller", () => {
       }
     };
 
-    it('runs after the release, and hands on the tag it found', () => {
+    it("runs after the release, at the push's commit or the check run's, and hands on the tag it found", () => {
       expect(candidate?.needs).toBe('release');
       expect(candidate?.outputs).toEqual({ tag: '${{ steps.find.outputs.tag }}' });
-      expect(find?.env).toEqual({ GH_TOKEN: '${{ github.token }}', REPO: '${{ github.repository }}', SHA: '${{ github.sha }}' });
+      expect(find?.env).toEqual({ GH_TOKEN: '${{ github.token }}', REPO: '${{ github.repository }}', SHA: '${{ github.event.check_run.head_sha || github.sha }}' });
     });
 
     it("finds candidate-v0.40.0 at this push's commit, a pre-release", () => {
@@ -442,13 +514,15 @@ describe("K-SHIP-7 Kanon's release caller", () => {
     const mint = steps.find((s) => s.id === 'releaser');
     const open = steps.find((s) => s.id === 'open');
 
-    it("runs only on a candidate, with a precondition's place for the end-to-end gate (plan 0012 E11)", () => {
-      expect(pins?.needs).toBe('candidate');
-      expect(pins?.if).toBe("needs.candidate.outputs.tag != ''");
-      expect(text).toContain('THE END-TO-END GATE GOES HERE');
+    it('runs only on a candidate the end-to-end gate passed, one run at a time (plan 0012 E11)', () => {
+      expect(pins?.needs).toEqual(['candidate', 'gate']);
+      expect(pins?.if).toContain("needs.candidate.outputs.tag != ''");
+      expect(pins?.concurrency).toEqual({ group: 'kanon-pins', 'cancel-in-progress': false });
+      expect(text).not.toContain('THE END-TO-END GATE GOES HERE');
     });
 
-    it('moves the pins with scripts/move-pins.mjs at the pushed commit, before any token is minted', () => {
+    // It holds the Releaser's key, so it checks out the triggering commit and no other ref (K-AGENT-49).
+    it('moves the pins with scripts/move-pins.mjs at the triggering commit, before any token is minted', () => {
       expect(steps[0]?.uses).toBe('actions/checkout@v7');
       expect(steps[0]?.with).toEqual({ 'persist-credentials': false });
       expect(move?.env).toEqual({ TAG: '${{ needs.candidate.outputs.tag }}' });
@@ -475,6 +549,9 @@ describe("K-SHIP-7 Kanon's release caller", () => {
         'permission-workflows': 'write',
       });
       expect(open?.env?.GH_TOKEN).toBe('${{ steps.releaser.outputs.token }}');
+      // The triggering commit, which is the default branch's head on a check run, and its branch.
+      expect(open?.env?.SHA).toBe('${{ github.sha }}');
+      expect(open?.env?.BASE).toBe('${{ github.ref_name }}');
       expect(at((s) => s === open)).toBe(at((s) => s === mint) + 1);
     });
 

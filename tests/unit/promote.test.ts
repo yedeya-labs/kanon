@@ -2,13 +2,18 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { UNREACHABLE_TITLE as DOCTOR_UNREACHABLE_TITLE } from '../../cli/doctor.mjs';
-import { ApiError, apply, check, GATES, laneCallers, pinTitle, Refusal, RUN_LISTING_CAP, SOAK_MS, SPACING_MS, summary, UNREACHABLE_TITLE } from '../../scripts/promote.mjs';
+import {
+  ApiError, apply, check, E2E_CHECK, GATES, gate, gateSummary, HARNESS, HARNESS_WORKFLOW, laneCallers, pinTitle, redIssueTitle, Refusal,
+  REPORTER_APP_ID, RUN_LISTING_CAP, SOAK_MS, SPACING_MS, startJobName, summary, UNREACHABLE_TITLE, VERDICT_JOB,
+} from '../../scripts/promote.mjs';
 
 /**
  * Plan 0009 §2, §3 and §7, step S5: the promotion, on fixtures of GitHub's answers. A candidate is
- * held by each of the four gates in turn, promoted when all four pass (its tag on the candidate's
+ * held by each of the four gates in turn, promoted when all five pass (its tag on the candidate's
  * commit, its Release latest, `v0` moved), held by the six-day spacing unless `urgent`, and
- * refused when `urgent` has no reason or the commit's package.json names another version.
+ * refused when `urgent` has no reason or the commit's package.json names another version. Plan
+ * 0012 §8, step E11: the fifth gate, end to end, on fixtures of the Reporter's check runs and the
+ * harness's runs.
  */
 
 const REPO = 'yedeya-labs/kanon';
@@ -59,6 +64,31 @@ const reviewRun = (laneRef: string) => ({
 });
 const pinSearch = `search/issues?q=${encodeURIComponent(`repo:${REPO} is:pr is:merged in:title "${pinTitle(VERSION)}"`)}&per_page=100`;
 
+/** The end-to-end gate's reads (plan 0012 §8.2): the Reporter's check runs, and the harness run one links. */
+const HARNESS_RUN = 900;
+const checkRunsPath = (sha = SHA) => page(`repos/${REPO}/commits/${sha}/check-runs?check_name=${E2E_CHECK}&app_id=${REPORTER_APP_ID}&filter=all`);
+const checkRun = (over: Record<string, unknown> = {}) => ({
+  id: 7001, name: E2E_CHECK, head_sha: SHA, status: 'completed', conclusion: 'success', external_id: `${HARNESS_RUN}-1`,
+  app: { id: REPORTER_APP_ID, slug: 'kanon-e2e-reporter' }, html_url: `https://github.com/${REPO}/runs/7001`, ...over,
+});
+const harnessRun = (over: Record<string, unknown> = {}) => ({
+  id: HARNESS_RUN, path: HARNESS_WORKFLOW, head_branch: 'main', head_repository: { full_name: HARNESS }, conclusion: 'success', run_attempt: 1,
+  html_url: `https://github.com/${HARNESS}/actions/runs/${HARNESS_RUN}`, ...over,
+});
+/** The harness run's jobs at one attempt: its `start` job's name records the candidate's tag and commit. */
+const harnessJobs = (verdict: string, others = 'success', start = startJobName(CANDIDATE, SHA)) => ({ jobs: [
+  { name: 'plan', conclusion: 'success' }, { name: start, conclusion: 'success' }, { name: 'provision (deploy-rehearsal)', conclusion: others }, { name: VERDICT_JOB, conclusion: verdict }, { name: "report (the check run's conclusion)", conclusion: 'success' },
+] });
+const redSearch = (tag = CANDIDATE) => `search/issues?q=${encodeURIComponent(`repo:${HARNESS} is:issue in:title "${redIssueTitle(tag)}"`)}&per_page=100`;
+/** A harness that ran `e2e.yml` on its main for the candidate, and whose verdict job succeeded. */
+const e2eGreen = (): Record<string, unknown> => ({
+  [checkRunsPath()]: { total_count: 1, check_runs: [checkRun()] },
+  [`repos/${HARNESS}`]: { full_name: HARNESS, default_branch: 'main' },
+  [`repos/${HARNESS}/actions/runs/${HARNESS_RUN}`]: harnessRun(),
+  [page(`repos/${HARNESS}/actions/runs/${HARNESS_RUN}/attempts/1/jobs`)]: harnessJobs('success'),
+  [redSearch()]: { items: [] },
+});
+
 const WORKFLOWS = [
   { file: 'review.yml', text: `jobs:\n  review:\n    uses: ${REPO}/.github/workflows/agent-review.yml@${CANDIDATE}\n` },
   { file: 'merge.yml', text: `jobs:\n  merge:\n    # uses: ${REPO}/.github/workflows/agent-merge.yml@v0.39.0\n    uses: ${REPO}/.github/workflows/agent-merge.yml@${CANDIDATE}\n` },
@@ -73,6 +103,8 @@ const github = (now: number, over: Record<string, Route> = {}) => {
     [`repos/${REPO}/git/matching-refs/tags/candidate-v`]: [ref('candidate-v0.40.0', PREV), ref(CANDIDATE, SHA)],
     [`repos/${REPO}/git/matching-refs/tags/v`]: [ref('v0', PREV), ref('v0.39.0', OLD), ref('v0.40.0', PREV)],
     [`repos/${REPO}/contents/package.json?ref=${SHA}`]: JSON.stringify({ name: 'kanon', version: VERSION }),
+    // The candidate's commit carries the end-to-end gate: it was cut after E11.
+    [`repos/${REPO}/contents/scripts/promote.mjs?ref=${SHA}`]: readFileSync(new URL('../../scripts/promote.mjs', import.meta.url), 'utf8'),
     [`repos/${REPO}/releases/tags/${CANDIDATE}`]: { tag_name: CANDIDATE, prerelease: true, body: CUT_NOTES, created_at: CUT },
     [page(`repos/${REPO}/compare/v0.40.0...${SHA}`)]: {
       commits: [
@@ -92,6 +124,7 @@ const github = (now: number, over: Record<string, Route> = {}) => {
     [`repos/${REPO}/actions/runs/1/jobs?per_page=100`]: { jobs: [{ id: 11, name: 'review / filter', conclusion: 'success' }, { id: 12, name: 'review / review / review / review', conclusion: 'success' }] },
     [`repos/${REPO}/releases/latest`]: { tag_name: 'v0.40.0', published_at: iso(now - 8 * DAY) },
     [`repos/${REPO}/git/ref/tags/v0`]: { ref: 'refs/tags/v0', object: { sha: PREV } },
+    ...e2eGreen(),
     ...over,
   };
   const writes: Write[] = [];
@@ -116,10 +149,10 @@ const run = (soak: number, { env = {}, over = {} }: { env?: Record<string, strin
   return { outcome, gh, now };
 };
 const verdicts = (o: ReturnType<typeof check>) => Object.fromEntries(o.gates.map((g) => [g.id, g.skipped ? 'skipped' : g.pass ? 'pass' : 'hold']));
-const ALL_PASS = { soak: 'pass', revert: 'pass', bug: 'pass', red: 'pass' };
+const ALL_PASS = { soak: 'pass', revert: 'pass', bug: 'pass', red: 'pass', e2e: 'pass' };
 
 describe('the gates (plan 0009 §2)', () => {
-  it('a candidate passing all four is promoted: its tag on the candidate\'s commit, its Release latest, v0 moved', () => {
+  it('a candidate passing all five is promoted: its tag on the candidate\'s commit, its Release latest, v0 moved', () => {
     const { outcome, gh } = run(4 * DAY);
     expect(verdicts(outcome)).toEqual(ALL_PASS);
     expect(outcome.decision).toBe('promote');
@@ -330,12 +363,12 @@ describe('the spacing, hold and urgent (plan 0009 §3, §7)', () => {
   it('urgent, with a reason, promotes within six days and before the soak ends, and the reason goes into the notes', () => {
     const now = at(10 * HOUR);
     const { outcome } = run(10 * HOUR, { env: { URGENT: 'true', REASON: 'security fix for #140' }, over: recent(now) });
-    expect(verdicts(outcome)).toEqual({ revert: 'pass', bug: 'pass', red: 'pass', review: 'pass', soak: 'skipped' });
+    expect(verdicts(outcome)).toEqual({ revert: 'pass', bug: 'pass', red: 'pass', e2e: 'pass', review: 'pass', soak: 'skipped' });
     expect(outcome.decision).toBe('promote');
     expect(outcome.plan!.notes).toContain('out of band (urgent): security fix for #140');
   });
 
-  it('urgent still applies the other three gates, and needs a review run that succeeded at the candidate', () => {
+  it('urgent still applies the other four gates, and needs a review run that succeeded at the candidate', () => {
     const urgent = { URGENT: 'true', REASON: 'fix' };
     const bug = { [page(`repos/${REPO}/issues?state=open&labels=bug`)]: [{ number: 131, labels: [{ name: 'bug' }, { name: 'sev:high' }], body: '### Introduced by\n\n#101\n' }] };
     expect(run(10 * HOUR, { env: urgent, over: bug }).outcome.decision).toBe('hold');
@@ -476,13 +509,13 @@ describe('what the promotion refuses or skips', () => {
   });
 });
 
-describe('one table of gates, so plan 0012\'s end-to-end gate (E11) is one more entry', () => {
+describe('one table of gates, so a gate is one more entry', () => {
   afterEach(() => {
-    while (GATES.length > 5) GATES.pop();
+    while (GATES.length > 6) GATES.pop();
   });
 
-  it('holds the four gates of plan 0009 §2 and the urgent path\'s review, in order', () => {
-    expect(GATES.map((g) => [g.id, g.when])).toEqual([['soak', 'normal'], ['revert', 'always'], ['bug', 'always'], ['red', 'always'], ['review', 'urgent']]);
+  it('holds the four gates of plan 0009 §2, plan 0012\'s end-to-end gate and the urgent path\'s review, in order', () => {
+    expect(GATES.map((g) => [g.id, g.when])).toEqual([['soak', 'normal'], ['revert', 'always'], ['bug', 'always'], ['red', 'always'], ['e2e', 'always'], ['review', 'urgent']]);
   });
 
   it('a gate added to the table is read, shown, and holds the candidate, urgent or not', () => {
@@ -498,8 +531,172 @@ describe('one table of gates, so plan 0012\'s end-to-end gate (E11) is one more 
   it('the summary names every gate with its verdict and evidence, and the outcome', () => {
     const text = summary(run(71 * HOUR).outcome);
     expect(text).toContain(`## Promotion: \`${CANDIDATE}\``);
-    for (const title of ['Soak', 'No revert', 'No serious bug', 'No unexplained red']) expect(text).toMatch(new RegExp(`^\\| ${title} \\| `, 'm'));
+    for (const title of ['Soak', 'No revert', 'No serious bug', 'No unexplained red', 'End to end']) expect(text).toMatch(new RegExp(`^\\| ${title} \\| `, 'm'));
     expect(text).toContain('**Held:** held by soak.');
+  });
+});
+
+// Plan 0012 §8.2 and §8.3, step E11 (`[ETE-31]` to `[ETE-34]`, `[ETE-36]`). Each condition of the
+// gate holds a candidate otherwise promoted, so each `hold` here is that condition's alone.
+describe('the end-to-end gate (plan 0012 §8.2, E11)', () => {
+  const e2e = (o: ReturnType<typeof check>) => o.gates.find((g) => g.id === 'e2e')!;
+  const held = (over: Record<string, Route>, env: Record<string, string> = {}) => {
+    const { outcome, gh } = run(4 * DAY, { over, env });
+    expect(verdicts(outcome).e2e).toBe('hold');
+    expect(outcome.decision).toBe('hold');
+    expect(outcome.why).toContain('end to end');
+    expect(outcome.plan).toBeUndefined();
+    expect(gh.writes).toEqual([]);
+    return e2e(outcome).evidence;
+  };
+  const runs = (...list: unknown[]) => ({ [checkRunsPath()]: { total_count: list.length, check_runs: list } });
+
+  it('[ETE-31] holds a candidate with no `kanon-e2e` check run (MUTATION: condition 1 removed turns this red)', () => {
+    expect(held(runs())).toBe(`no \`kanon-e2e\` check run by the Reporter (App id ${REPORTER_APP_ID}) on ${CANDIDATE}'s commit ${SHA}; no red issue \`e2e: ${CANDIDATE} is red\` in ${HARNESS}`);
+  });
+
+  it('[ETE-31] holds a candidate whose only green `kanon-e2e` check run is another App\'s, by its App id, though it links a green harness run (MUTATION: the App id check removed turns this red)', () => {
+    // GitHub Actions' own App, as a workflow token's check run would carry; and one on another commit.
+    const evidence = held(runs(checkRun({ id: 7002, app: { id: 15368, slug: 'github-actions' } }), checkRun({ id: 7003, head_sha: LATER })));
+    expect(evidence).toMatch(/^no `kanon-e2e` check run by the Reporter .*; 2 more by another App or on another commit, ignored;/);
+  });
+
+  it('[ETE-36] holds a candidate whose Reporter check run links a run on another branch of the harness (MUTATION: the branch check removed turns this red)', () => {
+    expect(held({ [`repos/${HARNESS}/actions/runs/${HARNESS_RUN}`]: harnessRun({ head_branch: 'forged' }) })).toContain(`on ${HARNESS}'s forged, not ${HARNESS}'s default branch main`);
+  });
+
+  it('[ETE-36] holds a candidate whose Reporter check run links a run of another workflow (MUTATION: the workflow check removed turns this red)', () => {
+    expect(held({ [`repos/${HARNESS}/actions/runs/${HARNESS_RUN}`]: harnessRun({ path: '.github/workflows/probe-13-reporter-check-run.yml' }) }))
+      .toContain(`a run of .github/workflows/probe-13-reporter-check-run.yml, not ${HARNESS_WORKFLOW}`);
+  });
+
+  it('[ETE-36] holds a candidate whose Reporter check run links a run recorded for another candidate (MUTATION: the candidate check removed turns this red)', () => {
+    const jobs = (start: string) => ({ [page(`repos/${HARNESS}/actions/runs/${HARNESS_RUN}/attempts/1/jobs`)]: harnessJobs('success', 'success', start) });
+    const want = JSON.stringify(startJobName(CANDIDATE, SHA));
+    expect(held(jobs(startJobName('candidate-v0.40.0', PREV)))).toContain(`whose \`start\` job records ${JSON.stringify(startJobName('candidate-v0.40.0', PREV))}, not ${want}`);
+    // The candidate's tag at another commit is another candidate too.
+    expect(held(jobs(startJobName(CANDIDATE, LATER)))).toContain(`not ${want}`);
+    // A run whose `start` job records no candidate (the harness's name today, before E8).
+    expect(held(jobs("start (the Reporter's check run)"))).toContain(`whose \`start\` job records "start (the Reporter's check run)", not ${want}`);
+  });
+
+  it('[ETE-36] holds a candidate whose Reporter check run links no run, or a run the harness doesn\'t have', () => {
+    expect(held(runs(checkRun({ external_id: 'https://example.com/forged' })))).toContain('links no harness run');
+    expect(held({ [`repos/${HARNESS}/actions/runs/${HARNESS_RUN}`]: undefined })).toContain(`links the harness run ${HARNESS_RUN}, which ${HARNESS} doesn't have`);
+  });
+
+  it('[ETE-36] holds a candidate whose green check run links a harness run whose `verdict` job failed (MUTATION: condition 4 removed turns this red)', () => {
+    const red = { [page(`repos/${HARNESS}/actions/runs/${HARNESS_RUN}/attempts/1/jobs`)]: harnessJobs('failure') };
+    expect(held(red)).toContain(`attempt 1, whose \`verdict\` job concluded failure`);
+    const none = { [page(`repos/${HARNESS}/actions/runs/${HARNESS_RUN}/attempts/1/jobs`)]: { jobs: [{ name: 'plan', conclusion: 'success' }, { name: startJobName(CANDIDATE, SHA), conclusion: 'success' }] } };
+    expect(held(none)).toContain('whose `verdict` job is missing');
+  });
+
+  it('[ETE-36] reads the `verdict` job at the attempt the check run names', () => {
+    const second = {
+      ...runs(checkRun({ external_id: `${HARNESS_RUN}-2` })),
+      [page(`repos/${HARNESS}/actions/runs/${HARNESS_RUN}/attempts/2/jobs`)]: harnessJobs('failure'),
+    };
+    expect(held(second)).toContain('attempt 2, whose `verdict` job concluded failure');
+  });
+
+  it('[ETE-31] holds a candidate whose latest Reporter check run is red, though an earlier one is green, or is still running (MUTATION: condition 5 removed turns this red)', () => {
+    const red = runs(checkRun(), checkRun({ id: 7010, conclusion: 'failure', html_url: `https://github.com/${REPO}/runs/7010` }));
+    expect(held(red)).toBe(`the Reporter's latest \`kanon-e2e\` check run, 7010, concluded failure; the check run: https://github.com/${REPO}/runs/7010; no red issue \`e2e: ${CANDIDATE} is red\` in ${HARNESS}`);
+    expect(held(runs(checkRun(), checkRun({ id: 7011, status: 'in_progress', conclusion: null })))).toMatch(/check run, 7011, is in_progress, not completed/);
+    expect(held(runs(checkRun({ conclusion: 'neutral' })))).toMatch(/check run, 7001, concluded neutral/);
+  });
+
+  it('[ETE-36] passes a green check run whose run concluded `failure` only because a non-gating job failed, while its `verdict` job succeeded (MUTATION: reading the run\'s conclusion instead of the `verdict` job\'s turns this red)', () => {
+    const over = {
+      [`repos/${HARNESS}/actions/runs/${HARNESS_RUN}`]: harnessRun({ conclusion: 'failure' }),
+      [page(`repos/${HARNESS}/actions/runs/${HARNESS_RUN}/attempts/1/jobs`)]: harnessJobs('success', 'failure'),
+    };
+    const { outcome } = run(4 * DAY, { over });
+    expect(verdicts(outcome)).toEqual(ALL_PASS);
+    expect(outcome.decision).toBe('promote');
+    expect(e2e(outcome).evidence).toBe(`the Reporter's latest \`kanon-e2e\` check run, https://github.com/${REPO}/runs/7001, concluded success, linking the harness run https://github.com/${HARNESS}/actions/runs/${HARNESS_RUN}, attempt 1, of ${HARNESS_WORKFLOW} on main for ${CANDIDATE}, whose \`verdict\` job succeeded`);
+    expect(outcome.plan!.notes).toContain(`**End to end:** ${e2e(outcome).evidence}`);
+  });
+
+  it('[ETE-31] the latest Reporter check run decides: a green one after an earlier red one passes', () => {
+    const { outcome } = run(4 * DAY, { over: runs(checkRun({ id: 6990, conclusion: 'failure' }), checkRun()) });
+    expect(verdicts(outcome)).toEqual(ALL_PASS);
+    expect(outcome.decision).toBe('promote');
+  });
+
+  it('a candidate cut before the gate was built, whose own commit carries no end-to-end gate, is not gated by it (plan 0012 decision 3)', () => {
+    const before = { [`repos/${REPO}/contents/scripts/promote.mjs?ref=${SHA}`]: '// the promotion, with four gates\nexport const SOAK_MS = 1;\n', ...runs(checkRun({ conclusion: 'failure' })) };
+    const { outcome } = run(4 * DAY, { over: before });
+    expect(verdicts(outcome)).toEqual(ALL_PASS);
+    expect(e2e(outcome).evidence).toBe(`not gated: ${CANDIDATE}'s commit ${SHA} predates the end-to-end gate, since its scripts/promote.mjs names no \`kanon-e2e\` check (plan 0012 decision 3)`);
+    // A commit with no scripts/promote.mjs carries none either; a failed read is no answer.
+    expect(verdicts(run(4 * DAY, { over: { ...before, [`repos/${REPO}/contents/scripts/promote.mjs?ref=${SHA}`]: undefined } }).outcome).e2e).toBe('pass');
+  });
+
+  it('[ETE-32] `urgent` doesn\'t skip it: an urgent candidate with no check run is held, the gate read and not skipped (MUTATION: `urgent` skipping the gate turns this red)', () => {
+    const { outcome } = run(10 * HOUR, { env: { URGENT: 'true', REASON: 'security fix for #140' }, over: runs() });
+    expect(verdicts(outcome)).toEqual({ revert: 'pass', bug: 'pass', red: 'pass', e2e: 'hold', review: 'pass', soak: 'skipped' });
+    expect(outcome.decision).toBe('hold');
+    expect(outcome.plan).toBeUndefined();
+  });
+
+  it('[ETE-32] no input overrides it: the dispatch has `hold`, `urgent` and `reason` only, and no other variable passes a red gate', () => {
+    const wf = parse(readFileSync(new URL('../../.github/workflows/promote.yml', import.meta.url), 'utf8')) as { on: { workflow_dispatch: { inputs: Record<string, unknown> } } };
+    expect(Object.keys(wf.on.workflow_dispatch.inputs)).toEqual(['hold', 'urgent', 'reason']);
+    for (const env of [{ HOLD: 'false' }, { OVERRIDE: 'true', SKIP_E2E: 'true', E2E: 'pass', FORCE: 'true' }, { URGENT: 'true', REASON: 'override the end-to-end gate' }] as Record<string, string>[]) {
+      held(runs(checkRun({ conclusion: 'failure' })), env);
+    }
+  });
+
+  it('[ETE-34] the summary names the gate, the check run and its red issue when it holds a candidate', () => {
+    const issue = `https://github.com/${HARNESS}/issues/41`;
+    const over = {
+      ...runs(checkRun({ conclusion: 'failure' })),
+      [redSearch()]: { items: [
+        { title: `${redIssueTitle(CANDIDATE)} again`, html_url: `https://github.com/${HARNESS}/issues/40`, state: 'open' },
+        { title: redIssueTitle(CANDIDATE), html_url: issue, state: 'open' },
+      ] },
+    };
+    const text = summary(run(4 * DAY, { over }).outcome);
+    expect(text).toContain(`| End to end | **hold** | the Reporter's latest \`kanon-e2e\` check run, 7001, concluded failure; the check run: https://github.com/${REPO}/runs/7001; the red issue: ${issue} (open) |`);
+    expect(text).toContain('**Held:** held by end to end.');
+    // A search that fails still holds, and says so.
+    const failed = summary(run(4 * DAY, { over: { ...runs(), [redSearch()]: undefined } }).outcome);
+    expect(failed).toMatch(/\| End to end \| \*\*hold\*\* \| no `kanon-e2e` check run .*; the red issue `e2e: candidate-v0\.41\.0 is red` in kanon-e2e\/harness couldn't be searched: /);
+  });
+
+  it('[ETE-31] the Reporter\'s App id is the one the App register records', () => {
+    const register = readFileSync(new URL('../../docs/qa/agent-identities.md', import.meta.url), 'utf8');
+    expect(register).toMatch(/^\| Other App \| `kanon-e2e-reporter` \|/m);
+    expect(/`kanon-e2e-reporter`, created by the Owner \(App id (\d+)\)/.exec(register)?.[1]).toBe(String(REPORTER_APP_ID));
+  });
+
+  describe("the pin job's reading, `promote.mjs gate` ([ETE-33])", () => {
+    const read = (over: Record<string, Route> = {}) => gate({ GITHUB_REPOSITORY: REPO, TAG: CANDIDATE }, { api: github(at(0), over).api });
+
+    it('passes on a green check run with a matching harness run, and holds on each red one, with the gate\'s evidence', () => {
+      const green = read();
+      expect(green).toMatchObject({ candidate: CANDIDATE, pass: true });
+      expect(gateSummary(green)).toContain('| End to end | pass |');
+      expect(gateSummary(green)).toContain(`**Pass:** the pin job moves Kanon's pins to \`${CANDIDATE}\`.`);
+      for (const over of [runs(), runs(checkRun({ conclusion: 'failure' })), { [page(`repos/${HARNESS}/actions/runs/${HARNESS_RUN}/attempts/1/jobs`)]: harnessJobs('failure') }]) {
+        const red = read(over);
+        expect(red.pass).toBe(false);
+        expect(gateSummary(red)).toContain('| End to end | **hold** |');
+        expect(gateSummary(red)).toContain("**Held:** Kanon's pins stay where they are.");
+      }
+    });
+
+    it('refuses a TAG that is not a candidate, or a candidate with no tag', () => {
+      for (const TAG of ['', 'v0.41.0', 'candidate-v0.41']) expect(() => gate({ GITHUB_REPOSITORY: REPO, TAG }, { api: github(at(0)).api })).toThrow(Refusal);
+      expect(() => gate({ GITHUB_REPOSITORY: REPO, TAG: CANDIDATE }, { api: github(at(0), { [`repos/${REPO}/git/matching-refs/tags/candidate-v`]: [ref('candidate-v0.40.0', PREV)] }).api })).toThrow(`no tag ${CANDIDATE}`);
+    });
+
+    it('opens nothing for a candidate a newer one superseded, though its gate is green: a re-run\'s check run never moves the pins back', () => {
+      const newer = { [`repos/${REPO}/git/matching-refs/tags/candidate-v`]: [ref('candidate-v0.40.0', PREV), ref(CANDIDATE, SHA), ref('candidate-v0.42.0', LATER)] };
+      expect(read(newer)).toEqual({ candidate: CANDIDATE, pass: false, evidence: `candidate-v0.42.0 is a newer candidate, so ${CANDIDATE} is superseded: Kanon's pins never move back to it` });
+    });
   });
 });
 
@@ -522,7 +719,7 @@ describe('promote.yml', () => {
   const job = wf.jobs.promote!;
   const step = (id: string) => job.steps.find((s) => s.id === id || s.name === id)!;
 
-  it('runs daily and on dispatch, with `hold`, `urgent` and its reason', () => {
+  it('runs daily and on dispatch, with `hold`, `urgent` and its reason, and no override ([ETE-32])', () => {
     expect(wf.on.schedule).toEqual([{ cron: '0 6 * * *' }]);
     expect(Object.fromEntries(Object.entries(wf.on.workflow_dispatch.inputs).map(([k, v]) => [k, v.type]))).toEqual({ hold: 'boolean', urgent: 'boolean', reason: 'string' });
   });

@@ -9,17 +9,24 @@
 #
 # The writes are granted here, on the calling job only: a reusable workflow can use no
 # more than its caller grants.
+#
+# A completed check run starts it too, for the pin job alone (plan 0012 §8.1, its step E11): the
+# end-to-end harness's Reporter completes `kanon-e2e` on a candidate's commit hours after the
+# push that cut it, and only then may Kanon's pins move. On that event the release is skipped.
 name: Release
 
 on:
   push:
     branches: [main]
+  check_run:
+    types: [completed]
 
 permissions: {}
 
 jobs:
   release:
     name: Release
+    if: github.event_name == 'push'
     permissions:
       contents: write
       pull-requests: write
@@ -32,8 +39,9 @@ jobs:
 
   # THE PIN JOB (plan 0009 §6, its step S4): Kanon runs each candidate on itself the day it is
   # cut. It is Kanon's, not the reusable workflow's: it moves Kanon's own pins to Kanon's own
-  # candidates, and teaches no check about Kanon. Two jobs: `candidate` says which candidate
-  # this push cut, if any, and `pins` opens the pull request.
+  # candidates, and teaches no check about Kanon. Three jobs: `candidate` says which candidate
+  # this push cut, if any, `gate` reads the end-to-end gate on it, and `pins` opens the pull
+  # request once that gate passes.
   #
   # Which push cut a candidate. The reusable release workflow declares no outputs, so this caller
   # can't read release-please's (`release_created`, `tag_name`, `sha`), and release-please has no
@@ -43,9 +51,18 @@ jobs:
   # Release that is a pre-release, is a candidate's creation. A plain release (`vX.Y.Z`) and
   # every other push leave `tag` empty, and `pins` is skipped. A read that fails fails the job
   # (K-PRIN-10), so an outage never reads as "no candidate".
+  #
+  # On a completed `kanon-e2e` check run that concluded `success` and names the Reporter's App
+  # id (`REPORTER_APP_ID` in scripts/promote.mjs), it reads the same at the check run's commit
+  # instead: a check run on any commit but a candidate's finds none. Every other check run skips
+  # it, and so everything after it. The `if:` only spares runs: `gate` reads the check run again.
   candidate:
     name: Find the candidate this push cut
     needs: release
+    if: >-
+      !cancelled() && (needs.release.result == 'success' || (github.event_name == 'check_run'
+      && github.event.check_run.name == 'kanon-e2e' && github.event.check_run.conclusion == 'success'
+      && github.event.check_run.app.id == 5349415))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -58,7 +75,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ github.event.check_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
           none() {
@@ -78,19 +95,51 @@ jobs:
           echo "Candidate $tag, cut at $SHA." >> "$GITHUB_STEP_SUMMARY"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+  # THE END-TO-END GATE (plan 0012 §8.1, decision 2, its step E11): Kanon's pins move only to a
+  # candidate the end-to-end harness passed, so the soak's 72 hours start on one. `promote.mjs
+  # gate` reads the gate the promotion reads, the fifth one (§8.2), and nothing else, with this
+  # job's read-only token: the Reporter's `kanon-e2e` check run on the candidate's commit, and the
+  # harness run it links, whose repository is public. On the push that cuts a candidate it holds,
+  # since the harness hasn't run yet; the Reporter's completed check run starts this workflow
+  # again, and `pins` runs then. There is no override: a red gate holds until a new candidate.
+  gate:
+    name: Read the end-to-end gate
+    needs: candidate
+    if: needs.candidate.outputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      pass: ${{ steps.gate.outputs.pass }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Read the end-to-end gate
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.candidate.outputs.tag }}
+        run: node scripts/promote.mjs gate
+
   # Opens `ci(deps): run Kanon on candidate vX.Y.Z` as the Releaser, with the edit
-  # `scripts/move-pins.mjs` makes at the candidate's commit: every `yedeya-labs/kanon` pin under
+  # `scripts/move-pins.mjs` makes at the triggering commit: every `yedeya-labs/kanon` pin under
   # `.github/` and the plugin's `ref` in `.claude/settings.json`. The Owner merges it, and its
   # merge starts the candidate's soak. When the candidate's own `lane-check` fails on the moved
   # callers, `scripts/pin-lane-check.mjs` lists each one, and the pull request opens as a draft
   # with that list in its body (kanon#1074): the job moves the pins only, and a person makes the
   # caller changes on its branch.
   #
-  # THE END-TO-END GATE GOES HERE (plan 0012 §8.1, decision 2, its step E11; not built): Kanon's
-  # pins move only to a candidate the end-to-end harness passed. E11 adds the gate as a
-  # precondition of this job, in its `needs:` and `if:` beside `candidate`, and the steps below
-  # don't change: they take the candidate's tag alone, and open nothing when its pull request
-  # already exists, so a later trigger (the gate turning green) can run them again.
+  # It runs only once `gate` passes (plan 0012 E11), and opens nothing when its pull request
+  # already exists, so the push and the check run that each start it never open two. It works at
+  # `github.sha`, the triggering commit and never another ref, since it holds the Releaser's key
+  # (K-AGENT-49): on a push, the pushed commit, the candidate's; on a check run, the default
+  # branch's head, which holds the candidate's commit and what merged after it.
   #
   # The Releaser's token is minted after the edit, and is required: the pull request must be the
   # Releaser's so CI runs on it. Its commit is made through the API with no author of its own,
@@ -98,14 +147,18 @@ jobs:
   # PR's commits. It changes workflow files, so the token asks for Workflows write too.
   pins:
     name: Open the pin pull request
-    needs: candidate
-    if: needs.candidate.outputs.tag != ''
+    needs: [candidate, gate]
+    if: needs.candidate.outputs.tag != '' && needs.gate.outputs.pass == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
+    concurrency:
+      group: kanon-pins
+      cancel-in-progress: false
     steps:
-      # The pushed commit, which is the candidate's: a push's checkout is `github.sha`.
+      # The triggering commit: the pushed one, the candidate's, on a push; the default branch's
+      # head on a check run.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
