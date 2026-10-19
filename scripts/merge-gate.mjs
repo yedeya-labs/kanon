@@ -1249,6 +1249,8 @@ export function readPr(number, repo, opts = {}) {
       title: meta.title,
       willClose: meta.closingIssuesReferences.map((r) => r.number),
       commitMessages: meta.commits.map((c) => `${c.messageHeadline}\n${c.messageBody ?? ''}`),
+      // As CI passes it, so a ref to another repository is dropped here too (kanon#1130).
+      repo,
       issuesReadable,
     }),
     // HAS THE REBASE LANE ALREADY TRIED THIS HEAD? (RA-2218)
