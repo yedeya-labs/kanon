@@ -1772,6 +1772,24 @@ esac
   return { read, calls: calls.split('\n').filter(Boolean) };
 };
 
+describe('the closing set is read for this repository, as CI reads it (kanon#1130)', () => {
+  // CI's `closing-refs.mjs` passes `repo`, which drops a ref qualified with another
+  // repository. `readPr` left it out, so the Merger's re-check answered a different question.
+  it('does not stop on a ref to another repository as an undeclared close', () => {
+    const { read } = stubReadPr({ meta: { body: `${IMPLEMENTER_HEADER}\n\nCloses #1\n\nAlso fixes other/lib#12 upstream.` } });
+    expect(read.closing.mergeClosesUndeclared).toEqual([]);
+    expect(mergeVerdict(pr({ closing: read.closing })).rule).not.toBe('undeclared-closes');
+  });
+
+  it('does not count a ref to another repository as declaring a local issue', () => {
+    const { read } = stubReadPr({
+      meta: { body: `${IMPLEMENTER_HEADER}\n\nCloses other/lib#7`, closingIssuesReferences: [{ number: 7 }] },
+    });
+    expect(read.closing.declared).toEqual([]);
+    expect(read.closing.willCloseButNotDeclared).toEqual([7]);
+  });
+});
+
 describe('an unreadable Actions listing is not "no startup failure" (RA-2256)', () => {
   it('WAITS on a listing that could not be read, rather than merging', () => {
     // The pre-RA-2256 shape: a `catch` yielding `[]`, which `startupFailuresIn` reads as
