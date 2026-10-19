@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -113,6 +113,29 @@ describe('a turn limit raised for one dispatched run', () => {
     expect(s).toContain('### Turn limit raised for this run');
     expect(s).toContain("- **max_turns:** 150 (the lane's limit is 90), dollar cap $60");
     expect(s).toContain('- **Reason:** line one line two &#96;x&#96; &#60;b&#62;&#124;');
+  });
+});
+
+// kanon#1129. `K-OBS-12`'s enforcement: every agent step's dollar cap is the one its turn cap
+// derives, so no lane can hand-pick a figure a normal run reaches. The deploy-diagnose lane and
+// the Explorer's telemetry mode ran 40 turns under $10, half of what 40 turns derive.
+describe('every agent step\'s dollar cap is derived from its turn cap (K-OBS-12)', () => {
+  const strings = (v: unknown): string[] =>
+    typeof v === 'string' ? [v] : v && typeof v === 'object' ? Object.values(v).flatMap(strings) : [];
+  const steps = readdirSync(WF).filter((f) => f.endsWith('.yml')).sort().flatMap((f) =>
+    strings(parse(read(f))).filter((s) => /--max-budget-usd/.test(s)).map((args) => ({ f, args })));
+
+  it('finds every step that sets a dollar cap, so the case below is not vacuous', () => {
+    expect(steps.length).toBe(28);
+    expect(new Set(steps.map((s) => s.f)).size).toBe(17);
+  });
+
+  it.each(steps.map((s) => [s.f, s.args] as const))('%s: the step\'s --max-budget-usd is budgetFor(--max-turns)', (f, args) => {
+    const turns = [...args.matchAll(/(?:^|\s)--max-turns[\s=]+(\d+)(?=\s|$)/g)].map((m) => Number(m[1]));
+    const usd = [...args.matchAll(/(?:^|\s)--max-budget-usd[\s=]+(\d+(?:\.\d+)?)(?=\s|$)/g)].map((m) => Number(m[1]));
+    expect(turns.length, `${f}: one --max-turns`).toBe(1);
+    expect(usd.length, `${f}: one --max-budget-usd`).toBe(1);
+    expect(usd[0], `${f}: ${turns[0]} turns`).toBe(budgetFor(turns[0]!));
   });
 });
 
