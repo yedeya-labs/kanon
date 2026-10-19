@@ -72,7 +72,7 @@ import { ARTIFACT_FILE, LISTING_SLACK, listTelemetryArtifacts, MAX_PAGES, readZi
 import { LANES as TELEMETRY_LANES, TERMINAL_REASONS } from '../actions/agent-telemetry/schema.mjs';
 import { defaultEscalationFile, ESCALATION_FILE, inPipelineCode, parseEscalationFile } from '../scripts/lib/escalation-paths.mjs';
 import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
-import { directoriesLine, unreached, updatedFrom } from '../actions/lane-check/dependabot-reach.mjs';
+import { directoriesLine, entryName, kanonEntries, unreached, updatedFrom } from '../actions/lane-check/dependabot-reach.mjs';
 import { renderNotice } from '../actions/agent-classify/classify-agent-result.mjs';
 
 // The reporter check lives in its own module, which `kanon init` shares (#444).
@@ -1371,23 +1371,22 @@ export const diagnose = async (deps, opts) => {
   // ── The Dependabot entry's reach (K-ADOPT-11, kanon#1105) ──────────────────────────────
   // Dependabot reads .github/workflows/ from `/`, and a composite action only from its own
   // directory, so an entry that doesn't reach a file pinning Kanon leaves it at the old release on
-  // every upgrade pull request, and lane-check fails the mix. Each Kanon entry has to reach them
-  // all: its updates are one pull request, and another entry's are another.
+  // every upgrade pull request, and lane-check fails the mix. Each entry that opens a Kanon
+  // upgrade pull request has to reach them all: its updates are one pull request, and another
+  // entry's are another. lane-check holds the same entries (kanon#1111).
   const pinning = [...new Set([...pins.values()].flat())].sort();
-  /** @type {any} */
+  /** @type {unknown} */
   let dependabot = null;
   try { dependabot = parseYaml(texts.get(DEPENDABOT) ?? ''); } catch { /* lane-check names a file it can't read */ }
-  const kanonEntries = (Array.isArray(dependabot?.updates) ? dependabot.updates : []).filter((/** @type {any} */ u) => isMap(u) && u['package-ecosystem'] === 'github-actions'
-    && isMap(u.groups) && Object.values(u.groups).some((g) => isMap(g) && Array.isArray(g.patterns) && g.patterns.includes('yedeya-labs/kanon*')));
   /** @type {{ e: unknown, left: string[] } | undefined} */
-  const reach = kanonEntries.map((/** @type {unknown} */ e) => ({ e, left: unreached(e, pinning) })).find((/** @type {{ left: string[] }} */ r) => r.left.length);
+  const reach = kanonEntries(dependabot, pinning).map((/** @type {unknown} */ e) => ({ e, left: unreached(e, pinning) })).find((/** @type {{ left: string[] }} */ r) => r.left.length);
   if (reach) {
     const nowhere = reach.left.filter((f) => updatedFrom(f) === null);
     const fixable = reach.left.filter((f) => !nowhere.includes(f));
     const line = directoriesLine(reach.e, pinning);
-    find('pin.dependabot-unreached', DEPENDABOT, `${DEPENDABOT}'s Kanon entry doesn't reach ${reach.left.join(', ')}, which ${reach.left.length > 1 ? 'pin' : 'pins'} Kanon: Dependabot reads .github/workflows/ from \`/\`, and a composite action only from its own directory${nowhere.length ? ', and no other file at all' : ''}. Its upgrade pull request leaves ${reach.left.length > 1 ? 'them' : 'it'} at the old release, and lane-check fails the mix (K-ADOPT-11).`, {
+    find('pin.dependabot-unreached', DEPENDABOT, `${DEPENDABOT}'s Kanon entry ${entryName(dependabot, reach.e)} doesn't reach ${reach.left.join(', ')}, which ${reach.left.length > 1 ? 'pin' : 'pins'} Kanon: Dependabot reads .github/workflows/ from \`/\`, and a composite action only from its own directory${nowhere.length ? ', and no other file at all' : ''}. Its upgrade pull request leaves ${reach.left.length > 1 ? 'them' : 'it'} at the old release, and lane-check fails the mix (K-ADOPT-11).`, {
       text: [
-        ...(fixable.length ? [`Write the Kanon entry's directories as this line, in place of any \`directory:\`.`] : []),
+        ...(fixable.length ? [`Write that entry's directories as this line, in place of any \`directory:\`.`] : []),
         ...(nowhere.length ? [`Move the Kanon reference${nowhere.length > 1 ? 's' : ''} in ${nowhere.join(', ')} into a workflow or a composite action: Dependabot updates no other file.`] : []),
       ].join(' '),
       commands: fixable.length ? [line] : [],

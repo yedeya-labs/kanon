@@ -125,6 +125,7 @@ describe('kanon doctor on what an installation lacks', () => {
       expect(ids(r)).toEqual(['pin.dependabot-unreached .github/dependabot.yml']);
       expect(r.json.findings[0]).toMatchObject({ category: 'pin', blocking: true });
       expect(r.json.findings[0].message).toContain(REQ.hook.path);
+      expect(r.json.findings[0].message).toContain("Kanon entry at `updates[0]` (`directory: /`) doesn't reach");
       expect(r.json.findings[0].fix.commands).toEqual(['directories: ["/", "/.github/actions/*"]']);
       expect(r.status).toBe(EXIT.findings);
     });
@@ -139,6 +140,39 @@ describe('kanon doctor on what an installation lacks', () => {
     it('passes an entry for `/` alone while no composite action pins Kanon', async () => {
       const files = healthyFiles();
       files['.github/dependabot.yml'] = forRootAlone(files);
+      const r = await run(checkout(files), fakeGitHub(), ['--json']);
+      expect(ids(r)).toEqual([]);
+    });
+
+    // kanon#1111: doctor holds the entries lane-check holds, each one that would open a Kanon
+    // upgrade pull request, whatever its group, cooldown or prefix.
+    const withEntry = (files: Record<string, string>, entry: string) => `${files['.github/dependabot.yml']!.trimEnd()}\n${entry}`;
+    it('passes a copied Kanon group in an entry for a directory that pins no Kanon reference (kanon#1111)', async () => {
+      const files = healthyFiles();
+      files[REQ.hook.path] = pinnedHook(files);
+      files['.github/dependabot.yml'] = withEntry(files, ['  - package-ecosystem: github-actions', '    directory: /infra', '    schedule:', '      interval: daily',
+        '    groups:', '      kanon:', '        patterns: ["yedeya-labs/kanon*"]', ''].join('\n'));
+      const r = await run(checkout(files), fakeGitHub(), ['--json']);
+      expect(ids(r)).toEqual([]);
+      expect(r.status).toBe(EXIT.healthy);
+    });
+
+    it("reports a second entry with no Kanon group that doesn't reach a pin: it still proposes Kanon (kanon#1111)", async () => {
+      const files = healthyFiles();
+      files[REQ.hook.path] = pinnedHook(files);
+      files['.github/dependabot.yml'] = withEntry(files, ['  - package-ecosystem: github-actions', '    directory: /', '    target-branch: release', '    schedule:', '      interval: daily', ''].join('\n'));
+      const r = await run(checkout(files), fakeGitHub(), ['--json']);
+      expect(ids(r)).toEqual(['pin.dependabot-unreached .github/dependabot.yml']);
+      // The first entry already reaches the hook, so the finding names the one to change (kanon#1111).
+      expect(r.json.findings[0].message).toContain("Kanon entry at `updates[1]` (`target-branch: release`, `directory: /`) doesn't reach");
+      expect(r.json.findings[0].fix.commands).toEqual(['directories: ["/", "/.github/actions/*"]']);
+    });
+
+    it('passes a second entry that ignores Kanon, which proposes no Kanon upgrade (kanon#1111)', async () => {
+      const files = healthyFiles();
+      files[REQ.hook.path] = pinnedHook(files);
+      files['.github/dependabot.yml'] = withEntry(files, ['  - package-ecosystem: github-actions', '    directory: /', '    target-branch: release', '    schedule:', '      interval: daily',
+        '    ignore:', '      - dependency-name: "yedeya-labs/kanon*"', ''].join('\n'));
       const r = await run(checkout(files), fakeGitHub(), ['--json']);
       expect(ids(r)).toEqual([]);
     });
