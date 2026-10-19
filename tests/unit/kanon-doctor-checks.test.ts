@@ -168,6 +168,20 @@ describe('kanon doctor on what an installation lacks', () => {
       expect(r.json.findings[0].fix.commands).toEqual(['directories: ["/", "/.github/actions/*"]']);
     });
 
+    // kanon#1131: lane-check fails each entry that doesn't reach a pin, so doctor reports each one,
+    // not only the first, or its fix takes a round per entry.
+    it("reports every entry that doesn't reach a pin, one finding each (kanon#1131)", async () => {
+      const files = healthyFiles();
+      files[REQ.hook.path] = pinnedHook(files);
+      files['.github/dependabot.yml'] = withEntry({ '.github/dependabot.yml': forRootAlone(files) }, ['  - package-ecosystem: github-actions', '    directory: /', '    target-branch: release', '    schedule:', '      interval: daily', ''].join('\n'));
+      const r = await run(checkout(files), fakeGitHub(), ['--json']);
+      expect(ids(r)).toEqual(['pin.dependabot-unreached .github/dependabot.yml', 'pin.dependabot-unreached .github/dependabot.yml']);
+      expect(r.json.findings[0].message).toContain("Kanon entry at `updates[0]` (`directory: /`) doesn't reach");
+      expect(r.json.findings[1].message).toContain("Kanon entry at `updates[1]` (`target-branch: release`, `directory: /`) doesn't reach");
+      for (const f of r.json.findings) expect(f.fix.commands).toEqual(['directories: ["/", "/.github/actions/*"]']);
+      expect(r.status).toBe(EXIT.findings);
+    });
+
     it('passes a second entry that ignores Kanon, which proposes no Kanon upgrade (kanon#1111)', async () => {
       const files = healthyFiles();
       files[REQ.hook.path] = pinnedHook(files);

@@ -1373,14 +1373,15 @@ export const diagnose = async (deps, opts) => {
   // directory, so an entry that doesn't reach a file pinning Kanon leaves it at the old release on
   // every upgrade pull request, and lane-check fails the mix. Each entry that opens a Kanon
   // upgrade pull request has to reach them all: its updates are one pull request, and another
-  // entry's are another. lane-check holds the same entries (kanon#1111).
+  // entry's are another. lane-check holds the same entries (kanon#1111), and fails each one, so
+  // each is a finding of its own (kanon#1131).
   const pinning = [...new Set([...pins.values()].flat())].sort();
   /** @type {unknown} */
   let dependabot = null;
   try { dependabot = parseYaml(texts.get(DEPENDABOT) ?? ''); } catch { /* lane-check names a file it can't read */ }
-  /** @type {{ e: unknown, left: string[] } | undefined} */
-  const reach = kanonEntries(dependabot, pinning).map((/** @type {unknown} */ e) => ({ e, left: unreached(e, pinning) })).find((/** @type {{ left: string[] }} */ r) => r.left.length);
-  if (reach) {
+  for (const e of kanonEntries(dependabot, pinning)) {
+    const reach = { e, left: unreached(e, pinning) };
+    if (!reach.left.length) continue;
     const nowhere = reach.left.filter((f) => updatedFrom(f) === null);
     const fixable = reach.left.filter((f) => !nowhere.includes(f));
     const line = directoriesLine(reach.e, pinning);
