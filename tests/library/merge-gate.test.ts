@@ -2815,13 +2815,14 @@ esac
     const follow = (out: string | Error) => {
       const asked: string[][] = [];
       const verified: Array<{ pr: LibraryValue, opts: LibraryValue }> = [];
+      const told: string[] = [];
       const followed = followQueueMerges('o/r', {
         run: (args: string[]) => { asked.push(args); if (out instanceof Error) throw out; return out; },
         verify: (p: LibraryValue, _repo: string, _say: unknown, opts: LibraryValue) => { verified.push({ pr: p, opts }); },
         now: NOW,
-        say: () => {},
+        say: (m: string) => told.push(m),
       });
-      return { asked, verified, followed };
+      return { asked, verified, followed, told };
     };
 
     it('checks the declared issues of each PR the Merger merged in the last day', () => {
@@ -2837,6 +2838,28 @@ esac
     it('leaves a PR someone else merged, and one merged before the window', () => {
       const { followed } = follow(listed([{ mergedBy: { login: 'a-person' } }, { number: 9, mergedAt: '2026-10-16T11:00:00Z' }]));
       expect(followed).toEqual([]);
+    });
+
+    it('says how many PRs merged in the window and how many as the Merger, even when none match (kanon#1117)', () => {
+      const { told } = follow(listed([{}, { number: 8, mergedBy: { login: 'a-person' } }, { number: 9, mergedAt: '2026-10-16T11:00:00Z' }]));
+      expect(told[0]).toBe(`2 PRs merged in the last day, 1 as the Merger (${MERGER_LOGIN}): checking #7; the other by a-person (1)`);
+    });
+
+    it('says it found nothing to check when no merged PR is the Merger\'s, and names who merged them (kanon#1117)', () => {
+      const { told, verified } = follow(listed([
+        { mergedBy: { login: 'a-person' } },
+        { number: 8, mergedBy: { login: 'github-merge-queue[bot]' } },
+        { number: 9, mergedBy: { login: 'a-person' } },
+        { number: 10, mergedBy: null },
+      ]));
+      expect(verified).toEqual([]);
+      expect(told).toEqual([
+        `4 PRs merged in the last day, 0 as the Merger (${MERGER_LOGIN}): nothing to check; the others by a-person (2), github-merge-queue[bot] (1), an unknown actor (1)`,
+      ]);
+    });
+
+    it('says it found nothing to check when nothing merged in the window (kanon#1117)', () => {
+      expect(follow('[]').told).toEqual([`0 PRs merged in the last day, 0 as the Merger (${MERGER_LOGIN}): nothing to check`]);
     });
 
     it('a list it could not read fails by name, rather than reading as nothing to check', () => {
