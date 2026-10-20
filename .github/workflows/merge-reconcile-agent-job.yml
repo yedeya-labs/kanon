@@ -233,18 +233,22 @@ jobs:
                rate it by the worst database state it could have left behind.
                Filing with no severity leaves the finding indistinguishable from a
                stale doc comment, and gets flagged `qa:needs-severity`.
-               Milestone — route by SUBJECT, not provenance: engineering-platform or
-               QA-pipeline work (a CI guard, build tooling, the agent pipeline
-               itself) goes to "Development Automation", as RA-602/RA-571 did. Everything
-               else goes to "Product Backlog" at ANY severity. A `sev:critical` /
-               `sev:high` product follow-up is LAUNCH-GATING: ALSO pass
-               `--label gate-candidate` and leave it on "Product Backlog". Never set a
-               roadmap milestone, the launch gate included, yourself — only the developer
-               places work on one (RA-1616). Gate hygiene is the constraint (K-WORK-10) —
-               if there is a workaround it is `sev:medium` and not a candidate.
-               Pass `--label` AND `--milestone` in the SAME `gh issue create`, never
-               `create` then `edit`: a bare create races the milestone backstop's
-               default (K-WORK-1).
+               SUBJECT: judge each follow-up by what its work is about, never by who
+               found it (K-WORK-4): a Reviewer raising it does not make it pipeline
+               work. It is `--subject pipeline` when the work is on the engineering
+               platform that builds and checks this project: its CI workflows and their
+               guards, its build tooling, its test harness, the Kanon lanes installed in
+               it. It is `--subject product` when it is about the code this project
+               ships. When it is about both, K-WORK-4 decides: the platform wins. Where
+               the excerpt says how this project draws that line, follow it.
+               File each follow-up through the filing skill: read and follow
+               `$KANON/skills/file-issue/SKILL.md`, whose plan command chooses the
+               milestone and any gate label and gives the exact arguments of one
+               `gh issue create`. The excerpt was written for the Reviewer on an open
+               PR: take its bar, labels, severity, subject line and body from it, but
+               where it names a milestone or says how to set one, the skill's plan
+               command replaces that here, and you add no milestone or gate label of
+               your own.
                Body: the finding (what / why / file:line)
                + "Surfaced by PR #${{ env.PR_NUMBER }} review; merged without the fold-in —
                filed by merge-reconciliation." Title it as the WORK, not the symptom.

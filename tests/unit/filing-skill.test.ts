@@ -53,6 +53,10 @@ const routingRestated =(text: string, { allowGateCandidate = false } = {}): stri
  * before it files and so must restate no routing either. `readAs` is the path the prompt names
  * when the file held here is Kanon's baseline, which `agent-setup` copies to that path in a
  * project that keeps no playbook of its own (`K-LAYOUT-17`).
+ *
+ * Merge-reconcile lists no playbook: it reads the Reviewer's "Capturing follow-ups", which the
+ * Reviewer's own lane reads too and which still routes until the Reviewer moves, last. Its prompt
+ * says the skill replaces that section's milestone lines instead, and a test below holds it.
  */
 type Playbook = { path: string; section: string; readAs?: string };
 const MOVED: Array<{ lane: string; workflow: string; job: string; playbook?: Playbook }> = [
@@ -73,6 +77,7 @@ const MOVED: Array<{ lane: string; workflow: string; job: string; playbook?: Pla
       readAs: 'docs/qa/explorer-playbook.md',
     },
   },
+  { lane: 'merge-reconcile', workflow: '.github/workflows/agent-merge-reconcile.yml', job: 'reconcile' },
 ];
 
 /** One `## ` section of a Markdown file, to the next `## ` heading. */
@@ -178,6 +183,20 @@ describe('each filer moved onto the skill files through it, and restates no rout
     expect(prompt).toContain('by what its failed criterion is about, never by who found it (K-WORK-4)');
     expect(prompt).toContain('`--subject pipeline`');
     expect(prompt).toContain('`--subject product`');
+  });
+
+  // Merge-reconcile files the follow-ups a review left out, product and pipeline alike, so its
+  // prompt says how to choose the subject (`K-WORK-4`). It reads the Reviewer's "Capturing
+  // follow-ups", which still routes until the Reviewer moves, so it also says the skill
+  // replaces that section's milestone lines.
+  it('merge-reconcile: chooses the subject by the work, and lets the skill override the excerpt', () => {
+    const prompt = promptOf('.github/workflows/agent-merge-reconcile.yml', 'reconcile').replace(/\s+/g, ' ');
+    expect(prompt).toContain('by what its work is about, never by who found it (K-WORK-4)');
+    expect(prompt).toContain('When it is about both, K-WORK-4 decides: the platform wins.');
+    expect(prompt).toContain('`--subject pipeline`');
+    expect(prompt).toContain('`--subject product`');
+    expect(prompt).toContain('.agent/reviewer-playbook-excerpt.md');
+    expect(prompt).toContain('the skill\'s plan command replaces that here');
   });
 
   it('catches a prompt that restates the routing, each way it can', () => {
