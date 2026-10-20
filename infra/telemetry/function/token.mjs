@@ -6,7 +6,7 @@
 //   POST   /v1/registrations        register; active at once (§3.3)
 //   GET    /v1/registrations/self   the registration's status, quota and flags
 //   DELETE /v1/registrations/self   erase: status `erased` at once, the rows walked after (§7)
-//   POST   /v1/rows                 up to 25 run, finding, work-item and deploy rows, mixed
+//   POST   /v1/rows                 up to 25 run, finding, work-item, deploy, smoke-check and notify rows, mixed
 //   GET    /v1/rows/self            the caller's own rows, a lane or `work` at a time (§3.5)
 //
 // THE KEY IS THE REGISTRATION'S, NEVER THE REQUEST'S. The token's `repository_id` finds the

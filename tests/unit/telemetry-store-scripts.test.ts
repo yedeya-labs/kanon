@@ -319,17 +319,28 @@ describe('erase.mjs deletes every partition of a key (§10)', () => {
     return { aws, calls };
   };
 
-  it('walks every lane\'s partition, the work partition, the finding partition and the deploy partition (plan 0006 §2.3, plan 0010 D9)', () => {
-    expect(partitionsOf('kk')).toEqual([...LANES.map((l) => `kk#${l}`), 'kk#work', 'kk#finding', 'kk#deploy']);
+  it('walks every lane\'s partition, the work, finding, deploy and smoke-check partitions (plan 0006 §2.3, plan 0010 D9, plan 0013 S3)', () => {
+    expect(partitionsOf('kk')).toEqual([...LANES.map((l) => `kk#${l}`), 'kk#work', 'kk#finding', 'kk#deploy', 'kk#smoke_check']);
   });
 
-  it('erasing a key with a stored deploy row leaves <key>#deploy empty (plan 0010 D9)', () => {
-    // The item is the one the ingest function stamps, keyed by its own keysOf.
-    const s = stamp({
+  const row = {
+    deploy: {
       schema_version: 1, row_kind: 'deploy', tag: 'run', recorded_at: '2026-10-02T11:59:00Z', run_id: 33679229731, run_attempt: 1,
       kanon_version: '0.50.0', role: 'production', position: 1, outcome: 'ok',
-    }, { caller: { kind: 'writer', key: 'kk' }, key: 'kk', now: Date.parse('2026-10-02T12:00:00Z') });
-    if (!s.ok) throw new Error('the deploy row did not validate');
+    },
+    smoke_check: {
+      schema_version: 1, row_kind: 'smoke_check', tag: 'run', recorded_at: '2026-10-02T11:59:00Z', run_id: 33679229731, run_attempt: 1,
+      trigger: 'schedule', kanon_version: '0.50.0', role: 'production', position: 2, outcome: 'failed', failed_stage: 'smoke', reset_ran: true,
+    },
+  };
+
+  it.each([
+    { kind: 'deploy', plan: 'plan 0010 D9' },
+    { kind: 'smoke_check', plan: 'plan 0013 S3' },
+  ] as const)('erasing a key with a stored $kind row leaves <key>#$kind empty ($plan)', ({ kind }) => {
+    // The item is the one the ingest function stamps, keyed by its own keysOf.
+    const s = stamp(row[kind], { caller: { kind: 'writer', key: 'kk' }, key: 'kk', now: Date.parse('2026-10-02T12:00:00Z') });
+    if (!s.ok) throw new Error(`the ${kind} row did not validate`);
     const table = new Map<string, { pk: string, sk: string }>([[`${s.item.pk}|${s.item.sk}`, { pk: s.item.pk, sk: s.item.sk }]]);
     const aws = (args: string[]) => {
       if (args[1] === 'query') {
@@ -341,9 +352,9 @@ describe('erase.mjs deletes every partition of a key (§10)', () => {
       for (const d of req['kanon-telemetry'] ?? []) table.delete(`${d.DeleteRequest.Key.pk.S}|${d.DeleteRequest.Key.sk.S}`);
       return { code: 0, stdout: JSON.stringify({ UnprocessedItems: {} }) };
     };
-    expect(s.item.pk).toBe('kk#deploy');
+    expect(s.item.pk).toBe(`kk#${kind}`);
     const counts = erase('kk', { aws, profile: 'kanon', apply: true });
-    expect(counts.find((c) => c.partition === 'kk#deploy')).toEqual({ partition: 'kk#deploy', rows: 1 });
+    expect(counts.find((c) => c.partition === `kk#${kind}`)).toEqual({ partition: `kk#${kind}`, rows: 1 });
     expect(table.size).toBe(0);
   });
 

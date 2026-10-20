@@ -28,7 +28,7 @@
 // the message, failed, or was skipped, and the hook's kind, never a URL, a channel or any text. N5
 // ships its field list and checks and the store takes it; the `notify` block writes it (N6). A
 // `smoke_check` row (version 1, plan 0013 §8) describes one smoke run outside a deploy; S2 ships
-// its field list and checks, and the store refuses it until S3 builds its intake.
+// its field list and checks, and the store takes it under `<key>#smoke_check` (S3).
 
 import { KANON_PATH, SCRUB_VERSION, verify } from './scrub.mjs';
 
@@ -79,6 +79,8 @@ export const RESERVED_PARTITION = 'work';
 export const FINDING_PARTITION = 'finding';
 /** The deploy partition's name, which no lane may take either (plan 0010 §10, decision 11). */
 export const DEPLOY_PARTITION = 'deploy';
+/** The smoke-check partition's name, which no lane may take either (plan 0013 §8, S3). */
+export const SMOKE_CHECK_PARTITION = 'smoke_check';
 
 export const ROLES = Object.freeze(['explorer', 'implementer', 'reviewer', 'merger', 'lead', 'overseer']);
 /** An actor's class on a work-item row (plan 0003 §3.2): a role, or `human`, or `other_bot`. */
@@ -610,7 +612,7 @@ const DEPLOY_V2 = Object.freeze({
 
 /**
  * The smoke-check row, version 1: eighteen fields (plan 0013 §8, decision 7). One run of the smoke
- * workflow outside a deploy, stored under `<key>#smoke_check` once S3 builds its intake. Like the
+ * workflow outside a deploy, stored under `<key>#smoke_check` since S3. Like the
  * deploy row, it names the environment by its role and position, never by its name, and carries no
  * release tag, commit, URL, reviewer or anything the hooks print (`K-OBS-16`): every field is a
  * number, a time, a boolean or a value from a closed list. Not `smoke`, a value of `tag`.

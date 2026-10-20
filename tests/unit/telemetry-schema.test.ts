@@ -8,6 +8,7 @@ import { parse } from 'yaml';
 import {
   DEPLOY_OUTCOMES,
   DEPLOY_PARTITION,
+  SMOKE_CHECK_PARTITION,
   DEPLOY_REFUSALS,
   DEPLOY_ROLES,
   DEPLOY_STAGES,
@@ -156,6 +157,9 @@ describe('the field lists (plan 0002 §2.1, plan 0003 §3.3)', () => {
     expect(LANES).not.toContain(FINDING_PARTITION);
     expect(LANES).not.toContain(DEPLOY_PARTITION);
     expect(Object.keys(LANE_ROLES)).not.toContain(DEPLOY_PARTITION);
+    // Plan 0013 S3: the smoke-check partition, which no lane may take either.
+    expect(SMOKE_CHECK_PARTITION).toBe('smoke_check');
+    expect(LANES).not.toContain(SMOKE_CHECK_PARTITION);
     expect(LANES.length).toBeGreaterThan(0);
   });
 
