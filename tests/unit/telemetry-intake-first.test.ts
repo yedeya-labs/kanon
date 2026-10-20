@@ -236,6 +236,25 @@ describe('kindWidenings and kindNarrowings: the row kinds each intake stores (ka
   });
 });
 
+describe('the release that stores smoke_check needs intake first (plan 0013 S3)', () => {
+  /** The kinds the release before it stored: its schema knew smoke_check (S2), its function refused it. */
+  const before = STORED_KINDS.filter((k) => k !== 'smoke_check');
+
+  it('stores smoke_check, which the schema already knows', () => {
+    expect(STORED_KINDS).toContain('smoke_check');
+    expect(Object.keys(SCHEMAS)).toContain('smoke_check');
+  });
+
+  it('names smoke_check as a kind the deployed intake knows but does not store, and narrows nothing', () => {
+    const deployed = { schemas: copy(), stored: before };
+    const release = { schemas: copy(), stored: STORED_KINDS };
+    expect(kindWidenings(deployed, release)).toEqual([
+      'smoke_check: a row kind the deployed intake knows but does not store, which it refuses as row_kind not-allowed',
+    ]);
+    expect(kindNarrowings(deployed, release)).toEqual([]);
+  });
+});
+
 /**
  * The ingest function's `rows.mjs`, reduced to the list of kinds it stores, beside the links to
  * the schema's modules the real directory holds, so reading it follows symlinks out of it.

@@ -14,7 +14,7 @@ import {
 import { ATTRIBUTES, readPage, rowOf, WORK_PROJECTION } from '../../infra/telemetry/function/aggregate.mjs';
 import { closingIssues } from '../../scripts/metrics/join.mjs';
 import { sign } from '../../infra/telemetry/function/sigv4.mjs';
-import { DEPLOY_REFUSALS, LANES, SCHEMAS } from '../../actions/agent-telemetry/schema.mjs';
+import { DEPLOY_REFUSALS, LANES, SCHEMAS, SMOKE_REFUSALS } from '../../actions/agent-telemetry/schema.mjs';
 import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
 import { keysCache } from '../../infra/telemetry/function/register-store.mjs';
 import { fakeDynamo, REGISTER, type Fake } from './helpers/fake-dynamo.js';
@@ -285,7 +285,7 @@ describe('a deploy row is stored under <key>#deploy (plan 0010 §10, D9)', () =>
   });
 });
 
-describe('plan 0013 S2 at intake: deploy row version 2 is stored, a smoke-check row is refused until S3', () => {
+describe('plan 0013 at intake: deploy row version 2 (S2), and a smoke-check row stored under <key>#smoke_check (S3)', () => {
   const deployV2 = (over: Row = {}): Row => ({
     schema_version: 2, row_kind: 'deploy', tag: 'run', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 1,
     kanon_version: '0.12.0', role: 'production', position: 2, outcome: 'smoke_failed', failed_stage: 'reset', reset_ms: 4_000, ...over,
@@ -301,29 +301,59 @@ describe('plan 0013 S2 at intake: deploy row version 2 is stored, a smoke-check 
     expect(r.puts).toEqual([expect.objectContaining({ pk: 'k1#deploy', schema_version: 2, failed_stage: 'reset', reset_ms: 4_000 })]);
   });
 
-  it('a valid smoke-check row gets 422 naming row_kind, from the writer and the importer, and nothing is stored', async () => {
+  it('is keyed <key>#smoke_check, by time, run, attempt and the environment\'s position, a partition erasure walks', () => {
+    expect(keysOf('k1', smokeCheck())).toEqual({ pk: 'k1#smoke_check', sk: '20261002T115900Z#33679229731-1-1' });
+    expect(PARTITIONS).toContain('smoke_check');
+  });
+
+  it('a valid smoke-check row is stored, from the writer and the importer, each under its own key', async () => {
     const writer = await call(event([smokeCheck()]));
-    expect(writer.status).toBe(422);
-    expect(writer.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
-    expect(writer.puts).toEqual([]);
+    expect(writer.status).toBe(200);
+    expect(writer.puts).toEqual([expect.objectContaining({
+      pk: 'k1#smoke_check', sk: '20261002T115900Z#33679229731-1-1', row_kind: 'smoke_check', source: 'collector',
+      expires_at: Math.floor(addMonths(NOW - 60_000, 13) / 1000),
+    })]);
     const importer = await call(event([smokeCheck()], { role: 'kanon-telemetry-importer', key: 'k2' }), { IMPORTER_ROLE: 'kanon-telemetry-importer' });
-    expect(importer.status).toBe(422);
-    expect(importer.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
-    expect(importer.puts).toEqual([]);
+    expect(importer.status).toBe(200);
+    expect(importer.puts).toEqual([expect.objectContaining({ pk: 'k2#smoke_check', source: 'import' })]);
   });
 
-  it('the rows beside it are still stored, and no partition is named for it yet', async () => {
-    const r = await call(event([runRow(), smokeCheck({ outcome: 'failed', failed_stage: 'smoke' })]));
-    expect(r.body.results.map((x: { status: string }) => x.status)).toEqual(['stored', 'rejected']);
-    expect(r.puts.map((p) => p.pk)).toEqual(['k1#review']);
-    expect(PARTITIONS).not.toContain('smoke_check');
+  it('a smoke-tagged one keeps 30 days; the backfill role may not send one', async () => {
+    const smoke = await call(event([smokeCheck({ tag: 'smoke' })]));
+    expect(smoke.puts[0]).toMatchObject({ pk: 'k1#smoke_check', expires_at: Math.floor((NOW - 60_000 + 30 * DAY) / 1000) });
+    const backfill = await call(event([smokeCheck()], { role: 'kanon-telemetry-backfill', key: 'k2' }), { BACKFILL_ROLE: 'kanon-telemetry-backfill' });
+    expect(backfill.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
+    expect(backfill.puts).toEqual([]);
   });
 
-  it('a smoke-check row with an environment field is rejected for the field, not only for its kind', async () => {
+  it('every refusal code the schema admits is stored, and the rows beside it land in their own partitions', async () => {
+    const refused = SMOKE_REFUSALS.map((refusal) => smokeCheck({ outcome: 'refused', refusal }));
+    const r = await call(event([runRow(), deployV2(), ...refused].slice(0, MAX_ROWS)));
+    expect(r.status).toBe(200);
+    expect(r.puts.map((p) => p.pk)).toEqual(['k1#review', 'k1#deploy', ...refused.map(() => 'k1#smoke_check')]);
+  });
+
+  it('a smoke-check row with an environment field is rejected for the field, and nothing of it is echoed', async () => {
     const r = await call(event([smokeCheck({ environment: 'staging' })]));
     expect(r.status).toBe(422);
     expect(r.body.results[0].errors).toEqual([{ field: 'environment', problem: 'unknown' }]);
+    expect(r.puts).toEqual([]);
     expect(JSON.stringify(r.body)).not.toContain('staging');
+  });
+
+  it('the aggregate never reads it: no Query names <key>#smoke_check, and no projection names a smoke-check field (§8)', async () => {
+    const fieldsOf = (kind: string) => new Set(Object.values(SCHEMAS[kind as keyof typeof SCHEMAS] as Record<string, Record<string, unknown>>).flatMap((v) => Object.keys(v)));
+    const smokeOnly = [...fieldsOf('smoke_check')].filter((f) => !fieldsOf('run').has(f) && !fieldsOf('work_item').has(f));
+    expect(smokeOnly).toEqual(expect.arrayContaining(['position', 'reset_ran', 'smoke_ms']));
+    const requests: Array<{ ExpressionAttributeValues: Record<string, { S: string }>, ExpressionAttributeNames: Record<string, string> }> = [];
+    await readPage({ k1: 'acme' }, async (req) => { requests.push(req as (typeof requests)[number]); return { Items: [] }; }, 'kanon-telemetry');
+    expect(requests.length).toBeGreaterThan(0);
+    for (const req of requests) {
+      expect(req.ExpressionAttributeValues[':p']?.S).not.toMatch(/#smoke_check$/);
+      const projected = Object.values(req.ExpressionAttributeNames as Record<string, string>);
+      expect(projected.filter((f) => smokeOnly.includes(f))).toEqual([]);
+    }
+    expect(ATTRIBUTES.filter((f) => smokeOnly.includes(f))).toEqual([]);
   });
 });
 
@@ -691,8 +721,8 @@ describe('the write and its signature', () => {
     await expect(putItem({ pk: 'k1#review' }, env, quoting)).rejects.toThrow(/^PutItem failed: ValidationException$/);
   });
 
-  it('the partitions erasure walks are every lane, work, finding and deploy (plan 0006 §2.3, plan 0010 D9)', () => {
-    expect(PARTITIONS).toEqual([...LANES, 'work', 'finding', 'deploy']);
+  it('the partitions erasure walks are every lane, work, finding, deploy and smoke_check (plan 0006 §2.3, plan 0010 D9, plan 0013 S3)', () => {
+    expect(PARTITIONS).toEqual([...LANES, 'work', 'finding', 'deploy', 'smoke_check']);
   });
 });
 

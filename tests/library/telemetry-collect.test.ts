@@ -24,8 +24,8 @@ import {
   workflowFileOf,
 } from '../../scripts/telemetry-collect.mjs';
 import {
-  ARTIFACT_FILE, ARTIFACT_PREFIX, DELIVERY_ARTIFACT_FILE, DELIVERY_ARTIFACT_PREFIX, deliveryArtifactName, DEPLOY_ARTIFACT_FILE, FINDING_ARTIFACT_FILE,
-  findingArtifactName,
+  ARTIFACT_FILE, ARTIFACT_PREFIX, DELIVERY_ARTIFACT_FILE, DELIVERY_ARTIFACT_PREFIX, deliveryArtifactName, DEPLOY_ARTIFACT_FILE, DEPLOY_ARTIFACT_PREFIX,
+  FINDING_ARTIFACT_FILE, findingArtifactName, SMOKE_ARTIFACT, SMOKE_ARTIFACT_FILE, SMOKE_ARTIFACT_PREFIX, smokeArtifactName,
 } from '../../scripts/lib/telemetry-artifacts.mjs';
 import { HOSTED_AUDIENCE, HOSTED_INGEST_URL, mintToken, storeOf, storeRequest } from '../../scripts/lib/telemetry-token.mjs';
 import { zipOf } from './helpers/zip.js';
@@ -555,6 +555,85 @@ describe('deploy rows (plan 0010 §8, §10, D9): sent from the deploy lane\'s `k
   it("ignores a fork's deploy artifact", async () => {
     nextRun += 1;
     const res = await run(github([deployArtifact(deployRow(1), { fork: true })]), store());
+    expect(res).toMatchObject({ listed: 0, sent: 0, foreign: 1, failures: [] });
+  });
+});
+
+describe('smoke-check rows (plan 0013 §8, S3): sent from the smoke workflow\'s `kanon-smoke-row-*` artifacts', () => {
+  /** A valid smoke-check row of the current run, for the environment at `position`. */
+  const smokeRow = (position: number, over: Record<string, unknown> = {}) => ({
+    schema_version: 1, row_kind: 'smoke_check', tag: 'run', recorded_at: iso(NOW - 10 * MIN), run_id: nextRun, run_attempt: 1,
+    trigger: 'schedule', kanon_version: '0.50.0', role: position === 2 ? 'production' : 'pre-production', position, outcome: 'ok',
+    reset_ran: false, ...over,
+  });
+  const smokeArtifact = (r: Record<string, unknown>, opts: { fork?: boolean; name?: string; content?: string } = {}): Fake => {
+    nextId += 1;
+    const created = Date.parse(String(r.recorded_at)) + 5_000;
+    return {
+      id: nextId,
+      name: opts.name ?? smokeArtifactName(Number(r.run_id), Number(r.run_attempt), Number(r.position)),
+      created_at: iso(created),
+      expires_at: iso(created + 90 * DAY),
+      workflow_run: { id: Number(r.run_id), repository_id: OWN, head_repository_id: opts.fork ? FORK : OWN },
+      zip: zipOf(SMOKE_ARTIFACT_FILE, opts.content ?? JSON.stringify(r)),
+    };
+  };
+
+  it('names the family as the deploy row\'s is, outside the run rows\' reserved prefix (kanon#826)', () => {
+    expect(SMOKE_ARTIFACT_PREFIX).toBe('kanon-smoke-row-');
+    expect(SMOKE_ARTIFACT_FILE).toBe('kanon-smoke-row.json');
+    expect(smokeArtifactName(12, 3, 2)).toBe('kanon-smoke-row-12-3-2');
+    expect(SMOKE_ARTIFACT.test(smokeArtifactName(12, 3, 2))).toBe(true);
+    expect(SMOKE_ARTIFACT_PREFIX.replace('smoke', 'deploy')).toBe(DEPLOY_ARTIFACT_PREFIX);
+    expect(SMOKE_ARTIFACT_PREFIX.startsWith(ARTIFACT_PREFIX)).toBe(false);
+  });
+
+  it('sends a smoke-check row beside a run row', async () => {
+    const runRow = row(5 * MIN);
+    nextRun += 1;
+    const s = store();
+    const res = await run(github([
+      artifact(runRow),
+      smokeArtifact(smokeRow(2, { outcome: 'failed', failed_stage: 'smoke', reset_ran: true, smoke_ms: 9_000 })),
+    ]), s);
+    expect(res).toMatchObject({ listed: 2, sent: 2, stored: 2, failures: [] });
+    const sent = s.posts.flat();
+    expect(sent.filter((r) => r.row_kind === 'smoke_check')).toEqual([expect.objectContaining({ position: 2, outcome: 'failed', failed_stage: 'smoke' })]);
+    expect(sent.filter((r) => r.row_kind === 'run')).toHaveLength(1);
+  });
+
+  it("refuses a row whose run, attempt or position isn't its artifact's, or that is a deploy row in a smoke artifact", async () => {
+    nextRun += 1;
+    const s = store();
+    const res = await run(github([
+      smokeArtifact(smokeRow(1), { name: smokeArtifactName(nextRun, 1, 2) }),
+      smokeArtifact({
+        schema_version: 1, row_kind: 'deploy', tag: 'run', recorded_at: iso(NOW - 10 * MIN), run_id: nextRun, run_attempt: 1,
+        kanon_version: '0.50.0', role: 'production', position: 3, outcome: 'ok',
+      }),
+    ]), s);
+    expect(res.sent).toBe(0);
+    expect(res.failures.sort()).toEqual([
+      expect.stringMatching(/^smoke_check run \d+ attempt 1 position 2 .*: the row's row_kind, run_id, run_attempt or position is not its artifact's$/),
+      expect.stringMatching(/^smoke_check run \d+ attempt 1 position 3 .*: the row's row_kind, run_id, run_attempt or position is not its artifact's$/),
+    ]);
+  });
+
+  it('a row that fails the schema names the field, never the value; an unreadable artifact is a failure', async () => {
+    nextRun += 1;
+    const res = await run(github([
+      smokeArtifact(smokeRow(1, { environment: 'prod-eu' })),
+      smokeArtifact(smokeRow(2), { content: 'not json' }),
+    ]), store());
+    expect(res.sent).toBe(0);
+    expect(res.failures).toContainEqual(expect.stringMatching(/^smoke_check .*position 1 .*fails the schema \(.*environment/));
+    expect(res.failures.join('\n')).not.toContain('prod-eu');
+    expect(res.failures).toContainEqual(expect.stringMatching(/^smoke_check .*position 2 .*: unreadable/));
+  });
+
+  it("ignores a fork's smoke-check artifact", async () => {
+    nextRun += 1;
+    const res = await run(github([smokeArtifact(smokeRow(1), { fork: true })]), store());
     expect(res).toMatchObject({ listed: 0, sent: 0, foreign: 1, failures: [] });
   });
 });

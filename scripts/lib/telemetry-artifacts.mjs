@@ -84,6 +84,20 @@ export const DEPLOY_ARTIFACT = new RegExp(`^${DEPLOY_ARTIFACT_PREFIX}(\\d+)-(\\d
 /** @param {number | string} runId @param {number | string} attempt @param {number | string} position */
 export const deployArtifactName = (runId, attempt, position) => `${DEPLOY_ARTIFACT_PREFIX}${runId}-${attempt}-${position}`;
 /**
+ * A smoke-check row's artifact (plan 0013 §8, S3): one per run of the smoke workflow outside a
+ * deploy, named as a deploy row's is, `kanon-smoke-row-<run id>-<attempt>-<position>`, the
+ * environment's position, holding one row in `kanon-smoke-row.json`. Not under `kanon-telemetry-`,
+ * which only a lane's run row may carry (kanon#826). The collector sends these since S3; the smoke
+ * workflow's `record` job (S5) writes them, taking the name and the file from here.
+ */
+export const SMOKE_ARTIFACT_PREFIX = 'kanon-smoke-row-';
+/** The file inside a smoke-check artifact: one smoke-check row. */
+export const SMOKE_ARTIFACT_FILE = 'kanon-smoke-row.json';
+/** A smoke-check artifact's name: the run id, the attempt and the environment's position. */
+export const SMOKE_ARTIFACT = new RegExp(`^${SMOKE_ARTIFACT_PREFIX}(\\d+)-(\\d+)-(\\d+)$`);
+/** @param {number | string} runId @param {number | string} attempt @param {number | string} position */
+export const smokeArtifactName = (runId, attempt, position) => `${SMOKE_ARTIFACT_PREFIX}${runId}-${attempt}-${position}`;
+/**
  * A `notify` row's artifact (plan 0011 §11, N5): one per run of a lane's `notify` job,
  * `kanon-delivery-<lane>-<run id>-<attempt>`, the `notify` job's run and attempt, holding one row
  * in `kanon-delivery.json`. The deploy lane's `notify` job runs once per environment in one run, so
@@ -182,7 +196,7 @@ export function readZipEntry(buf, name) {
  * @typedef {(path: string) => any} Api           a `gh api` GET of one path, parsed
  * @typedef {(id: number) => Buffer} Download     one artifact's zip, by id
  * @typedef {{ id: number, name: string, runId: number, attempt: number, createdAt: number, expiresAt: number }} LaneArtifact
- * @typedef {LaneArtifact & { lane: string, kind: 'run' | 'finding' | 'deploy' | 'notify', position?: number }} AnyArtifact
+ * @typedef {LaneArtifact & { lane: string, kind: 'run' | 'finding' | 'deploy' | 'notify' | 'smoke_check', position?: number }} AnyArtifact
  */
 
 /** @param {unknown} err */
@@ -249,29 +263,35 @@ export const ANY_LANE_ARTIFACT = new RegExp(`^${ARTIFACT_PREFIX}([a-z][a-z0-9-]*
  *
  * With `deliveries`, it also takes each lane's `notify` row artifacts (plan 0011 §11, N5),
  * `kind: 'notify'`, with the lane its name carries, under the same own-run rule.
- * @param {{ repo: string, from: number, api: Api, maxPages?: number, findings?: boolean, deploys?: boolean, deliveries?: boolean }} opts
+ *
+ * With `smokes`, it also takes the smoke workflow's row artifacts (plan 0013 S3),
+ * `kind: 'smoke_check'`, with `lane: 'smoke_check'` and the environment's `position`, under the
+ * same own-run rule.
+ * @param {{ repo: string, from: number, api: Api, maxPages?: number, findings?: boolean, deploys?: boolean, deliveries?: boolean, smokes?: boolean }} opts
  * @returns {{ artifacts: AnyArtifact[], foreign: number, retentionDays: number | null }}
  */
-export function listTelemetryArtifacts({ findings = false, deploys = false, deliveries = false, ...opts }) {
+export function listTelemetryArtifacts({ findings = false, deploys = false, deliveries = false, smokes = false, ...opts }) {
   return listArtifacts((name) => {
     const m = ANY_LANE_ARTIFACT.exec(name);
     if (m) return [m[0], m[2], m[3], m[1], 'run'];
     const d = deploys ? DEPLOY_ARTIFACT.exec(name) : null;
     if (d) return [d[0], d[1], d[2], 'deploy', 'deploy', d[3]];
+    const k = smokes ? SMOKE_ARTIFACT.exec(name) : null;
+    if (k) return [k[0], k[1], k[2], 'smoke_check', 'smoke_check', k[3]];
     const n = deliveries ? DELIVERY_ARTIFACT.exec(name) : null;
     if (n) return [n[0], n[2], n[3], n[1], 'notify'];
     const f = findings ? FINDING_ARTIFACT.exec(name) : null;
     return f ? [f[0], f[2], f[3], f[1], 'finding'] : null;
   }, opts, [
     ARTIFACT_PREFIX, ...(findings ? [FINDING_ARTIFACT_PREFIX] : []), ...(deploys ? [DEPLOY_ARTIFACT_PREFIX] : []),
-    ...(deliveries ? [DELIVERY_ARTIFACT_PREFIX] : []),
+    ...(deliveries ? [DELIVERY_ARTIFACT_PREFIX] : []), ...(smokes ? [SMOKE_ARTIFACT_PREFIX] : []),
   ]);
 }
 
 /**
  * The listing both readers share. `match` returns, for a name it takes, `[name, run id, attempt]`
  * and, for the any-lane listing, the lane (or the reporter) fourth, the kind fifth and a deploy
- * artifact's position sixth. Only names
+ * or smoke-check artifact's position sixth. Only names
  * under `prefixes` are looked at; the retention is measured from the run artifacts alone.
  * @param {(name: string) => (string | undefined)[] | null} match
  * @param {{ repo: string, from: number, api: Api, maxPages?: number }} opts
@@ -303,10 +323,10 @@ function listArtifacts(match, { repo, from, api, maxPages = MAX_PAGES }, prefixe
       if (Number.isFinite(expiresAt) && name.startsWith(ARTIFACT_PREFIX)) retention = Math.min(retention, expiresAt - createdAt);
       if (!m || a.expired || createdAt < from || seen.has(a.id)) continue;
       seen.add(a.id);
-      const kind = m[4] === 'finding' || m[4] === 'deploy' || m[4] === 'notify' ? m[4] : 'run';
+      const kind = m[4] === 'finding' || m[4] === 'deploy' || m[4] === 'notify' || m[4] === 'smoke_check' ? m[4] : 'run';
       artifacts.push({
         id: a.id, name, runId: Number(m[1]), attempt: Number(m[2]), createdAt, expiresAt, lane: String(m[3] ?? ''), kind,
-        ...(kind === 'deploy' ? { position: Number(m[5]) } : {}),
+        ...(kind === 'deploy' || kind === 'smoke_check' ? { position: Number(m[5]) } : {}),
       });
     }
     if (list.length < 100 || newest < from - LISTING_SLACK) break;

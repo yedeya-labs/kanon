@@ -75,6 +75,12 @@
 // store keys it `<key>#deploy` by time, run, attempt and position, so a re-sent row overwrites
 // itself.
 //
+// SMOKE-CHECK ROWS (plan 0013 §8, step S3). The smoke workflow's `record` job (S5) uploads one
+// `smoke_check` row per run as `kanon-smoke-row-<run id>-<attempt>-<position>`, named as a deploy
+// row's artifact is and also outside the `kanon-telemetry-` prefix. The same sweep lists them and
+// checks and sends each as it does a deploy row; the store keys it `<key>#smoke_check` the same
+// way. A collector pinned before S3 doesn't list the family, and its artifacts expire unsent.
+//
 // NOTIFY ROWS (plan 0011 §11, step N5). Each lane's `notify` job uploads one `notify` row as
 // `kanon-delivery-<lane>-<run id>-<attempt>`, the job's own run and attempt, holding
 // `kanon-delivery.json`, also outside the `kanon-telemetry-` prefix. The same sweep lists them,
@@ -97,6 +103,7 @@ import { nameContext, verify } from '../actions/agent-telemetry/scrub.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import {
   ARTIFACT_FILE, DELIVERY_ARTIFACT_FILE, DEPLOY_ARTIFACT_FILE, FINDING_ARTIFACT_FILE, ghApi, ghDownload, listTelemetryArtifacts, readZipEntry,
+  SMOKE_ARTIFACT_FILE,
 } from './lib/telemetry-artifacts.mjs';
 import { codeOf, HOSTED_INGEST_URL, REFUSED_TITLE, storeOf, storeRequest, TokenError, UNPUBLISHED_JOB } from './lib/telemetry-token.mjs';
 import { readUpstreamFindingsFrom, SENT_VALUES } from './lib/upstream-findings.mjs';
@@ -441,7 +448,7 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
   // which must not read as "there was nothing".
   let listing;
   try {
-    listing = listTelemetryArtifacts({ repo, from: now - SWEEP_CAP_DAYS * DAY, api, findings: true, deploys: true, deliveries: true });
+    listing = listTelemetryArtifacts({ repo, from: now - SWEEP_CAP_DAYS * DAY, api, findings: true, deploys: true, deliveries: true, smokes: true });
   } catch (err) {
     failures.push(`could not list artifacts (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
     return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, withheld: 0, workItems: 0, failures, warnings };
@@ -523,12 +530,13 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
       }
       continue;
     }
-    if (a.kind === 'deploy') {
-      const where = `deploy run ${a.runId} attempt ${a.attempt} position ${a.position} (artifact ${a.id})`;
+    if (a.kind === 'deploy' || a.kind === 'smoke_check') {
+      const where = `${a.kind} run ${a.runId} attempt ${a.attempt} position ${a.position} (artifact ${a.id})`;
+      const fileName = a.kind === 'deploy' ? DEPLOY_ARTIFACT_FILE : SMOKE_ARTIFACT_FILE;
       let row;
       try {
-        const file = readZipEntry(download(a.id), DEPLOY_ARTIFACT_FILE);
-        if (!file) throw new Error(`no ${DEPLOY_ARTIFACT_FILE}`);
+        const file = readZipEntry(download(a.id), fileName);
+        if (!file) throw new Error(`no ${fileName}`);
         row = JSON.parse(file.toString('utf8'));
       } catch (err) {
         failures.push(`${where}: unreadable (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
@@ -539,7 +547,7 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
         failures.push(`${where}: fails the schema (${describeErrors(v.errors)})`);
         continue;
       }
-      if (row.row_kind !== 'deploy' || row.run_id !== a.runId || row.run_attempt !== a.attempt || row.position !== a.position) {
+      if (row.row_kind !== a.kind || row.run_id !== a.runId || row.run_attempt !== a.attempt || row.position !== a.position) {
         failures.push(`${where}: the row's row_kind, run_id, run_attempt or position is not its artifact's`);
         continue;
       }
