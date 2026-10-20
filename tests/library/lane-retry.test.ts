@@ -194,7 +194,7 @@ describe('every spelling of a breadcrumb is read (RA-2709, #53)', () => {
 describe('the rebase lane, first half of PR RA-2446 (RA-2519)', () => {
   const HEAD = 'cafed00dbeef0000000000000000000000000000';
   const pr = (number = 2446) => ({
-    number, author: { login: 'example-implementer' }, state: 'OPEN', isDraft: false,
+    number, author: { login: 'example-implementer' }, state: 'OPEN', isDraft: false, isCrossRepository: false,
     headRefOid: HEAD, headRefName: `fix/${number}`, labels: [{ name: 'agent:implement' }],
     mergeStateStatus: 'DIRTY', mergeable: 'CONFLICTING',
     // The Implementer's marker and status (plan 0005 §3.3, L4): the PR is in the chain.

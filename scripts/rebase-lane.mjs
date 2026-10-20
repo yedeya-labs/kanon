@@ -137,6 +137,15 @@ export function ineligible(pr, { implementer = IMPLEMENTER_LOGIN } = {}) {
   if (labels.includes(HELD_LABEL)) {
     return `carries \`${HELD_LABEL}\` — a human owns this PR, and moving its head would mint a fresh duplicate of the Merger's escalation comment, whose marker is keyed on the head SHA`;
   }
+  // A FORK'S HEAD NEVER REACHES THE AGENT (K-AGENT-48, kanon#1128). Its job holds the App token and
+  // fetches every branch of this repository, and its agent runs the gates on what it merges, so
+  // the head must be this repository's. Refused before the agent's job starts, and refused when
+  // the field wasn't read, so a read that dropped it can't let a fork through.
+  if (pr.isCrossRepository !== false) {
+    return pr.isCrossRepository === true
+      ? "its head is on a fork, and this lane checks out only this repository's branches"
+      : 'whether its head is on a fork could not be read — refusing rather than guessing';
+  }
   // The Implementer's login and, from L4, its role marker in the PR body (plan 0005 §3.3).
   if (!asRole('Implementer', { login: normaliseLogin(pr.author?.login), expected: implementer, body: pr.body })) {
     return `authored by \`${normaliseLogin(pr.author?.login) || 'unknown'}\`, not this pipeline — a human's branch is theirs to resolve`;
@@ -231,7 +240,7 @@ export function rebaseDecision(prs, {
 
 /** The `gh pr list` fields the decision needs. One place, so a read that forgets one is
  *  one edit — and `conflictState` throws rather than answering "clear" if it does. */
-export const PR_FIELDS = `number,author,body,state,isDraft,labels,headRefOid,headRefName,${CONFLICT_JSON}`;
+export const PR_FIELDS = `number,author,body,state,isDraft,isCrossRepository,labels,headRefOid,headRefName,${CONFLICT_JSON}`;
 
 /** How many times `settledPrs` reads, and how long it waits between reads: a minute at most. */
 export const SETTLE_READS = 7;

@@ -126,7 +126,7 @@ const READERS: Record<string, Reader> = {
   },
   'rebase-lane: the Implementer\'s PRs (ineligible)': {
     role: 'Implementer',
-    read: (body) => ineligible({ state: 'OPEN', author: { login: `app/${appLogin('Implementer')}` }, body, isDraft: false, labels: [{ name: 'agent:implement' }], headStatuses: STAMPED }) === null,
+    read: (body) => ineligible({ state: 'OPEN', author: { login: `app/${appLogin('Implementer')}` }, body, isDraft: false, isCrossRepository: false, labels: [{ name: 'agent:implement' }], headStatuses: STAMPED }) === null,
   },
   'incremental-review: the Reviewer\'s verdicts (reviewerVerdicts)': {
     role: 'Reviewer',

@@ -40,7 +40,8 @@
 #   · no step reads the pull request's head, title, body or branch. Every checkout here and
 #     in `rebase-agent-job.yml` takes no `ref`, which on this event is the default branch;
 #     the PRs it resolves come from its own `gh pr list` of open PRs, each the Implementer
-#     App's and carrying its status (`rebase-lane.mjs`, `ineligible`), never the closed one;
+#     App's, carrying its status and with its head on this repository, never a fork
+#     (`rebase-lane.mjs`, `ineligible`), and never the closed one;
 #   · the workflow that runs is the caller on the default branch and this lane at the
 #     caller's pinned tag; the pull request can change neither.
 #

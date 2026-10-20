@@ -42,8 +42,9 @@ const pr = ({
   mergeStateStatus = 'DIRTY',
   mergeable = 'CONFLICTING',
   headStatuses = STAMPED as unknown,
+  isCrossRepository = false as unknown,
 } = {}) => ({
-  number, author: { login }, state, isDraft, headRefOid, headRefName,
+  number, author: { login }, state, isDraft, headRefOid, headRefName, isCrossRepository,
   labels: labels.map((name) => ({ name })), mergeStateStatus, mergeable,
   // The Implementer's marker and the implementer status on the head (plan 0005 §3.3, L4).
   body: headerLine('Implementer'), headStatuses,
@@ -72,6 +73,19 @@ describe('whose branches reach the agent at all', () => {
     const out = decide([pr({ login: 'some-human' })]);
     expect(out.resolve).toEqual([]);
     expect(out.noted[0].why).toMatch(/not this pipeline/);
+  });
+
+  it.each([
+    ["a fork's", true],
+    ['an unread', null],
+  ])("never hands over a head with %s provenance, before any checkout (K-AGENT-48)", (_label, isCrossRepository) => {
+    const out = decide([pr({ isCrossRepository })]);
+    expect(out.resolve).toEqual([]);
+    expect(out.noted[0].why).toMatch(/fork/);
+  });
+
+  it('reads whether a head is a fork in the one `gh pr list` it decides on', () => {
+    expect(PR_FIELDS.split(',')).toContain('isCrossRepository');
   });
 
   it.each([

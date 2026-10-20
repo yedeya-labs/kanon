@@ -1591,7 +1591,10 @@ describe('who owns a conflicting PR — the Merger or the rebase lane (RA-2218)'
   ])('never reaches the wait arm for %s — this function declines it first', (_l, over, rule) => {
     // THE PARITY THAT REPLACES A RUNTIME CHECK. A "would the lane take it?" branch was
     // written here and deleted as unreachable: every refusal in `ineligible()` is also a
-    // gate `mergeVerdict` returns at, earlier. These pin that, so the day the two rule
+    // gate `mergeVerdict` returns at, earlier, but the lane's fork refusal (K-AGENT-48).
+    // No case here lists that one, because no PR the author gate admits can meet it: the
+    // Implementer App pushes only to this repository's branches (the note at
+    // `mergeVerdict`'s conflict escalation says why). These pin the rest, so the day the two rule
     // sets diverge — `mergeVerdict` admitting a PR the lane refuses, which would wait
     // forever — is a red test rather than a PR nobody ever looks at again.
     const v = mergeVerdict(conflicting({ rebaseAttempted: false, ...over }));

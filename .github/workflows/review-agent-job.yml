@@ -199,6 +199,8 @@ jobs:
       # gets `main` and the Reviewer would review code the PR does not contain. The filter
       # resolved the head SHA; check out exactly that — which also pins the review to
       # the commit the checks ran against rather than a merge preview of it.
+      # A NAMED EXCEPTION TO `K-AGENT-48`, with the scope step's fetch of the same head: the filter
+      # refuses a fork's head before this job starts, and no step here runs the tree.
       - uses: actions/checkout@v7
         id: checkout
         if: steps.claim.outputs.proceed == 'true'
