@@ -110,11 +110,11 @@ The project briefs, the escalating labels and a spec promotion (`K-SPEC-9`) esca
 
 ### `K-MERGE-9` Recover pipeline problems; escalate only decisions
 
-**Rule.** Every merger run ends in one of a fixed set of outcomes: merge, wait, recover, escalate, skip, or release. A pipeline problem (a stale or misattributed approval, a review with no verdict) is recovered by the merger itself, for example by re-dispatching the reviewer. Only a decision a human can make is escalated. Skips and changes-requested states stay silent; every waiting PR is named in the run's summary.
+**Rule.** Every merger run ends in one of a fixed set of outcomes: merge, wait, recover, escalate, skip, or release. A pipeline problem (a stale or misattributed approval, a review with no verdict) is recovered by the merger itself, for example by re-dispatching the reviewer. A check that fails on an approved head of the implementer's own PR is handed back to the implementer's revise lane, once per head, with the failed checks named; the merger escalates it only if that head is still red afterwards. Only a decision a human can make is escalated. Skips and changes-requested states stay silent; every waiting PR is named in the run's summary.
 
-**Why.** A refusal is only worth a human's attention if a human can fix it. Labelling routine states trains humans to ignore the label, and a wait that nobody can see is a PR parked forever.
+**Why.** A refusal is only worth a human's attention if a human can fix it. Labelling routine states trains humans to ignore the label, and a wait that nobody can see is a PR parked forever. A check that goes red after the approval is a normal state, not a broken one: no check list an implementer runs before pushing covers every check CI runs. With no changes-request on the head, nothing else hands it back, so without the hand-back a one-command fix waits for a person. Once per head keeps a flaky check from looping, and the fixing push dismisses the approval, so the reviewer reviews the new head before anything merges.
 
-**Enforced by.** The merger's verdict function returns only these outcomes, and its summary lists every waiting PR.
+**Enforced by.** The merger's verdict function returns only these outcomes, and its summary lists every waiting PR. The hand-back is a recover keyed on a per-head marker the merger writes before it adds the revise label, and the revise lane acts on an approved head only when that marker, for that head, is the merger's; the revise lane's round cap still applies.
 
 **Class.** framework
 

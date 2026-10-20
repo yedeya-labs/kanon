@@ -1,4 +1,5 @@
-# Kanon's Implementer answers a changes-request on its own pull request (ADR 0011, stage 2).
+# Kanon's Implementer answers a changes-request on its own pull request, or fixes an approved head
+# whose checks failed when the Merger hands it back (ADR 0011, stage 2; kanon#1100).
 #
 # A trigger-only caller of Kanon's implement-revise lane, written exactly as an adopter writes
 # one (docs/lanes.md). It is named `implement-revise.yml` because `agent-implement-revise.yml`
@@ -8,10 +9,12 @@
 #
 # Every review on every pull request starts it, and the lane's filter job decides: it acts
 # only on a changes-request standing on a pull request the Implementer opened, whose author it
-# reads from the App register on the default branch. Anything else concludes in that one cheap
+# reads from the App register on the default branch, or on an approved head the Merger handed
+# back with its marker for that head. Anything else concludes in that one cheap
 # job. So until the Implementer has opened a pull request, every run skips.
 # `agent:revise` is the lane's re-delivery label: the Lead's reconciler (`lead-reconcile.yml`,
-# since 2026-10-12) adds it inside a project, and a member may add it by hand.
+# since 2026-10-12) adds it inside a project, a member may add it by hand, and the Merger adds it
+# to hand back an approved head whose checks failed, once per head (kanon#1100).
 #
 # The secrets: as implement.yml, mapped by name, never inherited.
 #

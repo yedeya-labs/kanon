@@ -21,6 +21,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** No longer prose only: the filing skill runs the planning module's `plan`, and a test fails when the skill stops running it or when a lane that files through it restates the routing in its prompt. The Explorer's sweep is the first lane moved. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 - **2026-10-20.** The code audit moved onto the filing skill, and the test holds its playbook's "Code-reading mode" section to restating no routing too. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 
+## `K-WORK-12`
+
+- **2026-10-20.** The Merger applies `agent:revise` too, to hand an approved head whose checks failed back to the Implementer's revise lane; the label's description says so. [#1100](https://github.com/yedeya-labs/kanon/issues/1100)
+
 ## `K-AGENT-2`
 
 - **2026-10-15.** The Owner decided that the Releaser may open a candidate's pin pull request, the one exception to its touching no file outside the release file set, where the adoption record declares the Workflows write that pull request needs. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
@@ -83,6 +87,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-MERGE-8`
 
 - **2026-10-06.** `kanon apps` adds the optional Releaser App to the default branch's ruleset's bypass list, and `kanon doctor` reports a ruleset that lacks it or lets another actor bypass. [#49](https://github.com/yedeya-labs/kanon/issues/49)
+
+## `K-MERGE-9`
+
+- **2026-10-20.** A check that fails on an approved head of the Implementer's own PR is a recover, not an escalation: the Merger hands the head back to the revise lane once, with the failed checks named, and escalates `checks-failed` only when that head is still red afterwards. Before, it escalated at once, and nothing else in the pipeline acted on an approved head. [#1100](https://github.com/yedeya-labs/kanon/issues/1100)
 
 ## `K-MERGE-13`
 

@@ -72,7 +72,7 @@ export { PIPELINE_ESCALATIONS } from './lib/escalation-paths.mjs';
  * the adopter's caller names, so they live with the other protocol strings, old spellings
  * included (#53, `lib/protocol-spellings.mjs`).
  */
-export { SELF_CHECKS, REVIEW_EVENT_CHECKS, ESCALATION_HEADER } from './lib/protocol-spellings.mjs';
+export { SELF_CHECKS, REVIEW_EVENT_CHECKS, ESCALATION_HEADER, HANDBACK } from './lib/protocol-spellings.mjs';
 
 /**
  * The JOBS of other workflows that start on the same `pull_request_review` event the Merger
@@ -278,6 +278,24 @@ export const LAPSES_WITH_HEAD = new Set([
 export const UNSTABLE_SETTLE_MS = 20 * 60 * 1000;
 
 /**
+ * The marker rule of the Merger's hand-back of a red, approved head to the Implementer's revise
+ * lane (kanon#1100), `HANDBACK`, is exported above from `lib/protocol-spellings.mjs`, because
+ * the revise lane's filter reads it by its exact text. It is a `recover`, not an escalation: the
+ * comment carries no escalation header, so `holdOn` never reads it as one.
+ */
+
+/** The label the hand-back adds, remove-then-add, which starts the revise lane (`K-WORK-12`). */
+export const REVISE_LABEL = 'agent:revise';
+
+/**
+ * How long after a hand-back the Merger waits before it reads the head's red as the revise
+ * lane's answer (kanon#1100). The lane's agent job registers as a running check within a minute
+ * or two of the label; inside this window, a sweep that runs before it does waits instead of
+ * escalating. Sized like `UNSTABLE_SETTLE_MS`, far below the hourly sweep.
+ */
+export const HANDBACK_SETTLE_MS = 20 * 60 * 1000;
+
+/**
  * The check rollup, partitioned (RA-1974; exported for RA-1723's red-unreviewed detector).
  *
  * PURE, and the ONLY definition of "which check runs count" — `mergeVerdict` calls it, so a
@@ -464,6 +482,10 @@ export function checkPartition(checks) {
  * `mergeQueue` is `mergeQueueOn`'s answer, read for `apply` and for one gate here: a head the
  * queue already removed after the Merger queued it escalates rather than merging (kanon#1104).
  * Absent or `null`, that gate doesn't apply, as it doesn't on a base without a queue.
+ *
+ * `handback` is read only when a check failed on the head: `false` when the Merger has not
+ * handed this head back to the revise lane, `{ at }` when it has, `null` when its comments
+ * couldn't be read (kanon#1100). Absent or `null`, a failed check escalates as `checks-failed`.
  *
  * `hold` is read only when `needs:human` is on the PR: who applied that label last, and
  * which (rule, head) pairs the Merger's own escalation comments name. Absent or `null` means
@@ -891,8 +913,28 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
   if (cancelled.length) {
     return stop('checks-cancelled', `${cancelled.map((c) => c.name).join(', ')} was cancelled and nothing re-ran it, so it never reported — re-run that check run (a fresh dispatch creates a new one and leaves this in the rollup)`);
   }
+  // A RED HEAD THE REVIEWER APPROVED IS THE IMPLEMENTER'S FIRST (kanon#1100). By here the PR is
+  // the Implementer's (login, marker and status chain) and the Reviewer approved this head, so
+  // there is no changes-request for the revise lane to answer and nothing else of the pipeline's
+  // acts on it. The failed check is the finding: hand the head back to the revise lane ONCE
+  // (`HANDBACK`), and escalate only when it is still red after that. `pr.handback` is read only
+  // when a check failed: `false` is "not handed back on this head", `{ at }` is when it was, and
+  // `null` or absent is "could not be read", which escalates as before rather than risk a second
+  // hand-back. A hand-back younger than `HANDBACK_SETTLE_MS` waits, so the sweep that follows it
+  // doesn't escalate before the lane's run registers; once it has, its job is a running check
+  // and `checks-pending` above waits on it.
   if (failed.length) {
-    return stop('checks-failed', `${failed.map((c) => `${c.name} (${c.conclusion})`).join(', ')}`);
+    const named = failed.map((c) => `${c.name} (${c.conclusion})`).join(', ');
+    const h = pr.handback;
+    if (h === false) {
+      return recover(HANDBACK, `${named} failed on \`${String(pr.headSha).slice(0, 7)}\` after ${reviewer} approved it — handing it back to the Implementer's revise lane, once for this head (kanon#1100)`);
+    }
+    if (h && typeof h.at === 'string' && now - Date.parse(h.at) < HANDBACK_SETTLE_MS) {
+      return wait('handed-back', `${named} failed, and the Merger handed this head back to the Implementer's revise lane at ${h.at}; waiting for that run (kanon#1100)`);
+    }
+    return stop('checks-failed', h && typeof h.at === 'string'
+      ? `${named} — the Merger handed this head back to the Implementer's revise lane at ${h.at}, and it is still red (kanon#1100)`
+      : `${named} — whether this head was handed back to the Implementer could not be read, so not handing it back again (kanon#1100)`);
   }
 
   // ── The closing set ───────────────────────────────────────────────────────
@@ -1092,7 +1134,7 @@ import { readProductionPromotionAt } from './lib/production-promotion.mjs';
 import { apiReader, judgingInputs } from './judging-inputs.mjs';
 import { isSpecFile, specPromotions } from './lib/spec-promotions.mjs';
 import {
-  ESCALATION_HEADER, REVIEW_EVENT_CHECKS, SELF_CHECKS, isEscalation, mergerMarker, mergerMarkerSpellings, mergerMarkersIn,
+  ESCALATION_HEADER, HANDBACK, REVIEW_EVENT_CHECKS, SELF_CHECKS, isEscalation, mergerMarker, mergerMarkerSpellings, mergerMarkersIn,
 } from './lib/protocol-spellings.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
@@ -1194,6 +1236,32 @@ export function readPr(number, repo, opts = {}) {
   } catch {
     issuesReadable = false;
   }
+  const checks = (meta.statusCheckRollup ?? []).map((c) => ({
+    name: c.name ?? c.context,
+    workflowName: c.workflowName,
+    // Carried for the supersede rule (RA-1892). A `StatusContext` has `createdAt` and
+    // no check-run id; a `CheckRun` has the other three. All are optional here —
+    // `mergeVerdict` degrades to the CANCELLED-only rule when none survives.
+    startedAt: c.startedAt ?? c.createdAt,
+    completedAt: c.completedAt,
+    databaseId: c.databaseId,
+    // The Actions run a CheckRun's job belongs to, so the Merger can tell its own run's
+    // jobs from the rest (kanon#812). gh's projection carries `detailsUrl`
+    // (`…/actions/runs/<run>/job/<job>`); a StatusContext, or a check from another App,
+    // has no such URL and is never ours.
+    runId: /\/actions\/runs\/(\d+)(?:\/|$)/.exec(c.detailsUrl ?? '')?.[1],
+    // A StatusContext has `state` and no `status`; a CheckRun has both. Flattening
+    // them here keeps the decision from having to know which kind it is looking at.
+    // A status whose `state` is PENDING, or EXPECTED (a required context that has not
+    // reported), has not finished: it keeps that state as its status and has no
+    // conclusion, so `checkPartition` waits on it rather than counting it failed (#821).
+    ...(c.status === undefined && UNREPORTED_STATES.has(c.state)
+      ? { status: c.state, conclusion: null }
+      : {
+        status: c.status ?? 'COMPLETED',
+        conclusion: c.conclusion ?? (c.state === 'SUCCESS' ? 'SUCCESS' : c.state ?? null),
+      }),
+  }));
   return {
     number: meta.number,
     author: meta.author?.login ?? '',
@@ -1219,32 +1287,7 @@ export function readPr(number, repo, opts = {}) {
       body: r.body ?? '',
       ...readTrailer(r),
     })),
-    checks: (meta.statusCheckRollup ?? []).map((c) => ({
-      name: c.name ?? c.context,
-      workflowName: c.workflowName,
-      // Carried for the supersede rule (RA-1892). A `StatusContext` has `createdAt` and
-      // no check-run id; a `CheckRun` has the other three. All are optional here —
-      // `mergeVerdict` degrades to the CANCELLED-only rule when none survives.
-      startedAt: c.startedAt ?? c.createdAt,
-      completedAt: c.completedAt,
-      databaseId: c.databaseId,
-      // The Actions run a CheckRun's job belongs to, so the Merger can tell its own run's
-      // jobs from the rest (kanon#812). gh's projection carries `detailsUrl`
-      // (`…/actions/runs/<run>/job/<job>`); a StatusContext, or a check from another App,
-      // has no such URL and is never ours.
-      runId: /\/actions\/runs\/(\d+)(?:\/|$)/.exec(c.detailsUrl ?? '')?.[1],
-      // A StatusContext has `state` and no `status`; a CheckRun has both. Flattening
-      // them here keeps the decision from having to know which kind it is looking at.
-      // A status whose `state` is PENDING, or EXPECTED (a required context that has not
-      // reported), has not finished: it keeps that state as its status and has no
-      // conclusion, so `checkPartition` waits on it rather than counting it failed (#821).
-      ...(c.status === undefined && UNREPORTED_STATES.has(c.state)
-        ? { status: c.state, conclusion: null }
-        : {
-          status: c.status ?? 'COMPLETED',
-          conclusion: c.conclusion ?? (c.state === 'SUCCESS' ? 'SUCCESS' : c.state ?? null),
-        }),
-    })),
+    checks,
     mergeStateStatus: meta.mergeStateStatus,
     // CARRIED ALONGSIDE, NOT INSTEAD (RA-2154). The `DIRTY` arm below is a question about
     // git and is now `conflictState`'s to answer; the ruleset arm at the end of
@@ -1277,6 +1320,9 @@ export function readPr(number, repo, opts = {}) {
     // WHO APPLIED `needs:human`, AND WHAT THE MERGER SAID ABOUT IT (RA-2097, RA-2238). Read only
     // when the label is on, which is the only time `mergeVerdict` consults it.
     hold: meta.labels.some((l) => l.name === 'needs:human') ? holdOn(meta.number, repo, gh) : undefined,
+    // WHETHER THE MERGER HANDED THIS HEAD BACK TO THE REVISE LANE (kanon#1100). Read only when a
+    // check failed, the only time `mergeVerdict` consults it.
+    handback: checkPartition(checks).failed.length ? handbackOn(meta.number, repo, gh, meta.headRefOid) : undefined,
     // THE SPEC PATCHES, read only when a spec changed (K-SPEC-9). `null` on a failed read,
     // which `mergeVerdict` waits on rather than reading as "no promotion" (kanon#273).
     specDiff: files.some(isSpecFile) ? specDiffOn(number, repo, gh) : undefined,
@@ -1388,6 +1434,29 @@ export function holdOn(number, repo, gh) {
       .filter((c) => asRole('Merger', { login: c.login, expected: MERGER_LOGIN, body: c.body }) && isEscalation(c.body))
       .flatMap((c) => mergerMarkersIn(c.body));
     return { labeledBy, escalations };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * When the Merger handed `head` back to the Implementer's revise lane, from its own `HANDBACK`
+ * marker comment (kanon#1100): `{ at }` (the comment's time), `false` when it hasn't, and `null`
+ * when the comments couldn't be read, which `mergeVerdict` escalates on rather than hand back
+ * again. Only the Merger's comment counts, by login and role marker, so a person or another
+ * agent quoting the marker doesn't spend the hand-back.
+ *
+ * @returns {{at: string}|false|null}
+ */
+export function handbackOn(number, repo, gh, head) {
+  try {
+    const said = gh(['api', `repos/${repo}/issues/${number}/comments?per_page=100`, '--paginate', '--jq',
+      '.[] | {login: .user.login, body: .body, at: .created_at} | @json'])
+      .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    const mark = marker(HANDBACK, head);
+    const found = said.find((c) => asRole('Merger', { login: c.login, expected: MERGER_LOGIN, body: c.body })
+      && String(c.body).includes(mark));
+    return found ? { at: String(found.at) } : false;
   } catch {
     return null;
   }
@@ -1633,6 +1702,41 @@ export function apply(pr, verdict, repo, { dryRun = true, json = readJson } = {}
       // Signed as the Merger (plan 0005 §3.3): its header and role marker open every post.
       gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body', signed(body, 'Merger', appPersona('Merger'))]);
       gh(['pr', 'edit', String(pr.number), '--repo', repo, '--add-label', 'needs:human']);
+    }
+    return;
+  }
+  if (verdict.action === 'recover' && verdict.rule === HANDBACK) {
+    // THE HAND-BACK (kanon#1100). COMMENT FIRST, then the label: the revise lane's filter looks
+    // for this comment's marker when the label starts it, so a label ahead of the comment would
+    // start a run that refuses the head. The comment is also the once-per-head record. A label
+    // that fails after it leaves the record, and the sweep after the settle window escalates.
+    // RE-ASKED AS THE VERDICT ASKED IT, by the Merger's own comment and every page (`handbackOn`),
+    // not by `alreadySaid`, which matches anyone's quote of the marker on one page: a forged
+    // marker would then park the PR in this recover for good. Anything but `false` (handed back
+    // already, or unreadable) acts on nothing, and the next sweep's verdict escalates instead.
+    const mark = marker(HANDBACK, pr.headSha);
+    if (handbackOn(pr.number, repo, gh, pr.headSha) !== false) return say(`already handed #${pr.number} back to the revise lane on this commit, or its comments could not be read`);
+    say(`hand #${pr.number} back to the Implementer's revise lane: ${verdict.why}`);
+    if (!dryRun) {
+      const failing = checkPartition(pr.checks).failed.map((c) => `- \`${c.workflowName ? `${c.workflowName} / ` : ''}${c.name}\` (${c.conclusion})${
+        c.runId ? `: \`gh run view ${c.runId} --repo ${repo} --log-failed\`` : ''}`);
+      gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body', signed([
+        `🔁 **Handing this back to the Implementer.** The Reviewer approved \`${String(pr.headSha).slice(0, 7)}\`, and then these checks failed on it:`,
+        '',
+        ...failing,
+        '',
+        `The failed check is the finding. The Merger added \`${REVISE_LABEL}\`, which starts the Implementer's revise lane on this head. Its push dismisses the approval, so the Reviewer reviews the new head before anything merges. This happens once per head: if this head is still red after that run, the Merger asks a person (\`needs:human\`).`,
+        '',
+        mark,
+      ].join('\n'), 'Merger', appPersona('Merger'))]);
+      // Remove-then-add, as the reconciler's `revise-churn` does: a label already on the PR adds
+      // no event, so the removal is what makes the add start the lane. The remove may fail.
+      try {
+        gh(['pr', 'edit', String(pr.number), '--repo', repo, '--remove-label', REVISE_LABEL]);
+      } catch {
+        // not labelled yet; the add below is still the event
+      }
+      gh(['pr', 'edit', String(pr.number), '--repo', repo, '--add-label', REVISE_LABEL]);
     }
     return;
   }

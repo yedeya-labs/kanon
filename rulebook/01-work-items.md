@@ -141,7 +141,7 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 | | `agent:implement` | `6f42c1` | Dispatches the Implementer's build lane; marks the PRs it opens |
 | | `agent:reviewer` | `6f42c1` | Filed or reviewed by the Reviewer |
 | | `agent:overseer` | `6f42c1` | Filed by the Overseer |
-| | `agent:revise` | `5319e7` | Re-delivers a lost review to the Implementer's revise lane; applied by the Lead only |
+| | `agent:revise` | `5319e7` | Re-delivers a lost review or a red approved head to the Implementer's revise lane (Lead, Merger) |
 | | `agent:lead-revise` | `5319e7` | Re-delivers a lost review to the Lead's brief-revise lane; applied by the Lead only |
 | Triage state | `qa:needs-triage` | `1d76db` | Bug filed, awaiting the Implementer's triage |
 | | `qa:reproduced` | `0e8a16` | Independently reproduced: confirmed real |
@@ -190,7 +190,7 @@ Two families have no members at installation. A `signal:<name>` label is created
 | Reviewer | `agent:reviewer` | What it files or reviews. |
 | Overseer | `agent:overseer` | What it files. |
 | Lead | none of its own | Its issues are marked by `project:<n>`. It applies `agent:revise` and `agent:lead-revise`, which are recovery labels: each re-delivers a lost review event to a revise lane (the Implementer's, or the Lead's own), and marks no author. |
-| Merger | none | It files nothing. Its one label is `needs:human`, its escalation. |
+| Merger | none | It files nothing. It applies `needs:human`, its escalation, and `agent:revise`, to hand an approved head whose checks failed back to the Implementer's revise lane. |
 
 Every label the pipeline applies must be in this table. The table is the authority on what each label is, and [`labels.json`](labels.json) is its machine-readable twin, from which a lane creates a missing label. The live repository is the authority on which labels exist.
 
