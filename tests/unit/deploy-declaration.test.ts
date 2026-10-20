@@ -224,6 +224,11 @@ describe('the smoke schedule (plan 0013 §4.3)', () => {
       /adoption\.md:14: `Smoke schedule`'s span `staging 0 3 \* \* \* \*` isn't an environment and a five-field cron/,
     ],
     [
+      'a `?`, which GitHub\'s cron does not take',
+      ['staging 0 3 ? * *'],
+      /adoption\.md:14: `Smoke schedule`'s span `staging 0 3 \? \* \*` isn't an environment and a five-field cron/,
+    ],
+    [
       'two spans with one cron',
       ['staging 0 3 * * *', 'production 0 3 * * *'],
       /adoption\.md:14: `Smoke schedule` gives `production` the same cron as `staging`, `0 3 \* \* \*`/,

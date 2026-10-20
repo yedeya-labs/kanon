@@ -98,7 +98,7 @@ const SPAN_LIST_LABELS = /** @type {readonly string[]} */ ([CHAIN_LABELS.environ
 export const CRON_FIELDS = 5;
 
 /** One cron field: digits, names, and the operators GitHub's cron takes. */
-const CRON_FIELD = /^[A-Za-z0-9*,\-/?]+$/;
+const CRON_FIELD = /^[A-Za-z0-9*,\-/]+$/;
 
 /** The CI wait when the record declares none, and its bounds, in minutes (plan 0010 decision 9). */
 export const DEFAULT_CI_WAIT = 90;
