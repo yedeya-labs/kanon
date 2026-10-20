@@ -240,11 +240,19 @@ jobs:
             DEDUP first: search OPEN issues and do NOT refile anything already tracked;
             a cluster of one root cause is ONE bug. Label bugs `bug`, `agent:explorer`,
             `qa:needs-triage`, the matching `signal:contract` or `signal:security` (or
-            `signal:spec-violation`), and a `sev:*` by impact. Milestone: Product
-            Backlog, a bucket (it is a product bug), never a roadmap milestone such as
-            the launch gate (K-WORK-5).
+            `signal:spec-violation`), and a `sev:*` by impact.
             Subjective or speculative findings: a `spec-delta` issue (labels
             `spec-delta`, `agent:explorer`), never a bug. Do NOT edit code or open PRs.
+            SUBJECT: judge each issue by what the cited code is, never by who found it
+            (K-WORK-4). It is `--subject pipeline` when it is about the engineering
+            platform that builds and checks this project: its CI workflows and their
+            guards, its test harness, the Kanon lanes installed in it. It is
+            `--subject product` when it is about the code this project ships. When it
+            is about both, K-WORK-4 decides: the platform wins. Where the playbook says
+            how this project draws that line, follow it.
+            File each issue through the filing skill: read and follow
+            `$KANON/skills/file-issue/SKILL.md`, whose plan command gives the exact
+            arguments of one `gh issue create`.
 
             REPORTING: WRITE `qa-audit-summary.json` at the repo root **BEFORE you start
             auditing**, and keep re-writing it as you go. Do NOT save it for the end: a
