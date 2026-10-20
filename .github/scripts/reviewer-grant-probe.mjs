@@ -303,10 +303,10 @@ const squash = (/** @type {unknown} */ s) => String(s ?? '').replace(/\s+/g, ' '
 /**
  * Judge one probe from the CLI's stream-json events and what the run left behind.
  * @param {Probe} probe
- * @param {{ events: any[], input: Record<string, string>, ran: boolean, loaded: string[], treeChanges: string[] }} seen
+ * @param {{ events: any[], input: Record<string, string>, ran: boolean, loaded: string[], treeChanges: string[], targetChanged?: boolean }} seen
  * @returns {{ pass: boolean, detail: string }}
  */
-export function judge(probe, { events, input, ran, loaded, treeChanges }) {
+export function judge(probe, { events, input, ran, loaded, treeChanges, targetChanged }) {
   const toolUses = events.flatMap((e) => (e?.type === 'assistant' && Array.isArray(e.message?.content) ? e.message.content : []))
     .filter((b) => b?.type === 'tool_use');
   // An instruction file's only sign may be the model obeying it, which a denial would stop
@@ -327,7 +327,14 @@ export function judge(probe, { events, input, ran, loaded, treeChanges }) {
     .filter((b) => b?.type === 'tool_result').map((b) => [b.tool_use_id, b]));
   if (probe.expect === 'refused') {
     const through = attempts.filter((a) => !denied.has(a.id));
-    return through.length ? { pass: false, detail: 'allowed' } : { pass: true, detail: 'denied' };
+    if (!through.length) return { pass: true, detail: 'denied' };
+    // A Write the permission check let through, which then failed (the file system refused it,
+    // or the tool did) and left the file as it was, wrote nothing. The file decides, not the
+    // event: a target that changed, or a call that didn't error, is a widening.
+    if (probe.tool === 'Write' && targetChanged === false && through.every((a) => results.get(a.id)?.is_error)) {
+      return { pass: true, detail: `not written: ${squash(JSON.stringify(results.get(through[0].id)?.content)).slice(0, 120)}` };
+    }
+    return { pass: false, detail: 'allowed' };
   }
   if (attempts.some((a) => denied.has(a.id))) return { pass: false, detail: 'denied' };
   const errored = attempts.filter((a) => results.get(a.id)?.is_error);
@@ -370,7 +377,10 @@ function workspace(lane) {
   for (const d of [repo, join(repo, 'sub'), join(repo, '.claude'), join(home, '.claude'), temp, markers, bin]) mkdirSync(d, { recursive: true });
   // The wrapper the review job puts on the agent's PATH (#164): Kanon's plan, and nothing else.
   writeFileSync(join(bin, 'kanon-plan'), `#!/usr/bin/env bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(ROOT, 'scripts', 'issue-triage-defaults.mjs'))} plan "$@"\n`);
-  chmodSync(join(bin, 'kanon-plan'), 0o755);
+  // Read-only, file and directory, as the review job leaves them: a write the grant let through
+  // would still fail at the file system.
+  chmodSync(join(bin, 'kanon-plan'), 0o555);
+  chmodSync(bin, 0o555);
   const touch = (/** @type {string} */ name) => `touch ${JSON.stringify(join(markers, name))}`;
   const hooks = (/** @type {string} */ who) => ({
     SessionStart: [{ hooks: [{ type: 'command', command: touch(`${who}-hook-session-start`) }] }],
@@ -470,6 +480,9 @@ async function runProbe(probe, { cli, flags, model, lane }) {
       for (const k of ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'TMPDIR']) if (process.env[k]) env[k] = String(process.env[k]);
       if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
       const configBefore = repoConfig(ws);
+      const target = probe.tool === 'Write' ? String(input.file_path ?? '') : '';
+      const contentOf = (/** @type {string} */ f) => (f && existsSync(f) ? readFileSync(f, 'utf8') : null);
+      const targetBefore = contentOf(target);
       /** @type {string} */
       const out = await new Promise((done) => {
         const child = spawn(cli, ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...probeArgs(flags, ws.temp, model)], { cwd: ws.repo, env, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -481,9 +494,11 @@ async function runProbe(probe, { cli, flags, model, lane }) {
       const events = String(out).split('\n').flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
       const leftBehind = readdirSync(ws.markers);
       const treeChanges = changesOf(lane, ws, configBefore);
-      last = judge(probe, { events, input, ran: leftBehind.includes('ran'), loaded: leftBehind.filter((m) => m !== 'ran'), treeChanges });
+      const targetChanged = target ? contentOf(target) !== targetBefore : false;
+      last = judge(probe, { events, input, ran: leftBehind.includes('ran'), loaded: leftBehind.filter((m) => m !== 'ran'), treeChanges, targetChanged });
       if (last.pass || !last.detail.startsWith('not attempted')) return last;
     } finally {
+      if (existsSync(ws.bin)) chmodSync(ws.bin, 0o755); // the read-only wrapper directory, so it can be removed
       rmSync(ws.base, { recursive: true, force: true });
     }
   }

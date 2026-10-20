@@ -236,7 +236,8 @@ jobs:
           bin="$RUNNER_TEMP/kanon-bin"
           mkdir -p "$bin"
           printf '#!/usr/bin/env bash\nexec %q %q plan "$@"\n' "$(command -v node)" "$KANON_ROOT/scripts/issue-triage-defaults.mjs" > "$bin/kanon-plan"
-          chmod +x "$bin/kanon-plan"
+          # Read-only, file and directory: the agent may run it, and nothing in the run may rewrite it.
+          chmod 555 "$bin/kanon-plan" "$bin"
           echo "$bin" >> "$GITHUB_PATH"
 
       # A PR NEVER CHOOSES THE RULES IT IS JUDGED BY (`K-MERGE-17`, kanon#25; RA-848).

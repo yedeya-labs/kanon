@@ -175,6 +175,22 @@ describe('judging one probe', () => {
     expect(judge(bash, { ...clean, input, events: [end([])] }).detail).toMatch(/^not attempted/);
   });
 
+  it('passes a refused Write the permission check let through only when it errored and left the file as it was (#164)', () => {
+    const write = { id: 'w', expect: 'refused' as const, tags: [] as string[], tool: 'Write' as const, file: '/t/kanon-bin/kanon-plan' };
+    const input = { file_path: '/t/kanon-bin/kanon-plan', content: 'probe\n' };
+    const useWrite = (id: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Write', input }] } });
+    // Through the permission check, but the write failed and the file is unchanged: nothing was written.
+    expect(judge(write, { ...clean, input, events: [useWrite('a'), result('a', true), end([])], targetChanged: false })).toMatchObject({ pass: true, detail: expect.stringMatching(/^not written/) });
+    // The file changed: a widening, whatever the event said.
+    expect(judge(write, { ...clean, input, events: [useWrite('a'), result('a', true), end([])], targetChanged: true })).toEqual({ pass: false, detail: 'allowed' });
+    // No error: the write went through.
+    expect(judge(write, { ...clean, input, events: [useWrite('a'), result('a'), end([])], targetChanged: false })).toEqual({ pass: false, detail: 'allowed' });
+    // Unknown whether the file changed: never a pass.
+    expect(judge(write, { ...clean, input, events: [useWrite('a'), result('a', true), end([])] })).toEqual({ pass: false, detail: 'allowed' });
+    // Denied by the permission check: a pass, as before.
+    expect(judge(write, { ...clean, input, events: [useWrite('a'), result('a', true), end(['a'])], targetChanged: false }).pass).toBe(true);
+  });
+
   it('fails any probe when something ran, loaded or changed the tree, denial or not', () => {
     const input = { command: 'sh marker.sh' };
     const events = [use('a', 'sh marker.sh'), end(['a'])];
