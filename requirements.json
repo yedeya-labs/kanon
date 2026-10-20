@@ -694,6 +694,29 @@
         "ceiling": 240
       }
     },
+    "agent-release-announce": {
+      "identities": [],
+      "secrets": [
+        "KANON_CHAT_RELEASE"
+      ],
+      "inputs": {
+        "tag": {
+          "type": "string",
+          "description": "An existing release's tag, to announce it again. A published release names its own."
+        },
+        "dry_run": {
+          "type": "string",
+          "description": "'true' to print the message instead of posting it"
+        }
+      },
+      "grant": {
+        "contents": "read"
+      },
+      "reads": [],
+      "readsWorkflows": [],
+      "hooks": [],
+      "qaStore": false
+    },
     "agent-review": {
       "identities": [
         "judge"
@@ -1362,6 +1385,19 @@
         "recommend": [],
         "when": "When the Stakeholder is not the Owner and follows the project from outside, through a chat channel."
       },
+      "agent-release-announce": {
+        "name": "Release announcement",
+        "group": "oversight",
+        "does": "Posts each published GitHub release, a stable release or a pre-release, to a chat channel: its tag, its name and its notes as Features, Fixes and Maintenance, with a link to it.",
+        "needs": [
+          "GitHub releases, published by a person or an App (a release the workflow token publishes starts no run)",
+          "a notify hook"
+        ],
+        "cost": "No model; a short job per published release. Without a notify hook or `KANON_CHAT_RELEASE`, the gate job runs alone.",
+        "minutes": "Not measured: Kanon doesn't call the lane yet; it runs once per published release.",
+        "recommend": [],
+        "when": "When the repository publishes GitHub releases and a chat channel should hear of each one, whether or not it deploys them."
+      },
       "agent-merge": {
         "name": "Merge",
         "group": "merge",
@@ -1485,7 +1521,8 @@
       },
       "leftOut": {
         "agent-explore-telemetry": "It needs a registration that sets `aggregate_invoker`, which only Kanon's operator sets after the collector's first run registers the repository (docs/telemetry.md), so nothing done at install makes it work.",
-        "agent-deploy-diagnose": "It diagnoses the deploy lane's failed runs, and the deploy lane is in no feature: it runs only where the adoption record declares environments, so you ask for this lane beside it."
+        "agent-deploy-diagnose": "It diagnoses the deploy lane's failed runs, and the deploy lane is in no feature: it runs only where the adoption record declares environments, so you ask for this lane beside it.",
+        "agent-release-announce": "It announces GitHub releases, which not every repository publishes, and nothing at install says whether this one will: you ask for it under Customise, or by name with `--lanes`."
       },
       "apps": [
         "author",
@@ -1655,6 +1692,12 @@
         "secret": "KANON_CHAT_DEPLOY",
         "lanes": [
           "deploy"
+        ]
+      },
+      "release": {
+        "secret": "KANON_CHAT_RELEASE",
+        "lanes": [
+          "agent-release-announce"
         ]
       }
     },

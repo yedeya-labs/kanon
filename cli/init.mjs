@@ -1121,23 +1121,35 @@ export const postsToChat = (lanes, environments, req) => lanes.some((l) => notif
 /**
  * The chat question (plan 0011 §10.1, decision 11), asked only when the chosen lanes post to a chat
  * channel and no notify hook at `.github/actions/notify/action.yml` answers it already. The adopt
- * skill asks it word for word.
+ * skill asks it word for word. What posts is named in it: the digests, the release announcements
+ * (kanon#1190) and the deploy announcements, whichever do, in that order (`chatAsk`).
+ * @param {string[]} what
  */
+const chatAsk = (what) =>
+  `Post ${what.length > 1 ? `${what.slice(0, -1).join(', ')} and ${what.at(-1)}` : what[0]} to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own.`;
 export const CHAT_QUESTION = 'Post digests to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own.';
 /** The chat question when the deploy lane is the only thing that posts (plan 0011 §10.1). */
 export const CHAT_QUESTION_DEPLOY = 'Post deploy announcements to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own.';
 /** The chat question when the digests and the deploy lane both post (plan 0011 §10.1). */
 export const CHAT_QUESTION_BOTH = 'Post digests and deploy announcements to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own.';
+/** The chat question when the release announcement is the only thing that posts (kanon#1190). */
+export const CHAT_QUESTION_RELEASE = 'Post release announcements to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own.';
+
+/** The message kind a release announcement is (kanon#1190), which no digest is. */
+const RELEASE_KIND = 'release';
 
 /**
- * The chat question's words for what posts (plan 0011 §10.1): the digests alone, the deploy
- * lane's announcements alone, or both.
+ * The chat question's words for what posts (plan 0011 §10.1): the digests, the release
+ * announcements and the deploy lane's announcements, each where it posts.
  * @param {string[]} lanes @param {string[]} environments @param {Requirements} req
  */
 export const chatQuestion = (lanes, environments, req) => {
-  const digests = lanes.some((l) => notifyingLanes(req).includes(l));
+  const releases = notifyOf(req)?.kinds[RELEASE_KIND]?.lanes ?? [];
+  const posting = lanes.filter((l) => notifyingLanes(req).includes(l));
+  const digests = posting.some((l) => !releases.includes(l));
+  const announces = posting.some((l) => releases.includes(l));
   const deploys = environments.length > 0 && deployKinds(req).length > 0;
-  return digests && deploys ? CHAT_QUESTION_BOTH : deploys ? CHAT_QUESTION_DEPLOY : CHAT_QUESTION;
+  return chatAsk([...(digests ? ['digests'] : []), ...(announces ? ['release announcements'] : []), ...(deploys ? ['deploy announcements'] : [])]);
 };
 /** Its options, Kanon's Slack hook recommended (decision 11). @type {Array<Option<Chat>>} */
 export const CHAT_OPTIONS = [
@@ -1162,9 +1174,9 @@ const hookPathOf = (req) => notifyOf(req)?.hook.path ?? NOTIFY_HOOK_PATH;
 /** Slack's page on incoming webhooks (plan 0011 §13), where the Slack steps' webhooks are made. */
 export const SLACK_WEBHOOKS_PAGE = 'https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks';
 /** What each message kind is called in a person's step. @type {Record<string, string>} */
-const KIND_WORDS = { 'project-digest': 'daily project digest', 'weekly-digest': 'weekly digest', deploy: 'deploy announcement' };
+const KIND_WORDS = { 'project-digest': 'daily project digest', 'weekly-digest': 'weekly digest', deploy: 'deploy announcement', release: 'release announcement' };
 /** The step id of each kind's chat secret (plan 0011 §10.2), the deploy lane's, `secret.chat-deploy`, only where an environment is declared. */
-const CHAT_STEPS = [{ kind: 'project-digest', id: 'secret.chat-project-digest' }, { kind: 'weekly-digest', id: 'secret.chat-weekly-digest' }, { kind: 'deploy', id: 'secret.chat-deploy' }];
+const CHAT_STEPS = [{ kind: 'project-digest', id: 'secret.chat-project-digest' }, { kind: 'weekly-digest', id: 'secret.chat-weekly-digest' }, { kind: 'deploy', id: 'secret.chat-deploy' }, { kind: 'release', id: 'secret.chat-release' }];
 /** The answer an existing hook infers (plan 0011 §10.1), from its kind as the `notify` block names it. @type {Record<'slack' | 'webhook' | 'custom', Chat>} */
 const CHAT_OF_HOOK = { slack: 'slack', webhook: 'webhook', custom: 'hook' };
 

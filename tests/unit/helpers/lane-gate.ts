@@ -24,7 +24,7 @@ export const LANES = readdirSync(WORKFLOWS)
   .sort();
 
 /** The triggers each lane's caller holds (docs/lanes.md), as the event the gate sees. */
-export type Trigger = 'review' | 'issue-label' | 'issue-opened' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-merged' | 'schedule' | 'deploy-failed';
+export type Trigger = 'review' | 'issue-label' | 'issue-opened' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-merged' | 'schedule' | 'deploy-failed' | 'release-published';
 export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-implement-revise.yml': ['review', 'pr-label', 'dispatch'],
   'agent-implement.yml': ['issue-label', 'dispatch'],
@@ -51,6 +51,8 @@ export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-overseer.yml': ['schedule', 'dispatch', 'pr-target-merged'],
   // Plan 0010 D8: a failed run of the deploy caller, judged by whoever started that run.
   'agent-deploy-diagnose.yml': ['deploy-failed'],
+  // kanon#1190: a published release, judged by whoever published it.
+  'agent-release-announce.yml': ['release-published', 'dispatch'],
 };
 
 /** The job holding the gate step, and the step's index in it. */
@@ -256,6 +258,8 @@ export const eventFor = (trigger: Trigger, actor: Actor): { name: string; payloa
       return { name: 'pull_request_target', payload: { action: 'closed', pull_request: { merged: true, merged_by: user }, sender: { login: 'someone-else' } }, env: {} };
     case 'schedule':
       return { name: 'schedule', payload: { schedule: '50 5 * * *' }, env: { GITHUB_ACTOR: actor.login } };
+    case 'release-published':
+      return { name: 'release', payload: { action: 'published', release: { tag_name: 'v1.0.0', draft: false, prerelease: false }, sender: user }, env: {} };
   }
 };
 

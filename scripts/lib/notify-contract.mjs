@@ -34,9 +34,10 @@ export const CONTRACT_VERSION = 1;
 
 /**
  * The message kinds of version 1 (§3.2). There is no `health` kind (decision 13): the health job
- * never posts. A kind is added with its producer and its secret, additively.
+ * never posts. A kind is added with its producer and its secret, additively (§3.4): `release`, a
+ * published release, for a repository that releases without deploying (kanon#1190).
  */
-export const KINDS = Object.freeze(['project-digest', 'weekly-digest', 'deploy']);
+export const KINDS = Object.freeze(['project-digest', 'weekly-digest', 'deploy', 'release']);
 export const SEVERITIES = Object.freeze(['info', 'warning', 'critical']);
 
 /**
@@ -49,10 +50,12 @@ export const KIND_SECRETS = Object.freeze(Object.fromEntries(
 ));
 
 /**
- * The lanes a message may come from (`source.lane`): the lanes that produce a kind. Each kind's
- * producer is its own lane today (§3.2), so this is the kinds' list; a lane is added with the kind.
+ * The lanes a message may come from (`source.lane`): the lanes that produce a kind, a lane added
+ * with its kind. The digests and the deploy lane are named for their kind (§3.2); the `release`
+ * kind's lane is `release-announce`, named for what it does, as its telemetry partition is
+ * (kanon#1190).
  */
-export const SOURCE_LANES = KINDS;
+export const SOURCE_LANES = Object.freeze(['project-digest', 'weekly-digest', 'deploy', 'release-announce']);
 
 /**
  * Version 1's limits (§3.1), in characters (Unicode code points) unless named otherwise. Each is

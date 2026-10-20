@@ -347,9 +347,20 @@ jobs:
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
+  release-announce:
+    # The release announcement (kanon#1190): the workflow token reads the release, and no model runs.
+    permissions:
+      contents: read
+    uses: $/.github/workflows/agent-release-announce.yml
+    with:
+      smoke: agent-lanes-smoke
+    secrets:
+      # Its kind's secret, which the lane hands its notify job alone.
+      KANON_CHAT_RELEASE: ${{ secrets.KANON_SMOKE_UNSET }}
+
   smoke:
     name: Agent lanes smoke
-    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs, lead, lead-split, rebase, merge, lead-reconcile, project-digest, weekly-digest, explore, dispatch-sweep, issue-backstop, code-audit, overseer, explore-telemetry, deploy-diagnose]
+    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs, lead, lead-split, rebase, merge, lead-reconcile, project-digest, weekly-digest, explore, dispatch-sweep, issue-backstop, code-audit, overseer, explore-telemetry, deploy-diagnose, release-announce]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -359,7 +370,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"'
-          echo "$RESULTS" | jq -e 'to_entries | length == 21 and all(.value.result == "success" or .value.result == "skipped")'
+          echo "$RESULTS" | jq -e 'to_entries | length == 22 and all(.value.result == "success" or .value.result == "skipped")'
 
       # For the fixture adopter only. lane-check itself comes from `$/`.
       - uses: actions/checkout@v7

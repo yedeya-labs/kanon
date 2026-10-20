@@ -107,6 +107,7 @@ One JSON object, version 1. Every field is listed; any other is refused.
 | `project-digest` | the daily project digest | the developer | `warning` when a project is stopped, `info` otherwise | `KANON_CHAT_PROJECT_DIGEST` |
 | `weekly-digest` | the weekly digest | a stakeholder outside the day-to-day (`K-LAYOUT-10`'s audience bullet) | `info` | `KANON_CHAT_WEEKLY_DIGEST` |
 | `deploy` | `announce-deploy.mjs`, in plan 0010's lane, once per environment | the Stakeholder | `info` when a deploy lands, `critical` when production fails, `warning` when another environment fails (the Owner's decision of 2026-10-15: this table named no severity for it) | `KANON_CHAT_DEPLOY` |
+| `release` | `announce-release.mjs`, in the release announcement's lane (`agent-release-announce.yml`, source lane `release-announce`), once per published release ([kanon#1190](https://github.com/yedeya-labs/kanon/issues/1190), added after this plan) | whoever follows the releases | `info`, a stable release and a pre-release alike, a pre-release saying so (the Owner's decision of 2026-10-20) | `KANON_CHAT_RELEASE` |
 
 **There is no `health` kind.** The Owner decided the health job never posts a chat message (decision 13): it files and reopens issues, and the issue is the record. The first draft's `health` kind had no other producer, so it leaves version 1's closed list, and with it the fourth per-kind secret: **three secrets, not four.** A health message later would be an additive kind with its producer ([§3.4](#34-versions)).
 
@@ -457,7 +458,7 @@ Read on 2026-10-14, on docs.slack.dev.
 
 ## Out of scope
 
-- **A `release` kind** for libraries that release without deploying, **cost alerts** (`K-ADOPT-1` step 10 names them; nothing produces one yet), and **health messages** (decision 13: never, for now). Each would be an additive kind with its producer and its secret.
+- **A `release` kind** for libraries that release without deploying: since built, by [kanon#1190](https://github.com/yedeya-labs/kanon/issues/1190), as its own lane (§3.2). **Cost alerts** (`K-ADOPT-1` step 10 names them; nothing produces one yet), and **health messages** (decision 13: never, for now). Each would be an additive kind with its producer and its secret.
 - **A third prebuilt hook,** and **naming other chat systems** (shape S3: they are the adopter's own hooks).
 - **A default-branch restriction on the hook** (decision 8: the Owner chose any branch).
 - **Interactive messages:** buttons, replies, slash commands. An incoming webhook can't receive them.

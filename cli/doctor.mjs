@@ -2790,7 +2790,7 @@ export const diagnose = async (deps, opts) => {
           continue;
         }
         if (!lacks) continue;
-        find('notify.kind-unset', c.file, `calls ${c.lane}, whose ${kind} messages are posted only with ${name}, which ${repo} doesn't hold: so ${kind} is not posted${req.lanes[c.lane] ? ', and the model run that writes it is skipped' : ''}. That is a choice (plan 0011 decision 3).`, {
+        find('notify.kind-unset', c.file, `calls ${c.lane}, whose ${kind} messages are posted only with ${name}, which ${repo} doesn't hold: so ${kind} is not posted${req.lanes[c.lane]?.claude?.length ? ', and the model run that writes it is skipped' : ''}. That is a choice (plan 0011 decision 3).`, {
           text: `To post ${kind}, store what your hook needs for it (for Kanon's Slack hook, the URL of a Slack incoming webhook for that channel; for its generic webhook hook, an https URL) ${OWN_TERMINAL}:`,
           commands: [`gh secret set ${name} -R ${repo}`],
         });

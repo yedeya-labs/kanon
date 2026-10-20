@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { SCHEMA as DOCTOR_SCHEMA } from '../../cli/doctor.mjs';
-import { CHAT_QUESTION, CHAT_QUESTION_BOTH, CHAT_QUESTION_DEPLOY, CHAT_RECORD, SCHEMA as INIT_SCHEMA, UPSTREAM_EVIDENCE_QUESTION } from '../../cli/init.mjs';
+import { CHAT_QUESTION, CHAT_QUESTION_BOTH, CHAT_QUESTION_DEPLOY, CHAT_QUESTION_RELEASE, CHAT_RECORD, SCHEMA as INIT_SCHEMA, UPSTREAM_EVIDENCE_QUESTION } from '../../cli/init.mjs';
 import { REVIEW_LABELS } from '../../scripts/lane-gate.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL } from '../../scripts/lib/upstream-findings.mjs';
 
@@ -524,7 +524,7 @@ describe('each skill is held to the kanon command it drives', () => {
     // The deploy lane announces too (plan 0011 N9): declared environments bring the question.
     expect(chat).toMatch(/any feature with deploy environments declared/);
     expect(chat).toMatch(/\*\*Don't ask it when the repository answers it already:\*\* when `\.inspection\.notifyHook` is not null/);
-    for (const q of [CHAT_QUESTION, CHAT_QUESTION_DEPLOY, CHAT_QUESTION_BOTH]) expect(chat).toContain(`"${q}"`);
+    for (const q of [CHAT_QUESTION, CHAT_QUESTION_DEPLOY, CHAT_QUESTION_BOTH, CHAT_QUESTION_RELEASE]) expect(chat).toContain(`"${q}"`);
     expect(chat).toMatch(/^- \*\*Recommended:\*\* \*\*Kanon's Slack hook\*\*/m);
     for (const flag of ['--chat slack', '--chat webhook', '--chat hook', '--chat none']) expect(chat).toContain(`\`${flag}\``);
     expect(chat).toMatch(/A caller that still maps `DIGEST_WEBHOOK` infers nothing/);

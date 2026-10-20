@@ -134,7 +134,7 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
 
   it('asks nothing where the checked release has no lane that notifies, as a release before N7', async () => {
     // This tree notifies since N7 and N8, from both digests; a release before them has the entry, and no lane in it.
-    expect(Object.values(notifyOf(REQ).kinds).flatMap((k) => k.lanes)).toEqual([LANE, 'agent-weekly-digest', 'deploy']);
+    expect(Object.values(notifyOf(REQ).kinds).flatMap((k) => k.lanes)).toEqual([LANE, 'agent-weekly-digest', 'deploy', 'agent-release-announce']);
     const f = files({ hook: null, mapped: ['CLAUDE_CODE_OAUTH_TOKEN', LEGACY] });
     const r = await check(f, github({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), LEGACY]) }), beforeN7());
     expect(notifyIds(r)).toEqual([]);
@@ -193,6 +193,20 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
       const user = github({ secrets: without(), org: null });
       await check(files(), user);
       expect(user.paths.filter((p) => p.includes('organization-secrets'))).toEqual([]);
+    });
+
+    // kanon#1190: the release announcement's caller, whose kind secret is KANON_CHAT_RELEASE, and
+    // which runs no model, so the note says nothing of one.
+    it("covers the release announcement's caller, with its kind and secret, and no model run (kanon#1190)", async () => {
+      const RELEASE_CALLER = '.github/workflows/agent-release-announce.yml';
+      const extra = { [RELEASE_CALLER]: callerFile('agent-release-announce', REQ.lanes['agent-release-announce']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }) };
+      const r = await check(files({ extra }), github({ secrets: new Set([...without(), SECRET]) }));
+      expect(notifyIds(r)).toEqual([`notify.kind-unset ${RELEASE_CALLER}`]);
+      const f = finding(r, 'notify.kind-unset');
+      expect(f.message).toContain('calls agent-release-announce, whose release messages are posted only with KANON_CHAT_RELEASE');
+      expect(f.message).not.toMatch(/model run/);
+      expect(f.fix.commands).toEqual([`gh secret set KANON_CHAT_RELEASE -R ${REPO}`]);
+      expect(notifyIds(await check(files({ extra }), github({ secrets: new Set([...without(), SECRET, 'KANON_CHAT_RELEASE']) })))).toEqual([]);
     });
 
     it('is unchecked where the token can\'t list the repository\'s secrets', async () => {

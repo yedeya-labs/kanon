@@ -175,6 +175,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-OBS-19`
 
 - **2026-10-15.** The guards the rule names are built: Kanon's `notify` block, `actions/notify`, with `tests/unit/helpers/notify-jobs.ts`, `tests/unit/notify-guard.test.ts` and `tests/library/notify-block.test.ts`, `K-AGENT-50`'s guard admitting the `notify` job only in its exact shape, and `K-AGENT-49`'s counting the block as running the adopter's code. The block publishes its outcome, `posted`, `failed` or `skipped`, as an output, since a skip leaves the job green. No lane runs it until the digests move. [Plan 0011](../docs/plans/0011-notifications.md) N6, [#839](https://github.com/yedeya-labs/kanon/issues/839), [#972](https://github.com/yedeya-labs/kanon/issues/972)
+- **2026-10-20.** A fourth kind, `release`, posted by the release announcement's lane with `KANON_CHAT_RELEASE`, joins the contract's lanes and the `notify` job's secrets; the rule's lists name it. [#1190](https://github.com/yedeya-labs/kanon/issues/1190)
 
 ## `K-LAYOUT-1`
 

@@ -40,6 +40,7 @@ The "Its short and skipped runs" column is held to the lanes' jobs by [`tests/un
 | `agent-overseer` | A weekly schedule; a merged change to its caller; a dispatch | A merged caller change that doesn't move the agent runtime forward (a short gate job) | Weeks |
 | `agent-project-digest` | A daily schedule; a dispatch | A run without both the notify hook and `KANON_CHAT_PROJECT_DIGEST`: the gate skips the `digest` job and runs only the health job, at no model cost (plan 0011 §8) | Days, and open projects |
 | `agent-weekly-digest` | A weekly schedule; a dispatch | No notify hook, or no `KANON_CHAT_WEEKLY_DIGEST`: a short gate job, and no model, since nothing would be posted (plan 0011 §8) | Weeks |
+| `agent-release-announce` | A release published; a dispatch | None: it runs no model, so every run is short | Published releases |
 | `agent-merge` | A review submitted; CI finishing on the default branch; an hourly schedule; a dispatch | None: it runs no model, so every run is short | Reviews, merges and hours |
 | `agent-rebase` | CI finishing on the default branch; a pull request merged; a daily schedule; a dispatch | A check that finds no agent pull request in conflict | Merges, and conflicts on agent pull requests |
 | `agent-dispatch-sweep` | A daily schedule; a run of a lane it recovers completing; a dispatch | None: it runs no model, so every run is short | Days, and the implement and triage runs that re-ask it ([Schedules are best effort](lanes.md#schedules-are-best-effort)) |
@@ -72,6 +73,7 @@ Measured on `yedeya-labs/kanon` over the 7 days from 2026-10-06 06:25 to 2026-10
 | `agent-overseer` | `overseer.yml` | 6.1 | 2.6 | 81% | 3.2 | 21 | 17 |
 | `agent-project-digest` | none | — | — | — | — | — | not measured |
 | `agent-weekly-digest` | none | — | — | — | — | — | not measured |
+| `agent-release-announce` | none | — | — | — | — | — | not measured |
 | `agent-merge` | `merge.yml` | 0.7 | 129 | 100% | 0.9 | — | 110 |
 | `agent-rebase` | `rebase.yml` | 6 | 43 | 93% | 0.8 | 8 | 57 |
 | `agent-dispatch-sweep` | `dispatch-sweep.yml` | 0.6 | 0 | — | — | — | 0 |

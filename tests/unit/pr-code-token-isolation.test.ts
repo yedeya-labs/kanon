@@ -247,6 +247,35 @@ describe("the deploy lane's two exceptions hold only what plan 0010 §7 lets the
   });
 });
 
+// kanon#1190: the release announcement's notify job runs the adopter's hook, as every notify job
+// does, and is admitted only in its exact shape; its `announce` job runs no code under test and
+// holds the workflow token's contents: read alone.
+describe('the release announcement holds a credential beside the code under test only in its notify job (kanon#1190)', () => {
+  const FILE = 'agent-release-announce.yml';
+  const wf = read(join(WF, FILE));
+
+  it('is read, and its notify job is the notify exception, in its shape', () => {
+    expect(PATHS.map((p) => basename(p))).toContain(FILE);
+    const running = Object.entries(wf.jobs ?? {}).filter(([, j]) => (j.steps ?? []).some(runsCodeUnderTest)).map(([n]) => n);
+    expect(running).toEqual(['notify']);
+    expect(Object.keys(violations([join(WF, FILE)]))).toEqual([`${FILE}:notify`]);
+    expect(isNotifyException(`${FILE}:notify`)).toBe(true);
+  });
+
+  it('the announce job runs no code under test, and its one credential is the workflow token, reading contents', () => {
+    const job = wf.jobs!.announce!;
+    expect((job.steps ?? []).map(runsCodeUnderTest).filter(Boolean)).toEqual([]);
+    expect(job.permissions).toEqual({ contents: 'read' });
+    expect(JSON.stringify(job)).not.toMatch(/secrets\s*[.[]/);
+  });
+
+  it('the mutation: a project-setup hook in the announce job beside the token breaks the rule', () => {
+    const mutated = structuredClone(wf);
+    mutated.jobs!.announce!.steps!.unshift({ uses: './.github/actions/project-setup', with: { token: '${{ github.token }}' } });
+    expect(judge(mutated, mutated.jobs!.announce!)).toBeDefined();
+  });
+});
+
 describe(`the notify job: ${NOTIFY_SHAPE}`, () => {
   /** The project digest with its notify job, as step N7 adds it. */
   const lane = (edit: (job: Job & Record<string, unknown>) => void = () => {}) => {

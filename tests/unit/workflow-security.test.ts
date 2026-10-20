@@ -360,3 +360,25 @@ describe('K-AGENT-47 no job passes secrets: inherit', () => {
     expect(docs.flatMap(({ file, doc }) => inheritsSecrets(doc).map((j) => `${file}: ${j}`))).toEqual([]);
   });
 });
+
+// kanon#1190: the release announcement runs on a published release and a dispatch, never on a
+// pull request, so no fork's pull request reaches the hook its `notify` job runs, and its caller
+// grants it nothing but contents: read.
+describe('the release announcement (kanon#1190) is started by no pull request, pins its actions and inherits nothing', () => {
+  const lane = docs.find(({ file }) => file.endsWith('/agent-release-announce.yml'))!;
+  const caller = (on: string) => y(`on:\n  ${on}:\n    types: [published]\njobs:\n  announce:\n    uses: $/.github/workflows/agent-release-announce.yml\n    secrets:\n      KANON_CHAT_RELEASE: \${{ secrets.KANON_CHAT_RELEASE }}\n`);
+
+  it('is read, and holds', () => {
+    expect(lane).toBeDefined();
+    expect(eventsOf(lane.doc)).toEqual(['workflow_call']);
+    expect(unpinned(lane.doc)).toEqual([]);
+    expect(inheritsSecrets(lane.doc)).toEqual([]);
+    expect(headCheckoutWalk(lane.file, lane.doc, loadLocal)).toEqual({ found: [], read: 0 });
+    expect((lane.doc as Doc & { permissions?: unknown }).permissions).toEqual({ contents: 'read' });
+  });
+
+  it('a caller started by release reads nothing for K-AGENT-48, and one started by pull_request_target would be walked', () => {
+    expect(headCheckoutWalk('caller.yml', caller('release'), loadLocal)).toEqual({ found: [], read: 0 });
+    expect(headCheckoutWalk('caller.yml', caller('pull_request_target'), loadLocal).read).toBeGreaterThan(0);
+  });
+});
