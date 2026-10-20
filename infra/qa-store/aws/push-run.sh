@@ -108,7 +108,9 @@ case "$kind" in
     tn="$(jq -r '.turns // 0' "$report")"
     # Liveness flags (RA-504) — `no_report`: the agent wrote nothing and the
     # workflow synthesized this row; `report_invalid`: it wrote something unparseable;
-    # `complete`: it reached its final write.
+    # `complete`: it reached its final write; `ended_unmarked`: it exited zero, ending its own
+    # turn, without reaching it (kanon#1135), so a `complete: false` row with it `false` was cut
+    # short, and one written before it existed carries neither reading.
     #
     # Each is written as an explicit true/false, never encoded by presence — the
     # Overseer's playbook mandates full-item queries precisely because a projection
@@ -116,7 +118,7 @@ case "$kind" in
     # be indistinguishable from "false".
     #
     # But ONLY when the source report actually carries the key. agent-code-audit.yml's
-    # stamp step normalizes all three before this runs, so a live run always has them.
+    # stamp step normalizes all four before this runs, so a live run always has them.
     # A one-time backfill does not go through that step — it replays historical reports written
     # before this protocol existed, and defaulting those to `false` would fabricate a
     # degraded signal: the docs promise pre-change rows have NEITHER attribute ("unknown,
@@ -126,6 +128,7 @@ case "$kind" in
       (if has("no_report")      then {no_report:      {BOOL: (.no_report == true)}}      else {} end)
       + (if has("complete")     then {complete:       {BOOL: (.complete == true)}}       else {} end)
       + (if has("report_invalid") then {report_invalid:{BOOL: (.report_invalid == true)}} else {} end)
+      + (if has("ended_unmarked") then {ended_unmarked:{BOOL: (.ended_unmarked == true)}} else {} end)
     ' "$report")"
     # RUN#audit / <ts> — liveness + execution-truth proxy
     put "$(jq -nc --arg ts "$ts" --arg c "$commit" --arg tr "$trigger" \

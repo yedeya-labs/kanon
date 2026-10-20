@@ -355,6 +355,9 @@ jobs:
           START_MS: ${{ steps.timer.outputs.start }}
           EVENT: ${{ github.event_name }}
           COMMIT: ${{ github.sha }}
+          # `success` only when the agent exited zero: it ended its own turn, under every cap. The
+          # step runs `continue-on-error`, so its conclusion would read `success` either way.
+          AGENT_OUTCOME: ${{ steps.agent.outcome }}
         run: |
           # AN ABSENT REPORT IS NEVER BENIGN HERE (RA-504). This lane has no change gate and no
           # skip path, and the agent is told to write the report on turn one, so "no file" means
@@ -408,20 +411,29 @@ jobs:
           const cites = invalid ? new Set() : new Set((JSON.stringify(s).match(/[\w./[\]-]+\.[A-Za-z]\w*:\d+(?:-\d+)?/g) || [])
             .filter(t => t.includes('/') && !t.includes('//')));
           s.lines_cited = cites.size;
-          // The three liveness flags as real booleans. `complete` is the agent's own end-of-run
+          // The three liveness flags as real booleans, before the fourth is derived from them. `complete` is the agent's own end-of-run
           // marker: anything but an explicit `true` reads as NOT known-complete, the honest
           // default. `complete:false` degrades the coverage claim; only an absent or unparseable
           // report fails the job.
           s.complete = s.complete === true;
           s.no_report = s.no_report === true;
           s.report_invalid = s.report_invalid === true;
+          // A FINISHED AUDIT WITH NO FINAL WRITE (kanon#1135): the agent exited zero, so no cap and
+          // no error cut it short, yet its report is still unmarked. `complete` stays false, since
+          // only the agent's own final write sets it, and this fourth flag says the run ended on
+          // its own, so a run that a cap cut short stays the only `complete: false` without it.
+          s.ended_unmarked = process.env.AGENT_OUTCOME === 'success' && !s.complete && !s.no_report && !s.report_invalid;
           s.cost_proxy = { ...(s.cost_proxy || {}), duration_ms: dur, turns: s.turns ?? null };
           fs.writeFileSync(f, JSON.stringify(s, null, 2));
           if (process.env.GITHUB_OUTPUT) {
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `complete=${s.complete}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `ended_unmarked=${s.ended_unmarked}\n`);
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `turns=${s.turns ?? ''}\n`);
           }
-          console.log(`stamped: trigger=${s.trigger} duration_ms=${dur} turns=${s.turns} files_read=${s.files_read} lines_cited=${s.lines_cited} complete=${s.complete} no_report=${s.no_report} report_invalid=${s.report_invalid} (self-reported lines_cited=${selfReported ?? 'none'})`);
+          if (s.ended_unmarked) {
+            console.log(`::warning title=audit ended without its final write::The audit agent exited zero, ending its own turn (turns: ${s.turns ?? 'unknown'} of --max-turns 100), but its report is still \`complete: false\`: it never made the final write. The report goes to the store as written, with \`ended_unmarked: true\`, so this run reads apart from one a cap cut short. Its coverage is what \`areas_scanned\` lists, and nothing more is claimed.`);
+          }
+          console.log(`stamped: trigger=${s.trigger} duration_ms=${dur} turns=${s.turns} files_read=${s.files_read} lines_cited=${s.lines_cited} complete=${s.complete} ended_unmarked=${s.ended_unmarked} no_report=${s.no_report} report_invalid=${s.report_invalid} (self-reported lines_cited=${selfReported ?? 'none'})`);
           EOF
 
       # THE REPORT, FOR THE `put` JOB. Uploaded whatever happened above, BEFORE the outcome

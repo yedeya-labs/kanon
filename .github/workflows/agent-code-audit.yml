@@ -37,7 +37,9 @@
 # The agent writes `qa-audit-summary.json` on its first turn and re-writes it after each area,
 # so a run cut short leaves a PARTIAL report rather than nothing. After the agent, the workflow
 # stamps the measured duration, the trigger and the commit, machine-counts `lines_cited`, and
-# synthesizes a `no_report` or `report_invalid` row when the agent wrote nothing usable. The
+# synthesizes a `no_report` or `report_invalid` row when the agent wrote nothing usable. It
+# flags `ended_unmarked` when the agent exited zero with its report never marked complete
+# (kanon#1135), so a run that ended on its own reads apart from one a cap cut short. The
 # report then goes to the `put` job as an artifact, and the audit job decides red or green
 # AFTER uploading it, so the durable write happens whichever way the run goes.
 #
