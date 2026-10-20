@@ -63,6 +63,9 @@ const files = [
 // release and for the same reason: through `$/`, a branch could change the check that names a
 // stalled lane.
 //
+// issue-backstop.yml calls the issue-opened backstop (kanon#1065), at the same release and for the
+// same reason: through `$/`, a dispatch from a branch would run that branch's lane with the Lead's key.
+//
 // The smoke run's python fixture hook is the first exception again, on a fixture (kanon#110):
 // the project-setup hook of the fixture adopter in Kanon's own checkout, run to show that a
 // hook with no `KANON` and no Node leaves a guard running on Kanon's Node.
@@ -111,6 +114,7 @@ const EXEMPT = new Set([
   '.github/workflows/verify-acs.yml: yedeya-labs/kanon/.github/workflows/agent-verify-acs.yml@vX.Y.Z',
   '.github/workflows/merge.yml: yedeya-labs/kanon/.github/workflows/agent-merge.yml@vX.Y.Z',
   '.github/workflows/project-digest.yml: yedeya-labs/kanon/.github/workflows/agent-project-digest.yml@vX.Y.Z',
+  '.github/workflows/issue-backstop.yml: yedeya-labs/kanon/.github/workflows/agent-issue-backstop.yml@vX.Y.Z',
   '.github/workflows/ci.yml: yedeya-labs/kanon/actions/lane-check@vX.Y.Z',
   // telemetry.yml calls the telemetry collector (plan 0002 S7), at the same release: its job
   // holds the store's writer credentials, so the code that runs with them is a released one.

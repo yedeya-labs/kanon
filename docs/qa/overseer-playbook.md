@@ -29,6 +29,7 @@ Tell a run that died from one that skipped by reading full run records, never a 
 | Verify acceptance criteria | `verify-acs.yml` | an issue label, a dispatch; since 2026-10-12 |
 | Merge (the Merger) | `merge.yml` | CI finishing on `main`, a review submitted, hourly (minute 37), a dispatch; since 2026-10-12 |
 | Daily project digest | `project-digest.yml` | daily (07:00 UTC), a dispatch; since 2026-10-14, for its health job ([#813](https://github.com/yedeya-labs/kanon/issues/813)), and with no `DIGEST_WEBHOOK` its digest posts nothing |
+| Issue backstop | `issue-backstop.yml` | an issue opened (by anyone, an outsider included), a dispatch; since 2026-10-20 |
 
 **The library's re-delivery logic doesn't know this yet.** It lists a lane's runs, and dispatches a re-review, by the lane's file name (`agent-review.yml`, `agent-implement-revise.yml`, `agent-lead-revise.yml`, `agent-lead-split.yml`), so on Kanon it finds no run and its dispatch fails ([the adoption record](adoption.md)'s re-delivery row). A re-delivery, or a failed re-review dispatch, on a Kanon pull request whose lane did run is that known gap: name it once, with the run that did deliver, and file nothing new for it.
 

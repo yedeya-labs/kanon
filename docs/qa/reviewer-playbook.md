@@ -10,7 +10,6 @@ From [#36](https://github.com/yedeya-labs/kanon/issues/36) on, the prompt is wri
 
 - **No app, no database, no E2E tier.** The stack document says so, and lists Kanon's gates.
 - **No launch gate.** Kanon has only the two buckets, and no roadmap milestone. Never create one.
-- **No issue-opened backstop.** Nothing adds `qa:needs-severity` or `gate-candidate` after you, and nothing defaults a milestone. The labels and milestone you file with are final.
 
 ## What to check
 

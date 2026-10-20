@@ -109,7 +109,7 @@
       "does": "Gives an issue opened with no milestone a bucket milestone (`K-WORK-1`), and flags a reviewer follow-up filed with no severity or, at a gate severity, without `gate-candidate`.",
       "needs": ["the two bucket milestones, which `kanon milestones` creates"],
       "cost": "No model; a short job per opened issue.",
-      "minutes": "Not measured: the lane is new, and Kanon doesn't call it yet; it runs once per opened issue, with no model, for well under a minute.",
+      "minutes": "Not measured yet: Kanon has called it only since 2026-10-20; it runs once per opened issue, with no model, for well under a minute.",
       "recommend": ["agent-implement", "agent-triage"],
       "when": "With implement or triage, once the Author App is installed: an issue filed by hand or through an issue form otherwise stays bare, and drops out of every progress report (`K-WORK-1`)."
     },
