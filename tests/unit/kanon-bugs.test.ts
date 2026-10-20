@@ -209,9 +209,9 @@ describe('public or private (the Owner, 2026-10-07 on #41: the three-adopter rul
     expect(detect(many(50, () => failed('k1')).concat(failed('k2'))).signals[0]).toMatchObject({ runs: 51, adopters: 2, visibility: 'private' });
   });
 
-  // #1094: the Owner's own projects (Kanon, the operator's repository, the e2e harness) declare
-  // their own figures (`publish_own_figures_as`), and plan 0012 §6.2 says their rows never count
-  // toward the rule. `own` is the map `aggregate` takes: each declaring key to its label.
+  // #1094: the Owner's own projects (docs/telemetry.md, "Kanon's own bugs", lists them under
+  // `--own`) declare their own figures (`publish_own_figures_as`), and plan 0012 §6.2 says
+  // their rows never count toward the rule. `own` is the map `aggregate` takes: each declaring key to its label.
   const own = { o1: 'kanon', o2: 'operator', o3: 'harness' };
 
   it("leaves declaring adopters out of the count, so the Owner's projects and one adopter stay private", () => {

@@ -7,9 +7,11 @@
  * message (step N8) is Kanon text too, and each hook renders it for its own system.
  *
  * Extracted from announce-deploy.mjs so the weekly digest (RA-502) can reuse them
- * instead of growing a second, drifting copy — the two posts read the same release
- * bodies and must categorise them identically, or the same commit gets called a
- * Feature in one and Maintenance in the other.
+ * instead of growing a second, drifting copy — the two posts parse the same release
+ * bodies and must read each commit's scope identically, which is why `parseSections`,
+ * `scopeOf` and `INTERNAL_SCOPES` live here. Only the deploy announcement categorises,
+ * with `classify`; the digest groups by its own `INTERNAL_AREAS`, a superset kept apart
+ * so widening it never changes what the announcement calls a Feature.
  *
  * PURE ONLY, deliberately: no fetch, no env, no process. That is what makes this
  * unit-testable (tests/library/release-notes.test.ts, announce-deploy.test.ts).
