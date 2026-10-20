@@ -159,6 +159,46 @@ laneCheck(() => {
         expect(r.status, `${JSON.stringify(more)}\n${r.out}`).toBe(0);
       }
     });
+    // kanon#1126: Dependabot opens an update no group takes in as a pull request of its own, per
+    // dependency and per directory, and each Kanon lane's workflow is a dependency of its own, so
+    // an entry that reaches every pin but groups none of Kanon still splits the upgrade.
+    const ungrouped = (at: number, ...said: string[]) => `its Kanon entry at \`updates[${at}]\` (${said.map((x) => `\`${x}\``).join(', ')}) proposes Kanon upgrades but puts them in no one group`;
+    const RELEASE = ungrouped(1, 'target-branch: release', 'directories: ["/","/.github/actions/*"]');
+    // A second entry that reaches every pin, with `groups` and `ignore` as given (undefined drops it).
+    const reaching = (more: Record<string, unknown>) => (t: Tree) => {
+      pinHook(t);
+      directories(['/', '/.github/actions/*'])(t);
+      t.edit(DEP, (d) => {
+        const u: Record<string, unknown> = { ...(d as Dep).updates[0]!, 'target-branch': 'release', ...more };
+        for (const [k, v] of Object.entries(u)) if (v === undefined) delete u[k];
+        (d as Dep).updates.push(u);
+      });
+    };
+    it('refuses a second entry that reaches every pin but groups none of Kanon, naming the `kanon` group as the fix (kanon#1126)', () => {
+      const r = red(reaching({ groups: undefined }), RELEASE);
+      expect(r.out).toContain('Add the `kanon` group `kanon init` writes');
+      expect(r.out).toContain('kanon: { patterns: ["yedeya-labs/kanon*"] }');
+      expect(r.out).not.toContain("doesn't reach");
+    });
+    it("refuses a group that takes in Kanon's actions but not its lanes' workflows (kanon#1126)", () =>
+      red(reaching({ groups: { kanon: { patterns: ['yedeya-labs/kanon'] } } }), RELEASE));
+    it("refuses the first entry too, when another group takes in Kanon's lanes before its own (kanon#1126)", () =>
+      red((t) => t.edit(DEP, (d) => {
+        const u = (d as Dep).updates[0]!;
+        u.groups = { lanes: { patterns: ['*/.github/workflows/*'] }, ...(u.groups as object) };
+      }), ungrouped(0, 'directory: /')));
+    it('passes a second entry that groups Kanon, by the `kanon` group or a catch-all, or ignores it (kanon#1126)', () => {
+      for (const more of [
+        { groups: { kanon: { patterns: ['yedeya-labs/kanon*'] } } },
+        { groups: { all: { patterns: ['*'] } } },
+        { groups: undefined, ignore: [{ 'dependency-name': 'yedeya-labs/kanon*' }] },
+      ]) {
+        const t = adopter();
+        reaching(more)(t);
+        const r = check(t);
+        expect(r.status, `${JSON.stringify(more)}\n${r.out}`).toBe(0);
+      }
+    });
     it('passes a composite action that pins no Kanon reference, which the entry for `/` leaves alone', () => {
       const t = adopter();
       expect(t.read(HOOK)).not.toContain('yedeya-labs/kanon/');

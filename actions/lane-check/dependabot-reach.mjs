@@ -6,7 +6,9 @@
 // lane-check's one-version rule then failed. lane-check and `kanon doctor` both read it here.
 //
 // Dependabot groups an entry's updates into one pull request across its directories, never
-// across entries, so one entry has to reach every file. It reads a glob only in `directories`
+// across entries, so one entry has to reach every file. That holds only for the updates a group
+// takes in: an update no group takes in is a pull request of its own, one per dependency and per
+// directory (kanon#1126), so the entry also has to group Kanon, `groupsKanon` below. It reads a glob only in `directories`
 // (`*` one directory deep, `**` any depth), and `directory` as written.
 
 /** @param {string} d */
@@ -72,16 +74,28 @@ export const directoriesLine = (entry, files) => {
 /** @param {unknown} v @returns {v is Record<string, any>} */
 const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** Kanon's dependency name: Dependabot names an action `owner/repo`, whatever the path after it. */
+/** Kanon's repository, which every Kanon dependency name starts with. */
 const KANON = 'yedeya-labs/kanon';
 
 /**
- * Whether a `dependency-name` matches Kanon's, `*` matching any run of characters, as Dependabot
- * matches it, and without case, as GitHub names a repository.
- * @param {unknown} name
+ * Kanon's dependency names, one of each kind (kanon#1126). Dependabot names an action at a release
+ * tag `owner/repo`, whatever the path after it, but a reusable workflow `owner/repo` and its path,
+ * so each Kanon lane a caller calls is a dependency of its own (dependabot-core's github_actions
+ * file parser). The workflow here is one no pattern naming only some of Kanon's workflows is sure
+ * to take in, so such a pattern counts as leaving Kanon's lanes out.
  */
-const namesKanon = (name) => typeof name === 'string'
-  && new RegExp(`^${name.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 'i').test(KANON);
+const KANON_NAMES = [KANON, `${KANON}/.github/workflows/any.yml`];
+
+/**
+ * Whether the pattern `pattern` matches the dependency name `name`, `*` matching any run of
+ * characters, as Dependabot matches it, and without case, as GitHub names a repository.
+ * @param {unknown} pattern @param {string} name
+ */
+const wild = (pattern, name) => typeof pattern === 'string'
+  && new RegExp(`^${pattern.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 'i').test(name);
+
+/** Whether a `dependency-name` matches a Kanon dependency name. @param {unknown} name */
+const namesKanon = (name) => KANON_NAMES.some((n) => wild(name, n));
 
 /** The update types that, ignored together, are every update. */
 const EVERY_UPDATE = ['version-update:semver-major', 'version-update:semver-minor', 'version-update:semver-patch'];
@@ -101,10 +115,51 @@ export const proposesKanon = (entry, files) => {
   const allow = entry.allow;
   if (Array.isArray(allow) && allow.length && !allow.some((a) => !isMap(a) || typeof a['dependency-name'] !== 'string'
     || namesKanon(a['dependency-name']) || a['dependency-name'].toLowerCase().startsWith(`${KANON}/`))) return false;
+  // Every Kanon name ignored, the lanes' workflows as well as the actions (kanon#1126).
   const ignore = Array.isArray(entry.ignore) ? entry.ignore : [];
-  return !ignore.some((i) => isMap(i) && namesKanon(i['dependency-name']) && i.versions === undefined
-    && (i['update-types'] === undefined || (Array.isArray(i['update-types']) && EVERY_UPDATE.every((t) => i['update-types'].includes(t)))));
+  return !KANON_NAMES.every((n) => ignore.some((i) => isMap(i) && wild(i['dependency-name'], n) && i.versions === undefined
+    && (i['update-types'] === undefined || (Array.isArray(i['update-types']) && EVERY_UPDATE.every((t) => i['update-types'].includes(t))))));
 };
+
+// Whether an entry that proposes Kanon groups it (kanon#1126). Dependabot opens "a single pull
+// request for each dependency that needs to be updated" unless a group takes it in, and, for one
+// dependency across `directories`, "a separate pull request for each directory". Kanon is several
+// dependencies, one per lane's workflow, so an entry that leaves any of them out of a group opens
+// several Kanon upgrade pull requests, each moving only part of the pins, and each fails the
+// one-version rule however well the entry reaches. Where the effect is unclear it counts the group
+// as not taking Kanon in whole, and the entry fails, as the entry `kanon init` writes never does.
+
+/** The semver update types a group's `update-types` names, which together take in every update. */
+const EVERY_GROUP_UPDATE = ['major', 'minor', 'patch'];
+
+/**
+ * Whether the group `g` takes in the dependency `name`: a pattern matches it, or the group names
+ * no patterns, and no `exclude-patterns` item matches it.
+ * @param {Record<string, any>} g @param {string} name
+ */
+const takesIn = (g, name) => (g.patterns === undefined || (Array.isArray(g.patterns) && g.patterns.some((p) => wild(p, name))))
+  && !(Array.isArray(g['exclude-patterns']) && g['exclude-patterns'].some((p) => wild(p, name)));
+
+/**
+ * Whether the parsed Dependabot entry `entry` puts every Kanon update in one group, so its Kanon
+ * upgrade is one pull request: the first version-updates group that takes in each Kanon name,
+ * Dependabot's rule for a dependency more than one group matches, is the same group for all of
+ * them, and that group takes in every update to them, so it sets no `update-types` short of all
+ * three, no `dependency-type`, and no `group-by`, which opens one pull request per dependency.
+ * @param {unknown} entry @returns {boolean}
+ */
+export const groupsKanon = (entry) => {
+  if (!isMap(entry) || !isMap(entry.groups)) return false;
+  const groups = Object.values(entry.groups).filter((g) => isMap(g) && (g['applies-to'] === undefined || g['applies-to'] === 'version-updates'));
+  const homes = KANON_NAMES.map((n) => groups.find((g) => takesIn(g, n)));
+  const home = homes[0];
+  return home !== undefined && homes.every((h) => h === home)
+    && home['group-by'] === undefined && home['dependency-type'] === undefined
+    && (home['update-types'] === undefined || (Array.isArray(home['update-types']) && EVERY_GROUP_UPDATE.every((t) => home['update-types'].includes(t))));
+};
+
+/** The `groups:` item `kanon init` writes, which takes in every Kanon update. */
+export const KANON_GROUP = 'kanon: { patterns: ["yedeya-labs/kanon*"] }';
 
 /**
  * The entries of the parsed `.github/dependabot.yml`, `doc`, that would open a Kanon upgrade pull

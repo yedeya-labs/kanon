@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { directoriesLine, kanonEntries, proposesKanon, unreached, updatedFrom } from '../../actions/lane-check/dependabot-reach.mjs';
+import { dependabotFile } from '../../cli/callers.mjs';
+import { parseYaml } from '../../cli/workflow-yaml.mjs';
+import { directoriesLine, groupsKanon, kanonEntries, proposesKanon, unreached, updatedFrom } from '../../actions/lane-check/dependabot-reach.mjs';
 
 /**
  * Which Kanon references the Dependabot entry that proposes Kanon upgrades reaches (K-ADOPT-11,
@@ -105,7 +108,11 @@ describe('the Dependabot entries that propose Kanon upgrades (K-ADOPT-11, kanon#
   it('leaves out an entry that ignores every Kanon update, and holds one that ignores only some', () => {
     expect(proposesKanon(entry({ ignore: [{ 'dependency-name': 'yedeya-labs/kanon*' }] }), FILES)).toBe(false);
     expect(proposesKanon(entry({ ignore: [{ 'dependency-name': '*' }] }), FILES)).toBe(false);
-    expect(proposesKanon(entry({ ignore: [{ 'dependency-name': 'yedeya-labs/kanon', 'update-types': ['version-update:semver-major', 'version-update:semver-minor', 'version-update:semver-patch'] }] }), FILES)).toBe(false);
+    expect(proposesKanon(entry({ ignore: [{ 'dependency-name': 'yedeya-labs/kanon*', 'update-types': ['version-update:semver-major', 'version-update:semver-minor', 'version-update:semver-patch'] }] }), FILES)).toBe(false);
+    expect(proposesKanon(entry({ ignore: [{ 'dependency-name': 'yedeya-labs/kanon' }, { 'dependency-name': 'yedeya-labs/kanon/*' }] }), FILES)).toBe(false);
+    // Dependabot names a reusable workflow by its repository and path, so ignoring the repository's
+    // bare name leaves every Kanon lane proposed (kanon#1126).
+    expect(proposesKanon(entry({ ignore: [{ 'dependency-name': 'yedeya-labs/kanon' }] }), FILES)).toBe(true);
     expect(proposesKanon(entry({ ignore: [{ 'dependency-name': 'yedeya-labs/kanon*', versions: ['1.2.3'] }] }), FILES)).toBe(true);
     expect(proposesKanon(entry({ ignore: [{ 'dependency-name': 'yedeya-labs/kanon*', 'update-types': ['version-update:semver-major'] }] }), FILES)).toBe(true);
     expect(proposesKanon(entry({ ignore: [{ 'dependency-name': 'actions/*' }] }), FILES)).toBe(true);
@@ -122,5 +129,60 @@ describe('the Dependabot entries that propose Kanon upgrades (K-ADOPT-11, kanon#
     const c = entry({ directory: '/infra', groups: { kanon: { patterns: ['yedeya-labs/kanon*'] } } });
     expect(kanonEntries({ version: 2, updates: [a, c, b] }, FILES)).toEqual([a, b]);
     for (const doc of [null, undefined, 'x', { updates: { a } }, { updates: null }]) expect(kanonEntries(doc, FILES)).toEqual([]);
+  });
+});
+
+/**
+ * Whether an entry that proposes Kanon groups it (kanon#1126). Dependabot opens an update no group
+ * takes in as a pull request of its own, per dependency and per directory, and each Kanon lane's
+ * workflow is a dependency of its own, so an ungrouped entry splits the upgrade into pull requests
+ * that each fail the one-version rule.
+ */
+describe('the Dependabot entries that group Kanon (K-ADOPT-11, kanon#1126)', () => {
+  const entry = (groups: unknown) => ({ 'package-ecosystem': 'github-actions', directory: '/', groups });
+  const KANON = { patterns: ['yedeya-labs/kanon*'] };
+
+  it('passes the `kanon` group kanon init writes, and a catch-all that takes Kanon in whole', () => {
+    expect(groupsKanon(entry({ kanon: KANON }))).toBe(true);
+    expect(groupsKanon(entry({ kanon: KANON, 'github-actions': { patterns: ['*'] } }))).toBe(true);
+    expect(groupsKanon(entry({ all: { patterns: ['*'] } }))).toBe(true);
+    expect(groupsKanon(entry({ kanon: { patterns: ['Yedeya-Labs/*'], 'update-types': ['patch', 'minor', 'major'] } }))).toBe(true);
+    expect(groupsKanon(entry({ kanon: { patterns: ['yedeya-labs/kanon', 'yedeya-labs/kanon/*'] } }))).toBe(true);
+    expect(groupsKanon(entry({ security: { 'applies-to': 'security-updates', patterns: ['*'] }, kanon: KANON }))).toBe(true);
+  });
+
+  it('fails an entry with no group, or none that takes Kanon in', () => {
+    expect(groupsKanon({ 'package-ecosystem': 'github-actions', directory: '/' })).toBe(false);
+    for (const g of [undefined, null, [], 'kanon', {}]) expect(groupsKanon(entry(g)), JSON.stringify(g)).toBe(false);
+    expect(groupsKanon(entry({ others: { patterns: ['actions/*'] } }))).toBe(false);
+    expect(groupsKanon(entry({ kanon: { patterns: ['*'], 'exclude-patterns': ['yedeya-labs/*'] } }))).toBe(false);
+    expect(groupsKanon(entry({ kanon: { ...KANON, 'applies-to': 'security-updates' } }))).toBe(false);
+    for (const e of [null, 'x', ['/']]) expect(groupsKanon(e)).toBe(false);
+  });
+
+  it("fails a group that takes in only Kanon's actions or only some of its lanes", () => {
+    expect(groupsKanon(entry({ kanon: { patterns: ['yedeya-labs/kanon'] } }))).toBe(false);
+    expect(groupsKanon(entry({ kanon: { patterns: ['yedeya-labs/kanon/*'] } }))).toBe(false);
+    expect(groupsKanon(entry({ kanon: { patterns: ['yedeya-labs/kanon', 'yedeya-labs/kanon/.github/workflows/agent-review.yml'] } }))).toBe(false);
+  });
+
+  it('passes the entry kanon init writes and the one in Kanon\'s own .github/dependabot.yml', () => {
+    const files = ['.github/workflows/ci.yml', '.github/actions/project-setup/action.yml'];
+    for (const text of [dependabotFile(), readFileSync('.github/dependabot.yml', 'utf8')]) {
+      const held = kanonEntries(parseYaml(text), files);
+      expect(held).toHaveLength(1);
+      expect(groupsKanon(held[0])).toBe(true);
+    }
+  });
+
+  it("fails Kanon split across two groups, since each is a pull request: the first that matches a name wins", () => {
+    expect(groupsKanon(entry({ actions: { patterns: ['yedeya-labs/kanon'] }, kanon: KANON }))).toBe(false);
+    expect(groupsKanon(entry({ lanes: { patterns: ['*/.github/workflows/*'] }, kanon: KANON }))).toBe(false);
+  });
+
+  it('fails a group that leaves some Kanon updates out, or opens a pull request per dependency', () => {
+    expect(groupsKanon(entry({ kanon: { ...KANON, 'update-types': ['minor', 'patch'] } }))).toBe(false);
+    expect(groupsKanon(entry({ kanon: { ...KANON, 'dependency-type': 'production' } }))).toBe(false);
+    expect(groupsKanon(entry({ kanon: { ...KANON, 'group-by': 'dependency-name' } }))).toBe(false);
   });
 });
