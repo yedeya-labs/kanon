@@ -23,7 +23,11 @@
 // A DEPLOY ROW (plan 0010 §10, step D9) is stored under `<key>#deploy`, from the collector on
 // either path and from the importer, like a run row; never from the backfill role. Its fields are
 // numbers, times, booleans and closed words only, so `validate` is all its intake needs. The
-// aggregate never reads it: no cross-adopter deploy figure is published (decision 11).
+// aggregate never reads it: no cross-adopter deploy figure is published (decision 11). Version 2
+// (plan 0013 §8, S2) adds the reset hook's stage and `reset_ms`, and is stored like version 1.
+//
+// A SMOKE-CHECK ROW (plan 0013 §8) is refused with `row_kind (not-allowed)` until S3 builds its
+// intake: `STORED_KINDS` doesn't name it.
 //
 // A NOTIFY ROW (plan 0011 §11, step N5) is stored in its lane's partition, `<key>#<lane>`, beside
 // the lane's run rows, under an `sk` that begins `notify#`, so it never takes a run row's key and
@@ -53,7 +57,8 @@ export const SHORT_RETENTION_MS = 30 * DAY;
  * The row kinds this function stores, each in a partition `PARTITIONS` names, so erasure walks it.
  * A kind the schema knows but this list doesn't is refused with `row_kind (not-allowed)`: stored,
  * it would land outside every partition erasure walks. The deploy row joined at plan 0010 D9, and the
- * notify row, in its lane's partition, at plan 0011 N5.
+ * notify row, in its lane's partition, at plan 0011 N5. The smoke-check row (plan 0013 §8), which the
+ * schema knows from S2, is refused until S3 adds it here and its partition to `PARTITIONS`.
  */
 export const STORED_KINDS = Object.freeze(['run', 'work_item', 'finding', 'deploy', 'notify']);
 /** The start of a notify row's `sk` in its lane's partition (plan 0011 §11). */

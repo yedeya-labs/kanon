@@ -285,6 +285,48 @@ describe('a deploy row is stored under <key>#deploy (plan 0010 §10, D9)', () =>
   });
 });
 
+describe('plan 0013 S2 at intake: deploy row version 2 is stored, a smoke-check row is refused until S3', () => {
+  const deployV2 = (over: Row = {}): Row => ({
+    schema_version: 2, row_kind: 'deploy', tag: 'run', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 1,
+    kanon_version: '0.12.0', role: 'production', position: 2, outcome: 'smoke_failed', failed_stage: 'reset', reset_ms: 4_000, ...over,
+  });
+  const smokeCheck = (over: Row = {}): Row => ({
+    schema_version: 1, row_kind: 'smoke_check', tag: 'run', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 1,
+    trigger: 'schedule', kanon_version: '0.12.0', role: 'pre-production', position: 1, outcome: 'ok', reset_ran: true, ...over,
+  });
+
+  it('a deploy row at version 2, failed at `reset`, is stored under <key>#deploy like version 1', async () => {
+    const r = await call(event([deployV2()]));
+    expect(r.status).toBe(200);
+    expect(r.puts).toEqual([expect.objectContaining({ pk: 'k1#deploy', schema_version: 2, failed_stage: 'reset', reset_ms: 4_000 })]);
+  });
+
+  it('a valid smoke-check row gets 422 naming row_kind, from the writer and the importer, and nothing is stored', async () => {
+    const writer = await call(event([smokeCheck()]));
+    expect(writer.status).toBe(422);
+    expect(writer.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
+    expect(writer.puts).toEqual([]);
+    const importer = await call(event([smokeCheck()], { role: 'kanon-telemetry-importer', key: 'k2' }), { IMPORTER_ROLE: 'kanon-telemetry-importer' });
+    expect(importer.status).toBe(422);
+    expect(importer.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
+    expect(importer.puts).toEqual([]);
+  });
+
+  it('the rows beside it are still stored, and no partition is named for it yet', async () => {
+    const r = await call(event([runRow(), smokeCheck({ outcome: 'failed', failed_stage: 'smoke' })]));
+    expect(r.body.results.map((x: { status: string }) => x.status)).toEqual(['stored', 'rejected']);
+    expect(r.puts.map((p) => p.pk)).toEqual(['k1#review']);
+    expect(PARTITIONS).not.toContain('smoke_check');
+  });
+
+  it('a smoke-check row with an environment field is rejected for the field, not only for its kind', async () => {
+    const r = await call(event([smokeCheck({ environment: 'staging' })]));
+    expect(r.status).toBe(422);
+    expect(r.body.results[0].errors).toEqual([{ field: 'environment', problem: 'unknown' }]);
+    expect(JSON.stringify(r.body)).not.toContain('staging');
+  });
+});
+
 describe('a notify row is stored in its lane\'s partition under notify# (plan 0011 §11, N5)', () => {
   const notifyRow = (over: Row = {}): Row => ({
     schema_version: 1, row_kind: 'notify', tag: 'run', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 2,
