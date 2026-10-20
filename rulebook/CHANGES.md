@@ -23,6 +23,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** Verify-acs moved onto the filing skill, and the test holds the baseline playbook's "Targeted-invariant mode" section to restating no routing too. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 - **2026-10-20.** Merge reconcile moved onto the filing skill. It reads the Reviewer's "Capturing follow-ups" section, which still routes until the Reviewer moves, so the test holds its prompt to saying the skill replaces that section's milestone lines. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 - **2026-10-20.** The Reviewer moved onto the filing skill, and its playbook's "Capturing follow-ups" names no milestone, in Kanon's own playbook and in the baseline, so the test holds that section to restating no routing for both the Reviewer and merge reconcile, and merge reconcile's prompt no longer says the skill overrides it. [#164](https://github.com/yedeya-labs/kanon/issues/164)
+- **2026-10-20.** The Lead's reconcile tick, last, files a brief's issues with the labels and milestone `plan` gives, the brief's milestone transcribed, and stops on an item `plan` refuses. The test now holds every lane prompt that files an issue to the skill, not only the lanes it lists. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 
 ## `K-WORK-12`
 
