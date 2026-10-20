@@ -47,10 +47,29 @@ const routingRestated =(text: string, { allowGateCandidate = false } = {}): stri
   return found;
 };
 
-/** The filers moved onto the skill: each lane's caller-facing workflow and the job that files. */
-const MOVED: Array<{ lane: string; workflow: string; job: string }> = [
+/**
+ * The filers moved onto the skill: each lane's caller-facing workflow, the job that files, and
+ * the playbook section its prompt sends the agent to, which is part of what the agent reads
+ * before it files and so must restate no routing either.
+ */
+const MOVED: Array<{ lane: string; workflow: string; job: string; playbook?: { path: string; section: string } }> = [
   { lane: 'explore', workflow: '.github/workflows/agent-explore.yml', job: 'explore' },
+  {
+    lane: 'code-audit',
+    workflow: '.github/workflows/agent-code-audit.yml',
+    job: 'audit',
+    playbook: { path: 'docs/qa/explorer-playbook.md', section: 'Code-reading mode' },
+  },
 ];
+
+/** One `## ` section of a Markdown file, to the next `## ` heading. */
+const sectionOf = (text: string, heading: string): string => {
+  const start = text.indexOf(`\n## ${heading}\n`);
+  if (start < 0) return '';
+  const rest = text.slice(start + 1);
+  const next = rest.indexOf('\n## ', 1);
+  return next < 0 ? rest : rest.slice(0, next);
+};
 
 const promptOf = (workflow: string, job: string): string => {
   const wf = readFlattened(join(ROOT, workflow)) as { jobs: Record<string, { steps: WorkflowStep[] }> };
@@ -108,7 +127,7 @@ describe('the filing skill (K-WORK-8)', () => {
 });
 
 describe('each filer moved onto the skill files through it, and restates no routing (K-WORK-8)', () => {
-  for (const { lane, workflow, job } of MOVED) {
+  for (const { lane, workflow, job, playbook } of MOVED) {
     const prompt = promptOf(workflow, job);
 
     it(`${lane}: sends its agent to the skill by its path in Kanon's tree`, () => {
@@ -118,7 +137,26 @@ describe('each filer moved onto the skill files through it, and restates no rout
     it(`${lane}: names no bucket, no milestone and no gate-candidate rule of its own`, () => {
       expect(routingRestated(prompt)).toEqual([]);
     });
+
+    if (playbook) {
+      it(`${lane}: its playbook's "${playbook.section}" section restates no routing either`, () => {
+        const section = sectionOf(read(playbook.path), playbook.section);
+        expect(section, `${playbook.path} has no "## ${playbook.section}"`).not.toBe('');
+        expect(prompt).toContain(playbook.path);
+        expect(routingRestated(section)).toEqual([]);
+        expect(section).toContain('filing skill');
+      });
+    }
   }
+
+  // The code audit files product bugs and pipeline bugs alike, so its prompt says how to tell
+  // them apart, by what the cited code is and never by who found it (`K-WORK-4`).
+  it('code-audit: tells its agent how to choose the subject, by the cited code', () => {
+    const prompt = promptOf('.github/workflows/agent-code-audit.yml', 'audit').replace(/\s+/g, ' ');
+    expect(prompt).toContain('never by who found it (K-WORK-4)');
+    expect(prompt).toContain('`--subject pipeline`');
+    expect(prompt).toContain('`--subject product`');
+  });
 
   it('catches a prompt that restates the routing, each way it can', () => {
     expect(routingRestated('Milestone: Product Backlog, a bucket (it is a product bug)')).toEqual([

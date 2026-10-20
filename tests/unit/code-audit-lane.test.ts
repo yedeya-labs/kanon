@@ -203,9 +203,11 @@ describe('what the agent is told', () => {
   });
 
   it('carries none of the reference adopter\'s own facts', () => {
-    // Its source directories, its examples, and the milestone it named by its own name.
+    // Its source directories, its examples, and the milestone it named by its own name. Since
+    // #164 the prompt names no milestone at all: it files through the filing skill, and
+    // `filing-skill.test.ts` holds it to restating no routing.
     expect(prompt).not.toMatch(/src\/server|src\/app|src\/db|catalog|kiosk|Production Ready/);
-    expect(prompt).toMatch(/Milestone: Product\s+Backlog, a bucket/);
+    expect(prompt).toContain('read and follow\n`$KANON/skills/file-issue/SKILL.md`');
   });
 
   it('keeps the report protocol: a skeleton first, re-written as it goes, complete only on the last write', () => {

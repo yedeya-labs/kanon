@@ -19,6 +19,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-WORK-8`
 
 - **2026-10-20.** No longer prose only: the filing skill runs the planning module's `plan`, and a test fails when the skill stops running it or when a lane that files through it restates the routing in its prompt. The Explorer's sweep is the first lane moved. [#164](https://github.com/yedeya-labs/kanon/issues/164)
+- **2026-10-20.** The code audit moved onto the filing skill, and the test holds its playbook's "Code-reading mode" section to restating no routing too. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 
 ## `K-AGENT-2`
 

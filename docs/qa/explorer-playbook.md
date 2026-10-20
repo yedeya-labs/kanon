@@ -39,7 +39,9 @@ What the code audit looks for on Kanon. The lane's prompt sets the bar (an objec
 - **Whether a rule is right.** A disagreement with a rule is an ADR, not a bug: file a `spec-delta` at most.
 - **Wording, style, or a doc that is unclear but not wrong.**
 
-**Filing on a public repository.** Every issue you file is public. Never name the reference adopter, its people or its product: write "the reference adopter", and cite its issues only as `RA-N`, as Kanon's files do. Quote no secret, token or key, even a revoked one. Rate severity with the rubric above, and milestone a bug to Product Backlog.
+**Filing on a public repository.** Every issue you file is public. Never name the reference adopter, its people or its product: write "the reference adopter", and cite its issues only as `RA-N`, as Kanon's files do. Quote no secret, token or key, even a revoked one. Rate severity with the rubric above, and file each issue through the [filing skill](../../skills/file-issue/SKILL.md), as the lane's prompt says.
+
+**The subject, on Kanon** (`K-WORK-4`). Kanon's product is the pipeline other repositories run, so a bug in what Kanon ships is `--subject product`: its actions, its scripts, its lane workflows, its rulebook, its skills and its docs. It is `--subject pipeline` only when every line it cites is in what checks Kanon's own pull requests and ships to no one: its tests under `tests/`, and a caller in `.github/workflows/` that runs a lane on Kanon itself.
 
 ## Telemetry mode
 
