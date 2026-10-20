@@ -624,7 +624,7 @@ The Explorer's code-reading mode reads your code and your specs every few days, 
 
 **Its memory.** With a store hook ([The QA store](qa-store.md)), the audit widens its coverage from the store's code-reading ledger, read through the hook's `export` before the agent, and its report is written through `put` after it, red run or green. Without one, it runs without memory: the export says the store is absent, the agent chooses areas from the history alone, and `put` is skipped with a notice.
 
-**Its report.** The agent writes `qa-audit-summary.json` on its first turn and re-writes it after each area. The workflow stamps the measured duration, the trigger and the commit, and counts the lines cited itself. A run that wrote no report, or one that doesn't parse, is recorded as such and then turns red; a run whose agent exited non-zero after a complete report stays green with a warning.
+**Its report.** The agent writes `qa-audit-summary.json` on its first turn and re-writes it after each area. The workflow stamps the measured duration, the trigger and the commit, and counts the lines cited itself. A run that wrote no report, or one that doesn't parse, is recorded as such and then turns red; a run whose agent exited non-zero after a complete report stays green with a warning. A run whose agent exited zero, ending its own turn, without the final write that marks its report complete stays green with a warning too: its report is stored as `complete: false` with `ended_unmarked: true`, so it reads apart from a run a cap cut short, whose `ended_unmarked` is false and whose job is red.
 
 It needs the Author App (the Explorer's), with `Contents: Read` and `Issues: Write` on the installation.
 

@@ -245,6 +245,55 @@ describe('the report is recorded before the job is judged (RA-504, RA-846)', () 
     expect(stamp).toContain('const cites = invalid ? new Set()');
   });
 
+  describe('a finished audit with no final write reads apart from one cut short (kanon#1135)', () => {
+    // The stamp step's own script, run as the job runs it: three of three green runs on Kanon
+    // ended their turn (`terminal_reason: completed`, well under the turn cap) with the report
+    // still `complete: false`, which the store could not tell from a capped run.
+    let work: string;
+    beforeAll(() => { work = mkdtempSync(join(tmpdir(), 'audit-stamp-')); });
+    afterAll(() => rmSync(work, { recursive: true, force: true }));
+
+    const stamp = (agentOutcome: string, report: string | null) => {
+      const dir = mkdtempSync(join(work, 'run-'));
+      if (report !== null) writeFileSync(join(dir, 'qa-audit-summary.json'), report);
+      const out = join(dir, 'github-output');
+      writeFileSync(out, '');
+      const stdout = execFileSync('bash', ['-e', '-c', String(byId('stamp').run)], {
+        cwd: dir, encoding: 'utf8',
+        env: { ...process.env, START_MS: String(Date.now()), EVENT: 'schedule', COMMIT: 'c'.repeat(40), AGENT_OUTCOME: agentOutcome, GITHUB_OUTPUT: out },
+      });
+      const outputs = Object.fromEntries(readFileSync(out, 'utf8').trim().split('\n').map((l) => l.split('=') as [string, string]));
+      return { stdout, outputs, stored: JSON.parse(readFileSync(join(dir, 'qa-audit-summary.json'), 'utf8')) };
+    };
+    const partial = JSON.stringify({ complete: false, areas_scanned: ['scripts/'], filed: [], deduped: [], citations: [], files_read: 6, turns: 20, notes: 'In progress.' });
+
+    it('hands the stamp step the agent step\'s outcome, which is `success` only when it ended its own turn', () => {
+      expect(byId('stamp').env?.AGENT_OUTCOME).toBe('${{ steps.agent.outcome }}');
+    });
+
+    it('an agent that exited zero with its report unmarked: `complete` stays false, `ended_unmarked` is true, and the job warns', () => {
+      const r = stamp('success', partial);
+      expect(r.stored).toMatchObject({ complete: false, ended_unmarked: true, no_report: false, report_invalid: false, areas_scanned: ['scripts/'] });
+      expect(r.outputs).toMatchObject({ complete: 'false', ended_unmarked: 'true' });
+      expect(r.stdout).toContain('::warning title=audit ended without its final write::');
+    });
+
+    it('an agent that exited non-zero with its report unmarked is cut short, and reads so', () => {
+      const r = stamp('failure', partial);
+      expect(r.stored).toMatchObject({ complete: false, ended_unmarked: false });
+      expect(r.outputs.ended_unmarked).toBe('false');
+      expect(r.stdout).not.toContain('title=audit ended without its final write');
+    });
+
+    it('a complete report, an absent one and an unparseable one are never `ended_unmarked`', () => {
+      expect(stamp('success', JSON.stringify({ complete: true, turns: 30 })).stored).toMatchObject({ complete: true, ended_unmarked: false });
+      expect(stamp('success', null).stored).toMatchObject({ no_report: true, complete: false, ended_unmarked: false });
+      expect(stamp('success', '{"complete":false,').stored).toMatchObject({ report_invalid: true, complete: false, ended_unmarked: false });
+      // An agent step that never ran (an earlier step failed) did not end its own turn.
+      expect(stamp('skipped', partial).stored).toMatchObject({ complete: false, ended_unmarked: false });
+    });
+  });
+
   it('explains a red run last', () => {
     // Then only the token's revoke, the job's last step (kanon#279, `K-AGENT-49`).
     expect(steps.at(-1)!.name).toBe('Revoke the App token');
