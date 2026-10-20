@@ -215,6 +215,30 @@ jobs:
         id: kanon
         if: steps.claim.outputs.proceed == 'true'
 
+      # THE FILING SKILL'S PLAN COMMAND, BY NAME (kanon#164, `K-WORK-8`). The Reviewer files its
+      # follow-ups through `skills/file-issue/SKILL.md`, which runs
+      # `node "$KANON/scripts/issue-triage-defaults.mjs" plan`. Its shell is an allow-list
+      # (kanon#248) that names neither an interpreter (`node` runs anything) nor a path behind a
+      # variable (`$KANON` is refused), so this puts one wrapper on the PATH, outside the
+      # workspace, as the Lead's lanes do for their scripts: `kanon-plan` runs Kanon's Node on
+      # Kanon's script at the pinned tag, with `plan` fixed as its first argument, and nothing
+      # else. `plan` reads its flags and prints JSON; it reads no file of the tree and writes
+      # none. The path is the `kanon` step's output, not `KANON`. It runs here, right after the
+      # `kanon` step, so nothing but the token and the label step stands between the pin's
+      # re-check and the agent (`tests/unit/judging-inputs.test.ts`); it writes only the runner's
+      # temp directory, which the pin's digest does not read.
+      - name: Put the filing skill's plan command on the agent's PATH
+        if: steps.claim.outputs.proceed == 'true'
+        env:
+          KANON_ROOT: ${{ steps.kanon.outputs.path }}
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/kanon-bin"
+          mkdir -p "$bin"
+          printf '#!/usr/bin/env bash\nexec %q %q plan "$@"\n' "$(command -v node)" "$KANON_ROOT/scripts/issue-triage-defaults.mjs" > "$bin/kanon-plan"
+          chmod +x "$bin/kanon-plan"
+          echo "$bin" >> "$GITHUB_PATH"
+
       # A PR NEVER CHOOSES THE RULES IT IS JUDGED BY (`K-MERGE-17`, kanon#25; RA-848).
       #
       # The checkout above is the PR's OWN head, and the Reviewer reads its playbook, the
@@ -698,6 +722,7 @@ jobs:
             - `gh`: `pr view|diff|checks|list|review|edit`, `issue view|list|create`,
               `label list`, `run view|list`, `search`, and `api`. Never `gh pr checks
               --watch` or `gh run watch`: they wait, and this run has no next turn.
+            - `kanon-plan`, the filing skill's plan command, by that name (below).
             - Write only to `${{ runner.temp }}/qa-review-<name>.md`, with the Write
               tool or a heredoc: the verdict file above, and any follow-up body you pass
               to `gh issue create --body-file`.
@@ -712,8 +737,8 @@ jobs:
               `echo` separators. You already start in the checkout, and two reads are
               two calls.
             - Name a file in the checkout by its relative path (`docs/qa/stack.md`),
-              never an absolute one. The only absolute path you need is the
-              `${{ runner.temp }}` file you write.
+              never an absolute one. The only absolute paths you need are the
+              `${{ runner.temp }}` file you write and the filing skill's, below.
             - Prefer the Read, Grep and Glob tools to a shell pipeline. Use the Grep
               tool for any pattern holding `$`, a backtick or `\|`, and read part of a
               file with the Read tool's offset and limit, never a `sed` address range
@@ -791,20 +816,28 @@ jobs:
             indistinguishable from a stale doc comment; it now gets flagged
             `qa:needs-severity` and comes back to you.
 
-            MILESTONE — route by SUBJECT, not provenance: engineering-platform or
-            QA-pipeline work (a CI guard, build tooling, the agent pipeline itself)
-            goes to "Development Automation", as RA-602/RA-571 did. Everything else goes
-            to "Product Backlog" — at ANY severity. A `sev:critical` or `sev:high`
-            product follow-up is LAUNCH-GATING: ALSO pass `--label gate-candidate`, and
-            leave it on "Product Backlog". Never set a roadmap milestone, the launch
-            gate included, yourself — only the developer places work on one (RA-1616).
+            SUBJECT: judge each follow-up by what its work is about, never by who
+            found it (K-WORK-4): your raising it does not make it pipeline work. It is
+            `--subject pipeline` when the work is on the engineering platform that
+            builds and checks this project: its CI workflows and their guards, its
+            build tooling, its test harness, the Kanon lanes installed in it. It is
+            `--subject product` when it is about the code this project ships. When it
+            is about both, K-WORK-4 decides: the platform wins. Where the playbook's
+            "Capturing follow-ups" says how this project draws that line, follow it.
             Gate hygiene (K-WORK-10): if the work has a workaround it is `sev:medium`
-            and NOT a candidate — do not inflate the severity.
+            — do not inflate the severity.
 
-            FILE IT IN ONE CALL: pass `--label` AND `--milestone` in the SAME
-            `gh issue create`, never `create` then `edit`. A bare `create` opens the
-            issue with no milestone and races the milestone backstop's default
-            (K-WORK-1).
+            FILE EACH FOLLOW-UP THROUGH THE FILING SKILL: read and follow
+            `$KANON/skills/file-issue/SKILL.md`. In this run `$KANON` is
+            `${{ steps.kanon.outputs.path }}`: read the skill with the Read tool at
+            that absolute path. Its plan command chooses the milestone and any gate
+            label and gives the exact arguments of one `gh issue create`; add no
+            milestone or gate label of your own. Your shell refuses `node` and
+            `$KANON`, so where the skill says to run
+            `node "$KANON/scripts/issue-triage-defaults.mjs" plan`, run `kanon-plan`
+            with the same flags instead, e.g. `kanon-plan --label follow-up --label
+            agent:reviewer --label sev:medium --subject product`: it is that command,
+            on your PATH by name.
 
             Body = the finding (what/why/file refs) +
             "Surfaced by PR #${{ env.PR_NUMBER }} review", and list any filed issues in
@@ -853,7 +886,8 @@ jobs:
           # token whose approval the Merger acts on. Now Bash is granted only for the `gh`
           # subcommands the Reviewer uses (counted over 80 retained transcripts: 1,249 Bash
           # calls; of their `gh` subcommands only `pr comment`, `release view` (once each)
-          # and `--version` are left out). Everything else falls to Claude Code's own
+          # and `--version` are left out), and for `kanon-plan`, the filing skill's plan command,
+          # a wrapper an earlier step writes outside the tree (kanon#164). Everything else falls to Claude Code's own
           # read-only set (`cat`, `grep`, `sed -n`, `jq`, read-only `git`, ...), which is
           # flag-aware: it refuses `git log --output=`, `git -c`, `find -exec`, `sed w`,
           # `sort -o` and a pager or external-diff option, where a `Bash(git log:*)` rule
@@ -902,7 +936,7 @@ jobs:
             --allowedTools Read,Grep,Glob
             --allowedTools "Edit(/${{ runner.temp }}/qa-review-*.md)"
             --allowedTools "Bash(gh pr view:*)" "Bash(gh pr diff:*)" "Bash(gh pr checks:*)" "Bash(gh pr list:*)" "Bash(gh pr review:*)" "Bash(gh pr edit:*)"
-            --allowedTools "Bash(gh issue view:*)" "Bash(gh issue list:*)" "Bash(gh issue create:*)" "Bash(gh label list:*)"
+            --allowedTools "Bash(gh issue view:*)" "Bash(gh issue list:*)" "Bash(gh issue create:*)" "Bash(gh label list:*)" "Bash(kanon-plan:*)"
             --allowedTools "Bash(gh run view:*)" "Bash(gh run list:*)" "Bash(gh search:*)" "Bash(gh api:*)"
             --setting-sources user
             --exclude-dynamic-system-prompt-sections
@@ -1469,7 +1503,7 @@ jobs:
             --allowedTools Read,Grep,Glob
             --allowedTools "Edit(/${{ runner.temp }}/qa-review-*.md)"
             --allowedTools "Bash(gh pr view:*)" "Bash(gh pr diff:*)" "Bash(gh pr checks:*)" "Bash(gh pr list:*)" "Bash(gh pr review:*)" "Bash(gh pr edit:*)"
-            --allowedTools "Bash(gh issue view:*)" "Bash(gh issue list:*)" "Bash(gh issue create:*)" "Bash(gh label list:*)"
+            --allowedTools "Bash(gh issue view:*)" "Bash(gh issue list:*)" "Bash(gh issue create:*)" "Bash(gh label list:*)" "Bash(kanon-plan:*)"
             --allowedTools "Bash(gh run view:*)" "Bash(gh run list:*)" "Bash(gh search:*)" "Bash(gh api:*)"
             --setting-sources user
             --exclude-dynamic-system-prompt-sections

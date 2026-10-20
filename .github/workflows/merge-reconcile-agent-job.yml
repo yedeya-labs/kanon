@@ -245,10 +245,8 @@ jobs:
                `$KANON/skills/file-issue/SKILL.md`, whose plan command chooses the
                milestone and any gate label and gives the exact arguments of one
                `gh issue create`. The excerpt was written for the Reviewer on an open
-               PR: take its bar, labels, severity, subject line and body from it, but
-               where it names a milestone or says how to set one, the skill's plan
-               command replaces that here, and you add no milestone or gate label of
-               your own.
+               PR: take its bar, labels, severity, subject line and body from it, and
+               add no milestone or gate label of your own.
                Body: the finding (what / why / file:line)
                + "Surfaced by PR #${{ env.PR_NUMBER }} review; merged without the fold-in —
                filed by merge-reconciliation." Title it as the WORK, not the symptom.

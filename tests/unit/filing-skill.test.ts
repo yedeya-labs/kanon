@@ -54,30 +54,44 @@ const routingRestated =(text: string, { allowGateCandidate = false } = {}): stri
  * when the file held here is Kanon's baseline, which `agent-setup` copies to that path in a
  * project that keeps no playbook of its own (`K-LAYOUT-17`).
  *
- * Merge-reconcile lists no playbook: it reads the Reviewer's "Capturing follow-ups", which the
- * Reviewer's own lane reads too and which still routes until the Reviewer moves, last. Its prompt
- * says the skill replaces that section's milestone lines instead, and a test below holds it.
+ * The Reviewer and merge-reconcile read the same section, the Reviewer playbook's "Capturing
+ * follow-ups" (merge-reconcile through an excerpt cut from it), so each lists both copies of it:
+ * Kanon's own, and the baseline a project without one is given.
  */
 type Playbook = { path: string; section: string; readAs?: string };
-const MOVED: Array<{ lane: string; workflow: string; job: string; playbook?: Playbook }> = [
+const REVIEWER_PLAYBOOKS: Playbook[] = [
+  { path: 'docs/qa/reviewer-playbook.md', section: 'Capturing follow-ups' },
+  {
+    path: 'rulebook/templates/playbooks/reviewer-playbook.md',
+    section: 'Capturing follow-ups',
+    readAs: 'docs/qa/reviewer-playbook.md',
+  },
+];
+const MOVED: Array<{ lane: string; workflow: string; job: string; playbooks?: Playbook[] }> = [
   { lane: 'explore', workflow: '.github/workflows/agent-explore.yml', job: 'explore' },
   {
     lane: 'code-audit',
     workflow: '.github/workflows/agent-code-audit.yml',
     job: 'audit',
-    playbook: { path: 'docs/qa/explorer-playbook.md', section: 'Code-reading mode' },
+    playbooks: [{ path: 'docs/qa/explorer-playbook.md', section: 'Code-reading mode' }],
   },
   {
     lane: 'verify-acs',
     workflow: '.github/workflows/agent-verify-acs.yml',
     job: 'verify',
-    playbook: {
+    playbooks: [{
       path: 'rulebook/templates/playbooks/explorer-playbook.md',
       section: 'Targeted-invariant mode',
       readAs: 'docs/qa/explorer-playbook.md',
-    },
+    }],
   },
-  { lane: 'merge-reconcile', workflow: '.github/workflows/agent-merge-reconcile.yml', job: 'reconcile' },
+  {
+    lane: 'merge-reconcile',
+    workflow: '.github/workflows/agent-merge-reconcile.yml',
+    job: 'reconcile',
+    playbooks: REVIEWER_PLAYBOOKS,
+  },
+  { lane: 'review', workflow: '.github/workflows/agent-review.yml', job: 'review', playbooks: REVIEWER_PLAYBOOKS },
 ];
 
 /** One `## ` section of a Markdown file, to the next `## ` heading. */
@@ -145,7 +159,7 @@ describe('the filing skill (K-WORK-8)', () => {
 });
 
 describe('each filer moved onto the skill files through it, and restates no routing (K-WORK-8)', () => {
-  for (const { lane, workflow, job, playbook } of MOVED) {
+  for (const { lane, workflow, job, playbooks = [] } of MOVED) {
     const prompt = promptOf(workflow, job);
 
     it(`${lane}: sends its agent to the skill by its path in Kanon's tree`, () => {
@@ -156,8 +170,8 @@ describe('each filer moved onto the skill files through it, and restates no rout
       expect(routingRestated(prompt)).toEqual([]);
     });
 
-    if (playbook) {
-      it(`${lane}: its playbook's "${playbook.section}" section restates no routing either`, () => {
+    for (const playbook of playbooks) {
+      it(`${lane}: the "${playbook.section}" section of ${playbook.path} restates no routing either`, () => {
         const section = sectionOf(read(playbook.path), playbook.section);
         expect(section, `${playbook.path} has no "## ${playbook.section}"`).not.toBe('');
         expect(prompt).toContain(playbook.readAs ?? playbook.path);
@@ -186,17 +200,30 @@ describe('each filer moved onto the skill files through it, and restates no rout
   });
 
   // Merge-reconcile files the follow-ups a review left out, product and pipeline alike, so its
-  // prompt says how to choose the subject (`K-WORK-4`). It reads the Reviewer's "Capturing
-  // follow-ups", which still routes until the Reviewer moves, so it also says the skill
-  // replaces that section's milestone lines.
-  it('merge-reconcile: chooses the subject by the work, and lets the skill override the excerpt', () => {
+  // prompt says how to choose the subject (`K-WORK-4`), and reads the subject line from the
+  // Reviewer's "Capturing follow-ups", through its excerpt.
+  it('merge-reconcile: chooses the subject by the work', () => {
     const prompt = promptOf('.github/workflows/agent-merge-reconcile.yml', 'reconcile').replace(/\s+/g, ' ');
     expect(prompt).toContain('by what its work is about, never by who found it (K-WORK-4)');
     expect(prompt).toContain('When it is about both, K-WORK-4 decides: the platform wins.');
     expect(prompt).toContain('`--subject pipeline`');
     expect(prompt).toContain('`--subject product`');
     expect(prompt).toContain('.agent/reviewer-playbook-excerpt.md');
-    expect(prompt).toContain('the skill\'s plan command replaces that here');
+  });
+
+  // The Reviewer keeps choosing the severity (#164's migration order) and chooses the subject.
+  // Its shell is an allow-list that refuses `node` and `$KANON`, so its prompt names the
+  // skill's path for this run and the plan command by its wrapper's name (review-verdict.test.ts
+  // runs the wrapper).
+  it('review: chooses the subject by the work, and runs plan by the name its shell allows', () => {
+    const prompt = promptOf('.github/workflows/agent-review.yml', 'review').replace(/\s+/g, ' ');
+    expect(prompt).toContain('by what its work is about, never by who found it (K-WORK-4)');
+    expect(prompt).toContain('When it is about both, K-WORK-4 decides: the platform wins.');
+    expect(prompt).toContain('`--subject pipeline`');
+    expect(prompt).toContain('`--subject product`');
+    expect(prompt).toContain('In this run `$KANON` is `${{ steps.kanon.outputs.path }}`');
+    expect(prompt).toContain('run `kanon-plan` with the same flags instead');
+    expect(prompt).toContain('ALWAYS APPLY A `sev:*` (RA-729) TO EACH FOLLOW-UP ISSUE YOU FILE');
   });
 
   it('catches a prompt that restates the routing, each way it can', () => {

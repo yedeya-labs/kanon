@@ -15,7 +15,7 @@ Cite a rule by its id; don't restate it (`K-PRIN-2`). Your instructions are read
 
 ## Capturing follow-ups
 
-File a follow-up only for trackable work, and fold in what is small (`K-WORK-17`). Search before filing (`K-WORK-15`). Give it a severity from the rubric in [the Explorer's playbook](./explorer-playbook.md) (`K-WORK-9`), the `gate-candidate` label when the severity is a gate severity (`K-WORK-10`), the labels of the fixed taxonomy (`K-WORK-12`), and a bucket milestone, chosen in the same call that creates the issue (`K-WORK-1`, `K-WORK-2`, `K-WORK-4`, `K-WORK-5`). Record where it came from (`K-WORK-19`), and write what must be true apart from how to fix it (`K-WORK-14`).
+File a follow-up only for trackable work, and fold in what is small (`K-WORK-17`). Search before filing (`K-WORK-15`). Give it a severity from the rubric in [the Explorer's playbook](./explorer-playbook.md) (`K-WORK-9`), the labels of the fixed taxonomy (`K-WORK-12`), and its subject, product or pipeline, by what the work is about (`K-WORK-4`). File it through the filing skill, `skills/file-issue/SKILL.md` in Kanon's tree, whose plan command chooses the milestone and any gate label and gives the arguments of one `gh issue create` (`K-WORK-8`). Record where it came from (`K-WORK-19`), and write what must be true apart from how to fix it (`K-WORK-14`).
 
 ## Beware your own suggested fix
 
