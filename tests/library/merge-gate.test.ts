@@ -3091,13 +3091,27 @@ esac
         '  docs/a.md:4  src/x.ts:10  ->  src/x.ts:12',
         '##[error]Process completed with exit code 1.',
       ]);
-      const failed = (name: string, databaseId: number) => ({ name, workflowName: 'CI', status: 'COMPLETED', conclusion: 'FAILURE', runId: '4242', databaseId });
+      const failed = (name: string, jobId: number) => ({ name, workflowName: 'CI', status: 'COMPLETED', conclusion: 'FAILURE', runId: '4242', jobId: String(jobId) });
       const green = { name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' };
       const MARK = `<!-- ${FIX_COMMANDS_MARKER}:`;
 
       it("names citation-shift when its step is the only failure, reading the job's failed log", () => {
         const calls = run(handback, { checks: [green, failed('Lint', 99)], logs: { 99: moved } });
         expect(calls).toContain('run view --job 99 --repo o/r --log-failed');
+        expect(calls).toContain(`${MARK}citation-shift -->`);
+      });
+
+      it("names it from a rollup entry shaped as gh's, which has the job id only in its detailsUrl", () => {
+        // Recorded from #1184's own rollup: gh's projection carries no `databaseId`, so a key read
+        // from it would never be named on a real hand-back.
+        const { read } = stubReadPr({ meta: { statusCheckRollup: [
+          { __typename: 'CheckRun', name: 'Citation guard', workflowName: 'CI', status: 'COMPLETED', conclusion: 'FAILURE',
+            startedAt: '2026-10-20T11:50:00Z', completedAt: '2026-10-20T11:51:00Z',
+            detailsUrl: 'https://github.com/o/r/actions/runs/4242/job/8873222319' },
+        ] } });
+        expect(read.checks[0]).toMatchObject({ runId: '4242', jobId: '8873222319', databaseId: undefined });
+        const calls = run(handback, { checks: read.checks, logs: { 8873222319: moved } });
+        expect(calls).toContain('run view --job 8873222319 --repo o/r --log-failed');
         expect(calls).toContain(`${MARK}citation-shift -->`);
       });
 

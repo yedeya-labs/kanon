@@ -311,7 +311,7 @@ export const HANDBACK_SETTLE_MS = 20 * 60 * 1000;
  * passed" (RA-1147), and that judgement is the caller's.
  *
  * @typedef {{name: string, workflowName?: string, status: string, conclusion: string|null,
- *            startedAt?: string, completedAt?: string, databaseId?: number, runId?: string}} Check
+ *            startedAt?: string, completedAt?: string, databaseId?: number, runId?: string, jobId?: string}} Check
  * @param {Check[]} checks
  * @returns {{relevant: Check[], live: Check[], pending: Check[], cancelled: Check[], failed: Check[]}}
  */
@@ -1251,6 +1251,10 @@ export function readPr(number, repo, opts = {}) {
     // (`…/actions/runs/<run>/job/<job>`); a StatusContext, or a check from another App,
     // has no such URL and is never ours.
     runId: /\/actions\/runs\/(\d+)(?:\/|$)/.exec(c.detailsUrl ?? '')?.[1],
+    // The job's id, from the same URL, for `gh run view --job` (kanon#1173). NOT `databaseId`:
+    // gh's projection carries none (above), and filling it would reorder the supersede rule's
+    // third rung.
+    jobId: /\/actions\/runs\/\d+\/job\/(\d+)(?:[/?#]|$)/.exec(c.detailsUrl ?? '')?.[1],
     // A StatusContext has `state` and no `status`; a CheckRun has both. Flattening
     // them here keeps the decision from having to know which kind it is looking at.
     // A status whose `state` is PENDING, or EXPECTED (a required context that has not
@@ -1467,20 +1471,21 @@ export function handbackOn(number, repo, gh, head) {
  * The keys in `lib/fix-commands.mjs` of the failed checks' fix commands, when every failed check
  * is an Actions job whose one failed step shows a failure that list knows, or `null` (kanon#1173).
  * Each job's failed steps' log is read with `gh run view --job <id> --log-failed`; a check with no
- * job id, or a log that can't be read, is `null`. Only the key goes into the hand-back: the revise
+ * job id (`readPr`'s `jobId`, from the check's `detailsUrl`), or a log that can't be read, is
+ * `null`. Only the key goes into the hand-back: the revise
  * lane runs the list's command for it, never one the log names.
  *
- * @param {{databaseId?: number|string, runId?: string}[]} failed
+ * @param {{jobId?: string, runId?: string}[]} failed
  * @returns {string[]|null}
  */
 export function fixKeysOf(failed, repo) {
   if (!failed.length) return null;
   const keys = new Set();
   for (const c of failed) {
-    if (!c.databaseId || !c.runId) return null;
+    if (!c.jobId || !c.runId) return null;
     let log;
     try {
-      log = gh(['run', 'view', '--job', String(c.databaseId), '--repo', repo, '--log-failed'], { maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+      log = gh(['run', 'view', '--job', c.jobId, '--repo', repo, '--log-failed'], { maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch {
       return null;
     }

@@ -414,6 +414,8 @@ describe("a hand-back whose failed checks all have a fix command runs it before 
   const gate = (expr: string, needs: Record<string, Record<string, string>>) => {
     const js = String(expr).replace(/^\$\{\{\s*|\s*\}\}$/g, '')
       .replace(/!cancelled\(\)|always\(\)/g, 'true')
+      // A need's `result`, as `result` in its entry; one that names none succeeded.
+      .replace(/needs\.([\w-]+)\.result/g, (_, job: string) => JSON.stringify(needs[job]?.result ?? 'success'))
       .replace(/needs\.([\w-]+)\.outputs\.(\w+)/g, (_, job: string, key: string) => JSON.stringify(needs[job]?.[key] ?? ''))
       .replace(/'([^']*)'/g, (_, s: string) => JSON.stringify(s));
     expect(js, `an expression this evaluator doesn't read: ${expr}`).toMatch(/^[\s"\w:,!=&|().-]*$/);
@@ -481,6 +483,11 @@ describe("a hand-back whose failed checks all have a fix command runs it before 
 
     it('a fix command that changed nothing runs the model', () => {
       expect(gate(wf.jobs.revise.if, { filter: handedBack('citation-shift'), 'fix-command': { changed: 'false' }, 'fix-push': {} })).toBe(true);
+    });
+
+    it('a filter that failed after writing act runs no model', () => {
+      // The mandate step refuses a hand-back with no Merger login after `act=true` is written.
+      expect(gate(wf.jobs.revise.if, { filter: { ...handedBack(''), result: 'failure' }, 'fix-command': {}, 'fix-push': {} })).toBe(false);
     });
 
     it('a changes-request still runs the model', () => {

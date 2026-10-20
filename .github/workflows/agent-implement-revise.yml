@@ -805,8 +805,10 @@ jobs:
   revise:
     needs: [filter, fix-command, fix-push]
     # Not when the fix jobs pushed (kanon#1173). `!cancelled()` because they are skipped on every
-    # run but a hand-back with a key, and a skipped need skips this job without it.
-    if: ${{ !cancelled() && needs.filter.outputs.act == 'true' && needs.fix-push.outputs.pushed != 'true' }}
+    # run but a hand-back with a key, and a skipped need skips this job without it. It would also
+    # run this job after a FAILED filter, which writes `act` before the mandate step that may
+    # refuse, so the filter's success is asked for by name.
+    if: ${{ !cancelled() && needs.filter.result == 'success' && needs.filter.outputs.act == 'true' && needs.fix-push.outputs.pushed != 'true' }}
     # Bounds a hang (RA-1336). Actions' default cap is 360m, so a wedged agent
     # burned six hours and left its issue looking mid-flight.
     #
