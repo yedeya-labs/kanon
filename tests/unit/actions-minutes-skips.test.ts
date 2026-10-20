@@ -58,8 +58,16 @@ const SKIPS: Record<string, Spec> = {
   },
   // `empty` is read after the model run, by the crash recovery.
   'agent-implement': { outputs: { empty: null } },
+  // `mode`, `fix` and `changed` choose the fix jobs over the model on a hand-back (kanon#1173), and
+  // end no run early by themselves; a push by them does, as the model then doesn't run.
   'agent-implement-revise': {
-    outputs: { act: ["a review that doesn't request changes", "isn't the Implementer's", 'a round past its cap'] },
+    outputs: {
+      act: ["a review that doesn't request changes", "isn't the Implementer's", 'a round past its cap'],
+      mode: null,
+      fix: null,
+      changed: null,
+      pushed: ['a hand-back whose failed checks all have a fix command Kanon knows'],
+    },
   },
   // `summary-artifact` is read after the model run, to store its summary.
   'agent-explore': { outputs: { sweep: ['a commit the QA store already holds a green sweep of'], 'summary-artifact': null } },

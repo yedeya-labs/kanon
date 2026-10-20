@@ -193,6 +193,9 @@ jobs:
       # The role's persona header line, for the round record (plan 0005 §3.3).
       header: ${{ steps.filter.outputs.header }}
       mode: ${{ steps.filter.outputs.mode }}
+      # The keys of the fix commands the Merger's hand-back named, or empty (kanon#1173).
+      fix: ${{ steps.filter.outputs.fix }}
+      base: ${{ steps.filter.outputs.base }}
       mandate: ${{ steps.mandate.outputs.text }}
     steps:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
@@ -263,6 +266,9 @@ jobs:
           # The marker rule of the Merger's hand-back (kanon#1100): `HANDBACK` in
           # `scripts/lib/protocol-spellings.mjs`, which a test holds this to.
           HANDBACK_RULE: checks-failed-handback
+          # The line of that hand-back naming its failed checks' fix commands by key (kanon#1173):
+          # `FIX_COMMANDS_MARKER` in the same file, which a test holds this to.
+          FIX_MARKER: kanon:fix-commands
           RESET: ${{ inputs.reset }}
         run: |
           set -euo pipefail
@@ -273,6 +279,7 @@ jobs:
           # The Merger's login, verified below on the hand-back path only; the mandate reads the
           # hand-back comment by it and by this head's marker, never by a substring (K-AGENT-45).
           MERGER_LOGIN=""
+          FIX=""
 
           # A COMMENT verdict carrying an approve (RA-378) is not a revision request,
           # and neither is an APPROVE. Only an explicit changes-request is.
@@ -403,7 +410,15 @@ jobs:
                 || skip "no changes-request stands on ${HEAD_SHA:0:7} (deciding verdict: 'APPROVED'), and the Merger has not handed this head back"
               read_login Merger
               case ",$HANDERS," in
-                *",$ROLE_LOGIN,"*) MODE=handback; MERGER_LOGIN="$ROLE_LOGIN" ;;
+                *",$ROLE_LOGIN,"*)
+                  MODE=handback
+                  MERGER_LOGIN="$ROLE_LOGIN"
+                  # THE KEYS OF THE FAILED CHECKS' FIX COMMANDS (kanon#1173), from the Merger's own
+                  # hand-back of this head, and only a comma list of keys: the `fix-command` job
+                  # looks each up in Kanon's list, so no text here is ever a command it runs.
+                  FIX="$(gh pr view "$PR" --repo "$REPO" --json comments \
+                    --jq "[.comments[] | select(((.author.login // \"\") | sub(\"^app/\";\"\") | sub(\"\\\\[bot\\\\]\$\";\"\")) == \"$ROLE_LOGIN\") | select(.body | contains(\"$HANDBACK_MARK\")) | .body | capture(\"<!-- ${FIX_MARKER}:(?<k>[a-z0-9-]+(,[a-z0-9-]+)*) -->\") | .k] | last // \"\"")"
+                  ;;
                 *) skip "the hand-back marker on ${HEAD_SHA:0:7} is not the Merger's ($ROLE_LOGIN): it was written by '${HANDERS}'" ;;
               esac
             else
@@ -538,6 +553,8 @@ jobs:
           echo "header=$ROLE_HEADER" >> "$GITHUB_OUTPUT"
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "merger=$MERGER_LOGIN" >> "$GITHUB_OUTPUT"
+          echo "fix=$FIX" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE_REF" >> "$GITHUB_OUTPUT"
           # The mandate branches on this. A gate that opens without telling the
           # agent WHY sends him to re-read the review he already answered twice.
           if [ "$IS_DISPATCH" = "true" ] && [ "$RESET" = "true" ]; then
@@ -661,14 +678,135 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
 
+  # ── A FAILED CHECK WITH A KNOWN FIX COMMAND IS FIXED WITHOUT A MODEL (kanon#1173) ──────────
+  #
+  # #1100's head went red on one step, citation-shift, whose own output named its `--fix`, and a
+  # person ran it two days later. When the Merger's hand-back names a key for every failed check,
+  # these two jobs run those keys' commands from Kanon's list (`scripts/lib/fix-commands.mjs`) and
+  # push what they rewrote, and the `revise` job, the model, doesn't run. Anything else, a key not
+  # on the list, a command that fails or changes nothing, a check still red after it, or a branch
+  # that moved since the hand-back, pushes nothing, and the model gets the hand-back as before.
+  #
+  # THE COMMAND IS NEVER THE CHECK'S. The Merger reads the failed log and names only a key; the
+  # filter passes only a comma list of keys; the script runs the list's argv for each, with no
+  # shell. A log that names a command changes nothing here.
+  #
+  # TWO JOBS, BECAUSE A JOB THAT CHECKS OUT THE PULL REQUEST HOLDS NO KEY (`K-AGENT-49`).
+  # `fix-command` checks the branch out with the workflow's read token, runs the commands, and
+  # hands the rewritten files to `fix-push` as an artifact. `fix-push` mints the Implementer's
+  # token, checks nothing out, and commits them over the API on top of the handed-back head, moving
+  # the branch only if it is still there. Neither runs the project's code: no project-setup hook,
+  # no install, only Kanon's scripts on Kanon's Node. The push dismisses the approval, so the
+  # Reviewer reviews the new head before anything merges, as after any revise, and it leaves the
+  # round marker as the Implementer, so the hand-back counts as one round, as the model's would.
+  fix-command:
+    needs: filter
+    if: needs.filter.outputs.act == 'true' && needs.filter.outputs.mode == 'handback' && needs.filter.outputs.fix != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      changed: ${{ steps.fix.outputs.changed }}
+    steps:
+      - uses: $/actions/kanon-path
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.filter.outputs.branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run the failed checks' fix commands
+        id: fix
+        env:
+          CHECKS: ${{ needs.filter.outputs.fix }}
+          BASE_REF: ${{ needs.filter.outputs.base }}
+          HEAD_SHA: ${{ needs.filter.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # The hand-back was for this head. A branch that moved since is someone else's push, and
+          # the model reads it fresh.
+          if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "→ the branch moved past ${HEAD_SHA:0:7} since the hand-back, so no fix command runs"
+            exit 0
+          fi
+          node "$KANON/scripts/revise-fix.mjs" run --checks "$CHECKS" \
+            --base "$(git merge-base "origin/$BASE_REF" HEAD)" --out "$RUNNER_TEMP/kanon-revise-fix/change.json"
+      - name: Hand the rewritten files to the push
+        if: steps.fix.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-revise-fix
+          path: ${{ runner.temp }}/kanon-revise-fix/change.json
+          retention-days: 1
+
+  fix-push:
+    needs: [filter, fix-command]
+    if: needs.fix-command.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      pushed: ${{ steps.push.outputs.pushed }}
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Mint the implementer token for the fix
+        id: fix-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+          # Narrowed to what this job uses (`K-AGENT-46`): the commit and the branch (`contents`),
+          # and the round marker, which GitHub accepts on either of the other two.
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+      - uses: actions/download-artifact@v8
+        with:
+          name: kanon-revise-fix
+          path: ${{ runner.temp }}/kanon-revise-fix
+      - name: Commit and push the fix
+        id: push
+        env:
+          GH_TOKEN: ${{ steps.fix-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ needs.filter.outputs.branch }}
+          CHECKS: ${{ needs.filter.outputs.fix }}
+          HEAD_SHA: ${{ needs.filter.outputs.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          node "$KANON/scripts/revise-fix.mjs" push --change "$RUNNER_TEMP/kanon-revise-fix/change.json" \
+            --branch "$BRANCH" --head "$HEAD_SHA" \
+            --message "$(printf 'chore(revise): run the fix command of %s\n\nThe Merger handed back %s, and every check that failed on it has a fix command Kanon knows (kanon#1173): %s' "${CHECKS//,/, }" "${HEAD_SHA:0:7}" "$RUN_URL")"
+      - name: Record the round
+        env:
+          GH_TOKEN: ${{ steps.fix-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.filter.outputs.pr }}
+          CHECKS: ${{ needs.filter.outputs.fix }}
+          HEAD_SHA: ${{ needs.filter.outputs.head_sha }}
+          SHA: ${{ steps.push.outputs.sha }}
+          HEADER: ${{ needs.filter.outputs.header }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s\n' \
+            "${HEADER:-**Implementer** <!-- kanon:role=implementer -->}" \
+            "" \
+            "🔧 **Ran the fix command of the failed checks** (\`${CHECKS//,/\`, \`}\`), which the Merger's hand-back of \`${HEAD_SHA:0:7}\` named, and pushed \`${SHA:0:7}\`. No model ran ($RUN_URL)." \
+            "" \
+            "The command is Kanon's own, from \`scripts/lib/fix-commands.mjs\`, and the check passed on the checkout after it. The push dismisses the approval, so the Reviewer reviews the new head. This counts as one revise round." \
+            "" \
+            "<!-- qa:implement-revise -->")"
+
   # THE SPINE LIVES IN `agent-lane.yml` (RA-2592, extending RA-2092) — token, checkout at the
   # PR head, install, database, the action, red-run classification, the RA-2519 retry
   # breadcrumbs, the telemetry-action restore and the cost row. What stays here is what
   # makes this lane THIS lane: the trigger, the filter that admits a review, the mandate,
   # the prompt, and the round record — which names the Implementer's login and marker.
   revise:
-    needs: filter
-    if: needs.filter.outputs.act == 'true'
+    needs: [filter, fix-command, fix-push]
+    # Not when the fix jobs pushed (kanon#1173). `!cancelled()` because they are skipped on every
+    # run but a hand-back with a key, and a skipped need skips this job without it.
+    if: ${{ !cancelled() && needs.filter.outputs.act == 'true' && needs.fix-push.outputs.pushed != 'true' }}
     # Bounds a hang (RA-1336). Actions' default cap is 360m, so a wedged agent
     # burned six hours and left its issue looking mid-flight.
     #

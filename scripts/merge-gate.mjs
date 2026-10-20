@@ -1134,8 +1134,9 @@ import { readProductionPromotionAt } from './lib/production-promotion.mjs';
 import { apiReader, judgingInputs } from './judging-inputs.mjs';
 import { isSpecFile, specPromotions } from './lib/spec-promotions.mjs';
 import {
-  ESCALATION_HEADER, HANDBACK, REVIEW_EVENT_CHECKS, SELF_CHECKS, isEscalation, mergerMarker, mergerMarkerSpellings, mergerMarkersIn,
+  ESCALATION_HEADER, HANDBACK, REVIEW_EVENT_CHECKS, SELF_CHECKS, fixCommandsMarker, isEscalation, mergerMarker, mergerMarkerSpellings, mergerMarkersIn,
 } from './lib/protocol-spellings.mjs';
+import { recognise } from './lib/fix-commands.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
 import { laneCallerFile } from './lib/lane-caller.mjs';
@@ -1463,6 +1464,34 @@ export function handbackOn(number, repo, gh, head) {
 }
 
 /**
+ * The keys in `lib/fix-commands.mjs` of the failed checks' fix commands, when every failed check
+ * is an Actions job whose one failed step shows a failure that list knows, or `null` (kanon#1173).
+ * Each job's failed steps' log is read with `gh run view --job <id> --log-failed`; a check with no
+ * job id, or a log that can't be read, is `null`. Only the key goes into the hand-back: the revise
+ * lane runs the list's command for it, never one the log names.
+ *
+ * @param {{databaseId?: number|string, runId?: string}[]} failed
+ * @returns {string[]|null}
+ */
+export function fixKeysOf(failed, repo) {
+  if (!failed.length) return null;
+  const keys = new Set();
+  for (const c of failed) {
+    if (!c.databaseId || !c.runId) return null;
+    let log;
+    try {
+      log = gh(['run', 'view', '--job', String(c.databaseId), '--repo', repo, '--log-failed'], { maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch {
+      return null;
+    }
+    const key = recognise(log);
+    if (!key) return null;
+    keys.add(key);
+  }
+  return [...keys].sort();
+}
+
+/**
  * Whether `agent-rebase.yml` has already posted its attempt marker for this head.
  *
  * The marker is the lane's, not this file's — imported rather than re-spelled, so the
@@ -1718,14 +1747,17 @@ export function apply(pr, verdict, repo, { dryRun = true, json = readJson } = {}
     if (handbackOn(pr.number, repo, gh, pr.headSha) !== false) return say(`already handed #${pr.number} back to the revise lane on this commit, or its comments could not be read`);
     say(`hand #${pr.number} back to the Implementer's revise lane: ${verdict.why}`);
     if (!dryRun) {
-      const failing = checkPartition(pr.checks).failed.map((c) => `- \`${c.workflowName ? `${c.workflowName} / ` : ''}${c.name}\` (${c.conclusion})${
+      const failed = checkPartition(pr.checks).failed;
+      const failing = failed.map((c) => `- \`${c.workflowName ? `${c.workflowName} / ` : ''}${c.name}\` (${c.conclusion})${
         c.runId ? `: \`gh run view ${c.runId} --repo ${repo} --log-failed\`` : ''}`);
+      const fixes = fixKeysOf(failed, repo);
       gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body', signed([
         `🔁 **Handing this back to the Implementer.** The Reviewer approved \`${String(pr.headSha).slice(0, 7)}\`, and then these checks failed on it:`,
         '',
         ...failing,
         '',
         `The failed check is the finding. The Merger added \`${REVISE_LABEL}\`, which starts the Implementer's revise lane on this head. Its push dismisses the approval, so the Reviewer reviews the new head before anything merges. This happens once per head: if this head is still red after that run, the Merger asks a person (\`needs:human\`).`,
+        ...(fixes ? ['', `Each failed check has a fix command Kanon knows (${fixes.map((k) => `\`${k}\``).join(', ')}), so the revise lane runs it first, and runs the model only if it changes nothing (kanon#1173).`, fixCommandsMarker(fixes)] : []),
         '',
         mark,
       ].join('\n'), 'Merger', appPersona('Merger'))]);
