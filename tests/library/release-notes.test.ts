@@ -3,9 +3,9 @@
  * plan 0011 N9) and weekly-digest.mjs (Kanon text since N8) (RA-502). Neither writes a
  * chat system's markup: each hook renders Kanon text for its own system.
  *
- * Both callers parse and classify with the same functions (`parseSections`,
- * `scopeOf`, `classify`): the deploy announcement and the weekly digest must
- * categorise the same commit identically, and a silent drift between them is
+ * Both callers parse with the same functions (`parseSections`, `scopeOf`), and
+ * only the deploy announcement calls `classify`: the two must read the same
+ * commit's scope identically, and a silent drift between them is
  * invisible until a stakeholder reads two posts that disagree. The Kanon-text
  * renderers are tested here too; announce-deploy.test.ts tests the message.
  */

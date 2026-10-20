@@ -736,7 +736,8 @@ jobs:
             NEVER a barrier. You are invoked only AFTER CI has finished on this exact
             commit, so the required checks have SETTLED and you never have to reason
             about a pending one: a RED required check → `REQUEST_CHANGES`, never APPROVE
-            over red (RA-293); all green → `APPROVE`. Still NEVER poll, wait for, or
+            over red (RA-293); all green → your findings decide, and a wrong PR body
+            is one that blocks (below). Still NEVER poll, wait for, or
             re-run a check — your run is finite and a backgrounded wait means your
             verdict is never posted. If a check somehow IS still pending, that is an
             anomaly rather than the normal case: say so in your review body and give
@@ -754,6 +755,13 @@ jobs:
             an "advisory approve" `COMMENT`; that is for a manual single-token session,
             not CI. A formed-but-unsubmitted review is
             indistinguishable from a crash — always end by POSTING.
+
+            THE PR BODY IS THE SQUASH COMMIT'S MESSAGE (K-SHIP-3), and the merge
+            follows your approval, often within minutes and with no push between. So
+            when the body would make a wrong or stale commit message (a claim the
+            commits have overtaken, a status that no longer holds), REQUEST_CHANGES
+            naming the edit, and never `APPROVE` with a note asking for it: once the
+            PR merges, its squash message can't be corrected.
 
             CAPTURE FOLLOW-UPS: if your review surfaces real deferred work (a
             scoped-out gap, a hardening, a missing test, a perf fix worth doing), FILE
