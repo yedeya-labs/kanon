@@ -28,7 +28,9 @@
 # A lane that runs the adopter's own toolchain AFTER this action gets Kanon's Node on the
 # PATH ahead of the adopter's, so a lane calls it before the project-setup hook wherever the
 # adopter's code runs later, and reads the path from this step's output, not from `KANON`,
-# wherever the adopter's code has run since (it can rewrite `$GITHUB_ENV`).
+# wherever the adopter's code has run since (it can rewrite `$GITHUB_ENV`). A step that runs
+# Kanon's script AFTER the adopter's hook takes Kanon's Node by absolute path from the `node`
+# output too, since the hook may put another Node first on the PATH (kanon#761).
 name: Kanon path
 description: Sets up Kanon's Node, and puts the absolute path of the Kanon tree this action came from in the `path` output and in `KANON` for later steps.
 author: yedeya-labs
@@ -37,6 +39,9 @@ outputs:
   path:
     description: The absolute path of Kanon's root, in the runner's action cache.
     value: ${{ steps.path.outputs.path }}
+  node:
+    description: The absolute path of the Node this action set up, for a step that must run Kanon's script on Kanon's Node after the project's hook has changed the PATH.
+    value: ${{ steps.path.outputs.node }}
 
 runs:
   using: composite
@@ -57,5 +62,7 @@ runs:
           echo "::error title=kanon-path::$root has no scripts/ directory, so it is not a Kanon tree"
           exit 1
         fi
+        node_bin="$(command -v node)"
         echo "path=$root" >> "$GITHUB_OUTPUT"
+        echo "node=$node_bin" >> "$GITHUB_OUTPUT"
         echo "KANON=$root" >> "$GITHUB_ENV"

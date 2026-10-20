@@ -6,9 +6,12 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { UNDECLARED, parseCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import {
-  CHARACTERIZATION_LABEL, changedFiles, characterization, classify, commentOnlyAt, dirtyPaths, exitCodeFor, materialise,
-  narrowRunnable, noBehaviourChange, planOutput, readResult, runFiles, tierOf, verdict, withMaterialised,
+  CHARACTERIZATION_LABEL, areasFromJson, changedFiles, characterization, classify, commentOnlyAt, dirtyPaths, exitCodeFor,
+  judgingAreas, materialise, narrowRunnable, noBehaviourChange, planOutput, planOutputs, readResult, runFiles, tierOf, verdict,
+  withMaterialised,
 } from '../../scripts/red-test.mjs';
+
+type CodeAreasT = ReturnType<typeof parseCodeAreas>;
 import { ROOT } from './helpers/adopter.js';
 
 /**
@@ -703,6 +706,42 @@ describe('the reusable workflow', () => {
     expect(last.run).toContain('PIPESTATUS[0]');
     expect(last.run).toContain('--base "$BASE" --head "$HEAD"');
   });
+
+  // kanon#761: what the check judges with is never the PR's.
+  it('scope reads the code areas from the default branch, before any of the PR\'s code runs, and hands them on', () => {
+    const plan = steps('scope').find((s) => s.id === 'plan') as Step;
+    expect(plan.env?.DEFAULT_BRANCH).toBe('${{ github.event.repository.default_branch }}');
+    expect(plan.run).toContain('--areas-ref "refs/remotes/origin/$DEFAULT_BRANCH"');
+    expect(steps('scope').some((s) => s.uses === './.github/actions/project-setup'), 'no PR code runs in scope').toBe(false);
+    expect(wf.jobs.scope.outputs.areas).toBe('${{ steps.plan.outputs.areas }}');
+    expect(wf.jobs.scope.outputs.areas_changed).toBe('${{ steps.plan.outputs.areas_changed }}');
+  });
+
+  it('verify refuses a PR that changes the code areas before anything of the PR\'s runs, on anything but an explicit false', () => {
+    const s = steps('verify');
+    const refuse = s.findIndex((x) => x.name === 'Refuse a pull request that changes the code areas it is judged with');
+    expect(refuse).toBe(0);
+    expect((s[refuse] as Step & { if?: string }).if).toBe("needs.scope.outputs.areas_changed != 'false'");
+    expect(s[refuse].run).toContain('exit 1');
+    expect(refuse).toBeLessThan(s.findIndex((x) => x.uses === './.github/actions/project-setup'));
+  });
+
+  it('verify judges with the areas scope read, on Kanon\'s Node by absolute path, never the tree\'s or the PATH\'s', () => {
+    const last = steps('verify').at(-1) as Step;
+    expect(last.env?.AREAS).toBe('${{ needs.scope.outputs.areas }}');
+    expect(last.run).toContain('--areas-json "$AREAS"');
+    expect(last.run).not.toContain('--areas-ref');
+    expect(last.env?.KANON_NODE).toBe('${{ steps.kanon.outputs.node }}');
+    expect(last.run).toMatch(/^\s*"\$KANON_NODE" "\$KANON\/scripts\/red-test\.mjs"/m);
+    const action = parse(readFileSync(join(ROOT, 'actions/kanon-path/action.yml'), 'utf8'));
+    expect(action.outputs.node.value).toBe('${{ steps.path.outputs.node }}');
+  });
+
+  it('the script reads no stack document from the working tree', () => {
+    const script = readFileSync(join(ROOT, 'scripts/red-test.mjs'), 'utf8');
+    expect(script).not.toMatch(/import[^;]*\breadCodeAreas\b/);
+    expect(script).not.toMatch(/readFileSync\([^)]*STACK_FILE/);
+  });
 });
 
 /**
@@ -815,8 +854,15 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
       writeFileSync(join(dir, f), body);
     }
   };
-  type Run = { status: number | null; out: string; output: string; dirty: string; addedOnDisk: boolean };
-  const check = (base: Record<string, string>, head: Record<string, string | null>, opts: { runner?: boolean; args?: string[]; after?: Record<string, string>; event?: unknown } = {}): Run => {
+  type Run = { status: number | null; out: string; output: string; outputs: Record<string, string>; dirty: string; addedOnDisk: boolean };
+  type Opts = {
+    runner?: boolean; args?: string[]; after?: Record<string, string>; event?: unknown;
+    /** A commit on the trusted branch after the merge base: the default branch moved on. */
+    trusted?: Record<string, string>;
+    /** Where the areas come from, in place of `--areas-ref trusted`. */
+    areasArgs?: string[];
+  };
+  const check = (base: Record<string, string>, head: Record<string, string | null>, opts: Opts = {}): Run => {
     const dir = mkdtempSync(join(tmpdir(), 'red-test-e2e-'));
     try {
       const g = (...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { cwd: dir, encoding: 'utf8' }).trim();
@@ -825,6 +871,14 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
       write(dir, { '.gitignore': 'node_modules\n.vitest-cache\n', 'vitest.config.mjs': "export default { cacheDir: '.vitest-cache' };\n", 'docs/qa/stack.md': STACK, ...base });
       g('add', '-A'); g('commit', '-qm', 'base');
       const baseSha = g('rev-parse', 'HEAD');
+      // The default branch, as the scope job reads it: the base, or a commit after it.
+      g('branch', 'trusted');
+      if (opts.trusted) {
+        g('checkout', '-q', 'trusted');
+        write(dir, opts.trusted);
+        g('add', '-A'); g('commit', '-qm', 'trusted moved on');
+        g('checkout', '-q', 'main');
+      }
       write(dir, head);
       g('add', '-A'); g('commit', '-qm', 'head');
       const headSha = g('rev-parse', 'HEAD');
@@ -837,14 +891,16 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
       const eventPath = join(dir, '.git', 'event.json');
       if (opts.event !== undefined) writeFileSync(eventPath, JSON.stringify(opts.event));
       // A clean environment: the runner must not inherit this suite's own Vitest worker state.
-      const r = spawnSync('node', [SCRIPT, '--base', baseSha, '--head', headSha, ...(opts.args ?? [])], {
+      const r = spawnSync('node', [SCRIPT, '--base', baseSha, '--head', headSha, ...(opts.areasArgs ?? ['--areas-ref', 'trusted']), ...(opts.args ?? [])], {
         cwd: dir, encoding: 'utf8', timeout: 100_000,
         env: { PATH: process.env.PATH ?? '', HOME: dir, GITHUB_OUTPUT: output, ...(opts.event !== undefined ? { GITHUB_EVENT_PATH: eventPath } : {}) },
       });
+      const written = readFileSync(output, 'utf8').trim();
       return {
         status: r.status,
         out: `${r.stdout}${r.stderr}`,
-        output: readFileSync(output, 'utf8').trim(),
+        output: written,
+        outputs: Object.fromEntries(written.split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)])),
         dirty: g('status', '--porcelain', '--untracked-files=no'),
         // Read now: the directory is gone once this returns.
         addedOnDisk: existsSync(join(dir, 'src/add.mjs')),
@@ -913,14 +969,14 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
   it('--plan: tests only → verify=false, so the verification job does not run, and no behaviour change is named', () => {
     const r = check({}, REAL_TEST, { args: ['--plan'] });
     expect(r.status, r.out).toBe(0);
-    expect(r.output).toBe('verify=false');
+    expect(r.outputs.verify).toBe('false');
     expect(r.out).toContain('**Skipped: no behaviour change to revert.** No non-test file changed, so');
   });
 
   it('--plan: tests beside a non-doc file it cannot revert, and no source → verify=false, saying only that nothing was reverted', () => {
     const r = check({ 'config/flags.json': '{"a":1}\n' }, { 'config/flags.json': '{"a":2}\n', ...REAL_TEST }, { args: ['--plan'] });
     expect(r.status, r.out).toBe(0);
-    expect(r.output).toBe('verify=false');
+    expect(r.outputs.verify).toBe('false');
     expect(r.out).toContain('**Skipped:** no source file changed');
     expect(r.out).not.toContain('no behaviour change');
   });
@@ -928,7 +984,7 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
   it('--plan: tests AND source → verify=true, with the scope heading, not a verdict', () => {
     const r = check(BUGGY, { ...FIXED, ...REAL_TEST }, { args: ['--plan'] });
     expect(r.status, r.out).toBe(0);
-    expect(r.output).toBe('verify=true');
+    expect(r.outputs.verify).toBe('true');
     expect(r.out.split('\n')[0]).toBe('## Red-test scope');
     expect(r.out).not.toContain('PASS');
   });
@@ -936,7 +992,7 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
   it('--plan with no tests tree declared names the default and skips: no runner is assumed', () => {
     const r = check({ 'docs/qa/stack.md': '# Stack\n\n## Gates\n\n1. test\n', ...BUGGY }, { ...FIXED, ...REAL_TEST }, { args: ['--plan'] });
     expect(r.status, r.out).toBe(0);
-    expect(r.output).toBe('verify=false');
+    expect(r.outputs.verify).toBe('false');
     expect(r.out).toContain("declares no `## Code areas`, so Kanon's default applies");
     expect(r.out).toContain('**Not run**: no `tests` tree in docs/qa/stack.md names a runner for these');
   });
@@ -964,14 +1020,14 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
   it('--plan: comment-only source → verify=false, so the check concludes SKIPPED, never red', () => {
     const r = check(GUARDED, { ...RECOMMENTED, ...REAL_TEST }, { args: ['--plan'] });
     expect(r.status, r.out).toBe(0);
-    expect(r.output).toBe('verify=false');
+    expect(r.outputs.verify).toBe('false');
     expect(r.out).toContain('no behaviour change to revert');
   });
 
   it('--plan: tests and docs, no non-test source at all → verify=false, with the same message', () => {
     const r = check({ 'docs/spec.md': 'One.\n' }, { 'docs/spec.md': 'Two.\n', ...REAL_TEST }, { args: ['--plan'] });
     expect(r.status, r.out).toBe(0);
-    expect(r.output).toBe('verify=false');
+    expect(r.outputs.verify).toBe('false');
     expect(r.out).toContain('**Skipped: no behaviour change to revert.**');
   });
 
@@ -998,14 +1054,14 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
   it('--plan: a person\'s `test:characterization` turns a behaviour-changing diff\'s check SKIPPED', () => {
     const r = check(BUGGY, { ...FIXED, ...VACUOUS_TEST }, { args: ['--plan'], event: labelled({ login: 'yedeya', type: 'User' }) });
     expect(r.status, r.out).toBe(0);
-    expect(r.output).toBe('verify=false');
+    expect(r.outputs.verify).toBe('false');
     expect(r.out).toContain('**Skipped: a person applied `test:characterization`** (@yedeya)');
   });
 
   it('--plan: the same label applied by an App is ignored, and says so: the check still verifies', () => {
     const r = check(BUGGY, { ...FIXED, ...VACUOUS_TEST }, { args: ['--plan'], event: labelled({ login: 'kanon-author[bot]', type: 'Bot' }) });
     expect(r.status, r.out).toBe(0);
-    expect(r.output).toBe('verify=true');
+    expect(r.outputs.verify).toBe('true');
     expect(r.out).toContain('applied by an App (@kanon-author[bot]), and an App cannot waive this check (K-MERGE-13): ignored.');
   });
 
@@ -1020,5 +1076,126 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
     expect(planOutput({ plan: true })).toBe('verify=true');
     expect(planOutput({ blocked: true })).toBe('verify=true');
     expect(planOutput(undefined)).toBe('verify=true');
+  });
+
+  // ── kanon#761: the PR's stack document can't steer the check ──────────────
+  const SRC_AS_TESTS = '# Stack\n\n## Gates\n\n1. run the tests\n\n## Code areas\n\n- `src/` — tests: the application, now "tests"\n- `tests/` `vitest` — tests: the suite\n';
+  const NO_RUNNER = '# Stack\n\n## Gates\n\n1. run the tests\n\n## Code areas\n\n- `src/` — code: the application\n- `tests/` — tests: the suite\n';
+  const NO_AREAS = '# Stack\n\n## Gates\n\n1. run the tests\n';
+
+  it('a PR that re-declares its source as a tests tree is refused, not skipped: the plan still sends verify, which fails', () => {
+    const plan = check(BUGGY, { ...FIXED, ...VACUOUS_TEST, 'docs/qa/stack.md': SRC_AS_TESTS }, { args: ['--plan'] });
+    expect(plan.status, plan.out).toBe(0);
+    expect(plan.outputs.verify).toBe('true');
+    expect(plan.outputs.areas_changed).toBe('true');
+    expect(plan.out).toContain('**Refused: this pull request changes the code areas the check judges with.**');
+    expect(plan.out).not.toContain('Skipped');
+    const run = check(BUGGY, { ...FIXED, ...VACUOUS_TEST, 'docs/qa/stack.md': SRC_AS_TESTS });
+    expect(run.status, run.out).toBe(1);
+    expect(run.out).toContain('**Refused');
+  });
+
+  it('a PR that drops its tests tree\'s runner is refused, not skipped', () => {
+    const r = check(BUGGY, { ...FIXED, ...VACUOUS_TEST, 'docs/qa/stack.md': NO_RUNNER }, { args: ['--plan'] });
+    expect(r.outputs.verify).toBe('true');
+    expect(r.outputs.areas_changed).toBe('true');
+    expect(r.out).toContain('declares the `tests` trees `tests/`, and `trusted` declares `tests/` `vitest`');
+  });
+
+  it('a PR that adds its first tests tree is refused, never SKIPPED', () => {
+    const r = check({ 'docs/qa/stack.md': NO_AREAS, ...BUGGY }, { ...FIXED, ...REAL_TEST, 'docs/qa/stack.md': STACK }, { args: ['--plan'] });
+    expect(r.outputs.verify).toBe('true');
+    expect(r.outputs.areas_changed).toBe('true');
+    expect(r.out).toContain('and `trusted` declares none');
+  });
+
+  it('a PR whose stack document can\'t be parsed is refused by name', () => {
+    const r = check(BUGGY, { ...FIXED, ...REAL_TEST, 'docs/qa/stack.md': '# Stack\n\n## Code areas\n\n- `src` — code: the application\n' }, { args: ['--plan'] });
+    expect(r.status, r.out).toBe(0);
+    expect(r.outputs.areas_changed).toBe('true');
+    expect(r.out).toMatch(/This pull request's docs\/qa\/stack\.md can't be read: docs\/qa\/stack\.md:\d+: a `code` area is a directory/);
+  });
+
+  it('a PR that only rewords its areas, keeping the tests trees, is judged as usual', () => {
+    const reworded = STACK.replace('the suite', 'every test we have');
+    const r = check(BUGGY, { ...FIXED, ...VACUOUS_TEST, 'docs/qa/stack.md': reworded });
+    expect(r.out).not.toContain('Refused');
+    expect(r.out).toContain('**UNVERIFIABLE');
+  });
+
+  it('a branch behind a default branch whose areas moved is judged by the default branch\'s, not refused and not its own', () => {
+    // The merge base declares no areas, so the PR's test has no runner there; the default branch
+    // has since declared `tests/` with Vitest. The PR touched neither.
+    const r = check({ 'docs/qa/stack.md': NO_AREAS, ...BUGGY }, { ...FIXED, ...REAL_TEST }, { trusted: { 'docs/qa/stack.md': STACK } });
+    expect(r.out).not.toContain('Refused');
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toContain('**PASS.** 1 file(s) failed an assertion against the reverted source.');
+  });
+
+  it('the stack document on disk is never read: a rewrite after checkout (the hook\'s) changes nothing', () => {
+    const r = check(BUGGY, { ...FIXED, ...VACUOUS_TEST }, { after: { 'docs/qa/stack.md': SRC_AS_TESTS } });
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('**BLOCKED');
+  });
+
+  it('the verifying run judges with the areas the plan handed it, whatever the tree on disk says', () => {
+    const plan = check(BUGGY, { ...FIXED, ...VACUOUS_TEST }, { args: ['--plan'] });
+    expect(plan.outputs.areas_changed).toBe('false');
+    const areas = plan.outputs.areas as string;
+    expect(JSON.parse(areas).tests).toEqual([{ path: 'tests/', what: 'the suite', runner: 'vitest' }]);
+    const r = check(BUGGY, { ...FIXED, ...VACUOUS_TEST }, { areasArgs: ['--areas-json', areas], after: { 'docs/qa/stack.md': SRC_AS_TESTS } });
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('**BLOCKED');
+  });
+
+  it('fails closed with no trusted source of areas: none given, an unreadable ref, or a garbled hand-over', () => {
+    for (const areasArgs of [[], ['--areas-ref', 'no-such-branch'], ['--areas-json', ''], ['--areas-json', '{"declared":true}']]) {
+      const r = check(BUGGY, { ...FIXED, ...REAL_TEST }, { areasArgs, args: ['--plan'] });
+      expect(r.status, `${areasArgs.join(' ')}: ${r.out}`).toBe(1);
+      expect(r.outputs.verify, areasArgs.join(' ')).toBeUndefined();
+      expect(r.out).toMatch(/^red-test: /m);
+    }
+  });
+
+  it('planOutputs and exitCodeFor: a refusal sends verify, says so, and fails it', () => {
+    expect(planOutputs({ areasChanged: true }, UNDECLARED)).toEqual(['verify=true', `areas=${JSON.stringify(UNDECLARED)}`, 'areas_changed=true']);
+    expect(planOutputs({ skipped: true }, UNDECLARED)[2]).toBe('areas_changed=false');
+    expect(exitCodeFor({ areasChanged: true })).toBe(1);
+  });
+});
+
+describe('judgingAreas: the trusted ref\'s areas, and whether the PR changes them (kanon#761)', () => {
+  const T = parseCodeAreas('## Code areas\n\n- `tests/` `vitest` — tests: the suite\n');
+  const SRC = parseCodeAreas('## Code areas\n\n- `src/` — tests: source\n- `tests/` `vitest` — tests: the suite\n');
+  const reader = (by: Record<string, CodeAreasT | Error>) => (ref: string) => {
+    const v = by[ref];
+    if (v instanceof Error) throw v;
+    if (!v) throw new Error(`no ${ref}`);
+    return v;
+  };
+
+  it('judges with the trusted ref\'s areas, whatever the head declares', () => {
+    const r = judgingAreas({ trustedRef: 'main', head: 'h', diffBase: 'b', read: reader({ main: T, h: SRC, b: T }) });
+    expect(r.areas).toBe(T);
+    expect(r.changed).toEqual({ trusted: '`tests/` `vitest`', head: '`src/`, `tests/` `vitest`' });
+  });
+
+  it('is unchanged when the head matches the trusted ref, or the merge base', () => {
+    expect(judgingAreas({ trustedRef: 'main', head: 'h', diffBase: 'b', read: reader({ main: T, h: T, b: SRC }) }).changed).toBeNull();
+    expect(judgingAreas({ trustedRef: 'main', head: 'h', diffBase: 'b', read: reader({ main: T, h: SRC, b: SRC }) })).toEqual({ areas: T, changed: null });
+  });
+
+  it('a merge base it can\'t read can\'t show the head unchanged', () => {
+    expect(judgingAreas({ trustedRef: 'main', head: 'h', diffBase: 'b', read: reader({ main: T, h: SRC, b: new Error('bad') }) }).changed).not.toBeNull();
+  });
+
+  it('throws when the trusted ref can\'t be read, and refuses a head that can\'t be', () => {
+    expect(() => judgingAreas({ trustedRef: 'main', head: 'h', diffBase: 'b', read: reader({ main: new Error('gone'), h: T, b: T }) })).toThrow('gone');
+    expect(judgingAreas({ trustedRef: 'main', head: 'h', diffBase: 'b', read: reader({ main: T, h: new Error('line 3'), b: T }) }).changed).toEqual({ malformed: 'line 3' });
+  });
+
+  it('areasFromJson takes back what the plan wrote, and nothing else', () => {
+    expect(areasFromJson(JSON.stringify(SRC))).toEqual(SRC);
+    for (const bad of ['', 'null', '[]', '{"declared":true,"code":[],"tests":[{"path":1}],"audit":[]}']) expect(() => areasFromJson(bad), bad).toThrow();
   });
 });

@@ -78,7 +78,30 @@
 // Either way the PR states the mutations that turn its test red (`K-PRIN-11`), and the Reviewer
 // asks for them: the test's sensitivity comes from those, since it can't come from here.
 //
-// Usage: node "$KANON/scripts/red-test.mjs" --base <sha> --head <sha>
+// ── WHAT IT JUDGES WITH IS NEVER THE PULL REQUEST'S (`K-MERGE-17`, kanon#761) ──
+// The script is Kanon's, from the action cache at the caller's pin. The other input that decides
+// the verdict is the stack document's `## Code areas`: which files are tests, and which runner
+// runs them. Read from the PR's checkout, a PR could declare its source directory a `tests` tree,
+// or drop its tree's runner, and every changed file would classify as a test that never runs: the
+// plan says "nothing to verify", and the required check concludes SKIPPED, which a ruleset counts
+// as passing. So the areas come from a ref the PR can't write, `--areas-ref` (the default branch,
+// in the workflow's `scope` job, where none of the PR's code has run), read from git objects,
+// never from the working tree. The verifying job runs the PR's setup hook first, which could
+// rewrite `.git` as easily as the tree, so it gets the areas the scope job read, as
+// `--areas-json` through a job output, and reads none of its own.
+//
+// A PR THAT CHANGES THE AREAS IS REFUSED, NEVER SKIPPED. Judged by the default branch's areas, a
+// PR that adds its first `tests` tree would conclude SKIPPED (its tests have no runner yet), and
+// judged by its own, it steers the check. Neither is a verdict, so the check refuses by name, red,
+// and a person merges the PR (`K-MERGE-4`: the stack document is an escalation path anyway).
+// "Changes" means the head declares different `tests` trees or runners from both the default
+// branch and the merge base, so a branch that is only behind a default branch whose areas moved
+// is judged by the default branch's, not refused. Only the `tests` entries are compared: they are
+// all of the declaration this check reads. A head whose declaration can't be parsed is refused
+// the same way.
+//
+// Usage: node "$KANON/scripts/red-test.mjs" --base <sha> --head <sha> --areas-ref <ref>
+//        (or --areas-json <json>: the areas a `--plan` run with `--areas-ref` wrote)
 //        (add --dry-run to classify and print without touching the tree)
 //        (add --plan to classify only and write `verify=true|false` to $GITHUB_OUTPUT: the
 //         workflow's `scope` job)
@@ -90,7 +113,7 @@ import { basename, join } from 'node:path';
 
 import { isAgentActor } from './lib/actors.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
-import { UNDECLARED, codeAreasDefaults, isTestPath, readCodeAreas } from './lib/code-areas.mjs';
+import { STACK_FILE, UNDECLARED, codeAreasDefaults, isTestPath, parseCodeAreas } from './lib/code-areas.mjs';
 import { commentOnly } from './lib/comment-only.mjs';
 import { RUNNERS, TABLE_EXT, interpretGoJson, isTestFile, runnerFor } from './lib/test-conventions.mjs';
 
@@ -120,6 +143,12 @@ const PLAN = process.argv.includes('--plan');
  *  to "nothing to check", never to "passed".
  *  @param {Record<string, unknown> | undefined | null} r */
 export const planOutput = (r) => `verify=${r?.skipped ? 'false' : 'true'}`;
+
+/** Every line `--plan` writes to `$GITHUB_OUTPUT`: the plan, the code areas the scope job read
+ *  from the trusted ref (one line of JSON, for the verifying job, which must not read its own),
+ *  and whether the PR changes them.
+ *  @param {Record<string, unknown> | undefined | null} r @param {CodeAreas} areas */
+export const planOutputs = (r, areas) => [planOutput(r), `areas=${JSON.stringify(areas)}`, `areas_changed=${r?.areasChanged ? 'true' : 'false'}`];
 
 /** @type {Git} */
 function git(args, opts = {}) {
@@ -326,12 +355,13 @@ export function classify(files, areas = UNDECLARED) {
  * `unverifiable`: files in the diff were never reverted, so no claim about them was tested.
  * `weakOnUnrevertedHarness`: the only evidence is files that failed to LOAD, and an unreverted
  * test helper could have caused that. `refused`: uncommitted work in the revert set (never in
- * CI, where the checkout is clean at a commit). Listed rather than inverted, because a pass is
+ * CI, where the checkout is clean at a commit). `areasChanged`: the PR changes the code areas it
+ * would be judged with (kanon#761). Listed rather than inverted, because a pass is
  * not one condition either; what stops a new refusal forgetting to join the list is that this
  * line is covered by a test.
  * @param {Record<string, unknown> | undefined | null} r
  */
-export const exitCodeFor = (r) => (r?.blocked || r?.inconclusive || r?.unverifiable || r?.weakOnUnrevertedHarness || r?.refused ? 1 : 0);
+export const exitCodeFor = (r) => (r?.blocked || r?.inconclusive || r?.unverifiable || r?.weakOnUnrevertedHarness || r?.refused || r?.areasChanged ? 1 : 0);
 
 /**
  * @param {{ expected: string[], results: Array<Partial<FileResult> & { file: string }>, ran?: boolean, unreverted?: string[], unrevertedTests?: string[] }} input
@@ -580,13 +610,118 @@ export function changedFiles(base, head, { run = git } = {}) {
   return { diffBase, files: run(['diff', '--name-only', diffBase, head]).split('\n').filter(Boolean) };
 }
 
-/** @param {CodeAreas} areas */
-function main(areas) {
+// ---------------------------------------------------------------------------
+// The code areas it judges with (kanon#761)
+
+/**
+ * The stack document's `## Code areas` at a git ref, read from the object store, never from the
+ * working tree. A ref that doesn't resolve throws: the check refuses rather than fall back to
+ * the checkout, which is the PR's. A ref with no stack document declares nothing, as
+ * `readCodeAreas` reads a tree without one; a malformed declaration throws.
+ * @param {string} ref @param {{ run?: Git }} [io]
+ * @returns {CodeAreas}
+ */
+export function areasAt(ref, { run = git } = {}) {
+  try {
+    run(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { stdio: 'pipe' });
+  } catch {
+    throw new Error(`can't read \`${ref}\`, the ref the code areas are taken from, and the check never takes them from the pull request. The checkout needs full history (\`fetch-depth: 0\`).`);
+  }
+  try {
+    run(['cat-file', '-e', `${ref}:${STACK_FILE}`], { stdio: 'pipe' });
+  } catch {
+    return UNDECLARED;
+  }
+  return parseCodeAreas(run(['cat-file', 'blob', `${ref}:${STACK_FILE}`], { stdio: 'pipe' }));
+}
+
+/** The part of a declaration this check reads, as one comparable string: each `tests` tree and
+ *  its runner. @param {CodeAreas} areas */
+const judgedKey = (areas) => areas.tests.map((t) => `\`${t.path}\`${t.runner ? ` \`${t.runner}\`` : ''}`).sort().join(', ');
+
+/**
+ * The code areas a run judges with, and whether the PR changes them.
+ *
+ * `areas` is always the trusted ref's, and a failure to read it throws (fail closed). `changed`
+ * is null when the head's `tests` trees match the trusted ref's, or the merge base's (the PR
+ * didn't touch them, the default branch moved). Otherwise it says what the head declares, or
+ * why it can't be read.
+ * @param {{ trustedRef: string, head: string, diffBase: string, read?: (ref: string) => CodeAreas }} input
+ * @returns {{ areas: CodeAreas, changed: null | { trusted: string, head: string } | { malformed: string } }}
+ */
+export function judgingAreas({ trustedRef, head, diffBase, read = (ref) => areasAt(ref) }) {
+  const areas = read(trustedRef);
+  let headKey;
+  try {
+    headKey = judgedKey(read(head));
+  } catch (e) {
+    return { areas, changed: { malformed: /** @type {Error} */ (e).message } };
+  }
+  if (headKey === judgedKey(areas)) return { areas, changed: null };
+  let baseKey = null;
+  try { baseKey = judgedKey(read(diffBase)); } catch { /* unreadable at the merge base: the head's can't be shown unchanged */ }
+  return { areas, changed: headKey === baseKey ? null : { trusted: judgedKey(areas) || 'none', head: headKey || 'none' } };
+}
+
+/**
+ * The areas a `--plan` run wrote as JSON, for the verifying job. Shape-checked, and any fault
+ * throws: a missing or garbled hand-over must not become "no tests tree declared".
+ * @param {string} text
+ * @returns {CodeAreas}
+ */
+export function areasFromJson(text) {
+  /** @type {any} */
+  let v;
+  try { v = JSON.parse(text); } catch { v = null; }
+  const list = (/** @type {unknown} */ x) => Array.isArray(x) && x.every((a) => a && typeof a.path === 'string' && typeof a.what === 'string' && (a.runner === undefined || typeof a.runner === 'string'));
+  if (!v || typeof v !== 'object' || typeof v.declared !== 'boolean' || !list(v.code) || !list(v.tests) || !list(v.audit)) {
+    throw new Error('--areas-json is not the code areas a `--plan` run wrote, so the check refuses rather than judge with none');
+  }
+  return { declared: v.declared, code: v.code, tests: v.tests, audit: v.audit };
+}
+
+/**
+ * Where this run's areas come from: `--areas-json` (the verifying job) or `--areas-ref` (the
+ * scope job, or a person's own run). Never the working tree, so one of the two is required.
+ * @param {string} diffBase @param {string} head
+ */
+function areasForRun(diffBase, head) {
+  const json = arg('areas-json');
+  const ref = arg('areas-ref');
+  if (json !== null && ref !== null) throw new Error('give --areas-ref or --areas-json, not both');
+  if (json !== null) return { areas: areasFromJson(json), changed: null, ref: null };
+  if (ref) return { ...judgingAreas({ trustedRef: ref, head, diffBase }), ref };
+  throw new Error(`--areas-ref <ref> is required: the ref ${STACK_FILE}'s \`## Code areas\` is read from, the default branch in CI. The check never reads them from the pull request's checkout (kanon#761).`);
+}
+
+/** @returns {{ result: Record<string, unknown>, areas: CodeAreas }} */
+function main() {
   const base = arg('base');
   const head = arg('head', 'HEAD') ?? 'HEAD';
   if (!base) throw new Error('--base <sha> is required');
 
   const { diffBase, files } = changedFiles(base, head);
+  const { areas, changed, ref: areasRef } = areasForRun(diffBase, head);
+  const say = (/** @type {string} */ line) => { console.log(line); };
+  // `--plan` runs in the `Red-test scope` job and reaches no verdict, so it must not print a
+  // verification heading that then ends without one.
+  say(PLAN ? '## Red-test scope\n' : '## Red-test verification\n');
+  if (changed) {
+    const what = 'malformed' in changed
+      ? `This pull request's ${STACK_FILE} can't be read: ${changed.malformed}`
+      : `This pull request declares the \`tests\` trees ${changed.head}, and \`${areasRef}\` declares ${changed.trusted}`;
+    say(`**Refused: this pull request changes the code areas the check judges with.** ${what}. The check reads \`## Code areas\` from the default branch, never from the pull request, so a pull request can't decide which of its own files are tests or how they run, and judging this one by the default branch's areas would skip tests its new declaration makes runnable. So it refuses rather than skip. A person reviews and merges a pull request that changes the code areas (K-MERGE-4, K-MERGE-13, K-MERGE-17).`);
+    return { result: { areasChanged: true }, areas };
+  }
+  return { result: verifyWith(areas, { base, head, diffBase, files, say }), areas };
+}
+
+/**
+ * @param {CodeAreas} areas
+ * @param {{ base: string, head: string, diffBase: string, files: string[], say: (line: string) => void }} run
+ * @returns {Record<string, unknown>}
+ */
+function verifyWith(areas, { base, head, diffBase, files, say }) {
   const existsAtHead = (/** @type {string} */ f) => {
     try { git(['cat-file', '-e', `${head}:${f}`], { stdio: 'pipe' }); return true; } catch { return false; }
   };
@@ -600,11 +735,6 @@ function main(areas) {
   // from the base correctly; it just has to still be told about it.
   const { runnable, deletedTests } = narrowRunnable(c.runnable, existsAtHead);
 
-  const say = (/** @type {string} */ line) => { console.log(line); };
-
-  // `--plan` runs in the `Red-test scope` job and reaches no verdict, so it must not print a
-  // verification heading that then ends without one.
-  say(PLAN ? '## Red-test scope\n' : '## Red-test verification\n');
   for (const d of codeAreasDefaults(areas)) say(`${d}\n`);
   say(`Diff \`${diffBase.slice(0, 7)}..${head.slice(0, 7)}\` (merge base of \`${base.slice(0, 7)}\`): ${src.length} source file(s), ${tests.length} test file(s).\n`);
 
@@ -722,25 +852,24 @@ function main(areas) {
 
 if (isCliEntry(import.meta.url)) {
   // The test trees and their runners decide which files are tests and how they run (ADR 0012): a
-  // malformed declaration ends the run with one line naming it, before anything is read.
-  let areas;
+  // malformed declaration at the trusted ref, or a ref that can't be read, ends the run with one
+  // line naming it, before any test runs.
+  let out;
   try {
-    areas = readCodeAreas();
+    out = main();
   } catch (e) {
     console.error(`red-test: ${/** @type {Error} */ (e).message}`);
     process.exit(1);
   }
-  let r;
-  try {
-    r = main(areas);
-  } catch (e) {
-    console.error(`red-test: ${/** @type {Error} */ (e).message}`);
-    process.exit(1);
-  }
+  const { result: r, areas } = out;
   if (PLAN) {
-    const line = planOutput(r);
+    const [line, ...rest] = planOutputs(r, areas);
     console.log(line);
-    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, [line, ...rest].map((l) => `${l}\n`).join(''));
+    // THE PLAN EXITS 0 ON EVERY RESULT IT REACHES, a refusal included. A failed `scope` job skips
+    // `Red-test verification` behind it, and a ruleset counts a skipped required check as
+    // passing, so a refusal is carried to the verifying job (`areas_changed`), which fails.
+    process.exit(0);
   }
   process.exit(exitCodeFor(r));
 }

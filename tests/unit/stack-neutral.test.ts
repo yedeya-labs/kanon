@@ -375,7 +375,7 @@ describe('the red-test check on the Python adopter, with only node and git on PA
       change(dir);
       git('add', '-A');
       git('commit', '-qm', 'head');
-      const r = spawnSync('node', [join(ROOT, 'scripts/red-test.mjs'), '--base', base, '--head', git('rev-parse', 'HEAD'), ...args], {
+      const r = spawnSync('node', [join(ROOT, 'scripts/red-test.mjs'), '--base', base, '--head', git('rev-parse', 'HEAD'), '--areas-ref', base, ...args], {
         cwd: dir,
         encoding: 'utf8',
         env: { PATH: bareBin, HOME: dir, KANON: ROOT },

@@ -137,7 +137,7 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
       'agent-telemetry: nothing',
       'dco: nothing',
       'implementer-status: nothing',
-      'kanon-path: path',
+      'kanon-path: node path',
       'lane-check: nothing',
       // The digests' notify jobs publish it as their job output (plan 0011 N7 and N8, kanon#972).
       'notify: outcome',

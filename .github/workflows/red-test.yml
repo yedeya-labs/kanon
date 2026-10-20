@@ -25,11 +25,24 @@
 # the repository it judged, so the workflow took the BASE revision's copy: a PR's own copy could
 # widen its skip paths and turn the check green on a PR whose tests prove nothing. Here
 # `kanon-path` runs `scripts/red-test.mjs` from the runner's action cache at the version the
-# caller pins, outside the workspace, so no PR branch can change the verifier script. The TESTS
-# still come from the PR, and so do two inputs the verifier reads: the stack document's `## Code
-# areas` (which files are tests, and their runners) and the project-setup hook, which installs the
-# toolchain. A PR that changes either touches an escalation path (`K-MERGE-4`), so a person
-# merges it; pinning those too is tracked as hardening.
+# caller pins, outside the workspace, so no PR branch can change the verifier script.
+#
+# NOR WHAT IT JUDGES WITH (kanon#761). The stack document's `## Code areas` says which files are
+# tests and which runner runs them, so a PR's own copy could turn its source into "tests" that
+# never run and conclude SKIPPED. The `scope` job reads it from the DEFAULT BRANCH (`K-MERGE-17`),
+# from git objects, before any of the PR's code has run, and hands it to `verify` as a job output;
+# `verify` reads none of its own, because by then the PR's hook has run and could rewrite the
+# tree or `.git`. A PR that changes the declared `tests` trees is refused, red, before the hook
+# runs, never skipped: a person merges it (`K-MERGE-4`). And `verify` runs the script with
+# Kanon's Node by absolute path, taken from `kanon-path` before the hook, so a hook that puts
+# another `node` first on the PATH doesn't run it.
+#
+# WHAT STILL COMES FROM THE PR: its tests, its install, and the project-setup hook, which this job
+# runs because it runs the PR's tests with the PR's toolchain. That code shares the runner with the
+# verifier, so it could still forge a runner's report or rewrite files outside the workspace: step
+# order within one job is not a boundary (the reason behind `K-AGENT-49`). The check guards
+# against a test that proves nothing, not against a PR built to defeat it: a person reads every PR
+# that changes the hook (`K-MERGE-4`), and the Reviewer reads the tests themselves.
 #
 # THE TREE IS THE PR'S HEAD, NOT GITHUB'S MERGE REF. On `pull_request`, `actions/checkout` checks
 # out `refs/pull/N/merge` unless told otherwise, and the script reverts and restores against the
@@ -37,9 +50,9 @@
 # the reverted source, and could supply a false strong PASS: the case the merge-base diff exists
 # to prevent. So both checkouts name the head commit.
 #
-# WHAT IS A TEST, AND HOW IT RUNS, IS THE PROJECT'S (ADR 0012). The script reads the stack
-# document's `## Code areas` (`K-LAYOUT-17`): a `tests` tree's runner runs its tests, a Python or
-# Go test runs with pytest or `go test`, and each file runs through the toolchain the
+# WHAT IS A TEST, AND HOW IT RUNS, IS THE PROJECT'S (ADR 0012). The script reads `## Code areas`
+# in the default branch's stack document (`K-LAYOUT-17`): a `tests` tree's runner runs its tests,
+# a Python or Go test runs with pytest or `go test`, and each file runs through the toolchain the
 # project-setup hook installed. Without a declaration, a JavaScript test has no runner and is
 # reported, never run.
 #
@@ -111,6 +124,10 @@ jobs:
     timeout-minutes: 10
     outputs:
       verify: ${{ steps.plan.outputs.verify }}
+      # The code areas read from the default branch, and whether the PR changes them, for
+      # `verify`, which must not read its own after the PR's hook has run (kanon#761).
+      areas: ${{ steps.plan.outputs.areas }}
+      areas_changed: ${{ steps.plan.outputs.areas_changed }}
     steps:
       # Full history: the script diffs against the merge base of the PR's base and head.
       - uses: actions/checkout@v7
@@ -120,15 +137,18 @@ jobs:
           persist-credentials: false
       - uses: $/actions/kanon-path
         id: kanon
+      # The code areas come from the DEFAULT BRANCH, as `fetch-depth: 0` fetched it, never from the
+      # PR's tree or its base (`K-MERGE-17`: a stacked PR's base is another PR's branch).
       - name: Decide whether there is a claim to verify
         id: plan
         env:
           KANON: ${{ steps.kanon.outputs.path }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -uo pipefail
-          node "$KANON/scripts/red-test.mjs" --plan --base "$BASE" --head "$HEAD" | tee -a "$GITHUB_STEP_SUMMARY"
+          node "$KANON/scripts/red-test.mjs" --plan --base "$BASE" --head "$HEAD" --areas-ref "refs/remotes/origin/$DEFAULT_BRANCH" | tee -a "$GITHUB_STEP_SUMMARY"
           exit "${PIPESTATUS[0]}"
 
   verify:
@@ -143,6 +163,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # A PR THAT CHANGES WHAT IT IS JUDGED WITH IS REFUSED HERE, before anything of the PR's runs,
+      # and red rather than skipped (kanon#761). `scope` said why in its summary. Anything but an
+      # explicit `false`, a missing output included, refuses.
+      - name: Refuse a pull request that changes the code areas it is judged with
+        if: needs.scope.outputs.areas_changed != 'false'
+        run: |
+          {
+            echo "## Red-test verification"
+            echo
+            echo "**Refused: this pull request changes the \`## Code areas\` of docs/qa/stack.md that the check judges with, or the scope job couldn't say it doesn't.** The \`Red-test scope\` job's summary names the difference. The check reads the code areas from the default branch, never from the pull request, so a person reviews and merges this one (K-MERGE-4, K-MERGE-13, K-MERGE-17)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Red-test refused::This pull request changes the code areas the red-test check judges with, so a person merges it."
+          exit 1
+
       # Full history: the job diffs against the merge base and checks files out of it.
       - uses: actions/checkout@v7
         with:
@@ -173,12 +207,18 @@ jobs:
       # `--base` is the base branch's TIP, and the script derives the MERGE BASE from it: it diffs
       # and reverts against `merge-base(base, head)`, so a branch that has not just been rebased
       # does not revert and run the default branch's commits as though they were the PR's.
+      #
+      # KANON'S NODE, BY ABSOLUTE PATH, and THE AREAS `scope` READ, not this tree's: the hook has
+      # run, and could have put another `node` first on the PATH or rewritten the stack document
+      # (kanon#761).
       - name: Verify the changed tests fail without the source change
         env:
           KANON: ${{ steps.kanon.outputs.path }}
+          KANON_NODE: ${{ steps.kanon.outputs.node }}
+          AREAS: ${{ needs.scope.outputs.areas }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -uo pipefail
-          node "$KANON/scripts/red-test.mjs" --base "$BASE" --head "$HEAD" | tee -a "$GITHUB_STEP_SUMMARY"
+          "$KANON_NODE" "$KANON/scripts/red-test.mjs" --base "$BASE" --head "$HEAD" --areas-json "$AREAS" | tee -a "$GITHUB_STEP_SUMMARY"
           exit "${PIPESTATUS[0]}"

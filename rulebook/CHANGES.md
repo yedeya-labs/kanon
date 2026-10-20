@@ -87,10 +87,12 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-MERGE-13`
 
 - **2026-10-12.** The Owner decided that a pull request with no behaviour change proves itself with a characterization test: the red-test check concludes skipped, never failed, and the pull request states the mutations that turn its test red. [#666](https://github.com/yedeya-labs/kanon/issues/666)
+- **2026-10-20.** The red-test check reads which files are tests, and their runners, from the default branch's stack document instead of the pull request's, and fails a pull request that changes them instead of skipping it. It runs its verifier with Kanon's Node by absolute path, after the pull request's setup hook. [#761](https://github.com/yedeya-labs/kanon/issues/761)
 
 ## `K-MERGE-17`
 
 - **2026-10-02.** Kanon's own DCO and PR-title checks run the last release, and the pull request's copy runs beside them as a test that isn't required. [#47](https://github.com/yedeya-labs/kanon/issues/47)
+- **2026-10-20.** The red-test check, which both judges a pull request and runs it, reads the stack document's code areas from the default branch. [#761](https://github.com/yedeya-labs/kanon/issues/761)
 
 ## `K-SHIP-7`
 
