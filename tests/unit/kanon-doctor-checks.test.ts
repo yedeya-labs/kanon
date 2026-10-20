@@ -162,10 +162,50 @@ describe('kanon doctor on what an installation lacks', () => {
       files[REQ.hook.path] = pinnedHook(files);
       files['.github/dependabot.yml'] = withEntry(files, ['  - package-ecosystem: github-actions', '    directory: /', '    target-branch: release', '    schedule:', '      interval: daily', ''].join('\n'));
       const r = await run(checkout(files), fakeGitHub(), ['--json']);
-      expect(ids(r)).toEqual(['pin.dependabot-unreached .github/dependabot.yml']);
+      // Ungrouped, too (kanon#1126): two findings on the one entry, each with its own fix.
+      expect(ids(r)).toEqual(['pin.dependabot-ungrouped .github/dependabot.yml', 'pin.dependabot-unreached .github/dependabot.yml']);
       // The first entry already reaches the hook, so the finding names the one to change (kanon#1111).
-      expect(r.json.findings[0].message).toContain("Kanon entry at `updates[1]` (`target-branch: release`, `directory: /`) doesn't reach");
-      expect(r.json.findings[0].fix.commands).toEqual(['directories: ["/", "/.github/actions/*"]']);
+      expect(r.json.findings[1].message).toContain("Kanon entry at `updates[1]` (`target-branch: release`, `directory: /`) doesn't reach");
+      expect(r.json.findings[1].fix.commands).toEqual(['directories: ["/", "/.github/actions/*"]']);
+    });
+
+    // kanon#1126: Dependabot opens an update no group takes in as a pull request of its own, per
+    // dependency and per directory, and each Kanon lane's workflow is a dependency of its own. So
+    // an entry that proposes Kanon has to group it, however well it reaches.
+    const releaseEntry = (...more: string[]) => ['  - package-ecosystem: github-actions', '    directories: ["/", "/.github/actions/*"]', '    target-branch: release',
+      '    schedule:', '      interval: daily', ...more, ''].join('\n');
+    it('reports an entry that proposes Kanon and groups none of it, with the `kanon` group as the fix (kanon#1126)', async () => {
+      const files = healthyFiles();
+      files[REQ.hook.path] = pinnedHook(files);
+      files['.github/dependabot.yml'] = withEntry(files, releaseEntry());
+      const r = await run(checkout(files), fakeGitHub(), ['--json']);
+      expect(ids(r)).toEqual(['pin.dependabot-ungrouped .github/dependabot.yml']);
+      expect(r.json.findings[0]).toMatchObject({ category: 'pin', blocking: true });
+      expect(r.json.findings[0].message).toContain('Kanon entry at `updates[1]` (`target-branch: release`, `directories: ["/","/.github/actions/*"]`) proposes Kanon upgrades but puts them in no one group');
+      expect(r.json.findings[0].fix.text).toContain('`kanon` group `kanon init` writes');
+      expect(r.json.findings[0].fix.commands).toEqual(['kanon: { patterns: ["yedeya-labs/kanon*"] }']);
+      expect(r.status).toBe(EXIT.findings);
+    });
+
+    it('reports a group that takes in only some of Kanon: the bare repository name leaves its lanes out (kanon#1126)', async () => {
+      const files = healthyFiles();
+      files['.github/dependabot.yml'] = withEntry(files, releaseEntry('    groups:', '      kanon:', '        patterns: ["yedeya-labs/kanon"]'));
+      const r = await run(checkout(files), fakeGitHub(), ['--json']);
+      expect(ids(r)).toEqual(['pin.dependabot-ungrouped .github/dependabot.yml']);
+    });
+
+    it('passes an entry that groups Kanon, or that ignores it (kanon#1126)', async () => {
+      for (const more of [
+        ['    groups:', '      kanon:', '        patterns: ["yedeya-labs/kanon*"]'],
+        ['    groups:', '      everything:', '        patterns: ["*"]'],
+        ['    ignore:', '      - dependency-name: "yedeya-labs/kanon*"'],
+      ]) {
+        const files = healthyFiles();
+        files[REQ.hook.path] = pinnedHook(files);
+        files['.github/dependabot.yml'] = withEntry(files, releaseEntry(...more));
+        const r = await run(checkout(files), fakeGitHub(), ['--json']);
+        expect(ids(r), more.join('\n')).toEqual([]);
+      }
     });
 
     // kanon#1131: lane-check fails each entry that doesn't reach a pin, so doctor reports each one,
@@ -173,7 +213,8 @@ describe('kanon doctor on what an installation lacks', () => {
     it("reports every entry that doesn't reach a pin, one finding each (kanon#1131)", async () => {
       const files = healthyFiles();
       files[REQ.hook.path] = pinnedHook(files);
-      files['.github/dependabot.yml'] = withEntry({ '.github/dependabot.yml': forRootAlone(files) }, ['  - package-ecosystem: github-actions', '    directory: /', '    target-branch: release', '    schedule:', '      interval: daily', ''].join('\n'));
+      files['.github/dependabot.yml'] = withEntry({ '.github/dependabot.yml': forRootAlone(files) }, ['  - package-ecosystem: github-actions', '    directory: /', '    target-branch: release', '    schedule:', '      interval: daily',
+        '    groups:', '      kanon:', '        patterns: ["yedeya-labs/kanon*"]', ''].join('\n'));
       const r = await run(checkout(files), fakeGitHub(), ['--json']);
       expect(ids(r)).toEqual(['pin.dependabot-unreached .github/dependabot.yml', 'pin.dependabot-unreached .github/dependabot.yml']);
       expect(r.json.findings[0].message).toContain("Kanon entry at `updates[0]` (`directory: /`) doesn't reach");
