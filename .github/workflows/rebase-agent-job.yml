@@ -98,7 +98,9 @@ jobs:
         id: checkout
         with:
           token: ${{ steps.app-token.outputs.token }}
-          # The agent merges `main` into a branch, so it needs both, not a shallow tip.
+          # The agent merges `main` into a branch, so it needs both, not a shallow tip. Every
+          # branch comes with it, so this is a named exception to `K-AGENT-48`: `ineligible`
+          # refuses a fork's head before this job starts, and only the agent runs the tree.
           fetch-depth: 0
 
       # THIS LANE CALLS THE AGENT-LANE BLOCKS DIRECTLY (RA-2659), not the reusable spine,

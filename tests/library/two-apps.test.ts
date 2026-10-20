@@ -112,7 +112,7 @@ describe('L4: the implement lane stamps only the PR its own run opened', () => {
 describe('L4: implement-revise and the rebase lane refuse a forged PR, so neither launders it', () => {
   const forged = (over: Record<string, unknown> = {}) => ({
     state: 'OPEN', author: { login: `app/${AUTHOR}` }, body: `${headerLine('Implementer')}\n\nCloses #3`,
-    isDraft: false, labels: [{ name: 'agent:implement' }], headStatuses: [], ...over,
+    isDraft: false, isCrossRepository: false, labels: [{ name: 'agent:implement' }], headStatuses: [], ...over,
   });
 
   it('the rebase lane refuses it by name, and accepts the real one', () => {
