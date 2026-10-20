@@ -1,0 +1,37 @@
+# Kanon's Slack hook (plan 0011 §7.1). `kanon init --chat slack` writes this file to
+# `.github/actions/notify/action.yml`, the one thing a notifying lane's `notify` job calls (§6.1).
+#
+# Each kind's message reaches it with that kind's secret and no other (`KANON_CHAT_PROJECT_DIGEST`,
+# `KANON_CHAT_WEEKLY_DIGEST`, `KANON_CHAT_DEPLOY`): store one Slack incoming-webhook URL in each,
+# the same URL in all three if one channel takes everything. A kind whose secret is unset is not
+# posted. See docs/notifications.md in Kanon.
+#
+# Its one step is Kanon's Slack action at the release `init` ran from (the candidate's tag on a
+# candidate pin). The upgrade skill moves this pin with your callers' (decision 18). Edit the step
+# and it is your own hook: Kanon then counts it as `custom`.
+name: notify
+description: Posts Kanon's notifications to Slack, through Kanon's Slack hook.
+
+inputs:
+  message-v1:
+    description: Path to the validated message, version 1, as JSON.
+    required: true
+  text:
+    description: Path to the message's plain-text rendering.
+    required: true
+  kind:
+    description: The message's kind.
+    required: true
+  secret:
+    description: This kind's Slack incoming-webhook URL.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: yedeya-labs/kanon/actions/notify/slack@candidate-v0.41.0 # x-release-please-version
+      with:
+        message-v1: ${{ inputs.message-v1 }}
+        text: ${{ inputs.text }}
+        kind: ${{ inputs.kind }}
+        secret: ${{ inputs.secret }}

@@ -1,0 +1,38 @@
+# The caller of Kanon's agent-weekly-digest lane, written by `kanon init` (docs/lanes.md). The triggers are yours;
+# the rest is the lane's, and `lane-check` holds this file to it.
+name: Weekly digest
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      week_end:
+        description: "End of the 7-day window (ISO date). Defaults to now."
+        required: false
+      dry_run:
+        description: "'true' to print the message instead of posting it"
+        required: false
+      max_turns:
+        description: "Raise the turn limit for this one dispatched run, a whole number from 1 to 30 (the lane's limit is 15). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        required: false
+      reason:
+        description: "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
+        required: false
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  digest:
+    uses: yedeya-labs/kanon/.github/workflows/agent-weekly-digest.yml@candidate-v0.41.0
+    with:
+      week_end: ${{ inputs.week_end }}
+      dry_run: ${{ inputs.dry_run }}
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      KANON_CHAT_WEEKLY_DIGEST: ${{ secrets.KANON_CHAT_WEEKLY_DIGEST }}
