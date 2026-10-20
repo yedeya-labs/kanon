@@ -1,0 +1,33 @@
+# The caller of Kanon's agent-issue-backstop lane, written by `kanon init` (docs/lanes.md). The triggers are yours;
+# the rest is the lane's, and `lane-check` holds this file to it.
+#
+# On Kanon it is named `issue-backstop.yml` because `agent-issue-backstop.yml` is the lane itself,
+# and it calls Kanon's last release, never `$/`, as every other caller here does (ADR 0011). It runs
+# as the Author App, minted for the Lead (docs/qa/agent-identities.md), runs no model, and on an
+# opened issue admits whoever opened it, an outsider included (docs/lanes.md, "The issue backstop").
+name: Issue backstop (Lead)
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue to apply the backstop to"
+        required: true
+      apply:
+        description: "'true' to actually write on a dispatch (anything else = dry run)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  backstop:
+    uses: yedeya-labs/kanon/.github/workflows/agent-issue-backstop.yml@candidate-v0.42.0
+    with:
+      issue_number: ${{ inputs.issue_number }}
+      apply: ${{ inputs.apply }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}

@@ -17,7 +17,7 @@ import { ROOT, SCRIPT, TRIAGE, IMPL, adopter, check, red, job, type Caller, type
  * says how every case runs and holds the helpers they share.
  */
 laneCheck(() => {
-  it('passes Kanon itself, its seventeen lane callers on the Author and the Judge (ADR 0011)', () => {
+  it('passes Kanon itself, its eighteen lane callers on the Author and the Judge (ADR 0011)', () => {
     // In this tree, not a copy: Kanon is its own adopter. CI runs the RELEASED action on it, at
     // the version its callers pin; this run reads the lanes as this PR leaves them, so a lane
     // change that would break Kanon's caller is red here before it is released. Since plan
@@ -26,7 +26,8 @@ laneCheck(() => {
     // lane's, since kanon#448, and the seventh the telemetry Explorer's, since kanon#443. The other
     // nine are the rest of the full pipeline, since ADR 0011's amendment of 2026-10-12: triage,
     // the dispatch sweep, merge reconcile, the Lead's four lanes, verify-acs and the Merger. The
-    // seventeenth is the daily project digest, since kanon#813, for its health job.
+    // seventeenth is the daily project digest, since kanon#813, for its health job, and the
+    // eighteenth the issue backstop, since kanon#1065.
     //
     // ONE CALLER IS CHECKED AS ITS PIN MOVE WILL WRITE IT. Plan 0011's N7 moved the project digest
     // behind the notify job and dropped `DIGEST_WEBHOOK` from the lane (decision 17), but Kanon's
@@ -48,7 +49,7 @@ laneCheck(() => {
     const r = spawnSync('bash', [SCRIPT], { cwd: copy ?? ROOT, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '' } });
     if (copy) rmSync(copy, { recursive: true, force: true });
     expect(r.status, r.stdout).toBe(0);
-    expect(r.stdout).toContain('17 lane caller(s) pass');
+    expect(r.stdout).toContain('18 lane caller(s) pass');
     // One lane-check run over Kanon's whole tree: under a loaded full run it outlasted the 5s
     // default once, as the three-run test below did.
   }, 30_000);
