@@ -57,4 +57,4 @@ On an API key, pass `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}` in pla
 | `started-at` | When the agent started (UTC, ISO 8601). |
 | `claude-args` | The flags the agent ran with: `claude_args`, with a raised turn limit and its dollar cap in place when the dispatch set one. Hand it to `agent-finish` as `claude-args-ran`. |
 | `prompt-cache-ttl` | The TTL the run was pinned at, for `agent-finish`: the input, `default` when it is empty, and empty for anything but a plain word ([#546](https://github.com/yedeya-labs/kanon/issues/546)). |
-| `auth` | The credential the agent ran on: `subscription` or `api-key`. A name, never anything the secret holds. |
+| `auth` | The credential the agent ran on: `subscription` or `api-key`. A name, never anything the secret holds. Every lane hands it to `agent-finish` as `auth`, for the run row's `auth` ([plan 0009](../../docs/plans/0009-release-channels-and-api-key.md) §12). |

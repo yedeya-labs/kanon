@@ -4,7 +4,7 @@ import { EXIT, SCHEMA, parseReportArgs, parseRows } from '../../cli/metrics-repo
 import { metrics } from '../../cli/metrics.mjs';
 import { DELIVERY_LANES as DECLARED_DELIVERY_LANES, deliveryLanes } from '../../scripts/metrics/indicators.mjs';
 import { closingIssues, joinRuns } from '../../scripts/metrics/join.mjs';
-import { DELIVERY_LANES, MINIMUM, OVERHEAD_LANES, metricsReport, renderReport, sortRows } from '../../scripts/metrics/report.mjs';
+import { DELIVERY_LANES, MINIMUM, OVERHEAD_LANES, costByAuth, metricsReport, renderReport, sortRows } from '../../scripts/metrics/report.mjs';
 import { bootstrap, kendallTauB, orderStatisticInterval, quantile, wilson } from '../../scripts/metrics/stats.mjs';
 import { UNTIL, ago, itemRow, mergedWithRuns, risingRows, runRow } from './helpers/metrics-rows.js';
 
@@ -388,6 +388,42 @@ describe('the intervals (§2.2 to §2.4)', () => {
     const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
     expect(bootstrap(units, mean)).toEqual(bootstrap(units, mean));
     expect(bootstrap(units, mean, { seed: 1 })).not.toEqual(bootstrap(units, mean, { seed: 2 }));
+  });
+});
+
+describe('cost by the credential each run ran on (plan 0009 §12, A6)', () => {
+  const rows = [
+    runRow('implement', { issue: 7, at: ago(2), cost: 3, fields: { auth: 'api-key' } }),
+    runRow('review', { pr: 8, at: ago(3), cost: 1, fields: { auth: 'api-key' } }),
+    runRow('review', { pr: 9, at: ago(4), cost: 2, fields: { auth: 'subscription' } }),
+    runRow('explore', { at: ago(5), cost: 4 }),
+    runRow('review', { pr: 10, at: ago(6), fields: { auth: 'subscription' } }),
+    // Outside the window: not counted.
+    runRow('review', { pr: 11, at: ago(40), cost: 50, fields: { auth: 'api-key' } }),
+  ];
+
+  it('are rows the telemetry schema accepts', () => {
+    for (const row of rows) expect(validate(row), JSON.stringify(row)).toEqual({ ok: true });
+  });
+
+  it('splits the window\'s cost by `auth`, and counts a row without it apart, never as the subscription', () => {
+    expect(report(rows).cost.byAuth).toEqual({
+      apiKey: { runs: 2, usd: 4 },
+      subscription: { runs: 2, usd: 2 },
+      notRecorded: { runs: 1, usd: 4 },
+      apiKeyShare: 0.4,
+    });
+  });
+
+  it('has no share when nothing in the window cost anything', () => {
+    expect(costByAuth([])).toEqual({ apiKey: { runs: 0, usd: 0 }, subscription: { runs: 0, usd: 0 }, notRecorded: { runs: 0, usd: 0 }, apiKeyShare: null });
+  });
+
+  it('says what list price means on each credential', () => {
+    const text = md(rows);
+    expect(text).toMatch(/on an API key it is what the key is billed, unless the account has its own rates, and on the subscription it is a measure of work, not money/);
+    expect(text).toMatch(/Cost by credential, over every lane's runs recorded in the window \(plan 0009 §12\), 40\.0% of it on an API key: API key \$4\.00 over 2 runs/);
+    expect(text).toMatch(/subscription \$2\.00 over 2 runs, a measure of work, not money; not recorded \$4\.00 over 1 runs/);
   });
 });
 

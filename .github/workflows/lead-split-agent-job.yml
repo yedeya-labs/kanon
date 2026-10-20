@@ -366,6 +366,7 @@ jobs:
           timeout-minutes: "60"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
           kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
           prompt-cache-ttl: ${{ steps.agent.outputs.prompt-cache-ttl }}
+          auth: ${{ steps.agent.outputs.auth }}
 
       # THE TOKEN DIES WITH THE JOB (`K-AGENT-49`). Last, after every step that uses it. It is
       # decoded from the secret again rather than read from `Receive the App token`, so a run that

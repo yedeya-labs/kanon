@@ -20,6 +20,12 @@
 //
 // RUNS JOIN ITEMS through `joinRuns` (§3.4), the one join every reader uses. Only `tag: run` rows
 // count (§2.1). Cost is the API list price the agent CLI reports (decision 1), and is labelled so.
+//
+// WHAT THAT PRICE MEANS DEPENDS ON THE CREDENTIAL (plan 0009 §12, A6). On an API key it is what the
+// key is billed, unless the account has its own rates; on the subscription it is a measure of work,
+// not money. So the report splits the window's cost by each run's `auth`, and a run whose row
+// doesn't record it is counted apart, never guessed at: the field is newer than the runs before
+// it, and from plan 0009 A2 to A6 a lane could already run on a key without saying so.
 
 import { LANES } from '../../actions/agent-telemetry/schema.mjs';
 import { BAND_VERSION, BANDS } from './band.mjs';
@@ -98,6 +104,31 @@ function cacheSavingsOf(runs) {
     paid += typeof run.total_cost_usd === 'number' ? run.total_cost_usd : 0;
   }
   return { usd: round(usd), runs: priced, share: usd + paid > 0 ? round(usd / (usd + paid)) : null, unpriced, unpricedModels: [...models].sort() };
+}
+
+/**
+ * The window's cost by the credential each run ran on (plan 0009 §12): every lane's runs recorded in
+ * the window, at list price, split by `auth`, with the share that ran on an API key. A run whose row
+ * has no `auth` is `notRecorded`, never counted as either; a run with no cost is counted in its
+ * group's runs and adds nothing to its dollars.
+ * @param {readonly RunRow[]} runs
+ */
+export function costByAuth(runs) {
+  const group = () => ({ runs: 0, usd: 0 });
+  const by = { subscription: group(), apiKey: group(), notRecorded: group() };
+  for (const run of runs) {
+    const g = run.auth === 'api-key' ? by.apiKey : run.auth === 'subscription' ? by.subscription : by.notRecorded;
+    g.runs += 1;
+    g.usd += typeof run.total_cost_usd === 'number' ? run.total_cost_usd : 0;
+  }
+  const total = by.subscription.usd + by.apiKey.usd + by.notRecorded.usd;
+  const done = (/** @type {{ runs: number, usd: number }} */ g) => ({ runs: g.runs, usd: round(g.usd) });
+  return {
+    subscription: done(by.subscription),
+    apiKey: done(by.apiKey),
+    notRecorded: done(by.notRecorded),
+    apiKeyShare: total > 0 ? round(by.apiKey.usd / total) : null,
+  };
 }
 
 /**
@@ -180,6 +211,7 @@ export function metricsReport(rows, { until, days = WINDOW_DAYS }) {
       mergedWithoutCost: merged.filter((i) => { const rs = (runsOf.get(i.pr_number) ?? []).filter(delivery); return rs.length > 0 && !rs.some(hasCost); }).length,
       runsWithoutCost: costed.reduce((s, c) => s + c.runs.filter((r) => typeof r.total_cost_usd !== 'number').length, 0),
       overhead: { runs: overheadRuns.length, usd: round(costOf(overheadRuns)) },
+      byAuth: costByAuth(runs.filter((r) => inWindow(Date.parse(r.recorded_at)))),
     },
     yield: {
       cells: headline.yield,
@@ -235,6 +267,12 @@ function cacheText(c) {
   return `Cache savings, at API list price: ${dollars(c.usd)} over ${c.runs} runs in the window${share}. ${c.unpriced} runs could not be priced${models}: unknown, never $0.`;
 }
 
+/** @param {Report['cost']['byAuth']} a */
+function authText(a) {
+  const share = a.apiKeyShare === null ? '' : `, ${percent(a.apiKeyShare)} of it on an API key`;
+  return `Cost by credential, over every lane's runs recorded in the window (plan 0009 §12)${share}: API key ${dollars(a.apiKey.usd)} over ${a.apiKey.runs} runs, what the key is billed at list price unless the account has its own rates; subscription ${dollars(a.subscription.usd)} over ${a.subscription.runs} runs, a measure of work, not money; not recorded ${dollars(a.notRecorded.usd)} over ${a.notRecorded.runs} runs, whose rows predate the \`auth\` field or whose agent never ran, counted as neither.`;
+}
+
 /** @param {Report['validity']['issueSide']} side */
 function issueSideText(side) {
   /** @param {Report['validity']['issueSide']['acCount']} e */
@@ -258,7 +296,7 @@ export function renderReport(r) {
   return [
     `## Kanon metrics, ${r.window.from} to ${r.window.until} (${r.window.days} days, by close date)`,
     '',
-    `Cost is the **API list price** the agent CLI reports for each run, not what anyone paid. Band version ${r.bandVersion}. Every interval is 95%; a cell below its minimum sample shows "not enough data (N)".`,
+    `Cost is the **API list price** the agent CLI reports for each run, not what anyone paid: on an API key it is what the key is billed, unless the account has its own rates, and on the subscription it is a measure of work, not money. Band version ${r.bandVersion}. Every interval is 95%; a cell below its minimum sample shows "not enough data (N)".`,
     '',
     ...r.warnings.flatMap((w) => [`> **Warning:** ${w}`, '']),
     `| Indicator | ${head.join(' | ')} |`,
@@ -290,6 +328,8 @@ export function renderReport(r) {
     line('Human wait, median', r.secondary.humanWait.cells, (c) => c.median, hours),
     '',
     cacheText(r.secondary.cacheSavings),
+    '',
+    authText(r.cost.byAuth),
     '',
     `Band validity (§3.6): ${r.validity.status}. Kendall's τ between band and cost ${r.validity.tau === null ? 'not computed' : `${r.validity.tau} (${r.validity.low ?? '?'} to ${r.validity.high ?? '?'})`}, over ${r.validity.n} merged items. Median cost by band: ${BANDS.map((b) => `${b} ${cellText(r.validity.medianCost[b], dollars)}`).join('; ')}.`,
     '',

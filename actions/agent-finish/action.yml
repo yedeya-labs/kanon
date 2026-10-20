@@ -160,6 +160,12 @@ inputs:
       `prompt_cache_ttl` (#546). Empty records nothing, which is not `default`.
     required: false
     default: ""
+  auth:
+    description: >-
+      `agent-run`'s `auth` output, `subscription` or `api-key`, the Claude credential the run ran
+      on, for the row's `auth` (plan 0009 §12). Empty records nothing, which is not `subscription`.
+    required: false
+    default: ""
 
 outputs:
   kind:
@@ -265,3 +271,4 @@ runs:
         job_started_at: ${{ inputs.job-started-at }}
         timeout_minutes: ${{ inputs.timeout-minutes }}
         prompt_cache_ttl: ${{ inputs.prompt-cache-ttl }}
+        auth: ${{ inputs.auth }}

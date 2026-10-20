@@ -46,6 +46,7 @@ Call it with `id: finish`, `if: always()` and `continue-on-error: true`, and han
 | `kanon-error` | no | The `kanon-error` output of an earlier Kanon step that failed (the spine's hook check, `agent-setup`'s push probe). |
 | `job-started-at`, `timeout-minutes` | no | When the job started and its timeout, for the row's `timed_out`. |
 | `prompt-cache-ttl` | no | `agent-run`'s `prompt-cache-ttl` output, the TTL the run was pinned at, for the row's `prompt_cache_ttl`. Empty records nothing, which is not `default`. |
+| `auth` | no | `agent-run`'s `auth` output, `subscription` or `api-key`, the Claude credential the run ran on, for the row's `auth` ([plan 0009](../../docs/plans/0009-release-channels-and-api-key.md) §12). Empty records nothing, which is not `subscription`. |
 
 | Output | Meaning |
 |---|---|

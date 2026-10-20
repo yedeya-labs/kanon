@@ -106,7 +106,7 @@ kanon metrics report --rows runs-and-items.json --windows 12           # a trend
 
 | Indicator | What it is | Minimum | Interval |
 |---|---|---|---|
-| Cost per merged item | The median and p90, over merged items closed in the window, of the summed `total_cost_usd` of every delivery-lane run joined to the item. **API list price**, not what anyone paid. Items with no run row are left out, not counted as zero. | median 10, p90 30 | order statistics |
+| Cost per merged item | The median and p90, over merged items closed in the window, of the summed `total_cost_usd` of every delivery-lane run joined to the item. **API list price**, not what anyone paid: on an API key it is what the key is billed, unless the account has its own rates, and on the subscription it is a measure of work, not money ([Cost by credential](#cost-by-credential)). Items with no run row are left out, not counted as zero. | median 10, p90 30 | order statistics |
 | Yield | The cost of delivery runs joined to a merged item over the cost of all delivery runs, over the items settled in the window. Runs that never reached a PR are a **No PR** column. | 20 | bootstrap, 2,000 resamples, fixed seed |
 | Escaped defects, 30 and 90 days | Agent-authored merged items with an explicit revert or linked fix within the horizon, over those merged in the window that far back, so each has had its whole horizon. A **lower bound** (§3.5). Human-authored items are printed beside, pooled, as a comparison cohort. | 50 | Wilson |
 | First-review approval | Merged items whose first Reviewer verdict was `approved`, over those with a verdict. | 20 | Wilson |
@@ -138,6 +138,15 @@ kanon metrics report --rows runs-and-items.json --windows 12           # a trend
 **How runs join items** is §3.4's rule, in `scripts/metrics/join.mjs`, which every reader uses: a run joins the item whose PR it names; a run naming only an issue joins the first item closing that issue to close after the run (on a tie, the lowest PR number). So a run joins at most one item. A delivery run that joins nothing, other than a Lead's (overhead, above), settles, not merged, 30 days after the last run on its PR or issue; the report reads no issue's state, so an issue closed without a PR settles the same way.
 
 **Exit codes:** 0 the report was made (a cell with too little data or a pooled view is not a failure); 2 a usage error; 3 a rows file that can't be read or isn't JSON rows. The message names the file, never its content.
+
+### Cost by credential
+
+[Plan 0009](plans/0009-release-channels-and-api-key.md) §12, step A6. Every cost stays `total_cost_usd`, the agent CLI's figure at API list price (plan 0003 decision 1). What that figure means depends on the Claude credential the run ran on, which its run row records as `auth`, `subscription` or `api-key` ([Collect the rows](telemetry.md#collect-the-rows)):
+
+- **On an API key,** list price is what the key is billed, before any discount or commitment the Console account has. Kanon can't see invoices, so it never says "paid".
+- **On the subscription,** it stays a measure of work, not money, and is never turned into a share of the subscription's limit.
+
+So the report prints, beside the cache savings, the cost of every lane's runs recorded in the window split three ways: on an API key, on the subscription, and **not recorded**, with the share that ran on a key. A row without `auth` is counted as neither, never guessed: it was written before the field (a release before step A6), or by a lane whose agent step never ran. Before plan 0009 step A2 every lane ran on the subscription, but from A2 to A6 a lane could run on a key without its row saying so, so the report doesn't assume. A run with no cost counts in its group's runs and adds nothing to its dollars. The headline cells are not split: they pool every run joined to an item, whatever it ran on.
 
 ### The deploy views
 
@@ -175,7 +184,7 @@ A rollback row counts the same way in all four.
 | `view`, `warnings` | string, array | `banded` or `pooled`, and why, as sentences. |
 | `rows` | object | `runs`, `workItems`, `runsJoined`, `runsUnjoined`, and `ignored`: `notRun`, `otherKind`, `unreadable`. |
 | `validity` | object | `status` (`valid`, `invalid`, `not-enough-data`), `n`, `tau`, `low`, `high`, and `medianCost` per band. |
-| `cost` | object | `cells` (each with `median` and `p90`), `mergedWithoutRuns`, `mergedWithoutCost` (merged items whose runs report no cost), `runsWithoutCost` (runs without a cost inside the costed items), `overhead` (`runs`, `usd`). |
+| `cost` | object | `cells` (each with `median` and `p90`), `mergedWithoutRuns`, `mergedWithoutCost` (merged items whose runs report no cost), `runsWithoutCost` (runs without a cost inside the costed items), `overhead` (`runs`, `usd`), and `byAuth`: `apiKey`, `subscription` and `notRecorded`, each with `runs` and `usd`, over every lane's runs recorded in the window, and `apiKeyShare`, the API key's share of their cost, `null` when they cost nothing ([Cost by credential](#cost-by-credential)). |
 | `yield` | object | `cells`, each with `yield`; `closedWithoutCost` (closed-unmerged items in the window with delivery runs, none of which reports a cost, left out of yield); and `unjoinedWithoutCost` (settled groups of delivery runs that join no item and report no cost, left out of yield). The merged items left out of yield for the same reason are `cost.mergedWithoutCost`. |
 | `escape` | object | `d30` and `d90`, each with `mergedFrom`, `mergedUntil`, and `agent` and `human` cells, each with `rate`. |
 | `approval`, `correction` | object | `cells`, each with `rate`. |

@@ -120,6 +120,14 @@ export const JOB_STATUSES = Object.freeze(['success', 'failure', 'cancelled']);
  * unset. Absent when the lane didn't say, which is not `default`.
  */
 export const PROMPT_CACHE_TTLS = Object.freeze(['5m', '1h', 'default']);
+/**
+ * Which Claude credential a run ran on (plan 0009 §12, step A6, Owner decision 10): `agent-run`'s
+ * `auth` output, `subscription` for `CLAUDE_CODE_OAUTH_TOKEN` and `api-key` for
+ * `ANTHROPIC_API_KEY`. A name for the kind of credential, decided by which secret the caller mapped,
+ * never derived from or holding anything the secret holds (`K-OBS-16`). Absent when the lane didn't
+ * say, which is not `subscription`.
+ */
+export const AUTHS = Object.freeze(['subscription', 'api-key']);
 
 /**
  * The lane stages' names (plan 0002 §2.6). `failed_stage` is the first stage that ended the
@@ -288,7 +296,10 @@ const KANON_VERSION = pattern(/^(\d+\.\d+\.\d+|dev)$/);
 /** A comma-separated list of up to 20 PR or issue numbers (plan 0003 §3.3). */
 const NUMBERS = /** @type {Field} */ ({ type: 'list', re: /^\d{1,9}$/, max: 20 });
 
-/** The run row, version 2: fifty-nine fields (plan 0002 §2.1, amended by plan 0003 §5.1). */
+/**
+ * The run row, version 2: sixty fields (plan 0002 §2.1, amended by plan 0003 §5.1, and by plan 0009
+ * §12, which adds `auth` to it rather than raising the version, Owner decision 10).
+ */
 const RUN_V2 = Object.freeze({
   // Row
   schema_version: req(oneOf([2])),
@@ -323,6 +334,8 @@ const RUN_V2 = Object.freeze({
   max_turns: count,
   autocompact: pattern(/^(auto|\d+[km]?)$/),
   config_fingerprint: pattern(/^[0-9a-f]{12}$/),
+  // Which credential the run was billed on (plan 0009 §12): the cost basis's reading, never a value.
+  auth: oneOf(AUTHS),
   // Cost
   total_cost_usd: /** @type {Field} */ ({ type: 'number', min: 0, max: 1000 }),
   num_turns: count,
@@ -366,7 +379,7 @@ const ACTOR = oneOf(ACTOR_CLASSES);
 const CHECK = oneOf(['pass', 'fail', 'absent']);
 
 /**
- * The run row, version 3: version 2's fifty-nine fields and `prompt_cache_ttl`, the TTL the run
+ * The run row, version 3: version 2's sixty fields and `prompt_cache_ttl`, the TTL the run
  * was pinned at, so the cache-TTL detector can judge a pin on the rows that ran under it rather
  * than on a date nothing records (#546).
  */
@@ -377,7 +390,7 @@ const RUN_V3 = Object.freeze({
 });
 
 /**
- * The run row, version 4: version 3's sixty fields and two counts the turn-budget measurement
+ * The run row, version 4: version 3's sixty-one fields and two counts the turn-budget measurement
  * asked for (#173), each a work-size count `K-OBS-16` allows, absent when unknown:
  * `review_open_items`, on a revise lane's run, the open items the Reviewer's latest
  * changes-request declares in its `<!-- qa:open-items N -->` marker; and `issue_ac_count`, on a
