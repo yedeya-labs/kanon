@@ -378,12 +378,12 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
       expect(items[0]).not.toHaveProperty('ended_unmarked');
     });
 
-    it('writes an audit run that ended without its final write as `complete: false` and `ended_unmarked: true` (kanon#1135)', () => {
+    it('writes an audit run that ended without its final write as `complete: true` and `ended_unmarked: true` (kanon#1135, kanon#1144)', () => {
       aws('exit 0');
-      writeFileSync(join(dir, 'report.json'), JSON.stringify({ commit: SHA, trigger: 'schedule', turns: 20, complete: false, ended_unmarked: true, no_report: false, report_invalid: false, areas_scanned: [] }));
+      writeFileSync(join(dir, 'report.json'), JSON.stringify({ commit: SHA, trigger: 'schedule', turns: 20, complete: true, ended_unmarked: true, no_report: false, report_invalid: false, areas_scanned: [] }));
       expect(run('put', { KIND: 'audit', QA_RUN_TS: '20261004T120000Z' }).status).toBe(0);
       const [row] = logged().slice(1).map((x) => JSON.parse(x[x.indexOf('--item') + 1]!));
-      expect(row).toMatchObject({ pk: { S: 'RUN#audit' }, complete: { BOOL: false }, ended_unmarked: { BOOL: true }, no_report: { BOOL: false }, report_invalid: { BOOL: false } });
+      expect(row).toMatchObject({ pk: { S: 'RUN#audit' }, complete: { BOOL: true }, ended_unmarked: { BOOL: true }, no_report: { BOOL: false }, report_invalid: { BOOL: false } });
     });
 
     it('skips a missing Explorer report, and fails a missing audit report', () => {

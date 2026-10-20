@@ -108,9 +108,11 @@ case "$kind" in
     tn="$(jq -r '.turns // 0' "$report")"
     # Liveness flags (RA-504) — `no_report`: the agent wrote nothing and the
     # workflow synthesized this row; `report_invalid`: it wrote something unparseable;
-    # `complete`: it reached its final write; `ended_unmarked`: it exited zero, ending its own
-    # turn, without reaching it (kanon#1135), so a `complete: false` row with it `false` was cut
-    # short, and one written before it existed carries neither reading.
+    # `complete`: it reached its final write, or it exited zero, ending its own turn, without
+    # it and the workflow marked it (kanon#1144); `ended_unmarked`: the workflow marked it so
+    # (kanon#1135). A `complete: false` row was cut short, except one written before kanon#1144
+    # with `ended_unmarked: true`, which ended on its own; one written before kanon#1135 carries
+    # no `ended_unmarked`, and neither reading.
     #
     # Each is written as an explicit true/false, never encoded by presence — the
     # Overseer's playbook mandates full-item queries precisely because a projection

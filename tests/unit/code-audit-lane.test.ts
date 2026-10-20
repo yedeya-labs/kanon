@@ -38,6 +38,7 @@ const steps = (audit.steps ?? []) as Step[];
 const at = (p: (s: Step) => boolean) => steps.findIndex(p);
 const byId = (id: string) => steps.find((s) => s.id === id)!;
 const prompt = String(byId('agent').with?.prompt);
+const reconcile = () => steps.find((s) => s.name?.startsWith('Reconcile the agent'))!;
 const caller = parse(readFileSync('tests/fixtures/lane-check/extra/agent-code-audit.yml', 'utf8')) as {
   on: { schedule: Array<{ cron: string }>; workflow_dispatch: unknown };
   permissions: Record<string, string>;
@@ -213,6 +214,16 @@ describe('what the agent is told', () => {
     expect(prompt).toContain('Do NOT self-report a `lines_cited` number');
   });
 
+  it('makes the write that sets `complete: true` the last tool call, before the final message (kanon#1144)', () => {
+    const said = prompt.replace(/\s+/g, ' ');
+    expect(said).toContain('Make that write your LAST tool call: your final message must come after the write that sets `"complete": true`');
+    // Since kanon#1141 a run that ends its own turn is not cut short, so the prompt says what the
+    // store's `complete: false` means only for the run a cap or an error stopped.
+    expect(said).not.toContain('`complete:false` in the store means "this audit was cut short');
+    expect(said).toContain('A run that a cap or an error stops keeps its last write\'s `complete:false`');
+    expect(said).toContain('a run that ends its own turn without that write is marked complete by the workflow');
+  });
+
   it('runs the configuration it records', () => {
     expect(byId('finish').with?.claude_args).toBe(byId('agent').with?.claude_args);
     expect(byId('finish').with?.agent).toBe('auditor');
@@ -245,37 +256,46 @@ describe('the report is recorded before the job is judged (RA-504, RA-846)', () 
     expect(stamp).toContain('const cites = invalid ? new Set()');
   });
 
-  describe('a finished audit with no final write reads apart from one cut short (kanon#1135)', () => {
-    // The stamp step's own script, run as the job runs it: three of three green runs on Kanon
+  describe('a finished audit with no final write is marked complete, and reads apart from one cut short (kanon#1135, kanon#1144)', () => {
+    // The stamp step's own script, run as the job runs it: three of four green runs on Kanon
     // ended their turn (`terminal_reason: completed`, well under the turn cap) with the report
     // still `complete: false`, which the store could not tell from a capped run.
     let work: string;
     beforeAll(() => { work = mkdtempSync(join(tmpdir(), 'audit-stamp-')); });
     afterAll(() => rmSync(work, { recursive: true, force: true }));
 
-    const stamp = (agentOutcome: string, report: string | null) => {
+    const stamp = (agentOutcome: string, report: string | null, claudeArgsRan = '') => {
       const dir = mkdtempSync(join(work, 'run-'));
       if (report !== null) writeFileSync(join(dir, 'qa-audit-summary.json'), report);
       const out = join(dir, 'github-output');
       writeFileSync(out, '');
       const stdout = execFileSync('bash', ['-e', '-c', String(byId('stamp').run)], {
         cwd: dir, encoding: 'utf8',
-        env: { ...process.env, START_MS: String(Date.now()), EVENT: 'schedule', COMMIT: 'c'.repeat(40), AGENT_OUTCOME: agentOutcome, GITHUB_OUTPUT: out },
+        env: { ...process.env, START_MS: String(Date.now()), EVENT: 'schedule', COMMIT: 'c'.repeat(40), AGENT_OUTCOME: agentOutcome, CLAUDE_ARGS_RAN: claudeArgsRan, GITHUB_OUTPUT: out },
       });
       const outputs = Object.fromEntries(readFileSync(out, 'utf8').trim().split('\n').map((l) => l.split('=') as [string, string]));
       return { stdout, outputs, stored: JSON.parse(readFileSync(join(dir, 'qa-audit-summary.json'), 'utf8')) };
     };
     const partial = JSON.stringify({ complete: false, areas_scanned: ['scripts/'], filed: [], deduped: [], citations: [], files_read: 6, turns: 20, notes: 'In progress.' });
+    const ran = (turns: number) => `--model claude-opus-5-5\n--effort high\n--max-turns ${turns}\n--max-budget-usd 40\n`;
 
     it('hands the stamp step the agent step\'s outcome, which is `success` only when it ended its own turn', () => {
       expect(byId('stamp').env?.AGENT_OUTCOME).toBe('${{ steps.agent.outcome }}');
     });
 
-    it('an agent that exited zero with its report unmarked: `complete` stays false, `ended_unmarked` is true, and the job warns', () => {
-      const r = stamp('success', partial);
-      expect(r.stored).toMatchObject({ complete: false, ended_unmarked: true, no_report: false, report_invalid: false, areas_scanned: ['scripts/'] });
-      expect(r.outputs).toMatchObject({ complete: 'false', ended_unmarked: 'true' });
+    it('an agent that exited zero with its report unmarked: the workflow marks it `complete`, `ended_unmarked` says so, and the job warns', () => {
+      const r = stamp('success', partial, ran(100));
+      expect(r.stored).toMatchObject({ complete: true, ended_unmarked: true, no_report: false, report_invalid: false, areas_scanned: ['scripts/'] });
+      expect(r.outputs).toMatchObject({ complete: 'true', ended_unmarked: 'true' });
       expect(r.stdout).toContain('::warning title=audit ended without its final write::');
+    });
+
+    it('an agent that wrote `complete: true` itself is not `ended_unmarked`, whichever way it exited', () => {
+      for (const outcome of ['success', 'failure']) {
+        const r = stamp(outcome, JSON.stringify({ complete: true, areas_scanned: ['scripts/'], turns: 30 }), ran(100));
+        expect(r.stored).toMatchObject({ complete: true, ended_unmarked: false });
+        expect(r.stdout).not.toContain('title=audit ended without its final write');
+      }
     });
 
     it('an agent that exited non-zero with its report unmarked is cut short, and reads so', () => {
@@ -291,6 +311,33 @@ describe('the report is recorded before the job is judged (RA-504, RA-846)', () 
       expect(stamp('success', '{"complete":false,').stored).toMatchObject({ report_invalid: true, complete: false, ended_unmarked: false });
       // An agent step that never ran (an earlier step failed) did not end its own turn.
       expect(stamp('skipped', partial).stored).toMatchObject({ complete: false, ended_unmarked: false });
+    });
+
+    // THE CAP THE AGENT RAN UNDER (kanon#1143): a dispatched run may raise `max_turns`, and
+    // `agent-run` rewrites `--max-turns` in the flags it hands back, so the annotations read the
+    // cap from those flags, never the lane's literal 100.
+    it('hands the stamp step the flags the agent ran with, and the reconcile step the cap read from them', () => {
+      expect(byId('stamp').env?.CLAUDE_ARGS_RAN).toBe('${{ steps.agent.outputs.claude-args }}');
+      expect(reconcile().env?.MAX_TURNS).toBe('${{ steps.stamp.outputs.max_turns }}');
+    });
+
+    it('names the turn cap the agent ran under, raised or not, and `unknown` without one', () => {
+      const raised = stamp('success', partial, ran(150));
+      expect(raised.outputs.max_turns).toBe('150');
+      expect(raised.stdout).toContain('(turns: 20 of --max-turns 150)');
+      expect(stamp('success', partial, ran(100)).stdout).toContain('(turns: 20 of --max-turns 100)');
+      const none = stamp('success', partial, '');
+      expect(none.outputs.max_turns).toBe('');
+      expect(none.stdout).toContain('(turns: 20 of --max-turns unknown)');
+    });
+
+    it('the reconcile step\'s warning names that cap too, and `unknown` without one', () => {
+      const run = (maxTurns: string) => execFileSync('bash', ['-c', String(reconcile().run)], {
+        cwd: work, encoding: 'utf8',
+        env: { ...process.env, COMPLETE: 'true', NO_REPORT: '', INVALID: '', TURNS: '150', MAX_TURNS: maxTurns, GITHUB_STEP_SUMMARY: join(work, 'summary') },
+      });
+      expect(run('150')).toContain('(turns: 150 of --max-turns 150)');
+      expect(run('')).toContain('(turns: 150 of --max-turns unknown)');
     });
   });
 

@@ -38,8 +38,9 @@
 # so a run cut short leaves a PARTIAL report rather than nothing. After the agent, the workflow
 # stamps the measured duration, the trigger and the commit, machine-counts `lines_cited`, and
 # synthesizes a `no_report` or `report_invalid` row when the agent wrote nothing usable. It
-# flags `ended_unmarked` when the agent exited zero with its report never marked complete
-# (kanon#1135), so a run that ended on its own reads apart from one a cap cut short. The
+# marks the report complete when the agent exited zero without that final write, and flags it
+# `ended_unmarked` (kanon#1135, kanon#1144), so a run that ended on its own reads apart from
+# one a cap cut short, which keeps `complete: false`. The
 # report then goes to the `put` job as an artifact, and the audit job decides red or green
 # AFTER uploading it, so the durable write happens whichever way the run goes.
 #
