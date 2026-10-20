@@ -183,7 +183,7 @@ const inheritsSecrets = (doc: Doc): string[] =>
 
 const y = (text: string) => parse(text) as Doc;
 
-describe('K-AGENT-48 pull_request_target never checks out the PR head', () => {
+describe("K-AGENT-48 pull_request_target checks out no fork's head, and runs a pull request's code only where K-AGENT-50 accepts it", () => {
   it.each([
     ['a checkout of the head SHA', 'on: pull_request_target\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@v7\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n'],
     ['a checkout of the head ref', 'on: [pull_request_target]\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@v7\n        with:\n          ref: ${{ github.head_ref }}\n'],

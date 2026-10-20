@@ -585,9 +585,10 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
   //
   // RA-1147'S ANNOUNCEMENT IS MET BY THE LANE: a `wait` posts nothing, but
   // `rebase-lane.mjs` posts its `attemptComment` before its session, and the wait is
-  // named in the sweep summary (RA-1290). Every refusal in the lane's `ineligible()` is a
-  // gate this function has already returned at (see the RA-2218 parity tests), so a PR
-  // waiting here is one the lane accepts.
+  // named in the sweep summary (RA-1290). Every refusal in the lane's `ineligible()` but
+  // one is a gate this function has already returned at (see the RA-2218 parity tests), so
+  // a PR waiting here is one the lane accepts. The one is its fork refusal (K-AGENT-48),
+  // which no PR that reaches this wait can meet: see the note at the conflict escalation.
   //
   // Only `false` qualifies: tried-and-still-conflicting and unreadable both fall through
   // to the escalations they get today (`never-started` / `merge-state`, below).
@@ -981,13 +982,20 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
     // omission. One was written and removed as UNREACHABLE: every refusal in
     // `rebase-lane.mjs`'s `ineligible()` — not open, `needs:human`, foreign author,
     // draft, no pipeline label — is also a gate THIS function returns at, earlier.
+    // The lane's fork refusal (K-AGENT-48, kanon#1128) is the one with no gate here, and
+    // it is unreachable for a PR that gets this far: the author gate admits only the
+    // Implementer App, whose installation token pushes to this repository's branches and
+    // reaches no fork, so its PRs' heads are this repository's. Its other half, an
+    // `isCrossRepository` the lane could not read, can't arise either: GitHub types the
+    // field non-null, and `gh` fails the whole read on a field it doesn't know. A gate
+    // here would be a branch that cannot fire, so this note is what holds the parity.
     // `IMPLEMENTER_LABELS` is a subset of the lane's `PIPELINE_LABELS`, both use the
     // same implementer login, and `needs:human` returns at the sticky `escalating-label`
     // arm above. So a PR arriving here is one the lane accepts, by construction, and a
     // branch that cannot fire reads as protection while providing none.
     //
     // What keeps that true is a PARITY TEST rather than a runtime branch
-    // (`tests/unit/merge-gate.test.ts`, "RA-2218"): if the two rule sets ever diverge so
+    // (`tests/library/merge-gate.test.ts`, "RA-2218"): if the two rule sets ever diverge so
     // that this function admits a PR the lane refuses, that PR would wait forever, and
     // the test is what makes the divergence red instead of silent.
     // `rebaseAttempted === false` already waited, ahead of every escalating gate (RA-2238).
