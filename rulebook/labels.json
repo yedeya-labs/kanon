@@ -6,7 +6,7 @@
     { "name": "agent:implement", "family": "Agent", "color": "6f42c1", "description": "Dispatches the Implementer's build lane; marks the PRs it opens" },
     { "name": "agent:reviewer", "family": "Agent", "color": "6f42c1", "description": "Filed or reviewed by the Reviewer" },
     { "name": "agent:overseer", "family": "Agent", "color": "6f42c1", "description": "Filed by the Overseer" },
-    { "name": "agent:revise", "family": "Agent", "color": "5319e7", "description": "Re-delivers a lost review to the Implementer's revise lane; applied by the Lead only" },
+    { "name": "agent:revise", "family": "Agent", "color": "5319e7", "description": "Re-delivers a lost review or a red approved head to the Implementer's revise lane (Lead, Merger)" },
     { "name": "agent:lead-revise", "family": "Agent", "color": "5319e7", "description": "Re-delivers a lost review to the Lead's brief-revise lane; applied by the Lead only" },
     { "name": "qa:needs-triage", "family": "Triage state", "color": "1d76db", "description": "Bug filed, awaiting the Implementer's triage" },
     { "name": "qa:reproduced", "family": "Triage state", "color": "0e8a16", "description": "Independently reproduced: confirmed real" },

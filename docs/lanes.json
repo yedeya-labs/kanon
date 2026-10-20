@@ -45,7 +45,7 @@
     "agent-implement-revise": {
       "name": "Implement, revise",
       "group": "implement",
-      "does": "Revises the Implementer's own pull request when the Reviewer requests changes.",
+      "does": "Revises the Implementer's own pull request when the Reviewer requests changes, or when the Merger hands back an approved head whose checks failed.",
       "needs": [],
       "cost": "A model run per change request, capped in rounds.",
       "minutes": "At Kanon's pace, about 66 runner-minutes a day: about 8 per round, while a review or label on any other pull request stops in under a minute.",

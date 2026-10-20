@@ -33,6 +33,10 @@ export const mergerMarkersIn = (/** @type {unknown} */ body) =>
   [...String(body ?? '').matchAll(new RegExp(`<!-- (?:${MERGER_MARKERS.join('|')}):([a-z-]+):([0-9a-f]{7,40}) -->`, 'g'))]
     .map((m) => ({ rule: m[1], sha: m[2] }));
 
+/** The marker rule of the Merger's hand-back of a red, approved head to the Implementer's revise
+ *  lane (kanon#1100), which that lane's filter reads; a test holds the lane's copy to this one. */
+export const HANDBACK = 'checks-failed-handback';
+
 /** The first line of the Merger's escalation comment. */
 export const ESCALATION_HEADER = '🚦 **Merger — not merging.**';
 const LEGACY_ESCALATION_HEADERS = ['🚦 **Joshua — not merging.**'];

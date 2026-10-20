@@ -9,6 +9,7 @@ import { comparePatch, GH_COMPARE_ARM } from './helpers/compare-diff.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { GH_REGISTER_ARM, IMPLEMENTER_LOGIN, REGISTER_FIXTURE, registerEnv } from './helpers/register.js';
 import { SPAWNS } from './helpers/spawns.js';
+import { HANDBACK } from '../../scripts/lib/protocol-spellings.mjs';
 
 // Its cases run the lane's steps in `bash` against a stub `gh`, so every case takes the spawn
 // budget (#436).
@@ -47,9 +48,9 @@ const runStepOrThrow = (step: Parameters<typeof runWorkflowStep>[0], opts: Param
 };
 
 /** Run the SHIPPED mandate step and return what it put in `outputs.text`. */
-const runMandate = ({ reset, round = '3' }: { reset: boolean; round?: string }) => {
+const runMandate = ({ reset, round = '3', mode = 'review' }: { reset: boolean; round?: string; mode?: string }) => {
   const r = runWorkflowStep(mandateStep, {
-    env: { RESET: String(reset), PR: '1057', ROUND: round, REPO: 'example-org/example-repo' },
+    env: { RESET: String(reset), MODE: mode, PR: '1057', ROUND: round, REPO: 'example-org/example-repo' },
   });
   // The step must not merely produce the right text — it must SUCCEED under the
   // runner's `-e`, which is what `bash -c` was hiding (RA-1044).
@@ -132,11 +133,17 @@ const runFilter = ({
   // The head's commit statuses as the API lists them (plan 0005 §3.3, L4); unset is the
   // Author App's implementer status, and `fail` a denied read.
   statuses = '',
+  // Top-level PR comments besides the implementer's round markers: the Merger's hand-back
+  // (kanon#1100), or a forgery of it.
+  extraComments = [] as { author: { login: string }; body: string }[],
+  // The App register the filter reads; the hand-back path also reads the Merger's row.
+  register = REGISTER_FIXTURE,
 }: Partial<{
   author: string; labels: string[]; prState: string; reviewState: string;
   rounds: number; changesRequested: number; isDispatch: boolean; reset: boolean;
   isLabel: boolean; labelAdded: string; headVerdict: string;
   headMoved: false | 'content-free' | 'revised'; readableDiffs: boolean; statuses: string;
+  extraComments: { author: { login: string }; body: string }[]; register: string;
 }> = {}) => {
   // ONE HEAD PER CHANGES-REQUEST, because a review is filed against a commit and a
   // healthy loop reviews a new one each round. The old fixture put every review on the
@@ -157,7 +164,8 @@ const runFilter = ({
     env: {
       PATH: `${dir}:${process.env.PATH}`, KANON: process.cwd(),
       REPO: 'example-org/example-repo',
-      ...registerEnv(filter),
+      ...registerEnv(filter, register),
+      HANDBACK_RULE: filter.env.HANDBACK_RULE,
       PR: '1057',
       // A workflow_dispatch carries no review, so this interpolates EMPTY.
       STATE: isDispatch || isLabel ? '' : reviewState,
@@ -188,10 +196,13 @@ const runFilter = ({
       }),
       STUB_COMMENTS: JSON.stringify({
         // Authored by the implementer — the cap counts HIS markers, not anyone's.
-        comments: Array.from({ length: rounds }, () => ({
-          author: { login: 'example-author' },
-          body: '<!-- qa:implement-revise -->',
-        })),
+        comments: [
+          ...Array.from({ length: rounds }, () => ({
+            author: { login: 'example-author' },
+            body: '<!-- qa:implement-revise -->',
+          })),
+          ...extraComments,
+        ],
       }),
     },
   });
@@ -236,6 +247,57 @@ describe('what it acts on', () => {
     it('still honours the round cap on the label path', () => {
       // A re-delivery must not become a way around the cap.
       expect(runFilter({ isLabel: true, rounds: 2 }).act).toBe(false);
+    });
+  });
+
+  describe("the Merger's hand-back of a red, approved head (kanon#1100)", () => {
+    // An approved head that goes red has no changes-request to answer, so this path is the
+    // only way the implementer hears about it. The Merger comments with its marker for the
+    // head, then adds the label; the filter acts only on that marker, by the Merger's App.
+    const MERGER = 'example-judge';
+    const withMerger = `${REGISTER_FIXTURE.trimEnd()}\n| Merger | \`${MERGER}\` | Read & write | Read & write | Read & write | No access |\n`;
+    const handback = (login: string, sha = HEAD_OID) => ({
+      author: { login },
+      body: `Handing this back.\n\n<!-- merger:${HANDBACK}:${sha.slice(0, 12)} -->`,
+    });
+    // The changes-request sits on an older head, and the revise push it got is what the
+    // Reviewer then approved: the shape of the case the issue reports.
+    const approved = { isLabel: true, headVerdict: 'APPROVED', changesRequested: 1, headMoved: 'revised' as const, register: withMerger };
+
+    it('acts on an approved head the Merger handed back, in hand-back mode', () => {
+      const r = runFilter({ ...approved, extraComments: [handback(MERGER)] });
+      expect(r.act).toBe(true);
+      expect(r.outputs.mode).toBe('handback');
+    });
+
+    it.each([
+      ['no hand-back at all', []],
+      ['a hand-back marker a person wrote', [handback('a-developer')]],
+      ['a hand-back marker the Author App wrote', [handback(IMPLEMENTER_LOGIN)]],
+      ["the Merger's hand-back of an older head", [handback(MERGER, 'abcdef0123456789')]],
+    ])('skips an approved head with %s', (_, extraComments) => {
+      expect(runFilter({ ...approved, extraComments }).act).toBe(false);
+    });
+
+    it('still honours the round cap on a hand-back', () => {
+      // Bounded twice over: once per head by the Merger, and by the round cap here, so a
+      // check that fails on every head can't loop the implementer.
+      expect(runFilter({ ...approved, rounds: 2, extraComments: [handback(MERGER)] }).act).toBe(false);
+    });
+
+    it('a changes-request still runs in review mode', () => {
+      expect(runFilter({ isLabel: true }).outputs.mode).toBe('review');
+    });
+
+    it('spells the marker as the Merger writes it', () => {
+      expect(filter.env.HANDBACK_RULE).toBe(HANDBACK);
+    });
+
+    it('tells the agent to fix the failed check, not to answer a review', () => {
+      const text = runMandate({ reset: false, mode: 'handback', round: '1' });
+      expect(text).toContain('THE REVIEWER APPROVED THIS HEAD, AND THEN A CHECK FAILED ON IT');
+      expect(text).toContain(`merger:${HANDBACK}:`);
+      expect(text).not.toContain('requested changes');
     });
   });
 

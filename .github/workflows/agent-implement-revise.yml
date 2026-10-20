@@ -191,6 +191,7 @@ jobs:
       login: ${{ steps.filter.outputs.login }}
       # The role's persona header line, for the round record (plan 0005 §3.3).
       header: ${{ steps.filter.outputs.header }}
+      mode: ${{ steps.filter.outputs.mode }}
       mandate: ${{ steps.mandate.outputs.text }}
     steps:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
@@ -258,10 +259,16 @@ jobs:
           IS_LABEL: ${{ github.event_name == 'pull_request' }}
           LABEL_ADDED: ${{ github.event.label.name }}
           REVISE_LABEL: agent:revise
+          # The marker rule of the Merger's hand-back (kanon#1100): `HANDBACK` in
+          # `scripts/lib/protocol-spellings.mjs`, which a test holds this to.
+          HANDBACK_RULE: checks-failed-handback
           RESET: ${{ inputs.reset }}
         run: |
           set -euo pipefail
           skip() { echo "act=false" >> "$GITHUB_OUTPUT"; echo "→ skipped ($1)"; echo "Skipped: $1" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          # `review` answers a changes-request; `handback` fixes a red head the Reviewer approved,
+          # which only the Merger's hand-back opens (kanon#1100). The mandate branches on it.
+          MODE=review
 
           # A COMMENT verdict carrying an approve (RA-378) is not a revision request,
           # and neither is an APPROVE. Only an explicit changes-request is.
@@ -377,8 +384,28 @@ jobs:
                 VERDICT="$R_STATE"
               fi
             done <<< "$DECIDING"
-            [ "$VERDICT" = "CHANGES_REQUESTED" ] \
-              || skip "no changes-request stands on ${HEAD_SHA:0:7} (deciding verdict: '${VERDICT:-none}')"
+            # A RED HEAD THE REVIEWER APPROVED, HANDED BACK BY THE MERGER (kanon#1100). An approval
+            # leaves no changes-request to answer, and the Merger's `checks-failed` used to go
+            # straight to a person. Now, once per head, the Merger comments with its hand-back
+            # marker for this head and then adds the label. Only that marker, on this head, in a
+            # comment by the Merger's App, opens this path: a person's or another agent's label
+            # on an approved head still skips. The login is read only when a marker is there, so
+            # every other label event costs no register read.
+            if [ "$VERDICT" = "APPROVED" ]; then
+              HANDBACK_MARK="<!-- merger:${HANDBACK_RULE}:${HEAD_SHA:0:12} -->"
+              HANDERS="$(gh pr view "$PR" --repo "$REPO" --json comments \
+                --jq "[.comments[] | select(.body | contains(\"$HANDBACK_MARK\")) | ((.author.login // \"\") | sub(\"^app/\";\"\") | sub(\"\\\\[bot\\\\]\$\";\"\"))] | join(\",\")")"
+              [ -n "$HANDERS" ] \
+                || skip "no changes-request stands on ${HEAD_SHA:0:7} (deciding verdict: 'APPROVED'), and the Merger has not handed this head back"
+              read_login Merger
+              case ",$HANDERS," in
+                *",$ROLE_LOGIN,"*) MODE=handback ;;
+                *) skip "the hand-back marker on ${HEAD_SHA:0:7} is not the Merger's ($ROLE_LOGIN): it was written by '${HANDERS}'" ;;
+              esac
+            else
+              [ "$VERDICT" = "CHANGES_REQUESTED" ] \
+                || skip "no changes-request stands on ${HEAD_SHA:0:7} (deciding verdict: '${VERDICT:-none}')"
+            fi
           fi
 
           [ "$PRSTATE" = "OPEN" ] || skip "PR #$PR is $PRSTATE"
@@ -505,6 +532,7 @@ jobs:
           echo "marked=$MARKED" >> "$GITHUB_OUTPUT"
           echo "login=$IMPL_LOGIN" >> "$GITHUB_OUTPUT"
           echo "header=$ROLE_HEADER" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           # The mandate branches on this. A gate that opens without telling the
           # agent WHY sends him to re-read the review he already answered twice.
           if [ "$IS_DISPATCH" = "true" ] && [ "$RESET" = "true" ]; then
@@ -525,6 +553,7 @@ jobs:
         if: steps.filter.outputs.act == 'true'
         env:
           RESET: ${{ steps.filter.outputs.reset }}
+          MODE: ${{ steps.filter.outputs.mode }}
           PR: ${{ steps.filter.outputs.pr }}
           ROUND: ${{ steps.filter.outputs.round }}
           REPO: ${{ github.repository }}
@@ -572,6 +601,29 @@ jobs:
           CHECK WHAT YOU GET BACK before acting on it — a reset below the cap is
           permitted, so that can return an APPROVE or nothing at all (RA-971). If it is
           not an unanswered changes-request, ignore it and work from the decision.
+          EOF
+            elif [ "${MODE:-review}" = "handback" ]; then
+              cat <<EOF
+          THE REVIEWER APPROVED THIS HEAD, AND THEN A CHECK FAILED ON IT. There is no
+          review finding to answer: the failed check is the finding. The Merger handed
+          the head back to you instead of to a person (kanon#1100). This is round
+          $ROUND of at most 2.
+
+          READ THE MERGER'S HAND-BACK COMMENT FIRST. It names each failed check and the
+          command that prints its failing log:
+            gh pr view $PR --repo $REPO --json comments \
+              --jq '[.comments[] | select(.body | contains("merger:checks-failed-handback:"))] | last | .body'
+            gh pr checks $PR --repo $REPO
+
+          Fix what made the check red, and nothing else: the approval covers the rest
+          of the change. If the check's own output names a fix command, run it. Your
+          push dismisses the approval, and the Reviewer reviews the new head before
+          anything merges.
+
+          If the failure isn't yours to fix (a check that is flaky or broken on the
+          default branch too, or an outage), push nothing and say so in your comment.
+          The Merger then asks a person, as it does when this head is still red after
+          this run.
           EOF
             else
               cat <<EOF

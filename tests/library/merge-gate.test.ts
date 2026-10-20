@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-const { ESCALATION_HEADER, FOLLOW_UP_MS, followQueueMerges, IMPLEMENTER_LABELS, IMPLEMENTER_LOGIN: MERGE_GATE_IMPLEMENTER, LAPSES_WITH_HEAD, MERGER_LOGIN, SELF_CHECKS, UNSTABLE_SETTLE_MS, apply, checkPartition, mergeVerdict: kanonMergeVerdict, readPr, sweep, summaryLines, verifyClosed, skipSummary, startupFailuresIn} = await import('../../scripts/merge-gate.mjs');
+const { ESCALATION_HEADER, FOLLOW_UP_MS, HANDBACK, HANDBACK_SETTLE_MS, followQueueMerges, IMPLEMENTER_LABELS, IMPLEMENTER_LOGIN: MERGE_GATE_IMPLEMENTER, LAPSES_WITH_HEAD, MERGER_LOGIN, SELF_CHECKS, UNSTABLE_SETTLE_MS, apply, checkPartition, mergeVerdict: kanonMergeVerdict, readPr, sweep, summaryLines, verifyClosed, skipSummary, startupFailuresIn} = await import('../../scripts/merge-gate.mjs');
 const { CONFLICT_WHY } = await import('../../scripts/conflict-state.mjs');
 const { IMPLEMENTER_LOGIN: LANE_IMPLEMENTER, PIPELINE_LABELS: LANE_LABELS } = await import('../../scripts/rebase-lane.mjs');
 import { writeStub } from '../unit/helpers/stub-bin.js';
@@ -2923,6 +2923,147 @@ esac
 
     it('verifyClosed\'s comment carries the marker that dedupes it', () => {
       expect(unclosed('').calls).toContain(`<!-- merger:issues-unclosed:${HEAD.slice(0, 12)} -->`);
+    });
+  });
+});
+
+describe('a red head the Reviewer approved goes back to the Implementer once (kanon#1100)', () => {
+  // An approved agent PR whose CI went red after the approval used to escalate straight to
+  // `needs:human` as `checks-failed`: there is no changes-request for the revise lane to answer,
+  // so nothing else in the pipeline acted on it. Now the Merger hands the head back to the
+  // revise lane once, and `needs:human` means the implementer tried and it is still red.
+  const NOW = Date.parse('2026-10-20T12:00:00Z');
+  const red = (over: Record<string, unknown> = {}) => pr({
+    checks: [
+      { name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' },
+      { name: 'Doc and code-comment coordinates the diff moved', workflowName: 'CI', status: 'COMPLETED', conclusion: 'FAILURE',
+        runId: '4242' },
+    ],
+    mergeStateStatus: 'BLOCKED',
+    ...over,
+  });
+  const verdict = (p: LibraryValue) => mergeVerdict(p, { now: NOW });
+
+  it('hands an approved, red agent PR back to the revise lane the first time', () => {
+    const v = verdict(red({ handback: false }));
+    expect(v.action).toBe('recover');
+    expect(v.rule).toBe(HANDBACK);
+    expect(v.why).toContain('Doc and code-comment coordinates the diff moved (FAILURE)');
+  });
+
+  it('waits while the hand-back is fresh, so a sweep right after it does not escalate', () => {
+    const v = verdict(red({ handback: { at: new Date(NOW - 5 * 60 * 1000).toISOString() } }));
+    expect(v.action).toBe('wait');
+    expect(v.rule).toBe('handed-back');
+  });
+
+  it('escalates the same head once its hand-back is spent', () => {
+    const v = verdict(red({ handback: { at: new Date(NOW - HANDBACK_SETTLE_MS - 1).toISOString() } }));
+    expect(v.action).toBe('escalate');
+    expect(v.rule).toBe('checks-failed');
+    expect(v.why).toContain('still red');
+  });
+
+  it.each([['unreadable', null], ['not read', undefined]])('escalates, never hands back, when the hand-back record is %s', (_, handback) => {
+    const v = verdict(red({ handback }));
+    expect(v.action).toBe('escalate');
+    expect(v.rule).toBe('checks-failed');
+  });
+
+  it("never hands back a PR that isn't the Implementer's", () => {
+    // Not the green zone at all, so the Merger stays out of it, as before.
+    for (const over of [{ author: 'a-person' }, { labels: ['review:please'] }, { headStatuses: [] }]) {
+      const v = verdict(red({ handback: false, ...over }));
+      expect(v.action, JSON.stringify(over)).toBe('skip');
+    }
+  });
+
+  it('hands back only an approved head', () => {
+    const cr = verdict(red({ handback: false, reviews: [{ state: 'CHANGES_REQUESTED', sha: HEAD, author: 'example-reviewer[bot]', body: REVIEWER_HEADER }] }));
+    expect(cr.rule).toBe('changes-requested');
+    expect(verdict(red({ handback: false, reviews: [] })).rule).toBe('no-review-on-head');
+  });
+
+  it('only a failed check qualifies: a cancelled one still escalates', () => {
+    const v = verdict(red({ handback: false, checks: [{ name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'CANCELLED' }] }));
+    expect(v.rule).toBe('checks-cancelled');
+  });
+
+  describe('readPr', () => {
+    const failing = { statusCheckRollup: [{ name: 'Lint', workflowName: 'CI', status: 'COMPLETED', conclusion: 'FAILURE' }] };
+    const line = (login: string, body: string, at = '2026-10-20T11:00:00Z') => JSON.stringify({ login, body, at });
+    const MARK = `<!-- merger:${HANDBACK}:${HEAD.slice(0, 12)} -->`;
+
+    it("reads the Merger's own hand-back of this head, with its time", () => {
+      const { read } = stubReadPr({ meta: failing, comments: line(MERGER_BOT, `${headerLine('Merger')}\n\nHanding back.\n\n${MARK}`) });
+      expect(read.handback).toEqual({ at: '2026-10-20T11:00:00Z' });
+    });
+
+    it("doesn't count a person's quote of the marker, or the Merger's hand-back of another head", () => {
+      const { read } = stubReadPr({ meta: failing, comments: [
+        line('a-member', MARK),
+        line(MERGER_BOT, `${headerLine('Merger')}\n\n<!-- merger:${HANDBACK}:${OLD.slice(0, 12)} -->`),
+      ].join('\n') });
+      expect(read.handback).toBe(false);
+    });
+
+    it('carries a failed read as null', () => {
+      expect(stubReadPr({ meta: failing, comments: null }).read.handback).toBeNull();
+    });
+
+    it("doesn't pay for the read on a PR with no failed check", () => {
+      const { read, calls } = stubReadPr({ comments: null });
+      expect(read.handback).toBeUndefined();
+      expect(calls.some((c) => c.includes('/1234/comments'))).toBe(false);
+    });
+  });
+
+  describe('apply', () => {
+    const run = (verdictIn: Record<string, unknown>, { said = '', dryRun = false } = {}) => {
+      const dir = mkdtempSync(join(tmpdir(), 'apply-handback-'));
+      writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${dir}/calls"
+case "$*" in
+  *"/comments"*) printf '%s' ${JSON.stringify(said)} ;;
+  "label list"*) printf '%s' '[{"name":"agent:revise"},{"name":"needs:human"}]' ;;
+esac
+`);
+      const prev = process.env.PATH;
+      process.env.PATH = `${dir}:${prev}`;
+      try {
+        apply(red(), verdictIn, 'o/r', { dryRun });
+      } finally {
+        process.env.PATH = prev;
+      }
+      let calls: string;
+      try { calls = readFileSync(join(dir, 'calls'), 'utf8'); } catch { calls = ''; }
+      return calls;
+    };
+    const handback = { action: 'recover', rule: HANDBACK, why: 'red after approval', quiet: false };
+
+    it('comments with the failed checks and the marker, then re-adds agent:revise, and applies no needs:human', () => {
+      const calls = run(handback);
+      const comment = calls.indexOf('pr comment');
+      const remove = calls.indexOf('--remove-label agent:revise');
+      const add = calls.indexOf('--add-label agent:revise');
+      expect(comment, 'no hand-back comment').toBeGreaterThan(-1);
+      expect(calls).toContain(`<!-- merger:${HANDBACK}:${HEAD.slice(0, 12)} -->`);
+      expect(calls).toContain('gh run view 4242 --repo o/r --log-failed');
+      // The comment first: the revise lane's filter looks for its marker when the label starts it.
+      expect(remove).toBeGreaterThan(comment);
+      expect(add).toBeGreaterThan(remove);
+      expect(calls).not.toContain('--add-label needs:human');
+      expect(calls).not.toContain('workflow run');
+    });
+
+    it('does nothing twice on one head', () => {
+      const calls = run(handback, { said: `<!-- merger:${HANDBACK}:${HEAD.slice(0, 12)} -->` });
+      expect(calls).not.toContain('pr comment');
+      expect(calls).not.toContain('--add-label');
+    });
+
+    it('does nothing on a dry run', () => {
+      expect(run(handback, { dryRun: true })).not.toContain('pr ');
     });
   });
 });
