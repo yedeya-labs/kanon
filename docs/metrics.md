@@ -128,15 +128,6 @@ kanon metrics report --rows runs-and-items.json --windows 12           # a trend
 | Human wait | The median `t_human_s` over merged items. | 10 |
 | Cache savings | Over every run recorded in the window: `cache_read_tokens` × (input price − cache-read price), at **API list price**, from the dated price table (`scripts/metrics/prices.mjs`), with the share of what the priced runs would have cost uncached. A run is priced at its `model` by the table entry in force when it ran. A run the table can't price (a model it doesn't hold, a long-context `[1m]` model, no cache count) is counted, and its model named: unknown, never $0. The table holds every model Kanon's lanes run on, as `--model` or `--fallback-model` (a test reads them from the workflows), at Anthropic's list prices, each read from [its pricing page](https://platform.claude.com/docs/en/about-claude/pricing) with the date read beside the table. It leaves out Claude Haiku 5.5, whose price depends on the prompt's length, which the run row doesn't carry, so its runs are unpriced. | |
 
-### Cost by credential
-
-[Plan 0009](plans/0009-release-channels-and-api-key.md) §12, step A6. Every cost stays `total_cost_usd`, the agent CLI's figure at API list price (plan 0003 decision 1). What that figure means depends on the Claude credential the run ran on, which its run row records as `auth`, `subscription` or `api-key` ([Collect the rows](telemetry.md#collect-the-rows)):
-
-- **On an API key,** list price is what the key is billed, before any discount or commitment the Console account has. Kanon can't see invoices, so it never says "paid".
-- **On the subscription,** it stays a measure of work, not money, and is never turned into a share of the subscription's limit.
-
-So the report prints, beside the cache savings, the cost of every lane's runs recorded in the window split three ways: on an API key, on the subscription, and **not recorded**, with the share that ran on a key. A row without `auth` is counted as neither, never guessed: it was written before the field (a release before step A6), or by a lane whose agent step never ran. Before plan 0009 step A2 every lane ran on the subscription, but from A2 to A6 a lane could run on a key without its row saying so, so the report doesn't assume. A run with no cost counts in its group's runs and adds nothing to its dollars. The headline cells are not split: they pool every run joined to an item, whatever it ran on.
-
 **The issue-side cross-check (§3.6)** is printed beside the band validity check: Kendall's τ-b between cost and each issue-side size, `ac_count` and `issue_body_chars`, with a bootstrap interval, over brief-driven merged items (`origin: brief`) with criteria. The measures are used raw: there is no issue-side band (the Owner's decision of 2026-10-14, [#685](https://github.com/yedeya-labs/kanon/issues/685)). It *rises* when the interval sits entirely above zero, and needs 10 such items. When every cost is tied, τ is not computed, and the line says so. It is a cross-check only, and never changes the view.
 
 **The views (§6.1)** read the span of `--windows` windows (default 6) of `--days` each, ending at `--until`. Their cells are the headline's, pooled across bands with the band mix beside them; the banded cells are the headline's, for the latest window.
@@ -147,6 +138,15 @@ So the report prints, beside the cache savings, the cost of every lane's runs re
 **How runs join items** is §3.4's rule, in `scripts/metrics/join.mjs`, which every reader uses: a run joins the item whose PR it names; a run naming only an issue joins the first item closing that issue to close after the run (on a tie, the lowest PR number). So a run joins at most one item. A delivery run that joins nothing, other than a Lead's (overhead, above), settles, not merged, 30 days after the last run on its PR or issue; the report reads no issue's state, so an issue closed without a PR settles the same way.
 
 **Exit codes:** 0 the report was made (a cell with too little data or a pooled view is not a failure); 2 a usage error; 3 a rows file that can't be read or isn't JSON rows. The message names the file, never its content.
+
+### Cost by credential
+
+[Plan 0009](plans/0009-release-channels-and-api-key.md) §12, step A6. Every cost stays `total_cost_usd`, the agent CLI's figure at API list price (plan 0003 decision 1). What that figure means depends on the Claude credential the run ran on, which its run row records as `auth`, `subscription` or `api-key` ([Collect the rows](telemetry.md#collect-the-rows)):
+
+- **On an API key,** list price is what the key is billed, before any discount or commitment the Console account has. Kanon can't see invoices, so it never says "paid".
+- **On the subscription,** it stays a measure of work, not money, and is never turned into a share of the subscription's limit.
+
+So the report prints, beside the cache savings, the cost of every lane's runs recorded in the window split three ways: on an API key, on the subscription, and **not recorded**, with the share that ran on a key. A row without `auth` is counted as neither, never guessed: it was written before the field (a release before step A6), or by a lane whose agent step never ran. Before plan 0009 step A2 every lane ran on the subscription, but from A2 to A6 a lane could run on a key without its row saying so, so the report doesn't assume. A run with no cost counts in its group's runs and adds nothing to its dollars. The headline cells are not split: they pool every run joined to an item, whatever it ran on.
 
 ### The deploy views
 

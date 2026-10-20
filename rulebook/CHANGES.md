@@ -120,6 +120,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-07.** [ADR 0007](../docs/decisions/0007-data-boundary.md) was amended so that an upstream-finding row sent with evidence may carry the finding's evidence and suggested fix as scrubbed text. [#573](https://github.com/yedeya-labs/kanon/pull/573)
 - **2026-10-14.** The Owner decided a fourth row kind, the deploy row, which records an environment's role and position in the declared chain, never its name, and no release tag or commit; [ADR 0007](../docs/decisions/0007-data-boundary.md) was amended to match. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 - **2026-10-14.** The rule names a fifth row kind, the notify row, which records one `notify` job's outcome and the hook's kind, never a URL, a channel, a host, text, a status body or a secret, and is stored but not published; [ADR 0007](../docs/decisions/0007-data-boundary.md) was amended to match. [Plan 0011](../docs/plans/0011-notifications.md), [#943](https://github.com/yedeya-labs/kanon/issues/943)
+- **2026-10-20.** The Owner decided (plan 0009 decision 10) that a run row may name the kind of Claude credential it ran on, `subscription` or `api-key`, chosen by which secret the caller mapped and never from anything the secret holds. [Plan 0009 §12](../docs/plans/0009-release-channels-and-api-key.md#12-cost-what-was-paid), [#579](https://github.com/yedeya-labs/kanon/issues/579)
 
 ## `K-ADOPT-1`
 
