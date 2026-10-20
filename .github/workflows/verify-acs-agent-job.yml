@@ -251,8 +251,17 @@ jobs:
             deployment.
 
             Labels: bug, agent:explorer, qa:needs-triage, signal:spec-violation, and a
-            sev:* you can justify from the evidence. Milestone: Product Backlog — never a
-            roadmap milestone such as the launch gate, which is not a bucket (K-WORK-5).
+            sev:* you can justify from the evidence.
+            SUBJECT: judge each finding by what its failed criterion is about, never by
+            who found it (K-WORK-4). It is `--subject pipeline` when the criterion and its
+            citing test are about the engineering platform that builds and checks this
+            project: its CI workflows and their guards, its test harness, the Kanon lanes
+            installed in it. It is `--subject product` when it is about the code this
+            project ships. When it is about both, K-WORK-4 decides: the platform wins.
+            Where the playbook says how this project draws that line, follow it.
+            File each finding through the filing skill: read and follow
+            `$KANON/skills/file-issue/SKILL.md`, whose plan command gives the exact
+            arguments of one `gh issue create`.
 
             COMMENT ON THE QA ISSUE WHEN YOU FINISH, and the comment MUST contain
             this line on its own:

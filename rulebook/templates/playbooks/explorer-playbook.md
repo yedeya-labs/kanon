@@ -15,7 +15,7 @@ The levels are `K-WORK-9`'s. On a project that hasn't said more:
 
 ## Targeted-invariant mode
 
-Check the one invariant you are given against the running code, and report what you examined as well as what you found (`K-AGENT-11`). File a bug only on an objective signal, deduplicated by its exact signature (`K-AGENT-9`).
+Check the one invariant you are given against the running code, and report what you examined as well as what you found (`K-AGENT-11`). File a bug only on an objective signal, deduplicated by its exact signature (`K-AGENT-9`). File each finding through the filing skill, as the lane's prompt says; this section names no milestone (`K-WORK-8`).
 
 ## Code-reading mode
 
