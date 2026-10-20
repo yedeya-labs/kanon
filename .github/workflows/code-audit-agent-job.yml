@@ -261,9 +261,15 @@ jobs:
             Then re-write the whole file after each area you finish, appending to
             `areas_scanned`, `filed`, `deduped` and `citations` and updating the counts,
             so whatever you have completed so far is always on disk. On your FINAL write,
-            and only then, set `"complete": true`. `complete:false` in the store means
-            "this audit was cut short, trust its coverage accordingly"; it is not a
-            failure to be hidden, so never set it true early to look tidy.
+            and only then, set `"complete": true`, and never earlier to look tidy.
+            Make that write your LAST tool call: your final message must come after the
+            write that sets `"complete": true`, with no tool call between them. A run that
+            a cap or an error stops keeps its last write's `complete:false`, which the store
+            reads as "this audit was cut short, trust its coverage accordingly"; it is not
+            a failure to be hidden. Only a cap or an error stops you before you end your
+            own turn, so a run that ends its own turn without that write is marked
+            complete by the workflow, which records that you never made it
+            (`ended_unmarked`).
             Each `areas_scanned` entry starts with the area's path: the ledger is keyed
             on it.
             Filled shape:
@@ -358,6 +364,9 @@ jobs:
           # `success` only when the agent exited zero: it ended its own turn, under every cap. The
           # step runs `continue-on-error`, so its conclusion would read `success` either way.
           AGENT_OUTCOME: ${{ steps.agent.outcome }}
+          # The flags the agent ran with, a dispatched run's raised `--max-turns` in place of the
+          # lane's (kanon#1143), so the annotations name the cap the run was held to.
+          CLAUDE_ARGS_RAN: ${{ steps.agent.outputs.claude-args }}
         run: |
           # AN ABSENT REPORT IS NEVER BENIGN HERE (RA-504). This lane has no change gate and no
           # skip path, and the agent is told to write the report on turn one, so "no file" means
@@ -418,20 +427,26 @@ jobs:
           s.complete = s.complete === true;
           s.no_report = s.no_report === true;
           s.report_invalid = s.report_invalid === true;
-          // A FINISHED AUDIT WITH NO FINAL WRITE (kanon#1135): the agent exited zero, so no cap and
-          // no error cut it short, yet its report is still unmarked. `complete` stays false, since
-          // only the agent's own final write sets it, and this fourth flag says the run ended on
-          // its own, so a run that a cap cut short stays the only `complete: false` without it.
+          // A FINISHED AUDIT WITH NO FINAL WRITE (kanon#1135, kanon#1144): the agent exited zero, so
+          // no cap and no error cut it short, yet its report is still unmarked. It finished, so
+          // the report is marked `complete` here rather than on one more write the model may skip,
+          // and this fourth flag says the workflow marked it, not the agent. A run that a cap or an
+          // error cut short exits non-zero, so it keeps the `complete: false` of its last write.
           s.ended_unmarked = process.env.AGENT_OUTCOME === 'success' && !s.complete && !s.no_report && !s.report_invalid;
+          if (s.ended_unmarked) s.complete = true;
+          // THE CAP THE AGENT RAN UNDER (kanon#1143), from the flags it ran with: empty when they
+          // can't be read, and the annotations then say `unknown`.
+          const maxTurns = (process.env.CLAUDE_ARGS_RAN || '').match(/(?:^|\s)--max-turns(?:[ \t]+|=)(\d+)(?=\s|$)/)?.[1] ?? '';
           s.cost_proxy = { ...(s.cost_proxy || {}), duration_ms: dur, turns: s.turns ?? null };
           fs.writeFileSync(f, JSON.stringify(s, null, 2));
           if (process.env.GITHUB_OUTPUT) {
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `complete=${s.complete}\n`);
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `ended_unmarked=${s.ended_unmarked}\n`);
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `turns=${s.turns ?? ''}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `max_turns=${maxTurns}\n`);
           }
           if (s.ended_unmarked) {
-            console.log(`::warning title=audit ended without its final write::The audit agent exited zero, ending its own turn (turns: ${s.turns ?? 'unknown'} of --max-turns 100), but its report is still \`complete: false\`: it never made the final write. The report goes to the store as written, with \`ended_unmarked: true\`, so this run reads apart from one a cap cut short. Its coverage is what \`areas_scanned\` lists, and nothing more is claimed.`);
+            console.log(`::warning title=audit ended without its final write::The audit agent exited zero, ending its own turn (turns: ${s.turns ?? 'unknown'} of --max-turns ${maxTurns || 'unknown'}), without the final write that marks its report complete. No cap and no error cut it short, so the workflow marked it \`complete: true\` and stores it with \`ended_unmarked: true\`, which says the agent never made that write. Its coverage is what \`areas_scanned\` lists, and nothing more is claimed.`);
           }
           console.log(`stamped: trigger=${s.trigger} duration_ms=${dur} turns=${s.turns} files_read=${s.files_read} lines_cited=${s.lines_cited} complete=${s.complete} ended_unmarked=${s.ended_unmarked} no_report=${s.no_report} report_invalid=${s.report_invalid} (self-reported lines_cited=${selfReported ?? 'none'})`);
           EOF
@@ -461,6 +476,7 @@ jobs:
           NO_REPORT: ${{ steps.stamp.outputs.no_report }}
           INVALID: ${{ steps.stamp.outputs.report_invalid }}
           TURNS: ${{ steps.stamp.outputs.turns }}
+          MAX_TURNS: ${{ steps.stamp.outputs.max_turns }}
         run: |
           set -euo pipefail
           if [ "$NO_REPORT" = "true" ] || [ "$INVALID" = "true" ]; then
@@ -468,7 +484,7 @@ jobs:
             exit 0
           fi
           if [ "$COMPLETE" = "true" ]; then
-            echo "::warning title=audit exited non-zero after a complete report::The audit agent exited non-zero but its report is COMPLETE and parseable (turns: ${TURNS:-unknown} of --max-turns 100). Nothing durable was lost: the report was on disk first, and the put job writes it. Treating this as green is deliberate (RA-846). Why it exited is on this run's \`auditor\` telemetry row: its \`outcome\`, \`reason\` and \`terminal_reason\` separate the turn and dollar caps (\`exhausted\`) from a mid-run \`api_error\` (\`failed\`)."
+            echo "::warning title=audit exited non-zero after a complete report::The audit agent exited non-zero but its report is COMPLETE and parseable (turns: ${TURNS:-unknown} of --max-turns ${MAX_TURNS:-unknown}). Nothing durable was lost: the report was on disk first, and the put job writes it. Treating this as green is deliberate (RA-846). Why it exited is on this run's \`auditor\` telemetry row: its \`outcome\`, \`reason\` and \`terminal_reason\` separate the turn and dollar caps (\`exhausted\`) from a mid-run \`api_error\` (\`failed\`)."
             echo "Agent exited non-zero AFTER writing a complete report (turns: ${TURNS:-unknown}): recorded as a warning, not a failure. The cause is on this run's \`auditor\` telemetry row." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
