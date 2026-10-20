@@ -350,15 +350,19 @@ jobs:
       # Deterministic producer -> JSON. `continue-on-error` because a FAILING
       # acceptance criterion is the finding, not a broken job: the whole point is
       # to report it, and a hard exit here would leave the Explorer nothing to read.
+      #
+      # KANON'S NODE, BY ABSOLUTE PATH (kanon#1185): the hook has run, and could have put another
+      # `node` first on the PATH, so the script runs on the one `kanon-path` set up before it.
       - name: Resolve and run the project's acceptance criteria
         id: verify
         continue-on-error: true
         env:
           PROJECT: ${{ steps.resolve.outputs.project }}
           KANON: ${{ steps.kanon.outputs.path }}
+          KANON_NODE: ${{ steps.kanon.outputs.node }}
         run: |
           set -uo pipefail
-          node "$KANON/scripts/verify-acs.mjs" "$PROJECT" --run --json=qa-verify-acs.json | tee -a "$GITHUB_STEP_SUMMARY"
+          "$KANON_NODE" "$KANON/scripts/verify-acs.mjs" "$PROJECT" --run --json=qa-verify-acs.json | tee -a "$GITHUB_STEP_SUMMARY"
 
       # NOT swallowed. No artifact means the producer died before writing one, and
       # that is a broken job — reporting "nothing to verify" would be the exact
