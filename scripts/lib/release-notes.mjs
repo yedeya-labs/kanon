@@ -1,7 +1,7 @@
 // @ts-nocheck -- moved from the reference adopter's pipeline library, which doesn't type-check its scripts (plan 0001 §3; ADR 0009)
 /**
  * Pure text helpers for turning release-please release bodies into chat text. Shared:
- * `parseSections`, `scopeOf`, `classify`, `INTERNAL_SCOPES` and `bulletProse`. Kanon text, for
+ * `parseSections`, `scopeOf`, `INTERNAL_SCOPES` and `bulletProse`. Kanon text, for
  * the deploy announcement's `deploy` message (plan 0011 step N9): `kanonBullet`, `kanonList`,
  * `kanonMaint`. Nothing here writes a chat system's markup: the weekly digest's `weekly-digest`
  * message (step N8) is Kanon text too, and each hook renders it for its own system.
