@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { JUDGING_INPUTS, NEVER_AN_INPUT, delegatedFrom, diskReader, judgingInputs, matchesRow } from '../../scripts/judging-inputs.mjs';
+import { JUDGING_INPUTS, NEVER_AN_INPUT, delegatedFrom, diskReader, gitReader, judgingInputs, matchesRow } from '../../scripts/judging-inputs.mjs';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { readFlattened, workflowText } from './helpers/called-workflow.js';
@@ -352,5 +352,31 @@ esac
     const { work } = fixture();
     git(work, 'checkout', '-q', 'origin/main');
     expect(judgingInputs(diskReader(work))).toEqual([...Object.keys(DEFAULT)].filter((p) => !['docs/qa/specs/area.md', 'docs/other.md', 'src/code.ts'].includes(p)).sort());
+  });
+});
+
+// It builds a git repository, so the block takes the spawn budget (#436).
+describe('what a commit pins is asked of the git reader, not the disk reader (kanon#1101)', SPAWNS, () => {
+  // A worktree under the checkout, where Claude Code makes them, ignored as an adopter ignores
+  // it: a second copy of the tree under `.claude/`, whose documents link repo-rooted paths.
+  const withWorktree = () => {
+    const { work } = fixture();
+    git(work, 'checkout', '-q', 'origin/main');
+    appendFileSync(join(work, '.git/info/exclude'), '.claude/worktrees/\n');
+    put(work, {
+      '.claude/worktrees/x/.git': 'gitdir: ../../../.git/worktrees/x\n',
+      '.claude/worktrees/x/notes.md': 'See [the other doc](/docs/other.md).\n',
+    });
+    expect(git(work, 'status', '--porcelain'), 'the worktree is ignored, so the checkout is clean').toBe('');
+    return work;
+  };
+  const CLEAN = [...Object.keys(DEFAULT)].filter((p) => !['docs/qa/specs/area.md', 'docs/other.md', 'src/code.ts'].includes(p)).sort();
+
+  it('gitReader at HEAD ignores an ignored .claude/worktrees/x/ and the doc its markdown links', () => {
+    expect(judgingInputs(gitReader('HEAD', withWorktree()))).toEqual(CLEAN);
+  });
+  it('while diskReader, the tamper tripwire, walks it: ignored files and what they link included', () => {
+    const found = judgingInputs(diskReader(withWorktree()));
+    expect(found).toEqual(expect.arrayContaining([...CLEAN, '.claude/worktrees/x/notes.md', 'docs/other.md']));
   });
 });
