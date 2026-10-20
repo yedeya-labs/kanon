@@ -54,6 +54,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-07.** `lane-check` holds every job that calls a Kanon workflow, the spine `agent-lane.yml` included, to mapping each secret by name or passing none, and fails `secrets: inherit`. Releases before this one let it through on a call to the spine. [#500](https://github.com/yedeya-labs/kanon/issues/500)
 - **2026-10-14.** The Owner's plan for the deploy lane amended the rule: a Kanon workflow may read an environment secret only by a fixed name, in a job that sets `environment:`, and only where its own guard test names it, since GitHub can't pass an environment secret from a caller to a called workflow; today that is `KANON_DEPLOY_SECRET` in `deploy.yml`'s `deploy` job. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 - **2026-10-16.** A measurement in the sandbox showed that GitHub evaluates a caller's secret mapping in the called job's scope, the environment's secret first, and that a secret the caller doesn't map is empty there. The rule now says the caller maps `KANON_DEPLOY_SECRET` by that one name, and `deploy.yml` declares it optional; the amendment of 2026-10-14 had said no caller could map it. [#1049](https://github.com/yedeya-labs/kanon/issues/1049)
+- **2026-10-20.** The Owner's plan for the smoke lifecycle fixed a second environment-secret name, `KANON_SMOKE_SECRET`, which the project's reset and smoke hooks read in the job that runs them, and which the deploy hook never sees, because a sandbox key or a test account's password isn't the deploy's secret. Nothing reads it yet: the guard admits it once the lane passes it. [Plan 0013](../docs/plans/0013-smoke-lifecycle.md) §11, [#1165](https://github.com/yedeya-labs/kanon/issues/1165)
 
 ## `K-AGENT-48`
 
@@ -107,6 +108,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-15.** The deploy lane holds one more secret, the announcement's `KANON_CHAT_DEPLOY`, declared by `deploy.yml` as optional and read by its `notify` job alone, which holds no cloud credential; the guard admits exactly that. [Plan 0011](../docs/plans/0011-notifications.md) N9, [#972](https://github.com/yedeya-labs/kanon/issues/972)
 - **2026-10-16.** `deploy.yml` declares `KANON_DEPLOY_SECRET` optional too, which the caller maps by that name so that GitHub resolves it in the deploy job's environment; the guard admits exactly the two optional declarations. [#1049](https://github.com/yedeya-labs/kanon/issues/1049)
+- **2026-10-20.** The deploy path gained the workflow that checks a deployed environment outside a deploy, `deploy-smoke.yml`, which runs no model either and obtains the cloud credential only in its one job that resets or smokes an environment; and a second secret, `KANON_SMOKE_SECRET`, which reaches the reset and smoke hooks' steps alone, never the deploy hook's. Neither the workflow nor the secret ships yet, so that half is prose only. [Plan 0013](../docs/plans/0013-smoke-lifecycle.md) §10, [#1165](https://github.com/yedeya-labs/kanon/issues/1165)
 
 ## `K-SHIP-10`
 
@@ -114,6 +116,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-14.** The rule is enforced by the `notify` job of `K-OBS-19`: a deploy's announcement is a `deploy` message posted by a job of its own, so a failed post never reads as a failed deploy, and the announced version moves only after the post. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)
 - **2026-10-15.** The Owner decided that each environment announces its own deploy, that a failure posts too (`critical` for production), and that what was announced is read from the environment's previous successful deployment rather than kept in a variable moved after the post. The deploy lane runs the announcement. [Plan 0011](../docs/plans/0011-notifications.md) N9, [#972](https://github.com/yedeya-labs/kanon/issues/972)
 - **2026-10-16.** The range holds only releases of the deployed tag's line, so a prefixed tag (`widgets-v1.2.3`) is announced, and under the `no-environments` fallback, with no deployment to read, each deploy announces its own release alone. [#1038](https://github.com/yedeya-labs/kanon/issues/1038), [#1039](https://github.com/yedeya-labs/kanon/issues/1039)
+- **2026-10-20.** The title and the rule name a third confusion, which the Owner's plan for the smoke lifecycle found in the announcement an adopter was reading: a failed smoke check after a deploy that landed is a failed check of a live release, never a failed deploy, and never skipped. The message already told the two apart; that it also says the release is live, and lists its changes, is prose only until it does. [Plan 0013](../docs/plans/0013-smoke-lifecycle.md) §7.2, [#1165](https://github.com/yedeya-labs/kanon/issues/1165)
 
 ## `K-PROJ-16`
 
@@ -160,6 +163,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-14.** The deploy lane's three hooks, `.github/actions/build`, `.github/actions/deploy` and `.github/actions/smoke`, and the adoption record's `## Deploy` section, joined the fixed paths. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 - **2026-10-14.** The notify hook, `.github/actions/notify/action.yml`, joined the fixed paths. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)
+- **2026-10-20.** The smoke check's optional reset hook, `.github/actions/smoke-reset/action.yml`, and the caller that runs the check outside a deploy, `.github/workflows/smoke.yml`, joined the fixed paths. [Plan 0013](../docs/plans/0013-smoke-lifecycle.md) §4.1, [#1165](https://github.com/yedeya-labs/kanon/issues/1165)
 
 ## `K-LAYOUT-6`
 
@@ -178,6 +182,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-14.** The Owner decided that the adoption record has a `## Deploy` section of its own, holding the deploy lane's environments, its CI wait and the fallback's marker, and that the reference deploy's three bullets move there from `## Choices` at once, with no period of reading both places. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 - **2026-10-15.** The gate never waits longer than 345 minutes for the release commit's CI, whatever the record declares, so a CI that never finishes ends in `ci-timeout`, which is filed, inside the gate job's 360-minute limit, not in a cancellation, which files nothing. [#912](https://github.com/yedeya-labs/kanon/issues/912), [#961](https://github.com/yedeya-labs/kanon/pull/961)
 - **2026-10-15.** The Owner decided the extra App permission choice: one bullet per App and permission under `## Choices`, with its reason, which widens that repository's App alone. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
+- **2026-10-20.** The `## Deploy` section gained an optional `Smoke schedule` bullet: one code span per environment, its name and then a five-field cron, no environment twice and no two environments sharing a cron string, since the cron is what tells one scheduled run from another. [Plan 0013](../docs/plans/0013-smoke-lifecycle.md) §4.3, [#1165](https://github.com/yedeya-labs/kanon/issues/1165)
 
 ## `K-LAYOUT-16`
 
