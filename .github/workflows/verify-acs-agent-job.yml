@@ -256,9 +256,9 @@ jobs:
             who found it (K-WORK-4). It is `--subject pipeline` when the criterion and its
             citing test are about the engineering platform that builds and checks this
             project: its CI workflows and their guards, its test harness, the Kanon lanes
-            installed in it. Anything else, the code this project ships among it, is
-            `--subject product`. Where the playbook says how this project draws that
-            line, follow it.
+            installed in it. It is `--subject product` when it is about the code this
+            project ships. When it is about both, K-WORK-4 decides: the platform wins.
+            Where the playbook says how this project draws that line, follow it.
             File each finding through the filing skill: read and follow
             `$KANON/skills/file-issue/SKILL.md`, whose plan command gives the exact
             arguments of one `gh issue create`.
