@@ -55,6 +55,11 @@ Written as rules `K-OBS-16`, `K-OBS-17` and `K-OBS-18` in [chapter 08](../../rul
 - **Never:** a URL, a channel, a host, the message's text, the hook's status body or a secret. A webhook URL is a credential, and any of the others would say whose row it is or quote the project the message describes.
 - **Rule 5 for notify rows:** they are stored, and not published: nothing reads them until the follow-up reader that decision 19 names, which counts posted and failed by hook kind and release, Kanon's prebuilt hooks only, behind the three-adopter floor (plan 0011 §11).
 
+**Amended 2026-10-20, by [plan 0013](../plans/0013-smoke-lifecycle.md)'s decisions 7 and 12: the smoke-check row, and the deploy row's reset stage.** A sixth row kind, the smoke-check row, describes one run of the smoke check outside a deploy, on one environment of the declared chain, and is written by the smoke workflow, which runs no model. The deploy row gains the reset hook's stage and duration. Rule 1's allowed list grows for both in `K-OBS-16`; the "never" list is unchanged.
+- **Allowed:** the environment's role and position, as on the deploy row; the trigger, `schedule` or `workflow_dispatch`, and whether a reset hook ran; the outcome, the stage that failed and the refusal, from Kanon's closed lists; and durations. Each is a number, a time, a boolean or a value from a closed list.
+- **Never:** the release's commit or tag, an environment's name, a URL, the reviewer, or anything the hooks print.
+- **Rule 5 for smoke-check rows:** they are stored, from plan 0013's S3, and not published: no metric reads them, and a view of them is a later choice (plan 0013 §8).
+
 ## Why
 
 - **Telemetry must be safe to leave a project by construction, not by review.** Free text is how content leaks: a bail reason or an error message can quote code, and a file path reveals a project's structure. A fixed schema with reason codes closes that route.

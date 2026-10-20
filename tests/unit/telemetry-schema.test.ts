@@ -29,6 +29,10 @@ import {
   RESERVED_PARTITION,
   ROLES,
   SCHEMAS,
+  SMOKE_OUTCOMES,
+  SMOKE_REFUSALS,
+  SMOKE_STAGES,
+  SMOKE_TRIGGERS,
   STAGES,
   STORE_FIELDS,
   describeErrors,
@@ -1210,7 +1214,7 @@ describe('the deploy row (plan 0010 §10, step D3)', () => {
   it('holds the closed lists to §10', () => {
     expect([...DEPLOY_ROLES]).toEqual(['production', 'pre-production']);
     expect([...DEPLOY_OUTCOMES]).toEqual(['ok', 'failed', 'smoke_failed', 'refused', 'rejected', 'cancelled']);
-    expect([...DEPLOY_STAGES]).toEqual(['gate', 'probe', 'build', 'approval', 'deploy', 'smoke']);
+    expect([...DEPLOY_STAGES]).toEqual(['gate', 'probe', 'build', 'approval', 'deploy', 'reset', 'smoke']);
     expect([...DEPLOY_REFUSALS]).toEqual([
       'draft', 'no-release', 'not-default-branch', 'declaration-mismatch', 'ci-red', 'ci-timeout',
       'superseded', 'trust-unbound', 'probe-unconfigured', 'not-maintainer',
@@ -1277,6 +1281,125 @@ describe('the deploy row (plan 0010 §10, step D3)', () => {
   it('no lane may be named `deploy`: a run row with that lane is rejected', () => {
     expect(LANES).not.toContain('deploy');
     fails({ ...finished(), lane: 'deploy' }, 'lane');
+  });
+
+  it('version 1 is unchanged by plan 0013: no `reset` stage, no `reset_ms`', () => {
+    expect((DEPLOY.failed_stage as { values: readonly string[] }).values).toEqual(['gate', 'probe', 'build', 'approval', 'deploy', 'smoke']);
+    fails({ ...deployed(), outcome: 'smoke_failed', failed_stage: 'reset' }, 'failed_stage');
+    expect(validate({ ...deployed(), reset_ms: 5_000 })).toEqual({ ok: false, errors: [{ field: 'reset_ms', problem: 'unknown' }] });
+  });
+});
+
+describe('deploy row version 2: the reset hook (plan 0013 §8, step S2)', () => {
+  const V1 = SCHEMAS.deploy![1]!;
+  const V2 = SCHEMAS.deploy![2]!;
+  const deployed = (): Row => ({
+    schema_version: 2, row_kind: 'deploy', tag: 'run', recorded_at: '2026-10-20T10:00:00Z',
+    run_id: 33679229731, run_attempt: 1, trigger: 'release', kanon_version: '0.43.0',
+    role: 'production', position: 2, outcome: 'ok', wait_ms: 600_000, deploy_ms: 240_000, reset_ms: 8_000, smoke_ms: 30_000,
+  });
+
+  it("is version 1's fields and `reset_ms`, with the same required ones", () => {
+    expect(Object.keys(V2).sort()).toEqual([...Object.keys(V1), 'reset_ms'].sort());
+    const required = (f: typeof V1) => Object.entries(f).filter(([, x]) => x.required).map(([k]) => k).sort();
+    expect(required(V2)).toEqual(required(V1));
+    expect(V2.reset_ms).toEqual({ type: 'int', max: 2 ** 31 - 1 });
+  });
+
+  it('a row with `reset_ms` validates, and so does a smoke check failed at `reset`', () => {
+    expect(validate(deployed())).toEqual({ ok: true });
+    expect(validate({ ...deployed(), outcome: 'smoke_failed', failed_stage: 'reset' })).toEqual({ ok: true });
+    expect(validate({ ...deployed(), outcome: 'smoke_failed', failed_stage: 'smoke' })).toEqual({ ok: true });
+  });
+
+  it("keeps version 1's checks: no environment's name, `failed_stage` never with `ok`", () => {
+    for (const field of ['sha', 'release', 'environment', 'url']) {
+      expect(validate({ ...deployed(), [field]: 'staging' }), field).toEqual({ ok: false, errors: [{ field, problem: 'unknown' }] });
+    }
+    const v = validate({ ...deployed(), failed_stage: 'reset' });
+    expect(v).toEqual({ ok: false, errors: [{ field: 'failed_stage', problem: 'outcome-mismatch' }] });
+    for (const reset_ms of [-1, 1.5, '8000']) expect(validate({ ...deployed(), reset_ms }).ok, String(reset_ms)).toBe(false);
+  });
+});
+
+describe('the smoke-check row (plan 0013 §8, step S2)', () => {
+  const SMOKE = SCHEMAS.smoke_check![1]!;
+  /** A scheduled smoke run on pre-production that passed, with a reset hook. */
+  const passed = (): Row => ({
+    schema_version: 1, row_kind: 'smoke_check', tag: 'run', recorded_at: '2026-10-20T03:10:00Z',
+    run_id: 33679229731, run_attempt: 1, trigger: 'schedule', kanon_version: '0.43.0',
+    role: 'pre-production', position: 1, outcome: 'ok', reset_ran: true,
+    wait_ms: 4_000, reset_ms: 12_000, smoke_ms: 95_000, duration_ms: 120_000,
+  });
+  const fails = (row: Row, field: string, problem?: string) => {
+    const v = validate(row);
+    expect(v.ok, field).toBe(false);
+    if (!v.ok) expect(v.errors, field).toContainEqual(problem ? { field, problem } : expect.objectContaining({ field }));
+  };
+
+  it('has the eighteen fields §8 lists, and requires the row, the run, the environment\'s place and the outcome', () => {
+    expect(Object.keys(SMOKE).sort()).toEqual([
+      'duration_ms', 'failed_stage', 'kanon_version', 'outcome', 'position', 'recorded_at', 'refusal', 'reset_ms',
+      'reset_ran', 'role', 'row_kind', 'run_attempt', 'run_id', 'schema_version', 'smoke_ms', 'tag', 'trigger', 'wait_ms',
+    ]);
+    const required = Object.entries(SMOKE).filter(([, f]) => f.required).map(([k]) => k).sort();
+    expect(required).toEqual([
+      'kanon_version', 'outcome', 'position', 'recorded_at', 'role', 'row_kind', 'run_attempt', 'run_id', 'schema_version', 'tag',
+    ]);
+    // `role` and `position` are the deploy row's own, not copies that could drift.
+    expect(SMOKE.role).toBe(SCHEMAS.deploy![1]!.role);
+    expect(SMOKE.position).toBe(SCHEMAS.deploy![1]!.position);
+  });
+
+  it('holds the closed lists to §8, and its kind is not `smoke`, a value of `tag`', () => {
+    expect([...SMOKE_TRIGGERS]).toEqual(['schedule', 'workflow_dispatch']);
+    expect([...SMOKE_OUTCOMES]).toEqual(['ok', 'failed', 'refused', 'rejected', 'cancelled']);
+    expect([...SMOKE_STAGES]).toEqual(['approval', 'reset', 'smoke']);
+    expect([...SMOKE_REFUSALS]).toEqual(['no-release', 'declaration-mismatch', 'not-live', 'not-person', 'not-maintainer', 'superseded']);
+    expect(Object.keys(SCHEMAS)).not.toContain('smoke');
+    fails({ ...passed(), row_kind: 'smoke' }, 'row_kind', 'enum');
+  });
+
+  it('a valid row validates, and so does each outcome §7.3 records', () => {
+    expect(validate(passed())).toEqual({ ok: true });
+    const bare = passed();
+    for (const k of ['trigger', 'reset_ran', 'wait_ms', 'reset_ms', 'smoke_ms', 'duration_ms']) delete bare[k];
+    expect(validate(bare)).toEqual({ ok: true });
+    expect(validate({ ...passed(), trigger: 'workflow_dispatch', role: 'production', position: 2 })).toEqual({ ok: true });
+    for (const failed_stage of ['reset', 'smoke']) expect(validate({ ...passed(), outcome: 'failed', failed_stage }), failed_stage).toEqual({ ok: true });
+    for (const refusal of SMOKE_REFUSALS) expect(validate({ ...passed(), outcome: 'refused', refusal }), refusal).toEqual({ ok: true });
+    expect(validate({ ...passed(), outcome: 'rejected', failed_stage: 'approval' })).toEqual({ ok: true });
+    expect(validate({ ...passed(), outcome: 'cancelled' })).toEqual({ ok: true });
+    for (const tag of ['smoke', 'test']) expect(validate({ ...passed(), tag }), tag).toEqual({ ok: true });
+  });
+
+  it('a row with an `environment`, `release`, `sha` or `url` field is rejected, naming it and never its value (K-OBS-16)', () => {
+    for (const field of ['environment', 'release', 'sha', 'url']) {
+      const v = validate({ ...passed(), [field]: 'staging.example.com' });
+      expect(v, field).toEqual({ ok: false, errors: [{ field, problem: 'unknown' }] });
+      expect(JSON.stringify(v)).not.toContain('example.com');
+    }
+  });
+
+  it('`refusal` only with `refused`, and a refusal names its code', () => {
+    fails({ ...passed(), refusal: 'superseded' }, 'refusal', 'outcome-mismatch');
+    fails({ ...passed(), outcome: 'failed', failed_stage: 'smoke', refusal: 'not-live' }, 'refusal', 'outcome-mismatch');
+    fails({ ...passed(), outcome: 'refused' }, 'refusal', 'required');
+    fails({ ...passed(), outcome: 'refused', refusal: 'ci-red' }, 'refusal', 'enum');
+  });
+
+  it('`failed_stage` never with `ok`, and a failure names its stage', () => {
+    fails({ ...passed(), failed_stage: 'smoke' }, 'failed_stage', 'outcome-mismatch');
+    fails({ ...passed(), outcome: 'failed' }, 'failed_stage', 'required');
+    fails({ ...passed(), outcome: 'failed', failed_stage: 'deploy' }, 'failed_stage', 'enum');
+  });
+
+  it('a value outside each closed list is refused', () => {
+    fails({ ...passed(), trigger: 'release' }, 'trigger', 'enum');
+    fails({ ...passed(), outcome: 'smoke_failed' }, 'outcome', 'enum');
+    fails({ ...passed(), role: 'staging' }, 'role', 'enum');
+    fails({ ...passed(), position: 0 }, 'position', 'range');
+    fails({ ...passed(), reset_ran: 'yes' }, 'reset_ran', 'type');
   });
 });
 

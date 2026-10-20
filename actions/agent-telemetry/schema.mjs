@@ -15,17 +15,20 @@
 // offending FIELDS only. It never echoes a value: a rejected row may hold the content this
 // schema exists to keep out, and the rejection is what reaches a log.
 //
-// FIVE ROW KINDS, each with its own version (plan 0002 §2.2). A `run` row (versions 2 to 4)
+// SIX ROW KINDS, each with its own version (plan 0002 §2.2). A `run` row (versions 2 to 4)
 // describes one agent run. A `work_item` row (version 1, plan 0003 §3.3) describes one pull request; S1
 // ships its field list only, and nothing writes one until plan 0003's M4. A `finding` row
 // (version 1, plan 0006 §2) carries one upstream finding, a finding only Kanon can act on; F1
 // ships its field list and checks; the Overseer's and the telemetry Explorer's filing steps write
 // them (F3, `scripts/lib/finding-rows.mjs`), and the collector sends them (F4). A `deploy` row
-// (version 1, plan 0010 §10) describes one environment's deploy of one release; D3 ships its field
-// list and checks, the deploy lane writes it (D4), and the store takes it (D9). A `notify` row
+// (versions 1 and 2, plan 0010 §10) describes one environment's deploy of one release; D3 ships its
+// field list and checks, the deploy lane writes it (D4), and the store takes it (D9). Version 2
+// (plan 0013 §8, S2) adds the reset hook's stage and duration. A `notify` row
 // (version 1, plan 0011 §11) records one `notify` job's outcome: whether the adopter's hook posted
 // the message, failed, or was skipped, and the hook's kind, never a URL, a channel or any text. N5
-// ships its field list and checks and the store takes it; the `notify` block writes it (N6).
+// ships its field list and checks and the store takes it; the `notify` block writes it (N6). A
+// `smoke_check` row (version 1, plan 0013 §8) describes one smoke run outside a deploy; S2 ships
+// its field list and checks, and the store refuses it until S3 builds its intake.
 
 import { KANON_PATH, SCRUB_VERSION, verify } from './scrub.mjs';
 
@@ -227,8 +230,14 @@ export const MAX_FINDINGS = 20;
 export const DEPLOY_ROLES = Object.freeze(['production', 'pre-production']);
 /** How one environment's deploy ended (plan 0010 §10). `rejected`: a reviewer rejected, or the approval timed out. */
 export const DEPLOY_OUTCOMES = Object.freeze(['ok', 'failed', 'smoke_failed', 'refused', 'rejected', 'cancelled']);
-/** The deploy lane's stages, in the order a release runs them (plan 0010 §10). */
-export const DEPLOY_STAGES = Object.freeze(['gate', 'probe', 'build', 'approval', 'deploy', 'smoke']);
+/**
+ * The deploy lane's stages, in the order a release runs them (plan 0010 §10). `reset`, the optional
+ * reset hook before the smoke hook (plan 0013 §6, decision 12), is a stage of deploy row version 2
+ * only: version 1's list stays as it shipped, so an intake deployed before it is unchanged.
+ */
+export const DEPLOY_STAGES = Object.freeze(['gate', 'probe', 'build', 'approval', 'deploy', 'reset', 'smoke']);
+/** Deploy row version 1's stages: every stage but `reset`. */
+const DEPLOY_V1_STAGES = Object.freeze(DEPLOY_STAGES.filter((s) => s !== 'reset'));
 /**
  * Why the lane refused (plan 0010 §3, §5, §10, §13): the gate's codes, then the environment job's
  * supersede check, the trust probe's two, and the fallback's production dispatch by anyone but the
@@ -240,6 +249,23 @@ export const DEPLOY_REFUSALS = Object.freeze([
 ]);
 /** The deploy caller's two triggers (plan 0010 §3). */
 export const DEPLOY_TRIGGERS = Object.freeze(['release', 'workflow_dispatch']);
+
+/**
+ * A smoke run outside a deploy (plan 0013 §8): its trigger, `schedule` for the run the scheduler
+ * dispatched (read from `via`), `workflow_dispatch` for one a person started.
+ */
+export const SMOKE_TRIGGERS = Object.freeze(['schedule', 'workflow_dispatch']);
+/** How a smoke run ended (plan 0013 §7.3). `rejected`: a reviewer rejected the `smoke` job. */
+export const SMOKE_OUTCOMES = Object.freeze(['ok', 'failed', 'refused', 'rejected', 'cancelled']);
+/** The smoke run's stages, in the order it runs them (plan 0013 §8): the approval, the reset hook, the smoke hook. */
+export const SMOKE_STAGES = Object.freeze(['approval', 'reset', 'smoke']);
+/**
+ * Why a smoke run refused (plan 0013 §4.1, §5.3): `declare`'s five checks, then `superseded`, a
+ * tag no longer live once the run held the environment's slot. Only with `refused`.
+ */
+export const SMOKE_REFUSALS = Object.freeze([
+  'no-release', 'declaration-mismatch', 'not-live', 'not-person', 'not-maintainer', 'superseded',
+]);
 
 /**
  * The message kinds a `notify` row names (plan 0011 §3.2, §11): `KINDS` in
@@ -554,7 +580,7 @@ const DEPLOY_V1 = Object.freeze({
   position: req(/** @type {Field} */ ({ type: 'int', min: 1, max: INT_MAX })),
   // Outcome
   outcome: req(oneOf(DEPLOY_OUTCOMES)),
-  failed_stage: oneOf(DEPLOY_STAGES),
+  failed_stage: oneOf(DEPLOY_V1_STAGES),
   refusal: oneOf(DEPLOY_REFUSALS),
   // The release, as booleans only
   prerelease: bool,
@@ -569,6 +595,51 @@ const DEPLOY_V1 = Object.freeze({
   since_release_ms: count,
 });
 
+/**
+ * The deploy row, version 2: version 1's twenty-two fields and `reset_ms`, the reset hook's
+ * duration, with `reset` among the stages `failed_stage` may name (plan 0013 §8, decision 12). A new
+ * list rather than a field added to version 1 (plan 0002 §2.2), so an intake from an earlier release
+ * still takes every row that carries neither: a row is written at version 2 only when it does.
+ */
+const DEPLOY_V2 = Object.freeze({
+  ...DEPLOY_V1,
+  schema_version: req(oneOf([2])),
+  failed_stage: oneOf(DEPLOY_STAGES),
+  reset_ms: count,
+});
+
+/**
+ * The smoke-check row, version 1: eighteen fields (plan 0013 §8, decision 7). One run of the smoke
+ * workflow outside a deploy, stored under `<key>#smoke_check` once S3 builds its intake. Like the
+ * deploy row, it names the environment by its role and position, never by its name, and carries no
+ * release tag, commit, URL, reviewer or anything the hooks print (`K-OBS-16`): every field is a
+ * number, a time, a boolean or a value from a closed list. Not `smoke`, a value of `tag`.
+ */
+const SMOKE_CHECK_V1 = Object.freeze({
+  // Row
+  schema_version: req(oneOf([1])),
+  row_kind: req(oneOf(['smoke_check'])),
+  tag: req(oneOf(TAGS)),
+  recorded_at: req(time),
+  // Run
+  run_id: req(int(RUN_ID_MAX)),
+  run_attempt: req(count),
+  trigger: oneOf(SMOKE_TRIGGERS),
+  kanon_version: RUN_V2.kanon_version,
+  // The environment, by its place in the chain
+  role: DEPLOY_V1.role,
+  position: DEPLOY_V1.position,
+  // Outcome
+  outcome: req(oneOf(SMOKE_OUTCOMES)),
+  failed_stage: oneOf(SMOKE_STAGES),
+  refusal: oneOf(SMOKE_REFUSALS),
+  reset_ran: bool,
+  // Time, in milliseconds: `wait_ms` is the queue and the approval, from the run's start to the job's
+  wait_ms: count,
+  reset_ms: count,
+  smoke_ms: count,
+  duration_ms: count,
+});
 /**
  * The notify row, version 1: sixteen fields (plan 0011 §11). One `notify` job's outcome, written
  * by the job that knows it, and stored in its lane's partition, `<key>#<lane>`, under an `sk` that
@@ -609,8 +680,9 @@ export const SCHEMAS = Object.freeze({
   run: Object.freeze({ 2: RUN_V2, 3: RUN_V3, 4: RUN_V4 }),
   work_item: Object.freeze({ 1: WORK_ITEM_V1 }),
   finding: Object.freeze({ 1: FINDING_V1 }),
-  deploy: Object.freeze({ 1: DEPLOY_V1 }),
+  deploy: Object.freeze({ 1: DEPLOY_V1, 2: DEPLOY_V2 }),
   notify: Object.freeze({ 1: NOTIFY_V1 }),
+  smoke_check: Object.freeze({ 1: SMOKE_CHECK_V1 }),
 });
 
 /** Set by the store, never by a row: a row that sends one is rejected (plan 0002 §2.1). */
@@ -765,6 +837,27 @@ function deployPairings(row) {
 }
 
 /**
+ * The cross-field rules of a smoke-check row (plan 0013 §8): `refusal` only with `refused`, and a
+ * refusal names its code; `failed_stage` never with `ok`, and a failure names its stage. A refusal
+ * or a cancel may come before any stage, in `route` or `declare`, so neither requires one.
+ * @param {Record<string, unknown>} row
+ * @returns {{ field: string, problem: string }[]}
+ */
+function smokeCheckPairings(row) {
+  /** @type {{ field: string, problem: string }[]} */
+  const out = [];
+  const outcome = typeof row.outcome === 'string' && SMOKE_OUTCOMES.includes(row.outcome) ? row.outcome : null;
+  if (!outcome) return out;
+  const refusal = Object.hasOwn(row, 'refusal');
+  if (outcome === 'refused' && !refusal) out.push({ field: 'refusal', problem: 'required' });
+  if (outcome !== 'refused' && refusal) out.push({ field: 'refusal', problem: 'outcome-mismatch' });
+  const stage = Object.hasOwn(row, 'failed_stage');
+  if (outcome === 'ok' && stage) out.push({ field: 'failed_stage', problem: 'outcome-mismatch' });
+  if (outcome === 'failed' && !stage) out.push({ field: 'failed_stage', problem: 'required' });
+  return out;
+}
+
+/**
  * The cross-field rules of a notify row (plan 0011 §11): `skip_reason` only with `skipped`, and a
  * skip names its reason; `failure` only with `failed`, and a failure names its cause. The job
  * always knows which, so a row without it is a bug in the block, refused like the deploy row's
@@ -838,6 +931,7 @@ export function validate(row, { imported = false } = {}) {
   if (kind === 'finding') errors.push(...findingPairings(r));
   if (kind === 'deploy') errors.push(...deployPairings(r));
   if (kind === 'notify') errors.push(...notifyPairings(r));
+  if (kind === 'smoke_check') errors.push(...smokeCheckPairings(r));
   return errors.length ? { ok: false, errors } : { ok: true };
 }
 
