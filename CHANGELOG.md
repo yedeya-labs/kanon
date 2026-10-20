@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.42.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.41.0...candidate-v0.42.0) (2026-10-19)
+
+
+### Features
+
+* **doctor:** flag a telemetry register tracked in a repository where Kanon's lanes run ([#1072](https://github.com/yedeya-labs/kanon/issues/1072)) ([6d44ecb](https://github.com/yedeya-labs/kanon/commit/6d44ecb5e25fb5651bcc30293920cf5ce21e6b45))
+* **lane-check:** point a red pull request that only moves Kanon's pins to /kanon:upgrade ([#1122](https://github.com/yedeya-labs/kanon/issues/1122)) ([422ab72](https://github.com/yedeya-labs/kanon/commit/422ab72974c139bef199f67857d96dd0db1edd52))
+* **metrics:** move the metrics page to the token path (plan 0008 step 4a) ([#1079](https://github.com/yedeya-labs/kanon/issues/1079)) ([0545496](https://github.com/yedeya-labs/kanon/commit/0545496abb89b5601aa71baa29d00adcbe8448dd))
+* **release:** gate promotion and Kanon's pins on the end-to-end harness's verdict ([#1118](https://github.com/yedeya-labs/kanon/issues/1118)) ([738b7e9](https://github.com/yedeya-labs/kanon/commit/738b7e981cd98b9ef398547bcd708a62de1f5246))
+
+
+### Bug Fixes
+
+* **citation-guard:** read coordinates into dynamic-route paths ([#1119](https://github.com/yedeya-labs/kanon/issues/1119)) ([a22ed12](https://github.com/yedeya-labs/kanon/commit/a22ed12434d49b1d67d21ed709f09e84040caa0a))
+* **classify:** name no max_turns re-dispatch on a lane no dispatch can raise, and correct two follow-up comments and plan 0011's N9 row ([#1110](https://github.com/yedeya-labs/kanon/issues/1110)) ([5ae234a](https://github.com/yedeya-labs/kanon/commit/5ae234ad470669e4fc2ccc0c4730fbf9cba29752))
+* **doctor:** count no lane's optional secret as missing, apart from the store's ([#1091](https://github.com/yedeya-labs/kanon/issues/1091)) ([fbf3015](https://github.com/yedeya-labs/kanon/commit/fbf3015de5ca5601a89a1b59b7342057970f18bd))
+* **doctor:** report every Dependabot entry that doesn't reach a Kanon pin ([#1132](https://github.com/yedeya-labs/kanon/issues/1132)) ([4df984d](https://github.com/yedeya-labs/kanon/commit/4df984deba57869d324000a8dd32826467d4bf8d))
+* **lane-check:** hold every Dependabot entry that proposes Kanon to the reach rule, in doctor too ([#1125](https://github.com/yedeya-labs/kanon/issues/1125)) ([284d726](https://github.com/yedeya-labs/kanon/commit/284d726bd5b67042895a9e955798daa689738b98))
+* **lane-check:** hold the Dependabot entry to every file that pins Kanon ([#1109](https://github.com/yedeya-labs/kanon/issues/1109)) ([7873a81](https://github.com/yedeya-labs/kanon/commit/7873a81d62771bb1bdd683e651c2181c106470de))
+* **lanes:** derive the deploy-diagnose and telemetry Explorer dollar caps from their 40 turns ([#1134](https://github.com/yedeya-labs/kanon/issues/1134)) ([54ab051](https://github.com/yedeya-labs/kanon/commit/54ab051f0de1a28222fa4d839c03d96743336a07))
+* **merge-gate:** read the closing set for this repository, as CI does ([#1133](https://github.com/yedeya-labs/kanon/issues/1133)) ([51671de](https://github.com/yedeya-labs/kanon/commit/51671debd51ad2c463f9c8204f03e79f769b8b0f))
+* **merge-gate:** say how many merged PRs the queue-merge issue check matched, even none ([#1123](https://github.com/yedeya-labs/kanon/issues/1123)) ([5d4a938](https://github.com/yedeya-labs/kanon/commit/5d4a938fe610b6dea31c34f444e9514891a85c09))
+* **merge:** add the PR to the merge queue where one sets the strategy ([#1103](https://github.com/yedeya-labs/kanon/issues/1103)) ([6fd50a2](https://github.com/yedeya-labs/kanon/commit/6fd50a2e08d9ad7d033658d77e4159d6059ca9cf))
+* **merge:** follow a queued PR to its outcome, so an ejected head is escalated, not queued again ([#1114](https://github.com/yedeya-labs/kanon/issues/1114)) ([c9e0842](https://github.com/yedeya-labs/kanon/commit/c9e08425d461a67a1e38cd06d94ccb7f2c2a3940))
+* **pins:** accept a candidate pin wherever an exact release is accepted ([#1073](https://github.com/yedeya-labs/kanon/issues/1073)) ([6dca70f](https://github.com/yedeya-labs/kanon/commit/6dca70fc617ad9fa1d87188e09ce93118ff8878e))
+* **release:** the pin job lists the caller changes a candidate needs, in a draft pin PR ([#1075](https://github.com/yedeya-labs/kanon/issues/1075)) ([3a33cf7](https://github.com/yedeya-labs/kanon/commit/3a33cf7d53657bb7b4be52fccc7ac585ce7c12c4))
+* **telemetry:** a cold intake container retries its first JWKS fetch instead of answering 503 for a minute ([#1070](https://github.com/yedeya-labs/kanon/issues/1070)) ([1c478c6](https://github.com/yedeya-labs/kanon/commit/1c478c638c737d6d91ab4398b65bb6f17412b426))
+* **telemetry:** leave declaring adopters out of the signals' and upgrade lag's three-adopter count ([#1097](https://github.com/yedeya-labs/kanon/issues/1097)) ([f4f9077](https://github.com/yedeya-labs/kanon/commit/f4f9077ce65947cb7ff98c746b3e09579f751c17))
+* **telemetry:** stop writing NAME_HASHES into the ingest function's environment ([#1120](https://github.com/yedeya-labs/kanon/issues/1120)) ([bbcbb4d](https://github.com/yedeya-labs/kanon/commit/bbcbb4dff4be87f357970d5260d0da9c42af205f))
+
+
+### Documentation
+
+* **apps:** register the end-to-end Reporter as an Other App ([#1083](https://github.com/yedeya-labs/kanon/issues/1083)) ([257b6cc](https://github.com/yedeya-labs/kanon/commit/257b6cc03cff9d1655a3c9c6a9cc1fdbe1e1d32d))
+* bring plan 0012's status up to date and count the Owner's own projects on the metrics page ([#1107](https://github.com/yedeya-labs/kanon/issues/1107)) ([2d44715](https://github.com/yedeya-labs/kanon/commit/2d4471598bce01d5709ef1cb557a420e2666f99d))
+* **metrics:** refresh the public metrics page ([#1084](https://github.com/yedeya-labs/kanon/issues/1084)) ([b802cda](https://github.com/yedeya-labs/kanon/commit/b802cdab1c56110645e338de53a4041ea0341529))
+* **metrics:** refresh the public metrics page ([#1127](https://github.com/yedeya-labs/kanon/issues/1127)) ([ae6cba2](https://github.com/yedeya-labs/kanon/commit/ae6cba207c127829ba3a3897e1dcb830c0d692ca))
+* **plans:** plan 0012 counts dispatched runs toward burn-in, and the first gate is the first set ([#1112](https://github.com/yedeya-labs/kanon/issues/1112)) ([6d759a7](https://github.com/yedeya-labs/kanon/commit/6d759a7dc971d695f85da2463e206e6db00e5a5e))
+* **plans:** plan 0012 records E0's items 8 and 17, measured on the subscription token ([#1089](https://github.com/yedeya-labs/kanon/issues/1089)) ([2687ce5](https://github.com/yedeya-labs/kanon/commit/2687ce5638de1d0e4bce3ccd92d7edb4a644d967))
+* **plans:** plan 0012 records E0's results and fixes text found drafting the harness issues ([#1092](https://github.com/yedeya-labs/kanon/issues/1092)) ([c4caf17](https://github.com/yedeya-labs/kanon/commit/c4caf172a00ce1872e34005950e99058d39a6e5a))
+* **plans:** plan 0012 records probe 19's answer and the working values E4 sizes from ([#1096](https://github.com/yedeya-labs/kanon/issues/1096)) ([33267dd](https://github.com/yedeya-labs/kanon/commit/33267dd3fe2a062b40ec385c90dc8825564fecae))
+* **plans:** plan 0012 takes decision 23's fallback, a read-only kanon job ([#1088](https://github.com/yedeya-labs/kanon/issues/1088)) ([5497e14](https://github.com/yedeya-labs/kanon/commit/5497e14f27dd0d2e03e6e7e8366e1a7b8c5358ab))
+* **plans:** plan 0012's harness sends telemetry and upstream findings as an adopter; its scenarios send neither ([#1093](https://github.com/yedeya-labs/kanon/issues/1093)) ([d49e261](https://github.com/yedeya-labs/kanon/commit/d49e261e009d90a4914572a66bff8716871e9417))
+* **plans:** run plan 0012's real-model tier on the Owner's subscription token ([#1082](https://github.com/yedeya-labs/kanon/issues/1082)) ([ff1f521](https://github.com/yedeya-labs/kanon/commit/ff1f5215d75c483b3e6c2d9439cb8c57878f3413))
+
+
+### Tests
+
+* **credential-reach:** follow a shell script's "$HERE/…" run, so lane-check's imports are held to the escalation paths ([#1098](https://github.com/yedeya-labs/kanon/issues/1098)) ([eda0f65](https://github.com/yedeya-labs/kanon/commit/eda0f6524dd58d9a4ad795b21b0e362e9846d3ec))
+
+
+### CI
+
+* **deps:** run Kanon on candidate v0.41.0 ([#1067](https://github.com/yedeya-labs/kanon/issues/1067)) ([632a1df](https://github.com/yedeya-labs/kanon/commit/632a1dfd7e07d7a60f8fe694e9948fb0ad711e97))
+
+
+### Chores
+
+* **adoption:** clear what doctor reports about Kanon's own adoption at v0.40.2 ([#1066](https://github.com/yedeya-labs/kanon/issues/1066)) ([7eb92dc](https://github.com/yedeya-labs/kanon/commit/7eb92dc223770edef65003fb142ddf38ac94004a))
+
 ## [0.41.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.40.0...candidate-v0.41.0) (2026-10-16)
 
 
