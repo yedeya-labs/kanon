@@ -1,6 +1,6 @@
 # Plan 0013: the smoke lifecycle, outside a deploy, one run per environment at a time
 
-- **Status:** proposed 2026-10-20, decisions open. Nothing in this plan is built. It answers [#1147](https://github.com/yedeya-labs/kanon/issues/1147), which asks for four things the deploy lane lacks once an adopter's smoke check writes real data: smoke runs outside a deploy, one smoke run per environment at a time across every trigger, a reset hook before the smoke hook, and "live, smoke failed" as an outcome of its own. Thirteen questions are open for the Owner ([Open questions for the Owner](#open-questions-for-the-owner)). Each has a recommendation.
+- **Status:** decided 2026-10-20. Nothing in this plan is built. It answers [#1147](https://github.com/yedeya-labs/kanon/issues/1147), which asks for four things the deploy lane lacks once an adopter's smoke check writes real data: smoke runs outside a deploy, one smoke run per environment at a time across every trigger, a reset hook before the smoke hook, and "live, smoke failed" as an outcome of its own. The draft asked the Owner thirteen questions. The Owner answered all thirteen on 2026-10-20, each as the draft recommended ([Owner decisions (2026-10-20)](#owner-decisions-2026-10-20)). **S0 and S4 come first:** the probes, then "live, smoke failed" in the existing lane. **S5 to S10 wait** until the adopter's own smoke runs outside a deploy have run for a few weeks, and what they teach is folded in here first (decision 1). `K-SHIP-13` is added (decision 9).
 - **Tracks:** [#1147](https://github.com/yedeya-labs/kanon/issues/1147). **Builds on:** [plan 0010](0010-deployment-lane.md) (the deploy lane: its hooks in §7, its concurrency in §6, what runs after a deploy in §8, the `deploy` row in §10, doctor's checks in §12), [plan 0011](0011-notifications.md) (the `deploy` message kind and its secret, `KANON_CHAT_DEPLOY`) and [plan 0012](0012-end-to-end-tests.md) (the harness's `deploy-rehearsal` scenario, which a new scenario extends). **Amends, once built:** plan 0010 §7 (a fourth hook and a smoke secret), §8 (a smoke failure no longer fails the deploy job) and §10 (the row's `reset` stage), and plan 0011 §3.2 (what a `smoke_failed` announcement says). **Offloads:** the end-to-end scenario, to the harness repository as an issue (S10). **Governed by:** [ADR 0002](../decisions/0002-standardise-dont-parameterise.md), [ADR 0007](../decisions/0007-data-boundary.md), `K-SHIP-9`, `K-SHIP-10`, `K-SHIP-12`, `K-AGENT-47`, `K-AGENT-50`, `K-OBS-16` and `K-PRIN-11` (every guard can fail, and is mutation-checked).
 - **Measured on** Kanon's `origin/main` at `6d9edec4`: `.github/workflows/deploy.yml`, `.github/workflows/deploy-release.yml`, `.github/workflows/agent-deploy-diagnose.yml`, `scripts/deploy-row.mjs`, `scripts/deploy-report.mjs`, `scripts/announce-deploy.mjs`, `scripts/deploy-gate.mjs`, `scripts/lib/deploy-declaration.mjs`, `actions/agent-telemetry/schema.mjs`, `cli/init.mjs` (`deployCallerFile` and the hook stubs), `cli/doctor.mjs` (`deploy.hook-missing`), `requirements.json` (`deploy`), `rulebook/06-shipping.md` (`K-SHIP-7` to `K-SHIP-12`), `rulebook/agent-permissions.json`, `docs/lanes.md` ("The deploy lane"), `docs/notifications.md` ("The deploy announcement"), and plans 0010, 0011 and 0012. The issue was read on 2026-10-20 with its one comment. **GitHub's documentation was not read for this draft.** What the plan says GitHub does is quoted from plan 0010 §6 and §3, which read it on 2026-10-14, or is listed in [§12](#12-what-is-not-confirmed-and-how-each-is-probed) to be probed. No probe has run.
 
@@ -15,7 +15,7 @@
 - **"Live, smoke failed" is its own outcome.** Once the deploy hook succeeds, the deploy job succeeds, so GitHub marks the release deployed. The smoke result is read from the step, and a small `verdict` job fails the call so the chain still stops. The announcement says the release is live and flags the failed smoke. A smoke issue of its own is filed. Nothing rolls back.
 - **A failed scheduled or on-demand run files the same smoke issue and posts the same alert,** so the diagnose lane covers it too.
 
-**How it gets there.** Probes first, in the sandbox, because the design rests on five platform behaviours nobody has measured (§12). Then the "live, smoke failed" outcome in the existing lane, which an adopter is waiting for and which stands on its own. Then the smoke workflow, its caller, doctor's checks and the diagnose lane's reach, in one release. Then a rehearsal and an end-to-end scenario.
+**How it gets there.** Probes first, in the sandbox, because the design rests on platform behaviours nobody has measured, eleven of them listed in §12, two of which (items 1 and 2) decide whether it holds as drawn. Then the "live, smoke failed" outcome in the existing lane, which an adopter is waiting for and which stands on its own. Those two come first. The smoke workflow, its caller, doctor's checks and the diagnose lane's reach wait until the adopter's own smoke runs outside a deploy have run for a few weeks (decision 1), then ship in one release, followed by a rehearsal and an end-to-end scenario.
 
 ## 1. The problem
 
@@ -32,22 +32,22 @@ A smoke check that only reads the deployed system can run at any time, any numbe
 
 | What | Where | What it means for this plan |
 |---|---|---|
-| The smoke hook runs only as the last step of the `deploy` job, after the deploy hook, with `environment`, `role` and `release` | `.github/workflows/deploy.yml:214-220` | No other trigger runs it. Nothing runs before it but the deploy |
-| The `deploy` job holds one concurrency group per environment, `kanon-deploy-<repo>-<environment>`, `cancel-in-progress: false`, `queue: max` | `deploy.yml:132-135` | The group already queues up to 100 pending jobs rather than one ([plan 0010 §6](0010-deployment-lane.md#6-concurrency)). The issue's "only one pending run" is GitHub's default, `queue: single`, which the lane doesn't use |
+| The smoke hook runs only as the last step of the `deploy` job, after the deploy hook, with `environment`, `role` and `release` | `.github/workflows/deploy.yml`, the `deploy` job's `Smoke` step | No other trigger runs it. Nothing runs before it but the deploy |
+| The `deploy` job holds one concurrency group per environment, `kanon-deploy-<repo>-<environment>`, `cancel-in-progress: false`, `queue: max` | `deploy.yml`, the `deploy` job's `concurrency` | The group already queues up to 100 pending jobs rather than one ([plan 0010 §6](0010-deployment-lane.md#6-concurrency)). The issue's "only one pending run" is GitHub's default, `queue: single`, which the lane doesn't use |
 | A job waiting for a reviewer holds the group's slot (measured in plan 0010's D0) | [plan 0010 §6](0010-deployment-lane.md#6-concurrency), [#890](https://github.com/yedeya-labs/kanon/issues/890) | A smoke run in the same group waits behind an unapproved production deploy, and the reverse |
-| The smoke step has no `continue-on-error`, so a smoke failure fails the `deploy` job | `deploy.yml:214-220` | GitHub's deployment for that job is not `success` (assumed, §12 item 1). The next environment's call `needs:` this one, so it doesn't start |
-| The deploy job exposes `deploy-outcome` and `smoke-outcome` | `deploy.yml:149-150` | The record can already tell the two apart |
-| `classifyEnvironment` returns `smoke_failed` at stage `smoke` when the job failed and `smoke-outcome` is `failure`; a cancel after the deploy ended is `cancelled` at `smoke` | `scripts/deploy-row.mjs:132`, `:135` | **The issue's "to verify first" holds for the row:** it tells a smoke failure from a deploy failure. The row's lists already hold both values: `DEPLOY_OUTCOMES` and `DEPLOY_STAGES` at `actions/agent-telemetry/schema.mjs:221` and `:223` |
-| `report` files `smoke_failed` like a failure, on the issue titled `Deploy to <environment> failed`, with the body "deployed, but its smoke check failed" | `scripts/deploy-report.mjs:39`, `:42`, `:66-70` | **Half holds:** the body tells them apart, the title doesn't. The next successful deploy closes it; nothing else does |
-| `announce` reads the record's outcome. For `smoke_failed` it writes a failure message, "`<version>` failed its smoke check on `<environment>`", `critical` on production, `warning` elsewhere | `deploy.yml:332`; `scripts/announce-deploy.mjs:72`, `:185`, `:193-217` | **Half holds:** it isn't "Deploy to production failed", and it isn't skipped. But it doesn't say the release is live, and it lists none of the release's changes, which only the `ok` message does (`buildDeployMessage`, `:134`). The issue's comment says an adopter's own announcement script takes only stage, version and SHA; Kanon's already takes `OUTCOME` |
-| The supersede check and the announcement's range read the environment's last deployment whose latest status is `success` | `scripts/deploy-gate.mjs:477-498`; `announce-deploy.mjs:265` | A release that is live but failed its smoke check isn't "last success" today. So a dispatch back to the release before it isn't flagged `rollback`, and the next deploy's announcement lists the smoke-failed release again |
-| The deploy hook's step alone receives `KANON_DEPLOY_SECRET`; the smoke step receives no secret, and a guard test fails if it does | `deploy.yml:201`; `tests/unit/deploy-lane.test.ts:351-356`, `:402-403` | A smoke check that needs anything beyond the job's OIDC credential has no way to get it |
-| `requirements.json`'s `deploy` entry lists three hooks; the smoke hook's inputs are `environment`, `release`, `role` | `requirements.json` (`deploy.hooks`) | Doctor checks these three (`cli/doctor.mjs:2965-2981`, `deploy.hook-missing`). No reset hook exists |
-| `kanon init` writes the deploy caller from the declared list, with `release` and `workflow_dispatch` triggers only | `cli/init.mjs:2092-2134` (`deployCallerFile`) | No caller has a schedule, and the dispatch means "deploy this release again" |
-| `init`'s smoke stub says only "Checks the deployed system answers as the release expects" | `cli/init.mjs:2194` | — |
-| The diagnose lane finds the issues a failed run filed by the title `Deploy to <environment> failed` and runs on `workflow_run` of the deploy caller | `.github/workflows/agent-deploy-diagnose.yml:14-18` | A smoke issue with another title, or a run of another caller, isn't diagnosed until the lane learns both |
-| The Judge App holds `actions: write` | `rulebook/agent-permissions.json:43` | An agent's token can dispatch a workflow. A smoke dispatch must say who may start it (§11) |
-| `K-SHIP-10` is "Announce each deploy once, and never confuse the two failures" (a failed announcement and a failed deploy) | `rulebook/06-shipping.md:121-123` | A third confusion, a failed smoke check read as a failed deploy, belongs in the same rule |
+| The smoke step has no `continue-on-error`, so a smoke failure fails the `deploy` job | `deploy.yml`, the `Smoke` step | GitHub's deployment for that job is not `success` (assumed, §12 item 1). The next environment's call `needs:` this one, so it doesn't start |
+| The deploy job exposes `deploy-outcome` and `smoke-outcome` | `deploy.yml`, the `deploy` job's `outputs` | The record can already tell the two apart |
+| `classifyEnvironment` returns `smoke_failed` at stage `smoke` when the job failed and `smoke-outcome` is `failure`; a cancel after the deploy ended is `cancelled` at `smoke` | `classifyEnvironment` (`scripts/deploy-row.mjs:117-138`) | **The issue's "to verify first" holds for the row:** it tells a smoke failure from a deploy failure. The row's lists already hold both values: `DEPLOY_OUTCOMES` (`actions/agent-telemetry/schema.mjs:221`) and `DEPLOY_STAGES` (`actions/agent-telemetry/schema.mjs:223`) |
+| `report` files `smoke_failed` like a failure, on the issue titled `Deploy to <environment> failed`, with the body "deployed, but its smoke check failed" | `scripts/deploy-report.mjs`: the outcomes that file, `FILES`; the body's words, `WHAT`; and the title, `issueTitle` (`scripts/deploy-report.mjs:42`) | **Half holds:** the body tells them apart, the title doesn't. The next successful deploy closes it; nothing else does |
+| `announce` reads the record's outcome. For `smoke_failed` it writes a failure message, "`<version>` failed its smoke check on `<environment>`", `critical` on production, `warning` elsewhere | `deploy.yml`, the `announce` job's `OUTCOME`; the `FAILED` list, `failureSeverity` (`scripts/announce-deploy.mjs:185`), `buildFailureMessage` (`scripts/announce-deploy.mjs:193-217`) | **Half holds:** it isn't "Deploy to production failed", and it isn't skipped. But it doesn't say the release is live, and it lists none of the release's changes, which only the `ok` message does: `buildDeployMessage` (`scripts/announce-deploy.mjs:134`). The issue's comment says an adopter's own announcement script takes only stage, version and SHA; Kanon's already takes `OUTCOME` |
+| The supersede check and the announcement's range read the environment's last deployment whose latest status is `success` | `supersede` in `scripts/deploy-gate.mjs`; `previousRelease` (`scripts/announce-deploy.mjs:265`) | A release that is live but failed its smoke check isn't "last success" today. So a dispatch back to the release before it isn't flagged `rollback`, and the next deploy's announcement lists the smoke-failed release again |
+| The deploy hook's step alone receives `KANON_DEPLOY_SECRET`; the smoke step receives no secret, and a guard test fails if it does | `deploy.yml`, the `Deploy` step's `env:`; `tests/unit/deploy-lane.test.ts`, "the hooks get the inputs plan 0010 §7 lists, and the smoke hook never the secret" | A smoke check that needs anything beyond the job's OIDC credential has no way to get it |
+| `requirements.json`'s `deploy` entry lists three hooks; the smoke hook's inputs are `environment`, `release`, `role` | `requirements.json` (`deploy.hooks`) | Doctor checks these three, as `deploy.hook-missing` in `cli/doctor.mjs`. No reset hook exists |
+| `kanon init` writes the deploy caller from the declared list, with `release` and `workflow_dispatch` triggers only | `deployCallerFile` (`cli/init.mjs:2092-2134`) | No caller has a schedule, and the dispatch means "deploy this release again" |
+| `init`'s smoke stub says only "Checks the deployed system answers as the release expects" | `DEPLOY_HOOK_DOES` (`cli/init.mjs:2191-2195`) | — |
+| The diagnose lane finds the issues a failed run filed by the title `Deploy to <environment> failed` and runs on `workflow_run` of the deploy caller | `.github/workflows/agent-deploy-diagnose.yml`, its header and its `gate` job | A smoke issue with another title, or a run of another caller, isn't diagnosed until the lane learns both |
+| The Judge App holds `actions: write` | `rulebook/agent-permissions.json`, the `judge` App's permissions | An agent's token can dispatch a workflow. A smoke dispatch must say who may start it (§11) |
+| `K-SHIP-10` is "Announce each deploy once, and never confuse the two failures" (a failed announcement and a failed deploy) | `rulebook/06-shipping.md` | A third confusion, a failed smoke check read as a failed deploy, belongs in the same rule |
 
 ## 3. What Kanon owns and what the adopter keeps
 
@@ -82,12 +82,13 @@ jobs:
     permissions: { actions: write, contents: read, deployments: read, id-token: write, issues: write }
     with:
       environments: 'staging production'
+      environment: ${{ github.event.inputs.environment }}   # empty on a schedule, where route picks it
     secrets:
       KANON_SMOKE_SECRET: ${{ secrets.KANON_SMOKE_SECRET }}
       KANON_CHAT_DEPLOY: ${{ secrets.KANON_CHAT_DEPLOY }}
 ```
 
-A separate caller, not two more triggers on the deploy caller (open question 2). The deploy caller's dispatch means "deploy this release again", its gate refuses any other dispatch, and doctor's `deploy.caller-mismatch` allows no other job in it.
+A separate caller, not two more triggers on the deploy caller (decision 2). The deploy caller's dispatch means "deploy this release again", its gate refuses any other dispatch, and doctor's `deploy.caller-mismatch` allows no other job in it.
 
 `deploy-smoke.yml` has these jobs:
 
@@ -96,7 +97,7 @@ schedule run (default branch):   route → dispatch
 dispatched run (at a release tag): route → declare → smoke (environment, shared group) → record → report → announce → notify
 ```
 
-- **`route`**, `contents: read` and `actions: read`, no credential. On a schedule, it reads the record's `Smoke schedule` at the run's commit and matches `github.event.schedule` to one environment. On a dispatch, it passes the input through.
+- **`route`**, `contents: read` and `actions: read`, no credential. On a schedule, it reads the record's `Smoke schedule` at the run's commit and matches `github.event.schedule` to one environment. On a dispatch, it passes the workflow's `environment` input through, which the caller maps from the dispatch's input.
 - **`dispatch`**, scheduled runs only, `actions: write` and `deployments: read` alone. It finds the environment's live release ([§4.4](#44-which-release-a-smoke-run-checks)) and dispatches the same caller at that tag with `environment` and `via` set to its own run id. It dispatches nothing when a smoke run for that environment is already pending or running, and says so in the summary, so a stuck queue doesn't fill with one run a night. GitHub starts a run for a `workflow_dispatch` the workflow token makes, as plan 0010 §3 quotes: "With the exception of `workflow_dispatch` and `repository_dispatch`, other `GITHUB_TOKEN`-triggered events do not create workflow runs at all."
 - **`declare`**, `contents: read`, `deployments: read`, `actions: read`, no credential. It refuses, by code, before any reviewer is asked:
 
@@ -115,6 +116,11 @@ dispatched run (at a release tag): route → declare → smoke (environment, sha
 
 A person runs `gh workflow run smoke.yml --ref <live tag> -f environment=<name>`. **At the tag, not the default branch,** for two reasons. Plan 0010 requires each environment's deployment refs to admit the release tags alone (doctor's `deploy.branch-policy`), so a run at the default branch can't enter the environment. And the smoke hook at the live tag is the check that matches the system that is live. The run summary names the command with the live tag filled in, for the next person.
 
+**The run uses the smoke caller at the live tag,** since GitHub runs a dispatched workflow from the file at the ref it is dispatched at. Three things follow.
+- **No smoke run outside a deploy works on an environment until a release that contains `smoke.yml` is deployed there.** After S6, `kanon init` writes the caller on the default branch, but each environment's live tag holds no caller until the next release reaches it. The deploy's own smoke step works throughout. Scheduled runs are routed from the default branch, so they start, and `dispatch` fails by name (`no-caller`) when the live tag has no caller.
+- **After a Kanon upgrade, the smoke workflow in effect on an environment is the one the live tag's caller pins,** not the default branch's, until a release with the new pin is deployed there. The scheduler's own jobs (`route`, `dispatch`) run at the default branch's pin.
+- **`deploy.smoke-caller-mismatch` reads the default branch,** so it can't see the live tag's caller. A second check, `deploy.smoke-caller-live` ([§9](#9-doctor-and-init)), reads the caller at each environment's live tag.
+
 **The environment's protection applies** because the `smoke` job references it: production's required reviewer approves each on-demand production run, or, under the `no-reviewers` fallback, only the Maintainer's dispatch runs it (check 5). A pre-production environment with no reviewer runs as soon as a person dispatches it.
 
 ### 4.3 A schedule per environment
@@ -127,13 +133,13 @@ An optional bullet in the record's `## Deploy` section, one code span per enviro
 
 `kanon init` writes one `schedule:` entry per span into the caller. GitHub runs a schedule only from the default branch's copy of a workflow, so the scheduled run is a router: it never smokes anything itself, it dispatches the on-demand path at the live tag ([§4.1](#41-the-caller-and-the-workflow)). One path then holds every check of §4.1.
 
-**Production may have a schedule** (open question 8). Doctor notes it, since it writes to production on a timer. **An environment with required reviewers may not:** each run would wait for a person and hold the deploy's slot while it waits ([§5](#5-one-run-per-environment-at-a-time)), so doctor blocks it (`deploy.smoke-schedule-reviewers`). Two environments may not share one cron string, because `github.event.schedule` is how `route` tells them apart.
+**Production may have a schedule** (decision 8). Doctor notes it, since it writes to production on a timer. **An environment with required reviewers may not:** each run would wait for a person and hold the deploy's slot while it waits ([§5](#5-one-run-per-environment-at-a-time)), so doctor blocks it (`deploy.smoke-schedule-reviewers`). Two environments may not share one cron string, because `github.event.schedule` is how `route` tells them apart.
 
 ### 4.4 Which release a smoke run checks
 
-**The live release** of an environment is the release of its newest GitHub deployment whose latest status is `success`, read as the supersede check and the announcement already read it (`deploy-gate.mjs:477-498`, `announce-deploy.mjs:265`). With [§7.1](#71-the-deploy-job-succeeds-when-the-deploy-hook-does)'s change, a release that deployed and failed its smoke check is live, which is true. A smoke run's own deployment, if the platform makes one (§12 item 6), is of the live release already, so it doesn't change the answer.
+**The live release** of an environment is the release of its newest GitHub deployment whose latest status is `success`, read as the supersede check and the announcement already read it (`supersede` in `scripts/deploy-gate.mjs`, `previousRelease` in `scripts/announce-deploy.mjs`). With [§7.1](#71-the-deploy-job-succeeds-when-the-deploy-hook-does)'s change, a release that deployed and failed its smoke check is live, which is true. A smoke run's own deployment, if the platform makes one (§12 item 6), is of the live release already, so it doesn't change the answer.
 
-**Under the `no-environments` fallback,** GitHub records no deployment, so the live release can't be read, and no job can be held to an environment's protection. Smoke runs outside a deploy aren't offered there in this plan (open question 13). The deploy's own smoke step runs as today.
+**Under the `no-environments` fallback,** GitHub records no deployment, so the live release can't be read, and no job can be held to an environment's protection. Smoke runs outside a deploy aren't offered there (decision 13). The deploy's own smoke step runs as today.
 
 ## 5. One run per environment at a time
 
@@ -152,20 +158,26 @@ What is not known: whether two jobs of **different workflows** that name the sam
 **Every job that resets or smokes an environment joins the deploy job's group:**
 
 ```yaml
+# deploy.yml's deploy job, as today:
 concurrency:
   group: kanon-deploy-${{ github.repository }}-${{ inputs.environment }}
   cancel-in-progress: false
   queue: max
+# deploy-smoke.yml's smoke job:
+concurrency:
+  group: kanon-deploy-${{ github.repository }}-${{ needs.declare.outputs.environment }}
+  cancel-in-progress: false
+  queue: max
 ```
 
-That is `deploy.yml`'s `deploy` job, as today, and `deploy-smoke.yml`'s `smoke` job. **The reset and the smoke hook run inside a job that holds the slot,** in both workflows, so no reset starts while another run is mid-check. No other job of either workflow holds a group: `route`, `dispatch`, `declare`, `record`, `report`, `announce` and `notify` touch nothing of the environment's.
+That is `deploy.yml`'s `deploy` job, whose `environment` input is the one the deploy caller passes, and `deploy-smoke.yml`'s `smoke` job, whose environment is `declare`'s `environment` output: the workflow's `environment` input once `declare` has checked it is declared, never empty (check 2 refuses an empty or undeclared one). Both are the environment's name exactly as the record's `## Deploy` list spells it, so both jobs resolve to one key, `kanon-deploy-<repo>-<environment>`. The `smoke` job's `environment:` key reads the same output. **The reset and the smoke hook run inside a job that holds the slot,** in both workflows, so no reset starts while another run is mid-check. No other job of either workflow holds a group: `route`, `dispatch`, `declare`, `record`, `report`, `announce` and `notify` touch nothing of the environment's.
 
-**A guard test holds the shape** (S5): each of the two jobs names exactly that group, with `queue: max` and `cancel-in-progress: false`, and no job anywhere in Kanon's workflows names a `kanon-deploy-` group with any other setting. A `queue: single` job that joined could cancel a pending deploy, which is the one thing the issue forbids.
+**A guard test holds the shape** (S5): rendered for one environment, both jobs' groups resolve to the same `kanon-deploy-<repo>-<environment>` key, each with `queue: max` and `cancel-in-progress: false`, and no job anywhere in Kanon's workflows names a `kanon-deploy-` group with any other setting. A `queue: single` job that joined could cancel a pending deploy, which is the one thing the issue forbids.
 
 ### 5.3 What a queued run does when it starts
 
 - **A smoke run queued behind a deploy** starts after the deploy, at a tag that is no longer live. It refuses `superseded` once it holds the slot. The deploy's own smoke step just checked the new release, so nothing is lost. The row says so ([§8](#8-telemetry)), and nothing is filed or announced.
-- **A deploy queued behind a smoke run** starts once the smoke run ends. It waits at most the smoke job's limit (`timeout-minutes`, 60 by default, open question 3), plus its approval wait if the smoke run is on an environment with reviewers.
+- **A deploy queued behind a smoke run** starts once the smoke run ends. It waits at most the smoke job's limit (`timeout-minutes`, 60 by default, which the record may change, decision 3), plus its approval wait if the smoke run is on an environment with reviewers.
 - **Two smoke runs** run one after the other. Each resets first, so neither sees the other's data.
 - **A queue that runs out of order** changes nothing. Each holder resets first, and the deploy's supersede check already covers a deploy that runs before an older one.
 
@@ -188,9 +200,9 @@ This is weaker: the check and the start are two reads, so a race of seconds rema
 
 **`.github/actions/smoke-reset/action.yml`,** a composite action the adopter writes, with the smoke hook's inputs, `environment`, `role` and `release`. **Optional:** when the file is absent, the lane skips the step and says so in the summary. Doctor notes its absence wherever a smoke run can happen outside a deploy ([§9](#9-doctor-and-init)).
 
-**Where it runs:** in the same job as the smoke hook, just before it, in both workflows. In `deploy.yml` that is after the deploy hook. **With what:** the job's OIDC credential, which the hook obtains itself as the deploy hook does, and the smoke secret, if open question 6 adds it. Nothing else.
+**Where it runs:** in the same job as the smoke hook, just before it, in both workflows. In `deploy.yml` that is after the deploy hook. **With what:** the job's OIDC credential, which the hook obtains itself as the deploy hook does, and the smoke secret, `KANON_SMOKE_SECRET` (decision 6). Nothing else.
 
-**What its failure means:** the smoke hook doesn't run, since its data is in an unknown state. The outcome is the smoke check's failure, at a stage of its own, `reset` (open question 12): after a deploy, "live, smoke failed" at `reset`; in a smoke-only run, `failed` at `reset`. A reset failure on production is as urgent as a smoke failure, because the fixtures may now be visible to the product.
+**What its failure means:** the smoke hook doesn't run, since its data is in an unknown state. The outcome is the smoke check's failure, at a stage of its own, `reset` (decision 12): after a deploy, "live, smoke failed" at `reset`; in a smoke-only run, `failed` at `reset`. A reset failure on production is as urgent as a smoke failure, because the fixtures may now be visible to the product.
 
 **What Kanon passes it, as environment variables, beside its inputs:** `KANON_SMOKE_TRIGGER`, one of `deploy`, `schedule` or `dispatch`, so the adopter can run a lighter tier on a schedule. Both hooks get it. It is an environment variable, not an input, so smoke hooks written before this plan stay valid: doctor's `deploy.hook-missing` checks declared inputs.
 
@@ -214,7 +226,7 @@ In `deploy.yml`'s `deploy` job, the reset and smoke steps get `continue-on-error
 | **GitHub's deployment** | not `success` | `success` (§12 item 1) |
 | **The chain** | stops | stops, through `verdict` |
 | **`record`, the `deploy` row** | `outcome: failed`, `failed_stage: deploy` | `outcome: smoke_failed`, `failed_stage: smoke`, or `reset` (new), with `smoke_ms` and the new `reset_ms` ([§8](#8-telemetry)) |
-| **`report`, the issue** | files or comments on `Deploy to <environment> failed` | files or comments on **`Smoke check on <environment> failed`**, a title of its own (open question 4), and **closes** `Deploy to <environment> failed` if one is open, since the deploy succeeded. Labels as today: `bug`, and `sev:high` on production, `sev:medium` elsewhere. Body: the release, "is live on `<environment>`, but its smoke check failed at the `<stage>` stage", the run, and the on-demand command to run it again |
+| **`report`, the issue** | files or comments on `Deploy to <environment> failed` | files or comments on **`Smoke check on <environment> failed`**, a title of its own (decision 4), and **closes** `Deploy to <environment> failed` if one is open, since the deploy succeeded. Labels as today: `bug`, and `sev:high` on production, `sev:medium` elsewhere. Body: the release, "is live on `<environment>`, but its smoke check failed at the `<stage>` stage", the run, and the on-demand command to run it again |
 | **`announce`, the message** | `critical` on production, `warning` elsewhere: "`<version>` failed to deploy to `<environment>`" | **One message, the landed one, flagged.** The title "`<version>` is live on `<environment>`, and its smoke check failed". The same Features, Fixes and Maintenance sections an `ok` deploy gets, so nobody misses what went live. A field "Smoke check: failed at `<stage>`" and the smoke issue's link. `critical` on production, `warning` elsewhere. It is never skipped, and never reads "failed to deploy" |
 | **`notify`** | posts through the hook with `KANON_CHAT_DEPLOY` | the same |
 | **Rollback** | none | none. A person decides, and a dispatch of the release before it is flagged `rollback: true`, since the smoke-failed release is now the environment's last success |
@@ -233,17 +245,17 @@ In `deploy.yml`'s `deploy` job, the reset and smoke steps get `continue-on-error
 | `rejected` | a reviewer rejected the `smoke` job | none | none | `smoke_check`, `rejected` |
 | `cancelled` | a person, or the run's limits | none | none | `smoke_check`, `cancelled` |
 
-**Which message kind** a smoke-only run posts is open question 5. The recommendation is the `deploy` kind and its secret, `KANON_CHAT_DEPLOY`, so the people who get the deploy announcements get its alerts, and the adopter stores no new secret. Plan 0011's contract gains one `source.lane` value, `deploy-smoke`, and the `notify` row's lane `smoke-announce`, since `deploy` is the deploy rows' partition.
+**The message kind** a smoke-only run posts is the `deploy` kind and its secret, `KANON_CHAT_DEPLOY` (decision 5), so the people who get the deploy announcements get its alerts, and the adopter stores no new secret. Plan 0011's contract gains one `source.lane` value, `deploy-smoke`, and the `notify` row's lane `smoke-announce`, since `deploy` is the deploy rows' partition.
 
 ## 8. Telemetry
 
 **The `deploy` row** (plan 0010 §10) gains the stage `reset` in `DEPLOY_STAGES` and a `reset_ms` count. Whether that is version 2 of the row or an addition to version 1 follows the schema's own rule for a new field; the store's intake ships first either way (`docs/telemetry.md`, as plan 0010's D9 did).
 
-**A new row kind, `smoke_check`,** version 1, for runs of `deploy-smoke.yml` (open question 7), stored under `<key>#smoke_check`. Every field is a number, a time, a boolean or a value from a closed list (ADR 0007, `K-OBS-16`):
+**A new row kind, `smoke_check`,** version 1, for runs of `deploy-smoke.yml` (decision 7), stored under `<key>#smoke_check`. Every field is a number, a time, a boolean or a value from a closed list (ADR 0007, `K-OBS-16`):
 
 | Field | Type | What |
 |---|---|---|
-| `schema_version`, `row_kind`, `tag`, `recorded_at`, `run_id`, `run_attempt`, `kanon_version` | as the `deploy` row | `row_kind: smoke_check`. The name isn't `smoke`, which is already a value of `tag` (`schema.mjs:86`) |
+| `schema_version`, `row_kind`, `tag`, `recorded_at`, `run_id`, `run_attempt`, `kanon_version` | as the `deploy` row | `row_kind: smoke_check`. The name isn't `smoke`, which is already a value of `tag`, in the `TAGS` list of `actions/agent-telemetry/schema.mjs` |
 | `trigger` | `schedule` or `workflow_dispatch` | a scheduled run's own dispatch records `schedule`, read from `via` |
 | `role`, `position` | as the `deploy` row | never the environment's name |
 | `outcome` | `ok`, `failed`, `refused`, `rejected`, `cancelled` | |
@@ -259,9 +271,9 @@ In `deploy.yml`'s `deploy` job, the reset and smoke steps get `continue-on-error
 ## 9. Doctor and init
 
 **`kanon init`** (S6):
-- writes `.github/workflows/smoke.yml` whenever it writes the deploy caller, pinned at the same release, with the dispatch trigger and one `schedule:` entry per span of the record's `Smoke schedule` (open question 2 decides whether it is written always, or only when asked);
+- writes `.github/workflows/smoke.yml` whenever it writes the deploy caller, pinned at the same release, with the dispatch trigger and one `schedule:` entry per span of the record's `Smoke schedule` (always, decision 2);
 - writes no stub for the reset hook. An optional hook with a stub that fails would force every adopter to write one. Doctor's note says when one matters;
-- maps `KANON_SMOKE_SECRET` (if open question 6 adds it) and `KANON_CHAT_DEPLOY` by their names, as `deployCallerFile` maps the deploy job's;
+- maps `KANON_SMOKE_SECRET` (decision 6) and `KANON_CHAT_DEPLOY` by their names, as `deployCallerFile` maps the deploy job's;
 - asks no new install question. The schedule is the adopter's later edit to the record, then `kanon init` again, which rewrites the caller as it rewrites the deploy caller. That keeps the Owner's install-questions decision of 2026-10-10 as plan 0010 left it;
 - gets a `--smoke-schedule '<environment> <cron>'` flag, repeated per environment, which writes the bullet.
 
@@ -270,6 +282,7 @@ In `deploy.yml`'s `deploy` job, the reset and smoke steps get `continue-on-error
 | Id | Blocks | Holds when | Read from |
 |---|---|---|---|
 | `deploy.smoke-caller-mismatch` | yes | the smoke caller exists, calls `deploy-smoke.yml` at the deploy caller's release with the declared list, maps no secret but its two, and its crons are exactly the record's `Smoke schedule`. The fix is `kanon init` | the checkout |
+| `deploy.smoke-caller-live` | no | each declared environment's live tag holds a smoke caller, and it pins the same Kanon release as the default branch's. A note naming the environment when it holds none (no smoke run outside a deploy works there until a release with the caller is deployed) or pins another release (that release's smoke workflow is the one in effect there) ([§4.2](#42-on-demand-behind-the-environments-protection)) | `GET repos/{o}/{r}/contents/.github/workflows/smoke.yml?ref=<live tag>`, the live tag read as [§4.4](#44-which-release-a-smoke-run-checks) says |
 | `deploy.smoke-schedule` | yes | the bullet parses: each span names a declared environment, once, with a five-field cron, and no two spans share a cron string | `scripts/lib/deploy-declaration.mjs` |
 | `deploy.smoke-schedule-reviewers` | yes | no scheduled environment has a required-reviewers rule ([§4.3](#43-a-schedule-per-environment)) | `GET repos/{o}/{r}/environments` |
 | `deploy.smoke-schedule-production` | no | production has no schedule; with one, the note says it writes to production on a timer | the declaration |
@@ -286,29 +299,29 @@ In `deploy.yml`'s `deploy` job, the reset and smoke steps get `continue-on-error
 | Where | Change | Step |
 |---|---|---|
 | `K-SHIP-10` | The rule's title and text name a third confusion: a failed smoke check after a landed deploy is announced as live and flagged, never as a failed deploy, and never skipped. "Enforced by" names `announce-deploy.mjs`'s test | S1, S4 |
-| `K-SHIP-12` | Names `deploy-smoke.yml` beside the two deploy workflows: no model, the cloud credential only in its `smoke` job, which references the environment. The secrets list gains `KANON_SMOKE_SECRET`, to the reset and smoke steps alone, if open question 6 adds it | S1, S5 |
-| `K-AGENT-47` | Plan 0010's one-sentence exception for `KANON_DEPLOY_SECRET` names the second fixed environment secret, if added | S1 |
+| `K-SHIP-12` | Names `deploy-smoke.yml` beside the two deploy workflows: no model, the cloud credential only in its `smoke` job, which references the environment. The secrets list gains `KANON_SMOKE_SECRET`, to the reset and smoke steps alone (decision 6) | S1, S5 |
+| `K-AGENT-47` | Plan 0010's one-sentence exception for `KANON_DEPLOY_SECRET` names the second fixed environment secret, `KANON_SMOKE_SECRET` (decision 6) | S1 |
 | `K-AGENT-50` | Its guard's list of jobs that run the default branch's reviewed code gains `deploy-smoke.yml`'s `smoke` job, which runs the release tag's hooks with a credential. `route`, `dispatch` and `declare` run no hook | S5 |
 | `K-LAYOUT-1` | The reset hook's path, the smoke caller's path | S1 |
 | `K-LAYOUT-10`, the `## Deploy` section | The optional `Smoke schedule` bullet | S1 |
 | `K-OBS-16`, ADR 0007 | The `smoke_check` row's allowed fields; the `deploy` row's `reset` stage and `reset_ms` | S2 |
-| **`K-SHIP-13`, new, if the Owner wants it** (open question 9) | "A production deploy is followed by a smoke check, and smoke data lives where the product can't see it." Class split: the lane runs the check, doctor notes a no-op hook; the project supplies the check and the fixtures' isolation, which stays prose | S1 |
+| **`K-SHIP-13`, new** (decision 9) | "A production deploy is followed by a smoke check, and smoke data lives where the product can't see it." Class split: the lane runs the check, doctor notes a no-op hook; the project supplies the check and the fixtures' isolation, which stays prose | S1 |
 | plan 0010 | §7 (four hooks, the smoke secret), §8 (a smoke failure leaves the deploy job green and stops the chain through `verdict`; the smoke issue), §10 (the `reset` stage), D12 (retry by an on-demand run, not "Re-run failed jobs"). A line at the top points here | S4 |
 | plan 0011 | §3.2: what a `smoke_failed` message says; the `deploy-smoke` lane value | S4, S5 |
 | `docs/lanes.md`, `docs/lanes.json` | "The deploy lane": the reset hook in the hooks table, "live, smoke failed", how to retry a smoke check; a new section, "Smoke runs outside a deploy": the caller, the two triggers, the shared group, the refusals | S4, S5 |
 | `docs/notifications.md` | "The deploy announcement": the flagged landed message; smoke-only alerts | S4, S5 |
 | `docs/doctor.md`, `skills/doctor` | [§9](#9-doctor-and-init)'s rows | S7 |
 | `docs/init.md`, `docs/install.md`, `README.md`, `docs/architecture.md` | The smoke caller, the `Smoke schedule` bullet and `--smoke-schedule`; the reset hook as optional | S6 |
-| `skills/upgrade` | An upgrade to S4's release: a smoke failure no longer turns the deploy job red, and the retry is an on-demand run; to S5's: run `kanon init` to get the smoke caller | S4, S6 |
+| `skills/upgrade` | An upgrade to S4's release: a smoke failure no longer turns the deploy job red, and the retry is an on-demand run; to S5's: run `kanon init` to get the smoke caller, and know that smoke runs outside a deploy work on an environment only once a release containing it is deployed there, and that after each later Kanon upgrade an environment runs the smoke workflow its live tag's caller pins until the next deploy (`deploy.smoke-caller-live` says which) | S4, S6 |
 | `docs/telemetry.md` | The `smoke_check` row in the ingest function | S3 |
 
 ## 11. Threat model
 
-- **Who can start a smoke run.** Anyone who can dispatch a workflow: write access, or an App token with `actions: write`. **Kanon's Judge App holds `actions: write`** (`rulebook/agent-permissions.json:43`), so an agent could dispatch one. `declare` admits only a person, read from the attempt's triggering actor's account type, or the workflow token with a `via` naming a scheduled run of this caller on the default branch (check 4, open question 10). An App's dispatch is refused `not-person`. **The `via` check is not a secret:** another workflow in the repository with `actions: write` on the workflow token could copy a recent `via`. It can only start a smoke run that a schedule had just started, at the live release, behind the environment's rules, so the worst it buys is a second check of the same release.
+- **Who can start a smoke run.** Anyone who can dispatch a workflow: write access, or an App token with `actions: write`. **Kanon's Judge App holds `actions: write`** (the `judge` App in `rulebook/agent-permissions.json`), so an agent could dispatch one. `declare` admits only a person, read from the attempt's triggering actor's account type, or the workflow token with a `via` naming a scheduled run of this caller on the default branch (check 4, decision 10). An App's dispatch is refused `not-person`. **The `via` check is not a secret:** another workflow in the repository with `actions: write` on the workflow token could copy a recent `via`. It can only start a smoke run that a schedule had just started, at the live release, behind the environment's rules, so the worst it buys is a second check of the same release.
 - **What protects production.** Production's required reviewer approves every on-demand production run, as it approves every deploy. Under `no-reviewers`, only the Maintainer's dispatch passes (check 5). A schedule on an environment with reviewers is blocked ([§4.3](#43-a-schedule-per-environment)), so a schedule never waits for a reviewer.
 - **What is weaker.** A pre-production environment with no reviewer runs a smoke check, and so writes data, for any person with write access who dispatches one. That is the same reach they have over a deploy to it today, through a release. Doctor's `deploy.reviewers-missing` already notes which environments have no reviewer.
 - **What the credential meets.** The `smoke` job holds `id-token: write` and the environment's OIDC subject, so the smoke and reset hooks can obtain **the same cloud role the deploy hook does.** That is true today inside the deploy job too. The hooks are the release tag's code, on the default branch, reviewed (`K-MERGE-4` escalates every file under `.github/`). A smoke role narrower than the deploy role would have to be told apart from it by something other than the subject, since both jobs carry the same one; whether a trust policy can read the workflow claim for that is §12 item 9, and the docs would suggest it only if it can.
-- **Secrets in the smoke job.** Today the smoke step gets none, and a guard test holds that (`deploy-lane.test.ts:402-403`). A smoke check that signs up a fake tenant may need a sandbox key or a test account's password the cloud role can't give. Open question 6 proposes one fixed name, `KANON_SMOKE_SECRET`, an environment secret, passed as `env:` to the reset and smoke steps alone, never to the deploy hook. `KANON_DEPLOY_SECRET` never reaches them. The chat secret reaches `notify` alone, as today. The guard test is extended to all three in both workflows.
+- **Secrets in the smoke job.** Today the smoke step gets none, and a guard test in `tests/unit/deploy-lane.test.ts` holds that. A smoke check that signs up a fake tenant may need a sandbox key or a test account's password the cloud role can't give. Decision 6 adds one fixed name, `KANON_SMOKE_SECRET`, an environment secret, passed as `env:` to the reset and smoke steps alone, never to the deploy hook. `KANON_DEPLOY_SECRET` never reaches them. The chat secret reaches `notify` alone, as today. The guard test is extended to all three in both workflows.
 - **No model.** `deploy-smoke.yml` runs no agent, holds no Claude credential and no App key: `K-SHIP-12`'s guard covers it. The diagnose lane runs separately, after a failure, read-only, as today.
 - **What the logs hold.** A smoke log can name the fake tenant and sandbox details. The issue, the message and the row hold none of it: the issue links the run, it doesn't quote it. The diagnose lane reads logs only where the adopter's `## Data` answer allows it, as today.
 
@@ -332,33 +345,34 @@ S0 probes each in the sandbox repository, as plan 0010's D0 did, and records the
 
 ## 13. Order of moves
 
-**Touches** names each step's files, to show which steps may run at once. **S4 ships on its own,** in the first release it is ready for: it changes only the existing lane, and an adopter is waiting for it. **S5 to S8 ship in one release,** so no adopter pins a smoke workflow without its caller and its checks.
+**Touches** names each step's files, to show which steps may run at once. **S0 and S4 come first** (decision 1), with S1 to S3 only as far as S4 needs them: the probes, then "live, smoke failed" and the reset hook in the existing lane, which ships on its own, in the first release it is ready for. **S5 to S10 wait** until the adopter's own smoke runs outside a deploy have run for a few weeks; what they teach is folded into this plan before S5 starts. **S5 to S8 then ship in one release,** so no adopter pins a smoke workflow without its caller and its checks.
 
 | Step | Where | What | Touches | What must be true | Mutation |
 |---|---|---|---|---|---|
-| **S0** | the sandbox repository, by a maintainer | **The probes** of [§12](#12-what-is-not-confirmed-and-how-each-is-probed), with throwaway workflows and trivial hooks, no cloud | none in Kanon; results in S0's issue | each of §12's answers is recorded with the run's link. If item 1 or 2 fails, this plan is amended before S4 or S5 is built | — (a measurement) |
-| **S1** | Kanon | **The rules and the declaration:** `K-SHIP-10`, `K-SHIP-12`, `K-AGENT-47`, `K-LAYOUT-1`, `K-LAYOUT-10` (and `K-SHIP-13` if decided); the `Smoke schedule` bullet in `scripts/lib/deploy-declaration.mjs` | `rulebook/06-shipping.md`, `rulebook/03-agents.md`, `rulebook/11-repository-layout.md`, `actions/agent-telemetry/schema.mjs` (`RULE_IDS` only, if `K-SHIP-13`), `scripts/lib/deploy-declaration.mjs`, `tests/unit/deploy-declaration.test.ts` | `rulebook-why.test.ts` passes; the parser reads one and two spans, refuses an undeclared environment, an environment twice, a cron of four or six fields, two equal crons, and an empty span, each by line | dropping the undeclared-environment check turns its test red |
+| **S0** | the sandbox repository, by a maintainer, **first** (decision 1) | **The probes** of [§12](#12-what-is-not-confirmed-and-how-each-is-probed), with throwaway workflows and trivial hooks, no cloud | none in Kanon; results in S0's issue | each of §12's answers is recorded with the run's link. If item 1 or 2 fails, this plan is amended before S4 or S5 is built | — (a measurement) |
+| **S1** | Kanon | **The rules and the declaration:** `K-SHIP-10`, `K-SHIP-12`, `K-AGENT-47`, `K-LAYOUT-1`, `K-LAYOUT-10` and `K-SHIP-13` (decision 9); the `Smoke schedule` bullet in `scripts/lib/deploy-declaration.mjs` | `rulebook/06-shipping.md`, `rulebook/03-agents.md`, `rulebook/11-repository-layout.md`, `actions/agent-telemetry/schema.mjs` (`RULE_IDS` only, for `K-SHIP-13`), `scripts/lib/deploy-declaration.mjs`, `tests/unit/deploy-declaration.test.ts` | `rulebook-why.test.ts` passes; the parser reads one and two spans, refuses an undeclared environment, an environment twice, a cron of four or six fields, two equal crons, and an empty span, each by line | dropping the undeclared-environment check turns its test red |
 | **S2** | Kanon | **The rows:** `reset` in `DEPLOY_STAGES` and `reset_ms`; the `smoke_check` kind; the ingest function refuses `smoke_check` until S3 | `actions/agent-telemetry/schema.mjs`, `infra/telemetry/function/rows.mjs` (`STORED_KINDS`), `tests/unit/telemetry-schema.test.ts`, `tests/unit/telemetry-ingest.test.ts` | a valid `smoke_check` row validates; one with an `environment`, `release`, `sha` or `url` field is rejected naming it; `refusal` without `refused`, or `failed_stage` with `ok`, is rejected; the ingest function answers it with 422 until S3 | admitting an `environment` field turns its test red |
 | **S3** | Kanon, **a release, then the Owner deploys intake from it** | **The store takes the rows:** `smoke_check` in `STORED_KINDS` and `PARTITIONS`; the erasure walk; the collector's artifact family | `infra/telemetry/function/rows.mjs`, `infra/telemetry/erase.mjs`, `scripts/telemetry-collect.mjs`, `scripts/lib/telemetry-artifacts.mjs`, `docs/telemetry.md`, their tests | S2 is merged. A `smoke_check` row lands in its partition; an erasure leaves it empty; `intake-first.mjs` names the change, so the intake deploy precedes the release that writes the rows | an erasure walk that skips the partition fails the erasure test |
-| **S4** | Kanon, **its own release** | **Live, smoke failed, and the reset hook, in the existing lane** ([§6](#6-the-reset-hook), [§7.1](#71-the-deploy-job-succeeds-when-the-deploy-hook-does), [§7.2](#72-what-each-job-says)): `continue-on-error` on the reset and smoke steps; the reset step, skipped when the hook is absent; `reset-outcome`; the `verdict` job; `classifyEnvironment` reads the step outcomes before `ok`; the smoke issue's title and the deploy issue's close; the flagged landed message; `KANON_SMOKE_TRIGGER`; the diagnose lane finds the smoke issue's title | `.github/workflows/deploy.yml`, `scripts/deploy-row.mjs`, `scripts/deploy-report.mjs`, `scripts/announce-deploy.mjs`, `scripts/deploy-diagnose.mjs`, `requirements.json` (the optional fourth hook), `tests/unit/deploy-lane.test.ts`, `tests/library/announce-deploy.test.ts`, `tests/unit/deploy-diagnose.test.ts`, `requirements.test.ts`, `docs/lanes.md`, `docs/notifications.md`, plans 0010 and 0011, `skills/upgrade` | S0's items 1 and 7 hold, or §7.1 is amended; S3's intake is deployed, since the row's `reset` stage is new. The lane test: the `deploy` job concludes success with a failed smoke step, and `verdict` fails the call; a later environment doesn't start; the row is `smoke_failed` at `smoke`, or at `reset` with the smoke step not run; `report` files on `Smoke check on <environment> failed` and closes `Deploy to <environment> failed`; the message is the landed one with its sections, titled "is live … and its smoke check failed", `critical` on production; no reset step runs when the hook is absent; neither hook's step references `KANON_DEPLOY_SECRET` | leaving `continue-on-error` off the smoke step turns the success test red; dropping `verdict` turns the chain test red; classifying `ok` before reading the smoke outcome turns the row test red; announcing a `smoke_failed` with the failure template turns the message test red |
-| **S5** | Kanon, the smoke release | **The smoke workflow** ([§4](#4-smoke-outside-a-deploy), [§5](#5-one-run-per-environment-at-a-time), [§7.3](#73-a-smoke-only-runs-outcomes)): `deploy-smoke.yml` with `route`, `dispatch`, `declare`, `smoke`, `record`, `report`, `announce`, `notify`; `scripts/smoke-gate.mjs` (the route, the scheduler, the five checks, `superseded`); the smoke-only row, issue and message; the shared group's guard | `.github/workflows/deploy-smoke.yml` (new), `scripts/smoke-gate.mjs` (new), `scripts/deploy-row.mjs`, `scripts/deploy-report.mjs`, `scripts/announce-deploy.mjs`, `scripts/lib/notify-contract.mjs` (the lane value), `requirements.json`, `docs/lanes.md`, `docs/lanes.json`, `docs/notifications.md`, `rulebook/03-agents.md` (`K-AGENT-50`'s list), `tests/unit/deploy-smoke.test.ts` (new), `smoke-gate.test.ts` (new), `id-token-guard.test.ts`, `app-key-isolation.test.ts`, `pr-code-token-isolation.test.ts`, `requirements.test.ts`, `lanes-doc.test.ts` | S0's items 2, 5 and 6 hold, or §5.5 and §4.4 are applied first; S1 to S4 are merged. On fixtures: each refusal of §4.1 by its code; a scheduled run dispatches at the live tag and nothing when a run is pending; a run whose tag stopped being live refuses `superseded` after the slot; `smoke` and `deploy.yml`'s `deploy` name one group with `queue: max`; `id-token: write` on `smoke` alone; no agent, no App key; `dispatch` holds `actions: write` and nothing else | a `queue: single` job in a `kanon-deploy-` group turns the guard red; admitting an App's dispatch turns the `not-person` test red; `id-token` on `route` turns `id-token-guard` red |
-| **S6** | Kanon, the smoke release | **`kanon init` writes the smoke caller** and `--smoke-schedule` ([§9](#9-doctor-and-init)) | `cli/init.mjs`, `tests/unit/kanon-init.test.ts`, `docs/init.md`, `docs/install.md`, `README.md`, `docs/architecture.md`, `skills/upgrade` | S5 is merged. The caller pins the deploy caller's release, has the dispatch trigger and one cron per span, maps only its two secrets, and is rewritten when the bullet changes; no declaration writes no caller; no reset stub is written | a caller written with `secrets: inherit` turns its test red |
-| **S7** | Kanon, the smoke release | **Doctor's checks** ([§9](#9-doctor-and-init)) | `cli/doctor.mjs`, `docs/doctor.md`, `skills/doctor`, `tests/unit/kanon-doctor-deploy.test.ts` | S6 is merged. Each id is reported on a stubbed answer and quiet on `init`'s own output; `deploy.smoke-schedule-reviewers` blocks a schedule on an environment with reviewers; `deploy.smoke-noop` notes `init`'s stub and an `exit 0` hook, and is quiet on a hook that runs a script | a `smoke-noop` that blocks turns its test red |
-| **S8** | Kanon, the smoke release | **The diagnose lane follows the smoke caller** | `.github/workflows/agent-deploy-diagnose.yml`, `cli/init.mjs` (its caller's `workflows:`), `tests/unit/deploy-diagnose.test.ts`, `docs/lanes.md` | S5 is merged. A failed smoke caller's run is diagnosed on its smoke issue; with open question 11's recommendation, only when the run filed the issue, not when it commented | a diagnosis on every comment turns its test red |
-| **S9** | the sandbox repository, by a maintainer | **The rehearsal:** the released lane, two environments, trivial hooks with a reset that writes a file and a smoke check that reads it | none in Kanon; the runs' links in S9's issue | S5 to S8 are released. A deploy whose pre-production smoke fails is announced live and flagged, files the smoke issue, and stops before production; an on-demand run passes and closes it; a scheduled run dispatches at the live tag; an on-demand production run queued behind a waiting production deploy waits, then refuses `superseded`; a deploy queued behind a running smoke run waits for it and cancels nothing; doctor reports no blocking `deploy.*` finding | — (live) |
-| **S10** | **offloaded to the harness repository as an issue** | **An end-to-end scenario,** `smoke-lifecycle`, repeating S9 on every candidate, without production's approval (plan 0012 decision 9) | none in Kanon | S9 is green | — |
+| **S4** | Kanon, **its own release, first** (decision 1) | **Live, smoke failed, and the reset hook, in the existing lane** ([§6](#6-the-reset-hook), [§7.1](#71-the-deploy-job-succeeds-when-the-deploy-hook-does), [§7.2](#72-what-each-job-says)): `continue-on-error` on the reset and smoke steps; the reset step, skipped when the hook is absent; `reset-outcome`; the `verdict` job; `classifyEnvironment` reads the step outcomes before `ok`; the smoke issue's title and the deploy issue's close; the flagged landed message; `KANON_SMOKE_TRIGGER`; the diagnose lane finds the smoke issue's title | `.github/workflows/deploy.yml`, `scripts/deploy-row.mjs`, `scripts/deploy-report.mjs`, `scripts/announce-deploy.mjs`, `scripts/deploy-diagnose.mjs`, `requirements.json` (the optional fourth hook), `tests/unit/deploy-lane.test.ts`, `tests/library/announce-deploy.test.ts`, `tests/unit/deploy-diagnose.test.ts`, `requirements.test.ts`, `docs/lanes.md`, `docs/notifications.md`, plans 0010 and 0011, `skills/upgrade` | S0's items 1 and 7 hold, or §7.1 is amended; S3's intake is deployed, since the row's `reset` stage is new. The lane test: the `deploy` job concludes success with a failed smoke step, and `verdict` fails the call; a later environment doesn't start; the row is `smoke_failed` at `smoke`, or at `reset` with the smoke step not run; `report` files on `Smoke check on <environment> failed` and closes `Deploy to <environment> failed`; the message is the landed one with its sections, titled "is live … and its smoke check failed", `critical` on production; no reset step runs when the hook is absent; neither hook's step references `KANON_DEPLOY_SECRET` | leaving `continue-on-error` off the smoke step turns the success test red; dropping `verdict` turns the chain test red; classifying `ok` before reading the smoke outcome turns the row test red; announcing a `smoke_failed` with the failure template turns the message test red |
+| **S5** | Kanon, the smoke release, **waits** (decision 1) | **The smoke workflow** ([§4](#4-smoke-outside-a-deploy), [§5](#5-one-run-per-environment-at-a-time), [§7.3](#73-a-smoke-only-runs-outcomes)): `deploy-smoke.yml` with `route`, `dispatch`, `declare`, `smoke`, `record`, `report`, `announce`, `notify`; `scripts/smoke-gate.mjs` (the route, the scheduler, the five checks, `superseded`); the smoke-only row, issue and message; the shared group's guard | `.github/workflows/deploy-smoke.yml` (new), `scripts/smoke-gate.mjs` (new), `scripts/deploy-row.mjs`, `scripts/deploy-report.mjs`, `scripts/announce-deploy.mjs`, `scripts/lib/notify-contract.mjs` (the lane value), `requirements.json`, `docs/lanes.md`, `docs/lanes.json`, `docs/notifications.md`, `rulebook/03-agents.md` (`K-AGENT-50`'s list), `tests/unit/deploy-smoke.test.ts` (new), `smoke-gate.test.ts` (new), `id-token-guard.test.ts`, `app-key-isolation.test.ts`, `pr-code-token-isolation.test.ts`, `requirements.test.ts`, `lanes-doc.test.ts` | S0's items 2, 5 and 6 hold, or §5.5 and §4.4 are applied first; S1 to S4 are merged. On fixtures: each refusal of §4.1 by its code; a scheduled run dispatches at the live tag and nothing when a run is pending; a run whose tag stopped being live refuses `superseded` after the slot; `smoke`'s group and `deploy.yml`'s `deploy` group, rendered for one environment, resolve to the same `kanon-deploy-<repo>-<environment>` key, each with `queue: max`; `dispatch` fails `no-caller` when the live tag holds no smoke caller; `id-token: write` on `smoke` alone; no agent, no App key; `dispatch` holds `actions: write` and nothing else | a `queue: single` job in a `kanon-deploy-` group turns the guard red; an empty environment term in `smoke`'s group, or one read from anything but `declare`'s `environment` output, turns the same-key test red; admitting an App's dispatch turns the `not-person` test red; `id-token` on `route` turns `id-token-guard` red |
+| **S6** | Kanon, the smoke release, **waits** | **`kanon init` writes the smoke caller** and `--smoke-schedule` ([§9](#9-doctor-and-init)) | `cli/init.mjs`, `tests/unit/kanon-init.test.ts`, `docs/init.md`, `docs/install.md`, `README.md`, `docs/architecture.md`, `skills/upgrade` | S5 is merged. The caller pins the deploy caller's release, has the dispatch trigger and one cron per span, maps the dispatch's `environment` input and only its two secrets, and is rewritten when the bullet changes; no declaration writes no caller; no reset stub is written. `init`'s closing step and `skills/upgrade` say that smoke runs outside a deploy start working on an environment only once a release containing the caller is deployed there, and that after an upgrade the live tag's pin is the one in effect ([§4.2](#42-on-demand-behind-the-environments-protection)) | a caller written with `secrets: inherit` turns its test red |
+| **S7** | Kanon, the smoke release, **waits** | **Doctor's checks** ([§9](#9-doctor-and-init)) | `cli/doctor.mjs`, `docs/doctor.md`, `skills/doctor`, `tests/unit/kanon-doctor-deploy.test.ts` | S6 is merged. Each id is reported on a stubbed answer and quiet on `init`'s own output; `deploy.smoke-schedule-reviewers` blocks a schedule on an environment with reviewers; `deploy.smoke-noop` notes `init`'s stub and an `exit 0` hook, and is quiet on a hook that runs a script | a `smoke-noop` that blocks turns its test red |
+| **S8** | Kanon, the smoke release, **waits** | **The diagnose lane follows the smoke caller** | `.github/workflows/agent-deploy-diagnose.yml`, `cli/init.mjs` (its caller's `workflows:`), `tests/unit/deploy-diagnose.test.ts`, `docs/lanes.md` | S5 is merged. A failed smoke caller's run is diagnosed on its smoke issue; by decision 11, only when the run filed the issue, not when it commented | a diagnosis on every comment turns its test red |
+| **S9** | the sandbox repository, by a maintainer, **waits** | **The rehearsal:** the released lane, two environments, trivial hooks with a reset that writes a file and a smoke check that reads it | none in Kanon; the runs' links in S9's issue | S5 to S8 are released. A deploy whose pre-production smoke fails is announced live and flagged, files the smoke issue, and stops before production; an on-demand run passes and closes it; a scheduled run dispatches at the live tag; an on-demand production run queued behind a waiting production deploy waits, then refuses `superseded`; a deploy queued behind a running smoke run waits for it and cancels nothing; doctor reports no blocking `deploy.*` finding | — (live) |
+| **S10** | **offloaded to the harness repository as an issue**, **waits** | **An end-to-end scenario,** `smoke-lifecycle`, repeating S9 on every candidate, without production's approval (plan 0012 decision 9) | none in Kanon | S9 is green | — |
 
 **Why this order.**
 - **Probes first:** items 1 and 2 decide whether the design holds as drawn, and no one has measured either.
 - **The rows and the store's intake before the lane that writes them,** as `docs/telemetry.md` requires of every row change.
 - **"Live, smoke failed" alone and early,** because it fixes a wrong reading in today's lane (a live release marked failed), it needs nothing from the smoke workflow, and an adopter has said it will switch to it as soon as it ships.
+- **The smoke workflow after the adopter's own has run** (decision 1), as other lanes were proven in one install before they were generalised.
 - **The smoke workflow, its caller, doctor and the diagnose lane together,** so the first adopter with a smoke caller is told what's missing before its first scheduled run.
 
 ## 14. Cost
 
 - **Actions minutes:** one scheduled run per declared cron, which routes and dispatches in under a minute, plus the smoke run itself, which costs what the adopter's check costs. On-demand runs cost the same. Free on a public repository. On a private one, a nightly check of ten minutes is about 300 minutes a month per environment.
 - **Waiting:** a deploy may wait behind a smoke run, for up to the smoke job's limit. That is wall time, not minutes, since a queued job holds no runner.
-- **The model:** only the diagnose lane, for an adopter that opted in. A check that fails every night would cost one Explorer run a night if each failed run were diagnosed, which is why open question 11 recommends diagnosing only the run that filed the issue.
+- **The model:** only the diagnose lane, for an adopter that opted in. A check that fails every night would cost one Explorer run a night if each failed run were diagnosed, which is why only the run that filed the issue is diagnosed (decision 11).
 - **The hosted store:** two small rows per smoke run at most, in an existing table. No new resource.
 - **Kanon's maintainers:** S0's probes and S9's rehearsal, by hand, in the sandbox. Then the harness repeats it on every candidate.
 
@@ -366,67 +380,73 @@ S0 probes each in the sandbox repository, as plan 0010's D0 did, and records the
 
 - **What the smoke check exercises, the fake tenant, its exclusions, the sandboxes and the reset's implementation.** They stay the adopter's.
 - **Automatic rollback** after a failed smoke check (plan 0010 §8).
-- **Smoke runs outside a deploy under the `no-environments` fallback** (open question 13's recommendation).
+- **Smoke runs outside a deploy under the `no-environments` fallback** (decision 13).
 - **A smoke check at a release other than the live one,** such as a candidate checked against production before its deploy.
 - **A smoke-pass metric, or time to restore counted to a passing smoke run.** The rows allow both later ([§8](#8-telemetry)).
 - **Fan-out:** one smoke run checks one environment. Several targets inside one environment are the hook's business, as the deploy's are.
 - **Kanon's own repository.** It declares no environment, so it gets no smoke caller. The operator's repository, which deploys the hosted store, may adopt it as any adopter does, through an issue filed there.
 
-## Open questions for the Owner
+## Owner decisions (2026-10-20)
+
+The draft asked thirteen questions. The Owner answered all of them on 2026-10-20, each as the draft recommended. The options are kept below, the chosen one marked **(chosen)**, and the sections above are written to the answers.
 
 1. **When to build it.** The issue suggests letting an adopter's own implementation land first, then extracting it. That adopter is waiting for "live, smoke failed" in Kanon's announcement.
    - (a) Build all of it now.
-   - (b) Build S0 and S4 now; build S5 to S10 after the adopter's own triggers and concurrency have run for a few weeks, and fold what it learned into this plan.
+   - (b) **(chosen)** Run S0 and build S4 now; build S5 to S10 after the adopter's own smoke runs outside a deploy have run for a few weeks, and fold what they taught into this plan first.
    - (c) Wait for the adopter for all of it.
-   - **Recommendation: (b).** S4 fixes a wrong reading in today's lane and unblocks the adopter. The smoke workflow is where one install's experience is worth the most.
+   - Why: S4 fixes a wrong reading in today's lane and unblocks the adopter. The smoke workflow is where one install's experience is worth the most. [§13](#13-order-of-moves).
 2. **Where the triggers live.**
-   - (a) A separate caller, `.github/workflows/smoke.yml`, always written with the deploy caller.
+   - (a) **(chosen)** A separate caller, `.github/workflows/smoke.yml`, always written with the deploy caller.
    - (b) A separate caller, written only when the record has a `Smoke schedule` or `init` is asked.
    - (c) More triggers on the deploy caller.
-   - **Recommendation: (a).** On-demand runs are useful without a schedule, and the deploy caller's dispatch already means "deploy again". (c) would loosen `deploy.caller-mismatch`.
+   - Why: on-demand runs are useful without a schedule, and the deploy caller's dispatch already means "deploy again". (c) would loosen `deploy.caller-mismatch`. [§4.1](#41-the-caller-and-the-workflow), [§9](#9-doctor-and-init).
 3. **The shared queue, and the smoke job's limit.**
-   - (a) One group for deploys and smoke runs, `queue: max`, with a 60-minute limit on the `smoke` job, which the record may change with a `Smoke limit` bullet.
+   - (a) **(chosen)** One group for deploys and smoke runs, `queue: max`, with a 60-minute limit on the `smoke` job, which the record may change with a `Smoke limit` bullet; the separate groups and soft lock of [§5.5](#55-the-fallback-if-the-probes-fail) if S0's item 2 fails.
    - (b) The same, with a fixed 60 minutes.
    - (c) Separate groups and the soft lock of §5.5, from the start.
-   - **Recommendation: (a), if S0's item 2 holds; (c) otherwise.** A real check with payments and emails can need more than 60 minutes, and a deploy waits at most that long.
+   - Why: a real check with payments and emails can need more than 60 minutes, and a deploy waits at most that long. [§5](#5-one-run-per-environment-at-a-time).
 4. **The smoke issue's title.**
-   - (a) A new issue per environment, `Smoke check on <environment> failed`, for deploy smoke failures and smoke-only failures alike, closed by the next passing check from any trigger.
+   - (a) **(chosen)** A new issue per environment, `Smoke check on <environment> failed`, for deploy smoke failures and smoke-only failures alike, closed by the next passing check from any trigger.
    - (b) Keep `Deploy to <environment> failed` for both, with the body telling them apart.
-   - **Recommendation: (a).** The title is what people read in a list, and a smoke-only run's pass can close it without a deploy.
+   - Why: the title is what people read in a list, and a smoke-only run's pass can close it without a deploy. [§7.2](#72-what-each-job-says).
 5. **The message kind for smoke-only runs.**
-   - (a) The `deploy` kind and `KANON_CHAT_DEPLOY`, with a new `source.lane`, `deploy-smoke`.
+   - (a) **(chosen)** The `deploy` kind and `KANON_CHAT_DEPLOY`, with a new `source.lane`, `deploy-smoke`.
    - (b) A new `smoke` kind with its own secret, `KANON_CHAT_SMOKE`, so alerts can go to another channel than announcements.
-   - **Recommendation: (a).** No new secret to store or check, and the stakeholders who see a release go live are the ones who need to know it broke. (b) can follow if an adopter asks.
+   - Why: no new secret to store or check, and the stakeholders who see a release go live are the ones who need to know it broke. (b) can follow if an adopter asks. [§7.3](#73-a-smoke-only-runs-outcomes).
 6. **A secret for the smoke and reset hooks.**
-   - (a) A new fixed name, `KANON_SMOKE_SECRET`, an environment secret, to the reset and smoke steps alone.
+   - (a) **(chosen)** A new fixed name, `KANON_SMOKE_SECRET`, an environment secret, to the reset and smoke steps alone.
    - (b) Pass `KANON_DEPLOY_SECRET` to them as well.
    - (c) None: the hooks use the cloud role, and read anything else through it.
-   - **Recommendation: (a).** A sandbox key or a test account's password isn't the deploy's secret, and the deploy's secret shouldn't reach a check that runs on a timer. (c) is clean on AWS but forces every adopter's design.
+   - Why: a sandbox key or a test account's password isn't the deploy's secret, and the deploy's secret shouldn't reach a check that runs on a timer. [§11](#11-threat-model).
 7. **Telemetry for smoke-only runs.**
-   - (a) A `smoke_check` row from the start (S2, S3).
+   - (a) **(chosen)** A `smoke_check` row from the start (S2, S3).
    - (b) No row in the first release; add one when a metric needs it.
-   - **Recommendation: (a).** The store's intake has to ship first either way for the `reset` stage, and without a row nobody can tell how often a schedule finds something.
+   - Why: the store's intake has to ship first either way for the `reset` stage, and without a row nobody can tell how often a schedule finds something. [§8](#8-telemetry).
 8. **A schedule on production.**
-   - (a) Allowed, with doctor's note.
+   - (a) **(chosen)** Allowed, with doctor's note; blocked on any environment with required reviewers.
    - (b) Refused by doctor.
-   - **Recommendation: (a).** It is the adopter's call. The adopter in the issue chose never, and the note makes the choice visible. A production with required reviewers is blocked anyway ([§4.3](#43-a-schedule-per-environment)).
+   - Why: it is the adopter's call, and the note makes the choice visible. [§4.3](#43-a-schedule-per-environment).
 9. **A rule, `K-SHIP-13`.**
-   - (a) Add it: "A production deploy is followed by a smoke check, and smoke data lives where the product can't see it", class split, with doctor's no-op note as its only check.
+   - (a) **(chosen)** Add it: "A production deploy is followed by a smoke check, and smoke data lives where the product can't see it", class split, with doctor's no-op note as its only check.
    - (b) No rule; say it in `docs/lanes.md` as advice.
-   - **Recommendation: (a).** The lane already runs a smoke check after every deploy, so the first half is true of every adopter of the lane, and the second half is the reason the reset hook exists. A rule says why where a reviewer looks.
+   - Why: the lane already runs a smoke check after every deploy, so the first half is true of every adopter of the lane, and the second half is the reason the reset hook exists. [§10](#10-rules-and-docs-that-change).
 10. **Who may start a smoke run.**
-    - (a) A person, or the scheduler with a valid `via`; an App's token is refused.
+    - (a) **(chosen)** A person, or the scheduler with a valid `via`; an App's token is refused.
     - (b) Anyone who can dispatch, Apps included.
-    - **Recommendation: (a).** A smoke run writes to an environment. No lane needs to start one, and an agent that could would hold a write path to production's data that no reviewer saw.
+    - Why: a smoke run writes to an environment. No lane needs to start one, and an agent that could would hold a write path to production's data that no reviewer saw. [§11](#11-threat-model).
 11. **Diagnosing smoke failures.**
-    - (a) Only the run that filed the smoke issue.
+    - (a) **(chosen)** Only the run that filed the smoke issue.
     - (b) Every failed run.
-    - **Recommendation: (a).** A check that fails every night until someone fixes it would otherwise cost a model run a night and add the same diagnosis to one issue again and again.
+    - Why: a check that fails every night until someone fixes it would otherwise cost a model run a night and add the same diagnosis to one issue again and again. [§14](#14-cost).
 12. **A reset failure's outcome.**
-    - (a) The smoke check's outcome (`smoke_failed` after a deploy, `failed` in a smoke-only run) at a new stage, `reset`.
+    - (a) **(chosen)** The smoke check's outcome (`smoke_failed` after a deploy, `failed` in a smoke-only run) at a new stage, `reset`.
     - (b) An outcome of its own, `reset_failed`.
-    - **Recommendation: (a).** For whoever reads the alert, the meaning is the same: the live release is unchecked. The stage says where. A new outcome would need a place in plan 0010's metrics, which (a) doesn't.
+    - Why: for whoever reads the alert, the meaning is the same: the live release is unchecked. The stage says where. [§6](#6-the-reset-hook).
 13. **Smoke runs under the `no-environments` fallback.**
-    - (a) Not offered; the deploy's own smoke step runs as today.
+    - (a) **(chosen)** Not offered; the deploy's own smoke step runs as today.
     - (b) Offered at the newest published release, with no protection and a doctor note.
-    - **Recommendation: (a).** Nothing there can hold a run to an environment's rules, or tell which release is live, which are the two things a smoke run outside a deploy rests on.
+    - Why: nothing there can hold a run to an environment's rules, or tell which release is live, which are the two things a smoke run outside a deploy rests on. [§4.4](#44-which-release-a-smoke-run-checks).
+
+## Open questions
+
+None open.
