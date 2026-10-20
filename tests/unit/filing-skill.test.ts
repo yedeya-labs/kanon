@@ -50,15 +50,28 @@ const routingRestated =(text: string, { allowGateCandidate = false } = {}): stri
 /**
  * The filers moved onto the skill: each lane's caller-facing workflow, the job that files, and
  * the playbook section its prompt sends the agent to, which is part of what the agent reads
- * before it files and so must restate no routing either.
+ * before it files and so must restate no routing either. `readAs` is the path the prompt names
+ * when the file held here is Kanon's baseline, which `agent-setup` copies to that path in a
+ * project that keeps no playbook of its own (`K-LAYOUT-17`).
  */
-const MOVED: Array<{ lane: string; workflow: string; job: string; playbook?: { path: string; section: string } }> = [
+type Playbook = { path: string; section: string; readAs?: string };
+const MOVED: Array<{ lane: string; workflow: string; job: string; playbook?: Playbook }> = [
   { lane: 'explore', workflow: '.github/workflows/agent-explore.yml', job: 'explore' },
   {
     lane: 'code-audit',
     workflow: '.github/workflows/agent-code-audit.yml',
     job: 'audit',
     playbook: { path: 'docs/qa/explorer-playbook.md', section: 'Code-reading mode' },
+  },
+  {
+    lane: 'verify-acs',
+    workflow: '.github/workflows/agent-verify-acs.yml',
+    job: 'verify',
+    playbook: {
+      path: 'rulebook/templates/playbooks/explorer-playbook.md',
+      section: 'Targeted-invariant mode',
+      readAs: 'docs/qa/explorer-playbook.md',
+    },
   },
 ];
 
@@ -142,7 +155,7 @@ describe('each filer moved onto the skill files through it, and restates no rout
       it(`${lane}: its playbook's "${playbook.section}" section restates no routing either`, () => {
         const section = sectionOf(read(playbook.path), playbook.section);
         expect(section, `${playbook.path} has no "## ${playbook.section}"`).not.toBe('');
-        expect(prompt).toContain(playbook.path);
+        expect(prompt).toContain(playbook.readAs ?? playbook.path);
         expect(routingRestated(section)).toEqual([]);
         expect(section).toContain('filing skill');
       });
@@ -154,6 +167,15 @@ describe('each filer moved onto the skill files through it, and restates no rout
   it('code-audit: tells its agent how to choose the subject, by the cited code', () => {
     const prompt = promptOf('.github/workflows/agent-code-audit.yml', 'audit').replace(/\s+/g, ' ');
     expect(prompt).toContain('never by who found it (K-WORK-4)');
+    expect(prompt).toContain('`--subject pipeline`');
+    expect(prompt).toContain('`--subject product`');
+  });
+
+  // A failed acceptance criterion is about whatever its project builds, so the verify-acs
+  // prompt says how to choose the subject too: by what the criterion is about (`K-WORK-4`).
+  it('verify-acs: tells its agent how to choose the subject, by what the criterion is about', () => {
+    const prompt = promptOf('.github/workflows/agent-verify-acs.yml', 'verify').replace(/\s+/g, ' ');
+    expect(prompt).toContain('by what its failed criterion is about, never by who found it (K-WORK-4)');
     expect(prompt).toContain('`--subject pipeline`');
     expect(prompt).toContain('`--subject product`');
   });

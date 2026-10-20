@@ -564,6 +564,12 @@ The Lead's reconcile lane drives an approved brief to done (`K-PROJ-*`): each ti
 
 It needs the Author App (the Lead's), with `Actions: Read` on the installation (the tick probes it before the deploy phase), and your reference environment's deploy declaration (above).
 
+## Verify acceptance criteria
+
+The verify-acs lane runs the tests that cite one project's acceptance criteria, at the release the reconciler names, and has the Explorer file one bug for each criterion that failed. It reads your playbook's "Targeted-invariant mode" section, or Kanon's baseline when you keep no playbook.
+
+**How it files.** The agent chooses each finding's labels, its one `sev:*`, and its subject: `pipeline` when the failed criterion and its citing test are about the platform that builds and checks your project (its CI workflows and guards, its test harness, the Kanon lanes installed in it), and `product` otherwise, never by who found it (`K-WORK-4`). Your playbook's "Targeted-invariant mode" section may say where your project draws that line. It files each finding through the [filing skill](skills.md#the-lanes-skills), whose `plan` command chooses the milestone and prints the arguments of one `gh issue create`. The lane's prompt names no milestone of its own (`K-WORK-8`), and neither should your playbook's section.
+
 ## The revise lane
 
 The revise lane answers the Reviewer's changes-request on the Implementer's own pull request, capped in rounds. It acts only on a pull request whose head carries the `kanon/role: implementer` status ([The App register](#the-app-register)), and refuses any other by name. It checks out the pull request's branch, runs your project-setup hook from it, and its agent runs your gates on the code before it pushes, in the job that holds the Author App's token and the Claude token. The Owner accepted that exposure (`K-AGENT-50`); [SECURITY.md's "Accepted exposures"](../SECURITY.md#accepted-exposures) says what it exposes and what bounds it.
