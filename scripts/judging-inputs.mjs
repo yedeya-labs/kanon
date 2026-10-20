@@ -26,6 +26,13 @@
 // run and may have rewritten `.git`), and the GitHub API at a ref (for the review filter,
 // which has no checkout). The set is the same function of the tree in all three.
 //
+// ASK A COMMIT WITH `gitReader`, NOT `diskReader` (kanon#1101). `diskReader` is the lane's
+// tamper tripwire, so it walks everything on disk, untracked and ignored files included: a
+// file the PR's code adds after the restore must change the digest. That also means a git
+// worktree under the checkout (Claude Code makes them in `.claude/worktrees/`) is read as more
+// agent configuration, with whatever its documents link to. A test or a tool asking what a
+// commit pins uses `judgingInputs(gitReader('HEAD', root))`, which reads tracked files only.
+//
 // NODE BUILTINS ONLY: lanes run it from the action cache through `kanon-path`, before any
 // install, and the review filter runs it in a job with no checkout.
 //
