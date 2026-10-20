@@ -3056,10 +3056,20 @@ esac
       expect(calls).not.toContain('workflow run');
     });
 
+    const said = (login: string) => JSON.stringify({ login, body: `${headerLine('Merger')}\n\n<!-- merger:${HANDBACK}:${HEAD.slice(0, 12)} -->`, at: '2026-10-20T11:00:00Z' });
+
     it('does nothing twice on one head', () => {
-      const calls = run(handback, { said: `<!-- merger:${HANDBACK}:${HEAD.slice(0, 12)} -->` });
+      const calls = run(handback, { said: said(MERGER_BOT) });
       expect(calls).not.toContain('pr comment');
       expect(calls).not.toContain('--add-label');
+    });
+
+    it("isn't stopped by someone else's copy of the marker", () => {
+      // A forged marker must not park the PR in this recover for good: only the Merger's
+      // own hand-back counts, as in the verdict.
+      const calls = run(handback, { said: said('a-stranger') });
+      expect(calls).toContain('pr comment');
+      expect(calls).toContain('--add-label agent:revise');
     });
 
     it('does nothing on a dry run', () => {

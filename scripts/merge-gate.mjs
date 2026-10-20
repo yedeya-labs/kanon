@@ -1710,8 +1710,12 @@ export function apply(pr, verdict, repo, { dryRun = true, json = readJson } = {}
     // for this comment's marker when the label starts it, so a label ahead of the comment would
     // start a run that refuses the head. The comment is also the once-per-head record. A label
     // that fails after it leaves the record, and the sweep after the settle window escalates.
+    // RE-ASKED AS THE VERDICT ASKED IT, by the Merger's own comment and every page (`handbackOn`),
+    // not by `alreadySaid`, which matches anyone's quote of the marker on one page: a forged
+    // marker would then park the PR in this recover for good. Anything but `false` (handed back
+    // already, or unreadable) acts on nothing, and the next sweep's verdict escalates instead.
     const mark = marker(HANDBACK, pr.headSha);
-    if (alreadySaid(pr.number, repo, HANDBACK, pr.headSha)) return say(`already handed #${pr.number} back to the revise lane on this commit`);
+    if (handbackOn(pr.number, repo, gh, pr.headSha) !== false) return say(`already handed #${pr.number} back to the revise lane on this commit, or its comments could not be read`);
     say(`hand #${pr.number} back to the Implementer's revise lane: ${verdict.why}`);
     if (!dryRun) {
       const failing = checkPartition(pr.checks).failed.map((c) => `- \`${c.workflowName ? `${c.workflowName} / ` : ''}${c.name}\` (${c.conclusion})${
