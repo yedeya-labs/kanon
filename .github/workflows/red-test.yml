@@ -103,8 +103,9 @@ jobs:
   # was verified. A job whose steps all succeed IS success, whatever it printed; the only way the
   # check concludes SKIPPED is for the job not to run. So this cheap job (no install, no database)
   # asks the script's `--plan` first, and `verify` runs only on `verify=true`. If THIS job fails (no
-  # merge base, a malformed declaration), its own check reads FAILURE and `verify` is skipped
-  # behind it: fail closed, visibly.
+  # merge base, a malformed declaration on the default branch), `verify` still runs and fails by
+  # name (kanon#1186): skipped behind it, it would read as passing to a ruleset that requires it,
+  # so every PR would pass until someone fixed the declaration.
   scope:
     name: Red-test scope
     # Only where "confirmed it fails" was asserted, and, on a `labeled` or `unlabeled` event,
@@ -157,12 +158,33 @@ jobs:
     # `verify` would be both uninformative and collision-prone there.
     name: Red-test verification
     needs: scope
-    # The label predicate lives on `scope`; a skipped `scope` skips this too. Here only the plan's
-    # answer is read, so a diff with nothing to verify concludes SKIPPED.
-    if: needs.scope.outputs.verify == 'true'
+    # The label predicate lives on `scope`; a skipped `scope` skips this too. A `scope` that
+    # SUCCEEDED is read for its plan, so a diff with nothing to verify concludes SKIPPED. A `scope`
+    # that ended any other way runs this job, which fails at its first step: without
+    # `!cancelled()`, Actions would read this field as `success() && …` and skip it, which a
+    # ruleset counts as passing (kanon#1186). A cancelled run, superseded by a newer one, starts
+    # nothing.
+    if: >-
+      !cancelled() && needs.scope.result != 'skipped'
+      && (needs.scope.result != 'success' || needs.scope.outputs.verify == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # A SCOPE THAT DID NOT FINISH FAILS THIS CHECK, BY NAME (kanon#1186). Its own log says why;
+      # this step says only that nothing was verified, before anything of the PR's runs.
+      - name: Fail when the scope job did not finish
+        if: needs.scope.result != 'success'
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: |
+          {
+            echo "## Red-test verification"
+            echo
+            echo "**Failed: the \`Red-test scope\` job ended \`$SCOPE_RESULT\`, so nothing was verified.** Its log names why, such as a \`## Code areas\` in the default branch's docs/qa/stack.md that can't be parsed, or no merge base. Skipped, this check would read as passing to a ruleset, so it fails until the scope job passes (K-MERGE-13)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Red-test scope failed::The Red-test scope job ended $SCOPE_RESULT, so nothing was verified. Its log names why."
+          exit 1
+
       # A PR THAT CHANGES WHAT IT IS JUDGED WITH IS REFUSED HERE, before anything of the PR's runs,
       # and red rather than skipped (kanon#761). `scope` said why in its summary. Anything but an
       # explicit `false`, a missing output included, refuses.

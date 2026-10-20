@@ -654,7 +654,7 @@ describe('the reusable workflow', () => {
   });
 
   it('concludes SKIPPED, not SUCCESS, when there is nothing to verify', () => {
-    expect(wf.jobs.verify.if).toBe("needs.scope.outputs.verify == 'true'");
+    expect(wf.jobs.verify.if).toContain("needs.scope.outputs.verify == 'true'");
     expect(wf.jobs.scope.outputs.verify).toBe('${{ steps.plan.outputs.verify }}');
     const plan = steps('scope').find((s) => s.id === 'plan') as Step;
     expect(plan.run).toContain('node "$KANON/scripts/red-test.mjs" --plan');
@@ -720,7 +720,7 @@ describe('the reusable workflow', () => {
   it('verify refuses a PR that changes the code areas before anything of the PR\'s runs, on anything but an explicit false', () => {
     const s = steps('verify');
     const refuse = s.findIndex((x) => x.name === 'Refuse a pull request that changes the code areas it is judged with');
-    expect(refuse).toBe(0);
+    expect(refuse).toBe(1);
     expect((s[refuse] as Step & { if?: string }).if).toBe("needs.scope.outputs.areas_changed != 'false'");
     expect(s[refuse].run).toContain('exit 1');
     expect(refuse).toBeLessThan(s.findIndex((x) => x.uses === './.github/actions/project-setup'));
@@ -835,6 +835,100 @@ describe('only a run that will verify shares the cancellable group, and a person
   it('still lets a newer verifying run supersede an older one: a push replaces the old head', () => {
     expect(groupOf({ action: 'synchronize', labels: AGENT, runId: 1 })).toBe(groupOf({ action: 'synchronize', labels: AGENT, runId: 2 }));
     expect(wf.concurrency['cancel-in-progress']).toBe(true);
+  });
+});
+
+/**
+ * WHAT `verify` DOES, GIVEN HOW `scope` ENDED (kanon#1186). A ruleset counts a skipped required
+ * check as passing, so a `scope` that fails must never leave `Red-test verification` skipped behind
+ * it. EVALUATED, as Actions reads a job's and a step's `if:`: a field with no status function is
+ * `success() && (field)`, which is how a failed `scope` once skipped `verify` silently. A step
+ * fails for certain when its script ends in `exit 1`; any other step is taken to pass, which is
+ * all these cases need, since nothing after a step that fails runs.
+ */
+type JobEnd = { result: 'success' | 'failure' | 'skipped' | 'cancelled'; outputs: Record<string, string> };
+const RED_TEST_WF = parse(readFileSync(join(ROOT, '.github/workflows/red-test.yml'), 'utf8'));
+const ifHolds = (field: string | undefined, ctx: { needs: Record<string, JobEnd>; ok: boolean; cancelled: boolean }): boolean => {
+  const expr = (field ?? '').replace(/^\$\{\{([\s\S]*)\}\}$/, '$1').trim() || 'success()';
+  const js = (/\b(success|failure|always|cancelled)\(\)/.test(expr) ? expr : `success() && (${expr})`)
+    .replace(/\bneeds\.(\w+)\.result\b/g, (_, j) => JSON.stringify(ctx.needs[j]?.result ?? ''))
+    .replace(/\bneeds\.(\w+)\.outputs\.(\w+)/g, (_, j, o) => JSON.stringify(ctx.needs[j]?.outputs[o] ?? ''))
+    .replace(/\bsuccess\(\)/g, String(ctx.ok && !ctx.cancelled))
+    .replace(/\bfailure\(\)/g, String(!ctx.ok))
+    .replace(/\balways\(\)/g, 'true')
+    .replace(/\bcancelled\(\)/g, String(ctx.cancelled))
+    .replace(/!=/g, '!==').replace(/([^!=])==(?!=)/g, '$1===');
+  if (/[A-Za-z_]\w*[.(]/.test(js.replace(/"[^"]*"/g, '""'))) throw new Error(`unmodelled expression: ${js}`);
+  return Boolean(new Function(`return (${js});`)());
+};
+type VerifyRun = { runs: false } | { runs: true; ran: string[]; failedAt?: string };
+const verifyRun = (scope: JobEnd, cancelled = false): VerifyRun => {
+  const job = RED_TEST_WF.jobs.verify;
+  const needs = { scope };
+  if (!ifHolds(job.if, { needs, ok: scope.result === 'success', cancelled })) return { runs: false };
+  const ran: string[] = [];
+  let failedAt: string | undefined;
+  for (const step of job.steps as Array<{ name?: string; uses?: string; run?: string; if?: string }>) {
+    if (!ifHolds(step.if, { needs, ok: failedAt === undefined, cancelled })) continue;
+    const label = step.name ?? step.uses ?? '?';
+    ran.push(label);
+    if (failedAt === undefined && /(^|\n)\s*exit 1\s*$/.test(step.run ?? '')) failedAt = label;
+  }
+  return { runs: true, ran, failedAt };
+};
+const SCOPE_FAILED_STEP = 'Fail when the scope job did not finish';
+
+describe('a scope that fails fails the required check, never skips it (kanon#1186)', () => {
+  const PLANNED = { verify: 'true', areas: '{}', areas_changed: 'false' };
+
+  it('names the required check, so the failure lands on the name a ruleset requires', () => {
+    expect(RED_TEST_WF.jobs.verify.name).toBe('Red-test verification');
+    expect(RED_TEST_WF.jobs.verify.needs).toBe('scope');
+  });
+
+  it('a failed scope, with no outputs, runs verify, which fails by name before anything of the PR\'s runs', () => {
+    const r = verifyRun({ result: 'failure', outputs: {} });
+    expect(r.runs, 'a skipped verify reads as passing to a ruleset').toBe(true);
+    if (!r.runs) return;
+    expect(r.failedAt).toBe(SCOPE_FAILED_STEP);
+    expect(r.ran).toEqual([SCOPE_FAILED_STEP]);
+    expect(r.ran).not.toContain('./.github/actions/project-setup');
+  });
+
+  it('a failed scope fails verify whatever outputs it left behind, a planned verify=true included', () => {
+    const r = verifyRun({ result: 'failure', outputs: PLANNED });
+    expect(r.runs && r.failedAt).toBe(SCOPE_FAILED_STEP);
+  });
+
+  it('the failing step says why, and names the scope job and the rule', () => {
+    const step = (RED_TEST_WF.jobs.verify.steps as Array<{ name?: string; run?: string }>).find((s) => s.name === SCOPE_FAILED_STEP);
+    expect(step?.run).toContain('Red-test scope');
+    expect(step?.run).toContain('K-MERGE-13');
+    expect(step?.run).toContain('::error title=Red-test scope failed::');
+  });
+
+  it('still skips where nothing was claimed or nothing is to verify: a skipped scope, or verify=false', () => {
+    expect(verifyRun({ result: 'skipped', outputs: {} }).runs, 'a person\'s PR is not subject (K-MERGE-13)').toBe(false);
+    expect(verifyRun({ result: 'success', outputs: { ...PLANNED, verify: 'false' } }).runs).toBe(false);
+  });
+
+  it('a planned verification runs as before: the scope step stays out of its way', () => {
+    const r = verifyRun({ result: 'success', outputs: PLANNED });
+    expect(r.runs).toBe(true);
+    if (!r.runs) return;
+    expect(r.failedAt).toBeUndefined();
+    expect(r.ran).not.toContain(SCOPE_FAILED_STEP);
+    expect(r.ran).toContain('./.github/actions/project-setup');
+    expect(r.ran.at(-1)).toBe('Verify the changed tests fail without the source change');
+  });
+
+  it('a planned verification of a PR that changes its areas is still refused', () => {
+    const r = verifyRun({ result: 'success', outputs: { ...PLANNED, areas_changed: 'true' } });
+    expect(r.runs && r.failedAt).toBe('Refuse a pull request that changes the code areas it is judged with');
+  });
+
+  it('a cancelled run starts nothing: a newer run superseded it', () => {
+    expect(verifyRun({ result: 'cancelled', outputs: {} }, true).runs).toBe(false);
   });
 });
 
@@ -1001,6 +1095,17 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
     const r = check({ 'docs/qa/stack.md': '# Stack\n\n## Code areas\n\n- `src` — code: the application\n', ...BUGGY }, { ...FIXED, ...REAL_TEST }, { args: ['--plan'] });
     expect(r.status, r.out).toBe(1);
     expect(r.out).toMatch(/^red-test: docs\/qa\/stack\.md:\d+: a `code` area is a directory/m);
+  });
+
+  // kanon#1186: the PR can't cause it, since the declaration is the default branch's, but a ruleset
+  // reads a skipped required check as passing, so every PR would pass until someone fixed it.
+  it('a malformed declaration on the default branch fails the required check, never skips it', () => {
+    const r = check(BUGGY, { ...FIXED, ...REAL_TEST }, { args: ['--plan'], trusted: { 'docs/qa/stack.md': '# Stack\n\n## Code areas\n\n- `src` — code: the application\n' } });
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toMatch(/^red-test: docs\/qa\/stack\.md:\d+: a `code` area is a directory/m);
+    const run = verifyRun({ result: 'failure', outputs: r.outputs });
+    expect(run.runs, '`Red-test verification` skipped, which a ruleset counts as passing').toBe(true);
+    expect(run.runs && run.failedAt).toBe(SCOPE_FAILED_STEP);
   });
 
   // The shape of the case that showed the gap: a characterization test, comment-only edits to the
