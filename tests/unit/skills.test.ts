@@ -59,10 +59,17 @@ const parseSkill = (dir: string, text: string): Skill => {
 };
 
 /**
- * The skills a lane's agent reads from `$KANON` (plan 0006 §4.1), not a person's skills: they
- * drive no `kanon` command, so the person's skills' checks below don't apply to them.
+ * The skills a lane's agent reads from `$KANON` (plan 0006 §4.1; the filing skill, #164), not a
+ * person's skills: they drive no `kanon` command, so the person's skills' checks below don't
+ * apply to them. The filing skill's own checks are in `filing-skill.test.ts`.
  */
-const LANE_SKILLS = ['upstream-finding'];
+const LANE_SKILLS = ['upstream-finding', 'file-issue'];
+
+/**
+ * The skills the model may start without being asked: doctor, which changes nothing without
+ * asking, and the filing skill, which an agent about to file an issue needs (#164).
+ */
+const MODEL_INVOKED = ['doctor', 'file-issue'];
 
 const ALL_SKILLS: Skill[] = readdirSync(join(ROOT, 'skills'), { withFileTypes: true })
   .filter((d) => d.isDirectory())
@@ -239,7 +246,7 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
     expect(listed.map((m) => m[1]).sort()).toEqual(SKILLS.map((s) => s.dir).sort());
     expect(SKILLS.map((s) => s.dir).sort()).toEqual(['adopt', 'doctor', 'upgrade']);
     // The lanes' skills are listed apart, as files a lane reads, never as a `/kanon:` command.
-    const lanes = section(read('docs/skills.md'), /^## The lanes' skill$/);
+    const lanes = section(read('docs/skills.md'), /^## The lanes' skills$/);
     expect(lanes).not.toBeNull();
     const named = [...lanes!.matchAll(/\[([a-z-]+)\]\(\.\.\/skills\/([a-z-]+)\/SKILL\.md\)/g)];
     for (const m of named) expect(m[1], m[0]).toBe(m[2]);
@@ -247,7 +254,7 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
     expect(lanes).not.toMatch(/\/kanon:/);
   });
 
-  it("names each skill by its directory, describes it, and lets only doctor start without being asked", () => {
+  it("names each skill by its directory, describes it, and lets only doctor and the filing skill start without being asked", () => {
     for (const s of ALL_SKILLS) {
       expect(s.front.name, s.dir).toBe(s.dir);
       expect(String(s.front.name)).toMatch(/^[a-z]+(?:-[a-z]+)*$/);
@@ -256,7 +263,7 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
       // Claude Code truncates a skill's description at 1,536 characters in its listing.
       expect(String(s.front.description).length, s.dir).toBeLessThanOrEqual(1536);
       // adopt and upgrade change the repository, so a person starts them (docs/skills.md).
-      expect(s.front['disable-model-invocation'] === true, s.dir).toBe(s.dir !== 'doctor');
+      expect(s.front['disable-model-invocation'] === true, s.dir).toBe(!MODEL_INVOKED.includes(s.dir));
       // A lane's skill is read by its path, so it is no command in the person's menu either.
       expect(s.front['user-invocable'] === false, s.dir).toBe(LANE_SKILLS.includes(s.dir));
     }
@@ -289,8 +296,8 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
 describe('the upstream-finding skill (plan 0006 §4.1)', () => {
   const s = skill('upstream-finding');
 
-  it('is the one lane skill', () => {
-    expect(LANE_SKILLS).toEqual(['upstream-finding']);
+  it('is a lane skill', () => {
+    expect(LANE_SKILLS).toContain('upstream-finding');
     expect(ALL_SKILLS.map((x) => x.dir)).toContain('upstream-finding');
   });
 

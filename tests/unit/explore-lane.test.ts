@@ -249,8 +249,12 @@ describe('the agent triages the summary (plan 0004 §4\'s second open item)', ()
     expect(raw).not.toMatch(/qa-explore-report|playwright/i);
   });
 
-  it('files into the bucket, never a roadmap milestone', () => {
-    expect(prompt).toContain('Milestone: Product Backlog, a bucket');
+  // #164: the Explorer's sweep is the first filer moved onto the filing skill. Its prompt names
+  // the labels and leaves the milestone to the skill's plan command; `filing-skill.test.ts` holds
+  // it to restating no routing.
+  it('files each bug through the filing skill, which places it', () => {
+    expect(prompt).toContain('Labels: bug, agent:explorer, qa:needs-triage, the matching signal:* and sev:*.');
+    expect(prompt).toContain('File each bug through the filing skill: read and follow `$KANON/skills/file-issue/SKILL.md`');
     expect(prompt).not.toMatch(/Production Ready/);
   });
 

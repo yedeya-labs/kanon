@@ -40,7 +40,7 @@ This chapter governs the issue: how it is labelled, which milestone it belongs t
 
 **Why.** Where an issue came from (a reviewer, an agent, a human) is provenance, not a kind of work. A CI guard is platform work whoever found it. Routing by provenance put guard work into the product backlog, where it was reported as product progress.
 
-**Enforced by.** The backstop routes by one label: an issue labelled `pipeline-improvement` goes to *Development Automation*, everything else to *Product Backlog*. Routing by subject beyond that label is prose only.
+**Enforced by.** The backstop routes by one label: an issue labelled `pipeline-improvement` goes to *Development Automation*, everything else to *Product Backlog*. The filing skill's `plan` takes the filer's judgment of the subject, `product` or `pipeline`, and sends pipeline work to *Development Automation* with or without the label. Judging the subject is prose only.
 
 **Class.** framework. The names are fixed because the backstop and the filing skill write them as literals. Letting each project name its buckets would buy nothing (the kind of a milestone is read from its due date, never its name) and would give every guard that writes a bucket a setting to read (`K-PRIN-1`).
 
@@ -80,7 +80,7 @@ This chapter governs the issue: how it is labelled, which milestone it belongs t
 
 **Why.** Routing is the rule most tempting to restate, because every filing agent needs it. In the reference adopter a routing table and four prompts once disagreed for a day, caught only by eye, and the workarounds (grep for positional references before renumbering a table; change every copy in the same edit) managed the copying rather than ending it.
 
-**Enforced by.** Prose only.
+**Enforced by.** The filing skill, [`skills/file-issue/SKILL.md`](../skills/file-issue/SKILL.md), runs `plan` in [`scripts/issue-triage-defaults.mjs`](../scripts/issue-triage-defaults.mjs), the module whose `decide()` the issue backstop runs, so the filer and the backstop route by one copy of the rule. `tests/unit/filing-skill.test.ts` fails when the skill stops running `plan` or passes a flag `plan` doesn't take, and when the prompt of a lane that files through the skill restates the routing: a bucket's name, a milestone of its own, or the `gate-candidate` rule. The Explorer's sweep files through it; the other filing lanes, and an adopter's own filers, are prose only until they move.
 
 **Class.** framework
 

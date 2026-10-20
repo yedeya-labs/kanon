@@ -608,7 +608,7 @@ Every issue has a milestone from the moment it is filed (`K-WORK-1`), but some f
 - **`gate-candidate`,** on a `follow-up` + `agent:reviewer` issue at `sev:critical` or `sev:high` that lacks it, on the product bucket (`K-WORK-10`). The issue stays on its bucket.
 - **`qa:needs-severity` and a comment with the severity rubric,** on a `follow-up` + `agent:reviewer` issue with no `sev:*` (`K-WORK-9`), unless it already carries the label.
 
-Each write is made only when it is missing, so running it again on the same issue writes nothing new. It acts only at opening: a milestone cleared later is not restored. Its caller:
+Each write is made only when it is missing, so running it again on the same issue writes nothing new. It acts only at opening: a milestone cleared later is not restored. A filing agent asks the same module first, through the [filing skill](skills.md#the-lanes-skills), so an issue it files arrives with its milestone and labels already chosen by the same rule. On such an issue the backstop also logs a shadow line: what `plan` would have chosen, beside what the filer chose. Its caller:
 
 - **Keeps two triggers:** `issues: [opened]`, which applies, and a dispatch with `issue_number` and `apply`, which without `apply` is a dry run that says what it would write.
 - **Grants `contents: read`.** Every write is on the App token.
@@ -711,6 +711,8 @@ Its caller:
 
 - **Keeps two triggers:** a daily `schedule`, and a dispatch with `tier`, passed through. Blank sweeps every tier.
 - **Grants `id-token: write`,** for the lane's store jobs alone, and `issues: read` and `actions: read` for the quality and telemetry reads. The Author App's token, minted for the Explorer, files the issues.
+
+**How it files.** The Explorer chooses each bug's labels and its one `sev:*`, and files it through the [filing skill](skills.md#the-lanes-skills), whose `plan` command chooses the milestone and prints the arguments of one `gh issue create`. The lane's prompt names no milestone of its own (`K-WORK-8`).
 
 **The change gate.** A scheduled run on a commit your QA store already holds a green full sweep of is skipped, and the skip is recorded, so a quiet day costs one short job, not a sweep. A dispatch always sweeps. The store's answer is read in a store job, through your store hook (`last-green`), and the run's summary is recorded the same way (`put`). Without a store hook the lane always sweeps, says the store is absent, and records nothing.
 

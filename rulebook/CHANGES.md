@@ -12,6 +12,14 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-14.** The Owner decided that a rule records no history of its own: a rule whose premise changed is rewritten so its Why states the premise that holds now, and the change is recorded here, not in a "Premise changed" note beside the rule. [#578](https://github.com/yedeya-labs/kanon/issues/578), [#859](https://github.com/yedeya-labs/kanon/pull/859)
 
+## `K-WORK-4`
+
+- **2026-10-20.** The filing skill's `plan` takes the filer's judgment of the subject, so pipeline work reaches the platform bucket without the `pipeline-improvement` label. Replaying the backstop's shadow over a week of filings found filers routing review follow-ups about the pipeline there, rightly, where a label-only `plan` sent them to the product bucket. [#164](https://github.com/yedeya-labs/kanon/issues/164)
+
+## `K-WORK-8`
+
+- **2026-10-20.** No longer prose only: the filing skill runs the planning module's `plan`, and a test fails when the skill stops running it or when a lane that files through it restates the routing in its prompt. The Explorer's sweep is the first lane moved. [#164](https://github.com/yedeya-labs/kanon/issues/164)
+
 ## `K-AGENT-2`
 
 - **2026-10-15.** The Owner decided that the Releaser may open a candidate's pin pull request, the one exception to its touching no file outside the release file set, where the adoption record declares the Workflows write that pull request needs. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
