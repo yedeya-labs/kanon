@@ -75,8 +75,21 @@ describe('a Kanon lane, called by a trigger-only caller', () => {
     const run = crit.findIndex((s) => s.name?.includes('Resolve and run'));
     expect(at).toBeGreaterThanOrEqual(0);
     expect(at).toBeLessThan(run);
-    expect(crit[run]!.run).toContain('node "$KANON/scripts/verify-acs.mjs"');
+    expect(crit[run]!.run).toContain('"$KANON/scripts/verify-acs.mjs"');
     expect(raw).not.toMatch(/node (\.\/)?scripts\/|\.kanon\/scripts/);
+  });
+
+  // kanon#1185: the criteria step runs after the project's hook, which may put another `node`
+  // first on the PATH, so it takes Kanon's Node from `kanon-path`'s output, taken before the hook.
+  it('runs the producer on Kanon’s Node by absolute path, never the PATH’s `node`', () => {
+    const at = crit.findIndex((s) => s.uses === '$/actions/kanon-path');
+    const hook = crit.findIndex((s) => s.uses === './.github/actions/project-setup');
+    const run = crit[crit.findIndex((s) => s.name?.includes('Resolve and run'))]!;
+    expect(crit[at]!.id).toBe('kanon');
+    expect(at).toBeLessThan(hook);
+    expect(run.env?.KANON_NODE).toBe('${{ steps.kanon.outputs.node }}');
+    expect(run.run).toMatch(/^\s*"\$KANON_NODE" "\$KANON\/scripts\/verify-acs\.mjs"/m);
+    expect(run.run).not.toMatch(/(^|[\s;&|(])node\s/m);
   });
 });
 
