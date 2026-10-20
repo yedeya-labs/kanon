@@ -792,6 +792,11 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(paths(steps)).toContain('.releases.stable');
     expect(steps).not.toMatch(/gh release view/);
     expect(steps).toMatch(/\*\*pinned at a candidate,\*\* a `\.releases\.pinned` of the form `candidate-vX\.Y\.Z`/);
+    // Running ahead to a candidate runs every `kanon` command at that candidate, so `init` never
+    // writes a file pinned at the plugin's release beside callers on the candidate.
+    expect(steps).toMatch(/\*\*every `kanon` command from here on runs at the candidate's tag, not this plugin's release\*\*/);
+    expect(steps).toMatch(/the `npx` line above with the candidate's tag after `#` in place of this plugin's release/);
+    expect(code(steps)).toContain('kanon doctor --to candidate-vA.B.C --json');
     expect(steps).toMatch(/\*\*Move to stable\*\* \(Recommended\), offered only when `\.releases\.stable` is the candidate's own version or later/);
     expect(section(skill('upgrade').body, /^## Moving the plugin$/)).toMatch(/\*\*a stable release, `vX\.Y\.Z`, by default\*\*, the latest being `\.releases\.stable`/);
     // The adopt skill names the channel and how upgrades arrive; the channel is no question.
