@@ -41,7 +41,7 @@ What the code audit looks for on Kanon. The lane's prompt sets the bar (an objec
 
 **Filing on a public repository.** Every issue you file is public. Never name the reference adopter, its people or its product: write "the reference adopter", and cite its issues only as `RA-N`, as Kanon's files do. Quote no secret, token or key, even a revoked one. Rate severity with the rubric above, and file each issue through the [filing skill](../../skills/file-issue/SKILL.md), as the lane's prompt says.
 
-**The subject, on Kanon** (`K-WORK-4`). Kanon's product is the pipeline other repositories run, so a bug in what Kanon ships is `--subject product`: its actions, its scripts, its lane workflows, its rulebook, its skills and its docs. It is `--subject pipeline` only when every line it cites is in what checks Kanon's own pull requests and ships to no one: its tests under `tests/`, and a caller in `.github/workflows/` that runs a lane on Kanon itself.
+**The subject, on Kanon** (`K-WORK-4`). Kanon's product is the pipeline other repositories run, so a bug in what Kanon ships is `--subject product`: its actions, its scripts, its lane workflows, its rulebook, its skills and its docs. It is `--subject pipeline` when it is about what runs only on Kanon's own repository and ships to no one, for example its tests under `tests/`, its pipeline scripts under `.github/scripts/`, and its own workflows in `.github/workflows/`: CI, the smoke runs, the release callers and the callers that run a lane on Kanon itself. A bug about both goes as `K-WORK-4` says: the platform wins.
 
 ## Telemetry mode
 
