@@ -1232,8 +1232,9 @@ function nextActionsCore(world, {
     // is SHARED across projects, because then one project could spend more than the
     // whole tick was allowed and the next would still be asked for more.
     // FILE-ONLY: THE SAME ELIGIBILITY, NO DISPATCH (kanon#1113). Decided after the filters, so
-    // the report names exactly the issues the tick would have labelled, and removing the label
-    // dispatches those on the next tick with nothing else to change.
+    // the report names every issue eligible for dispatch (a dispatching tick labels as many of
+    // them as its slots and budget allow), and removing the label dispatches on the next tick
+    // with nothing else to change.
     if (world.fileOnly && eligible.length) {
       return {
         phase, actions: [],
