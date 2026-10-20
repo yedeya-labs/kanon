@@ -42,6 +42,41 @@ describe('plan: bucket routing, pipeline work beats product work (K-WORK-4)', ()
   });
 });
 
+/**
+ * The shadow's finding (#164, step 2). Replayed over the week's real filings, the commonest
+ * disagreement was a review follow-up about a guard, a test or a doc of the pipeline, which its
+ * filer put on the platform bucket with no `pipeline-improvement` label. The filer was right
+ * (`K-WORK-4`: route by subject, and the platform bucket wins), and a label-only `plan()` would
+ * have moved every one of them to the product bucket. So the subject is the filer's to name.
+ */
+describe('plan: the subject is the filer\'s judgment (K-WORK-4)', () => {
+  it('sends work the filer names pipeline to the platform bucket, with no label for it', () => {
+    const p = plan(reviewer('sev:low'), { subject: 'pipeline' });
+    expect(p.milestone).toBe(PIPELINE_MILESTONE);
+    expect(p.reason).toBe('the filer named the subject pipeline');
+    expect(p.labels).not.toContain('pipeline-improvement');
+  });
+
+  it('makes no candidate of pipeline work the filer named, however severe (K-WORK-11)', () => {
+    expect(plan(reviewer('sev:critical'), { subject: 'pipeline' }).gateCandidate).toBe(false);
+    expect(plan(reviewer('sev:critical'), { subject: 'pipeline', explicitMilestone: DEFAULT_MILESTONE }).gateCandidate).toBe(false);
+    expect(() => plan(reviewer('sev:critical', GATE_CANDIDATE_LABEL), { subject: 'pipeline' })).toThrow(PlanRefusal);
+  });
+
+  it('holds pipeline work the filer named off a roadmap milestone (K-WORK-11)', () => {
+    expect(() => plan(['enhancement'], { subject: 'pipeline', explicitMilestone: 'Launch' })).toThrow(/K-WORK-11/);
+  });
+
+  it('routes product as it routes no subject', () => {
+    expect(plan(reviewer('sev:high'), { subject: 'product' })).toEqual(plan(reviewer('sev:high')));
+  });
+
+  it('refuses a subject it does not know, and product beside the pipeline label', () => {
+    expect(() => plan(['enhancement'], { subject: 'platform' })).toThrow(/neither product nor pipeline/);
+    expect(() => plan(['pipeline-improvement'], { subject: 'product' })).toThrow(/K-WORK-4/);
+  });
+});
+
 describe('plan: the gate-candidate rule (K-WORK-10)', () => {
   it('adds gate-candidate to a critical or high reviewer follow-up, which stays on its bucket', () => {
     for (const sev of ['sev:critical', 'sev:high']) {
@@ -160,10 +195,18 @@ describe('shadow: the backstop logs what plan() would have chosen, and writes no
     });
   });
 
-  it('reports a disagreement: a CI-guard follow-up the filer routed by milestone with no pipeline-improvement label', () => {
+  it('reads a filing on the platform bucket as the filer naming the subject pipeline, and compares the rest', () => {
     const s = shadow({ labels: reviewer('sev:low'), milestone: PIPELINE_MILESTONE });
+    expect(s?.agrees).toBe(true);
+    expect(s?.planned?.milestone).toBe(PIPELINE_MILESTONE);
+    // A gate-candidate on pipeline work is still a disagreement: plan() would refuse it.
+    expect(shadow({ labels: reviewer('sev:high', GATE_CANDIDATE_LABEL), milestone: PIPELINE_MILESTONE })?.refused).toMatch(/K-WORK-10/);
+  });
+
+  it('reports a disagreement: pipeline-improvement work the filer put on the product bucket', () => {
+    const s = shadow({ labels: ['pipeline-improvement'], milestone: DEFAULT_MILESTONE });
     expect(s?.agrees).toBe(false);
-    expect(s?.planned?.milestone).toBe(DEFAULT_MILESTONE);
+    expect(s?.planned?.milestone).toBe(PIPELINE_MILESTONE);
   });
 
   it('reports a missing gate-candidate as a disagreement', () => {
@@ -197,6 +240,13 @@ describe('cli', () => {
     expect(JSON.parse(r.out).ghArgs).toBe(`--label enhancement --milestone 'Bob'\\''s launch'`);
   });
 
+  it('plan: takes the filer\'s subject', () => {
+    const r = cli(['plan', '--label', 'follow-up', '--label', 'agent:reviewer', '--label', 'sev:low', '--subject', 'pipeline'], '');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out).ghArgs).toBe(`--label follow-up --label agent:reviewer --label sev:low --milestone 'Development Automation'`);
+    expect(cli(['plan', '--label', 'bug', '--subject', 'platform'], '').code).toBe(1);
+  });
+
   it('plan: a refusal exits 1, says why on stderr, and prints no arguments', () => {
     const r = cli(['plan', '--label', 'follow-up', '--label', 'agent:reviewer'], '');
     expect(r.code).toBe(1);
@@ -210,13 +260,13 @@ describe('cli', () => {
   });
 
   it('backstop: keeps its output, adds the shadow, and logs it on stderr', () => {
-    const issue = { labels: [{ name: 'follow-up' }, { name: 'agent:reviewer' }, { name: 'sev:low' }], milestone: { title: PIPELINE_MILESTONE } };
+    const issue = { labels: [{ name: 'follow-up' }, { name: 'agent:reviewer' }, { name: 'sev:critical' }], milestone: { title: DEFAULT_MILESTONE } };
     const r = cli([], JSON.stringify(issue));
     expect(r.code).toBe(0);
     const out = JSON.parse(r.out);
     expect(out.milestone).toBeNull();
     expect(out.shadow.agrees).toBe(false);
-    expect(r.err).toMatch(/^shadow \(writes nothing\): plan\(\) would file on "Product Backlog"; the filer chose "Development Automation" — differs$/m);
+    expect(r.err).toMatch(/^shadow \(writes nothing\): plan\(\) would file on "Product Backlog" with gate-candidate; the filer chose "Product Backlog" — differs$/m);
   });
 
   it('backstop: logs no shadow for a bare issue', () => {

@@ -62,7 +62,11 @@
  * THE SHADOW (kanon#164, migration step 1). Until the filers move to `plan()`, the
  * backstop logs what `plan()` would have chosen for each filed issue next to what its
  * filer chose, and writes nothing from it, so a week of real filings shows where the
- * two disagree before any prompt's routing prose is deleted.
+ * two disagree before any prompt's routing prose is deleted. That week's commonest disagreement
+ * was a filer's subject (`K-WORK-4`), which `plan()` now takes from the filer (migration step 2).
+ *
+ * THE FILING SKILL (kanon#164, migration step 2): `skills/file-issue/SKILL.md` is how a filer
+ * asks `plan()`. The Explorer's sweep files through it; the other filers move one at a time.
  *
  * Exercised by tests/unit/issue-triage-defaults.test.ts. Run it locally exactly
  * as the workflow does:
@@ -202,12 +206,18 @@ export function decide({ labels = [], milestone = '' } = {}) {
 export class PlanRefusal extends Error {}
 
 /**
- * The stream an issue belongs to, which never takes a roadmap milestone or a candidacy
- * (`K-WORK-11`), or null. Pipeline work is read from its label, as the bucket routing reads it.
+ * The two subjects a filer may name (`K-WORK-4`): product work, or engineering-platform and
+ * pipeline work. Like severity it is the filer's judgment, read and never derived.
  */
-function streamOf(set) {
+export const SUBJECTS = ['product', 'pipeline'];
+
+/**
+ * The stream an issue belongs to, which never takes a roadmap milestone or a candidacy
+ * (`K-WORK-11`), or null.
+ */
+function streamOf(set, pipeline) {
   if (set.has(EXPLORER)) return 'an Explorer bug';
-  if (set.has(PIPELINE_IMPROVEMENT)) return 'pipeline work';
+  if (pipeline) return 'pipeline work';
   return null;
 }
 
@@ -224,14 +234,33 @@ function streamOf(set) {
  * names are fixed (`K-WORK-4`), so anything else is a roadmap milestone or a typo, and telling
  * which would need a read of the repository this function doesn't make.
  *
+ * THE SUBJECT IS THE FILER'S, as the severity is (kanon#164's shadow). Routing is by subject
+ * (`K-WORK-4`), and a review follow-up that asks for a CI guard is pipeline work with no
+ * `pipeline-improvement` label on it: that label marks a proposal to improve the pipeline, not
+ * every issue whose subject is the pipeline. The shadow's replay over a week of real filings
+ * found filers routing exactly those to the platform bucket, rightly, where a label-only rule
+ * sent them to the product one. So the filer names the subject, `pipeline` or `product`, and
+ * this function maps it to the bucket. The label still implies `pipeline`, and naming `product`
+ * beside it is refused.
+ *
  * @param {string[]} labels the filer's choice, its `sev:*` included
- * @param {{explicitMilestone?: string}} [options] a milestone transcribed from an approved
- *   brief (`K-WORK-5`), passed through as given; never an agent's own routing choice
+ * @param {{explicitMilestone?: string, subject?: string}} [options] `explicitMilestone`: a
+ *   milestone transcribed from an approved brief (`K-WORK-5`), passed through as given, never an
+ *   agent's own routing choice. `subject`: one of `SUBJECTS`, the filer's judgment of what the
+ *   issue is about; absent, it is read from the labels.
  * @returns {{milestone: string, labels: string[], severity: string|null, gateCandidate: boolean, reason: string, args: string[]}}
  */
-export function plan(labels = [], { explicitMilestone = '' } = {}) {
+export function plan(labels = [], { explicitMilestone = '', subject = '' } = {}) {
   const set = new Set(labels);
   const explicit = String(explicitMilestone ?? '').trim();
+  const named = String(subject ?? '').trim();
+  if (named && !SUBJECTS.includes(named)) {
+    throw new PlanRefusal(`subject "${named}" is neither ${SUBJECTS.join(' nor ')} (K-WORK-4)`);
+  }
+  if (named === 'product' && set.has(PIPELINE_IMPROVEMENT)) {
+    throw new PlanRefusal(`carries ${PIPELINE_IMPROVEMENT}, which is pipeline work, yet names the subject product (K-WORK-4)`);
+  }
+  const pipeline = named === 'pipeline' || set.has(PIPELINE_IMPROVEMENT);
 
   const severities = SEVERITY_LABELS.filter((sev) => set.has(sev));
   if (severities.length > 1) {
@@ -241,17 +270,19 @@ export function plan(labels = [], { explicitMilestone = '' } = {}) {
     throw new PlanRefusal('a follow-up + agent:reviewer issue needs its sev:*, which only its filer can judge (K-WORK-9)');
   }
 
-  const stream = streamOf(set);
+  const stream = streamOf(set, pipeline);
   if (explicit && stream && !BUCKET_MILESTONES.includes(explicit)) {
     throw new PlanRefusal(`"${explicit}" is not a bucket, and ${stream} never goes on a roadmap milestone (K-WORK-11)`);
   }
 
-  const milestone = explicit || (set.has(PIPELINE_IMPROVEMENT) ? PIPELINE_MILESTONE : DEFAULT_MILESTONE);
-  const reason = explicit
-    ? 'transcribed from an approved brief'
-    : set.has(PIPELINE_IMPROVEMENT) ? `labelled ${PIPELINE_IMPROVEMENT}` : 'no unambiguous destination';
+  const milestone = explicit || (pipeline ? PIPELINE_MILESTONE : DEFAULT_MILESTONE);
+  let reason = 'no unambiguous destination';
+  if (explicit) reason = 'transcribed from an approved brief';
+  else if (set.has(PIPELINE_IMPROVEMENT)) reason = `labelled ${PIPELINE_IMPROVEMENT}`;
+  else if (pipeline) reason = 'the filer named the subject pipeline';
 
-  const gateCandidate = isGateCandidate(labels, milestone);
+  // Pipeline work is never a candidate (`K-WORK-11`), on whichever bucket a brief put it.
+  const gateCandidate = !pipeline && isGateCandidate(labels, milestone);
   if (set.has(GATE_CANDIDATE_LABEL) && !gateCandidate) {
     throw new PlanRefusal(
       `carries ${GATE_CANDIDATE_LABEL}, which K-WORK-10 gives only a sev:critical or sev:high follow-up + agent:reviewer issue on the product bucket: drop it, plan() adds it where the rule does`,
@@ -274,8 +305,12 @@ export function plan(labels = [], { explicitMilestone = '' } = {}) {
 export function shadow({ labels = [], milestone = '' } = {}) {
   if (!milestone) return null;
   const filed = { milestone, gateCandidate: labels.includes(GATE_CANDIDATE_LABEL) };
+  // A filer that chose the platform bucket named the subject pipeline, which is its judgment to
+  // make (`plan()`'s `subject`), so the shadow asks with it and compares the rest. A roadmap
+  // milestone is still compared as it was: the backstop can't tell a brief's from a filer's own.
+  const subject = milestone === PIPELINE_MILESTONE ? 'pipeline' : '';
   try {
-    const p = plan(labels);
+    const p = plan(labels, { subject });
     const planned = { milestone: p.milestone, gateCandidate: p.gateCandidate };
     const agrees = planned.milestone === filed.milestone && planned.gateCandidate === filed.gateCandidate;
     return { planned, filed, agrees, refused: null };
@@ -329,27 +364,33 @@ export function needsSeverityComment() {
 /** One argument as a POSIX shell reads it back: bare when it is safe, single-quoted when not. */
 const shellQuote = (arg) => (/^[\w.:/@=+-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`);
 
-const PLAN_USAGE = 'usage: issue-triage-defaults.mjs plan --label <name>... [--explicit-milestone <title>]';
+/** The flags `plan` takes, each with a value. The filing skill passes only these. */
+export const PLAN_FLAGS = ['--label', '--subject', '--explicit-milestone'];
+
+const PLAN_USAGE = 'usage: issue-triage-defaults.mjs plan --label <name>... [--subject product|pipeline] [--explicit-milestone <title>]';
 
 /**
- * `plan --label <name>... [--explicit-milestone <title>]`: one JSON plan on stdout, with
- * `ghArgs`, the arguments as one shell-quoted string. A refusal exits 1 and prints only
- * `{refused}`, so no arguments exist to file with. There is no `--milestone`: a filer's own
- * routing choice is exactly what this replaces, and only a brief's milestone is explicit.
+ * `plan --label <name>... [--subject product|pipeline] [--explicit-milestone <title>]`: one JSON
+ * plan on stdout, with `ghArgs`, the arguments as one shell-quoted string. A refusal exits 1 and
+ * prints only `{refused}`, so no arguments exist to file with. There is no `--milestone`: a
+ * filer's own routing choice is exactly what this replaces. The filer names the subject, and only
+ * a brief's milestone is explicit.
  */
 function planCli(argv) {
   const labels = [];
   let explicitMilestone = '';
+  let subject = '';
   for (let i = 0; i < argv.length; i += 2) {
     const [flag, value] = [argv[i], argv[i + 1]];
-    if (value === undefined || !['--label', '--explicit-milestone'].includes(flag)) {
+    if (value === undefined || !PLAN_FLAGS.includes(flag)) {
       return { code: 2, out: '', err: `${PLAN_USAGE}\n` };
     }
     if (flag === '--label') labels.push(value);
+    else if (flag === '--subject') subject = value;
     else explicitMilestone = value;
   }
   try {
-    const p = plan(labels, { explicitMilestone });
+    const p = plan(labels, { explicitMilestone, subject });
     return { code: 0, out: JSON.stringify({ ...p, ghArgs: p.args.map(shellQuote).join(' ') }), err: '' };
   } catch (err) {
     if (!(err instanceof PlanRefusal)) throw err;

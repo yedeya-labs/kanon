@@ -231,9 +231,9 @@ jobs:
             (route::signal::normalized-message), search OPEN issues, and file a bug, or
             comment on the existing match. A cluster of ONE root cause across routes is
             ONE bug, not many: dedup hard. Labels: bug, agent:explorer, qa:needs-triage,
-            the matching signal:* and sev:*. Milestone: Product Backlog, a bucket (it is
-            a product bug), never a roadmap milestone such as the launch gate
-            (K-WORK-5). Tier severity by evidence.
+            the matching signal:* and sev:*. Tier severity by evidence. File each bug
+            through the filing skill: read and follow `$KANON/skills/file-issue/SKILL.md`,
+            whose plan command gives the exact arguments of one `gh issue create`.
             If every route PASSED (`failed` is 0), file NOTHING and say the sweep was
             clean.
 
