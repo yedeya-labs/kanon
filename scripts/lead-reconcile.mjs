@@ -189,6 +189,30 @@ const REVISE = 'agent:revise';
 // progress must become visible without someone reading Actions annotations".
 const HELD = 'needs:human';
 const HELD_MARKER = '<!-- qa:lead-held -->';
+/**
+ * FILE, BUT DO NOT DISPATCH (kanon#1113). A person's routing choice for one project, on its
+ * tracking issue beside `needs:human` and read from the same label list.
+ *
+ * `needs:human` stops the whole tick, filing included, and means "a tick escalated something".
+ * A project whose issues are built some other way (a person, a local session, another agent)
+ * still wants the Lead's filing, `project:<n>` mirror, dependency tracking, closure and report,
+ * and only the dispatch withheld. Holding the project for that reused the escalation label for
+ * a decision, and lost the filing with it.
+ *
+ * With this label every phase runs as usual and the reconcile phase adds no `agent:implement`:
+ * it reports the issues it would have dispatched instead. An issue a person labels
+ * `agent:implement` by hand is still dispatched by that label, and the tick reconciles it like
+ * any other in-flight issue. Removing the label resumes dispatch on the next tick. `needs:human`
+ * still outranks it: a held project does nothing at all.
+ */
+export const FILE_ONLY = 'lead:file-only';
+
+/** What the tracking issue's labels tell the tick (RA-963, kanon#1113), pure so a test reads it.
+ *  @param {string[]} names the tracking issue's label names */
+export const trackingControls = (names) => ({
+  projectHeld: names.includes(HELD),
+  fileOnly: names.includes(FILE_ONLY),
+});
 // On the retro, so a later tick can tell "never closed" from "closed and reopened"
 // (RA-1062). The retro's heading is not a marker — a human quoting it would be read as
 // one, which is the mistake RA-1066 absorbed three documents into.
@@ -1207,6 +1231,15 @@ function nextActionsCore(world, {
     // the budget defaulted to Infinity; it stops being invisible the moment the budget
     // is SHARED across projects, because then one project could spend more than the
     // whole tick was allowed and the next would still be asked for more.
+    // FILE-ONLY: THE SAME ELIGIBILITY, NO DISPATCH (kanon#1113). Decided after the filters, so
+    // the report names exactly the issues the tick would have labelled, and removing the label
+    // dispatches those on the next tick with nothing else to change.
+    if (world.fileOnly && eligible.length) {
+      return {
+        phase, actions: [],
+        stopped: `file-only: the tracking issue carries \`${FILE_ONLY}\`, so this tick dispatches nothing to the implement lane. Eligible, dispatch disabled: ${eligible.map((i) => `#${i.number}`).join(', ')}. Remove the label and the next tick dispatches them`,
+      };
+    }
     const actions = eligible.slice(0, Math.min(slots, budgetLeft))
       .map((i) => ({ kind: 'dispatch', number: i.number, title: i.title }));
     if (actions.length) return { phase, actions };
@@ -3052,10 +3085,14 @@ function readWorld(project) {
   // READ, NOT ASSUMED. An unreadable tracking issue must not read as "not held" — that
   // is the direction that resumes a project a human stopped. Failing to read is itself
   // a reason to hold: the tick cannot establish that acting is safe.
+  // The same read says whether the project is file-only (kanon#1113). On a failed read the
+  // hold already stops every action, dispatch included, so `fileOnly` stays false rather than
+  // reporting a label nobody saw.
   let projectHeld;
+  let fileOnly = false;
   try {
-    projectHeld = (ghJson(['issue', 'view', String(project), '--repo', REPO, '--json', 'labels'])
-      .labels ?? []).some((l) => l.name === HELD);
+    ({ projectHeld, fileOnly } = trackingControls((ghJson(['issue', 'view', String(project), '--repo', REPO, '--json', 'labels'])
+      .labels ?? []).map((l) => l.name)));
   } catch {
     projectHeld = true;
     warn(`could not read #${project}'s labels, so whether this project is held is UNKNOWN — holding rather than acting`);
@@ -3076,7 +3113,7 @@ function readWorld(project) {
   // The environment's name for the report, at any phase (kanon#219). Read softly: only the deploy
   // phase, through `readDeploy`, may fail on a missing or malformed record (`K-PROJ-11`).
   const environment = deploy?.environment ?? declaredEnvironment();
-  return { project, briefMerged, briefPath, proposed, filed, open, blocked, unmilestoned, all, deploy, environment, qaIssue, trackingClosed, trackingReopened, projectHeld, searchHits: found.length, searchTitles: found.map((i) => i.title), knownLabels, labelled };
+  return { project, briefMerged, briefPath, proposed, filed, open, blocked, unmilestoned, all, deploy, environment, qaIssue, trackingClosed, trackingReopened, projectHeld, fileOnly, searchHits: found.length, searchTitles: found.map((i) => i.title), knownLabels, labelled };
 }
 
 // ---------------------------------------------------------------------------
@@ -3247,6 +3284,11 @@ export function report(world, { phase, actions, stopped, reviewNotes = [] }) {
   }
   if (world.blocked.length) {
     lines.push(`**Blocked — no action taken.** ${world.blocked.map((i) => `#${i.number}`).join(', ')} carry \`${NEEDS_INFO}\`/\`blocked\`. A tick must not route around a question a human owes an answer to.\n`);
+  }
+  // EVERY TICK, IN EVERY PHASE (kanon#1113). The `stopped` line names the withheld issues only
+  // when one is eligible; this says the switch is on when none is, and while filing.
+  if (world.fileOnly) {
+    lines.push(`**File-only:** the tracking issue carries \`${FILE_ONLY}\`, so this tick files, reconciles and closes as usual but labels no issue \`${IMPLEMENT}\`. Remove the label to resume dispatch on the next tick.\n`);
   }
   if (stopped) lines.push(`**Stopped:** ${stopped}.\n`);
   if (phase === 'brief-partially-parsed') {

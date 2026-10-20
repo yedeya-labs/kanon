@@ -171,6 +171,7 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 | | `gate-candidate` | `d93f0b` | Filer says launch-gating (sev:critical or sev:high); the Stakeholder decides if it joins the gate |
 | | `gate:declined` | `cfd3d7` | The Stakeholder declined this gate-candidate for the gate; applied by a person only |
 | | `needs:human` | `d93f0b` | A human decides: the Merger declined this PR, the Lead held this project, or a review deferred it |
+| | `lead:file-only` | `c5def5` | On a project's tracking issue: the Lead files and reconciles its issues but dispatches none |
 | | `blocked` | `b60205` | Waiting on something outside the pipeline; parks the issue's whole project |
 | | `test:characterization` | `c2e0c6` | A person says the PR's tests lock behaviour already right: red-test skips; applied by a person only |
 | Project membership | `project:<n>` | `bfd4f2` | Project #n: mirrors the marker while the project is open; written by the Lead only |
@@ -189,7 +190,7 @@ Two families have no members at installation. A `signal:<name>` label is created
 | Implementer | `agent:triage`, `agent:implement` | Two lanes of one role under one App: fixing a reported bug, and building a planned item. Each label dispatches its lane. |
 | Reviewer | `agent:reviewer` | What it files or reviews. |
 | Overseer | `agent:overseer` | What it files. |
-| Lead | none of its own | Its issues are marked by `project:<n>`. It applies `agent:revise` and `agent:lead-revise`, which are recovery labels: each re-delivers a lost review event to a revise lane (the Implementer's, or the Lead's own), and marks no author. |
+| Lead | none of its own | Its issues are marked by `project:<n>`. It applies `agent:revise` and `agent:lead-revise`, which are recovery labels: each re-delivers a lost review event to a revise lane (the Implementer's, or the Lead's own), and marks no author. It reads `needs:human` and `lead:file-only` on a tracking issue and applies only the first. |
 | Merger | none | It files nothing. It applies `needs:human`, its escalation, and `agent:revise`, to hand an approved head whose checks failed back to the Implementer's revise lane. |
 
 Every label the pipeline applies must be in this table. The table is the authority on what each label is, and [`labels.json`](labels.json) is its machine-readable twin, from which a lane creates a missing label. The live repository is the authority on which labels exist.

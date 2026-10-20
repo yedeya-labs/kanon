@@ -11,6 +11,7 @@ import { readRepoDoc } from './helpers/adopter-doc.js';
 const { SPLIT_LABEL } = await import('../../scripts/split-lineage.mjs');
 const { itemSatisfied, satisfiedTitles, classifyDeploy, readDeploy: kanonReadDeploy, closingMergeShas, isReviewBlocked, awaitingReview, dependencyCycles, needsVerification, verificationCaveat, declaresMembership, findDeployRun, nextActions, reachesPhase6, renderCloseAction, renderCloseComment, ownFailureCaveat, DEPLOY_PHASE, reconcileAll, report, retro, parseProposed, phaseOf, readBudget, reviewRecovery, chargeable, reviseRecovery, reviseRunsFor, startedAfter, standingChangesRequest, projectReviews, execute, qaIssueOf, hold, renderHoldComment, applyDecision, repoLabels, ghCause, redactSecrets, isTransient, holdMarker, occupiesSlot, isParkedOnHuman, linkedPrsRead, laneStateOf, adoptedProvenance, HUMAN_ACTION, carriedOut, inDecomposition, isProjectWork, SPEC_FINDING, FINDING_ANCHOR, openGatingWork, blockedOf, labelMirror, mirrorLabels, mirrorCap, projectLabel, qaIssueTitle, isQaIssueTitle } = await import('../../scripts/lead-reconcile.mjs');
 const { qaRoundBudget, heldClearsRead, QA_ROUND_CAP } = await import('../../scripts/lead-reconcile.mjs');
+const { FILE_ONLY, trackingControls } = await import('../../scripts/lead-reconcile.mjs');
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ROOT } from './helpers/adopter.js';
 import { workflowText } from '../unit/helpers/called-workflow.js';
@@ -2054,6 +2055,68 @@ describe('a held project takes no actions (RA-963)', () => {
 
   it('an unheld project is unaffected', () => {
     expect(phaseOf({ ...heldWorld, projectHeld: false })).not.toBe('held');
+  });
+});
+
+describe('a file-only project files its issues and dispatches none (kanon#1113)', () => {
+  /**
+   * `needs:human` on the tracking issue stops the whole tick, filing included, and means a
+   * tick escalated something. A project built some other way wants the filing, tracking and
+   * closure, with the dispatch alone withheld, by a label that says so.
+   */
+  const dispatched = (r: { actions: Array<{ kind: string; number?: number }> }) => r.actions.filter((a) => a.kind === 'dispatch');
+
+  it('reads the switch, and the hold, from the tracking issue\'s labels', () => {
+    expect(FILE_ONLY).toBe('lead:file-only');
+    expect(trackingControls(['enhancement', FILE_ONLY])).toEqual({ projectHeld: false, fileOnly: true });
+    expect(trackingControls(['needs:human'])).toEqual({ projectHeld: true, fileOnly: false });
+    expect(trackingControls([])).toEqual({ projectHeld: false, fileOnly: false });
+  });
+
+  it('still files every proposed issue', () => {
+    const w = { ...worldFrom(BRIEF(['a', 'b'])), fileOnly: true };
+    expect(phaseOf(w)).toBe('file');
+    const r = nextActions(w);
+    expect(r.actions.map((a: { kind: string; title: string }) => [a.kind, a.title])).toEqual([['file', 'a'], ['file', 'b']]);
+  });
+
+  it('dispatches none of the eligible issues, and names each one it withheld', () => {
+    const w = { ...worldFrom(BRIEF(['a', 'b', 'c'], 'Product Backlog', { 2: 'A' }), [
+      { number: 1, title: 'a' }, { number: 2, title: 'b' }, { number: 3, title: 'c' },
+    ]), fileOnly: true };
+    expect(phaseOf(w)).toBe('reconcile');
+    const r = nextActions(w, { wip: 3 });
+    expect(dispatched(r)).toEqual([]);
+    expect(r.stopped).toMatch(/lead:file-only/);
+    // The same eligibility as a dispatching tick: #3 waits on #1, so it is not named.
+    expect(r.stopped).toMatch(/dispatch disabled: #1, #2\./);
+    expect(r.stopped).toMatch(/remove the label/i);
+  });
+
+  it('says so in its summary on every tick, filing or not', () => {
+    const filing = { ...worldFrom(BRIEF(['a'])), fileOnly: true };
+    expect(report(filing, nextActions(filing))).toMatch(/\*\*File-only:\*\* the tracking issue carries `lead:file-only`/);
+    const idle = { ...worldFrom(BRIEF(['a']), [{ number: 1, title: 'a', labels: ['agent:implement'] }]), fileOnly: true };
+    expect(report(idle, nextActions(idle, { wip: 3 }))).toMatch(/\*\*File-only:\*\*/);
+    const off = worldFrom(BRIEF(['a']), [{ number: 1, title: 'a' }]);
+    expect(report(off, nextActions(off, { wip: 3 }))).not.toMatch(/File-only/);
+  });
+
+  it('dispatches the eligible issues on the next tick once the label is removed', () => {
+    const issues = [{ number: 1, title: 'a' }, { number: 2, title: 'b' }];
+    const w = worldFrom(BRIEF(['a', 'b']), issues);
+    expect(dispatched(nextActions({ ...w, fileOnly: true }, { wip: 3 }))).toEqual([]);
+    expect(dispatched(nextActions({ ...w, fileOnly: false }, { wip: 3 })).map((a: { number?: number }) => a.number)).toEqual([1, 2]);
+  });
+
+  it('`needs:human` still holds everything, filing included, with or without the switch', () => {
+    const filing = { ...worldFrom(BRIEF(['a', 'b'])), projectHeld: true, fileOnly: true };
+    expect(phaseOf(filing)).toBe('held');
+    expect(nextActions(filing).actions).toEqual([]);
+    const reconciling = { ...worldFrom(BRIEF(['a']), [{ number: 1, title: 'a' }]), projectHeld: true, fileOnly: false };
+    const r = nextActions(reconciling, { wip: 3 });
+    expect(r.actions).toEqual([]);
+    expect(r.stopped).toMatch(/needs:human/);
   });
 });
 

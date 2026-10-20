@@ -25,6 +25,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-WORK-12`
 
 - **2026-10-20.** The Merger applies `agent:revise` too, to hand an approved head whose checks failed back to the Implementer's revise lane; the label's description says so. [#1100](https://github.com/yedeya-labs/kanon/issues/1100)
+- **2026-10-20.** The taxonomy gained `lead:file-only`, which a person puts on a project's tracking issue so that the Lead files and reconciles the project's issues but dispatches none of them; `needs:human` keeps its meaning as the escalation that stops the whole tick. [#1113](https://github.com/yedeya-labs/kanon/issues/1113)
 
 ## `K-AGENT-2`
 
@@ -127,6 +128,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-15.** The Owner decided that each environment announces its own deploy, that a failure posts too (`critical` for production), and that what was announced is read from the environment's previous successful deployment rather than kept in a variable moved after the post. The deploy lane runs the announcement. [Plan 0011](../docs/plans/0011-notifications.md) N9, [#972](https://github.com/yedeya-labs/kanon/issues/972)
 - **2026-10-16.** The range holds only releases of the deployed tag's line, so a prefixed tag (`widgets-v1.2.3`) is announced, and under the `no-environments` fallback, with no deployment to read, each deploy announces its own release alone. [#1038](https://github.com/yedeya-labs/kanon/issues/1038), [#1039](https://github.com/yedeya-labs/kanon/issues/1039)
 - **2026-10-20.** The title and the rule name a third confusion, which the Owner's plan for the smoke lifecycle found in the announcement an adopter was reading: a failed smoke check after a deploy that landed is a failed check of a live release, never a failed deploy, and never skipped. The message already told the two apart; that it also says the release is live, and lists its changes, is prose only until it does. [Plan 0013](../docs/plans/0013-smoke-lifecycle.md) §7.2, [#1165](https://github.com/yedeya-labs/kanon/issues/1165)
+
+## `K-PROJ-11`
+
+- **2026-10-20.** The dispatch phase can be withheld on its own: with `lead:file-only` on the tracking issue every other phase runs, each tick names the issues it did not dispatch, and removing the label resumes dispatch. Before, the only stop was `needs:human`, which also stopped the filing. [#1113](https://github.com/yedeya-labs/kanon/issues/1113)
 
 ## `K-PROJ-16`
 

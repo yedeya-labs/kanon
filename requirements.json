@@ -1037,6 +1037,7 @@
     "gate-candidate",
     "gate:declined",
     "needs:human",
+    "lead:file-only",
     "blocked",
     "test:characterization",
     "project:<n>",
