@@ -784,6 +784,22 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(section(skill('upgrade').body, /^## Steps$/)).toContain('"Offering the Releaser"');
   });
 
+  it('reads Kanon\'s latest stable release from doctor, and offers it to a candidate pin (plan 0009 S6)', () => {
+    // The stable release comes from doctor's JSON, `releases.stable`, never from a `gh` call of the
+    // skill's own (ADR 0014), and docs/doctor.md documents it, so the test below holds the path.
+    expect(resolves('doctor', '.releases.stable')).toBe(true);
+    const steps = section(skill('upgrade').body, /^## Steps$/)!;
+    expect(paths(steps)).toContain('.releases.stable');
+    expect(steps).not.toMatch(/gh release view/);
+    expect(steps).toMatch(/\*\*pinned at a candidate,\*\* a `\.releases\.pinned` of the form `candidate-vX\.Y\.Z`/);
+    expect(steps).toMatch(/\*\*Move to stable\*\* \(Recommended\), offered only when `\.releases\.stable` is the candidate's own version or later/);
+    expect(section(skill('upgrade').body, /^## Moving the plugin$/)).toMatch(/\*\*a stable release, `vX\.Y\.Z`, by default\*\*, the latest being `\.releases\.stable`/);
+    // The adopt skill names the channel and how upgrades arrive; the channel is no question.
+    const adopt = section(skill('adopt').body, /^## Steps$/)!;
+    expect(paths(adopt)).toContain('.pin');
+    expect(adopt).toContain('**Dependabot proposes each stable Kanon release, about once a week,**');
+  });
+
   it('reads only fields its command documents', () => {
     const problems: string[] = [];
     let seen = 0;
