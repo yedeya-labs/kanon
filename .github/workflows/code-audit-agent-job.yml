@@ -351,6 +351,7 @@ jobs:
           timeout-minutes: "60"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
           kanon-error: ${{ steps.setup.outputs.kanon-error }}
           prompt-cache-ttl: ${{ steps.agent.outputs.prompt-cache-ttl }}
+          auth: ${{ steps.agent.outputs.auth }}
 
       # Stamp the measured duration and the actual trigger and commit into the report (RA-504),
       # so a degraded run is self-evident and scheduled liveness is logged, not inferred.

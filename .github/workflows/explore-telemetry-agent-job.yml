@@ -275,6 +275,7 @@ jobs:
           timeout-minutes: "30"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
           kanon-error: ${{ steps.setup.outputs.kanon-error }}
           prompt-cache-ttl: ${{ steps.agent.outputs.prompt-cache-ttl }}
+          auth: ${{ steps.agent.outputs.auth }}
 
       # THE REPORT, FOR THE FILE JOB: data, handed to a job the agent can't reach. One day. No
       # report uploads nothing, and the file job says the run was lost.

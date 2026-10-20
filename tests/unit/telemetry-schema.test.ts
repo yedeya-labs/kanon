@@ -18,6 +18,7 @@ import {
   KANON_ERRORS,
   LANES,
   PROMPT_CACHE_TTLS,
+  AUTHS,
   LANE_ROLES,
   NOTIFY_FAILURES,
   NOTIFY_HOOKS,
@@ -121,8 +122,8 @@ const both = (execution: string | null, env: Record<string, string> = {}) =>
 const finished = () => both('tests/fixtures/agent-blocks/finished.json').v2 as Row;
 
 describe('the field lists (plan 0002 §2.1, plan 0003 §3.3)', () => {
-  it('a run row has fifty-nine fields and a work-item row eighty-four', () => {
-    expect(Object.keys(RUN)).toHaveLength(59);
+  it('a run row has sixty fields and a work-item row eighty-four', () => {
+    expect(Object.keys(RUN)).toHaveLength(60);
     expect(Object.keys(WORK)).toHaveLength(84);
   });
 
@@ -1088,6 +1089,91 @@ describe('run row version 4: the counts the turn-budget measurement asked for (#
       expect(v2).toMatchObject({ schema_version: 2 });
       for (const c of COUNTS) expect(v2).not.toHaveProperty(c);
     }
+  });
+});
+
+
+describe('the run row records which Claude credential it ran on (plan 0009 §12, A6)', () => {
+  const FINISHED = 'tests/fixtures/agent-blocks/finished.json';
+
+  it('`auth` is an enum of exactly `subscription` and `api-key`, optional, on every run row version', () => {
+    expect([...AUTHS]).toEqual(['subscription', 'api-key']);
+    for (const [version, fields] of Object.entries(SCHEMAS.run!)) {
+      expect(fields.auth, `version ${version}`).toEqual({ type: 'enum', values: ['subscription', 'api-key'] });
+    }
+  });
+
+  it('accepts its two values, at version 2, and refuses any other', () => {
+    const row: Row = { ...finished(), schema_version: 2 };
+    delete row.auth;
+    for (const auth of ['subscription', 'api-key']) expect(validate({ ...row, auth }), auth).toEqual({ ok: true });
+    for (const bad of ['oauth', 'API-KEY', 'api_key', 'subscription ', '', 'sk-ant-oat01', 'sk-ant-api03', 'none']) {
+      expect(validate({ ...row, auth: bad }), JSON.stringify(bad)).toEqual({ ok: false, errors: [{ field: 'auth', problem: 'enum' }] });
+    }
+    for (const bad of [1, true, null, ['api-key']]) {
+      expect(validate({ ...row, auth: bad }), JSON.stringify(bad)).toEqual({ ok: false, errors: [{ field: 'auth', problem: 'type' }] });
+    }
+  });
+
+  it('a row without it validates, at every version', () => {
+    for (const version of [2, 3, 4]) {
+      const row: Row = { ...finished(), schema_version: version };
+      delete row.auth;
+      expect(validate(row), `version ${version}`).toEqual({ ok: true });
+    }
+  });
+
+  it('writes the credential the lane handed in, and never raises the row\'s version for it', () => {
+    for (const auth of ['subscription', 'api-key']) {
+      const { v2, errors } = both(FINISHED, { TELEMETRY_AUTH: auth });
+      expect(errors, auth).toEqual([]);
+      expect(v2, auth).toMatchObject({ schema_version: 2, auth });
+      expect(both(FINISHED, { TELEMETRY_AUTH: auth, TELEMETRY_PROMPT_CACHE_TTL: '1h' }).v2).toMatchObject({ schema_version: 3, auth });
+    }
+  });
+
+  it('leaves out a value it does not know, never guessing `subscription`', () => {
+    for (const auth of ['', 'oauth', 'api-key\nlane=x', 'sk-ant-oat01-abc']) {
+      const { v2, errors } = both(FINISHED, { TELEMETRY_AUTH: auth });
+      expect(errors, auth).toEqual([]);
+      expect(v2, auth).not.toHaveProperty('auth');
+    }
+  });
+
+  type Step = { id?: string; uses?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown> };
+  const action = (name: string) => parse(readFileSync(join('actions', name, 'action.yml'), 'utf8')) as {
+    inputs: Record<string, unknown>; outputs?: Record<string, { value: string }>; runs: { steps: Step[] };
+  };
+
+  it('agent-run\'s output reaches the row: agent-finish, then the telemetry action, then the normaliser', () => {
+    expect(action('agent-run').outputs?.auth?.value).toBe('${{ steps.credential.outputs.auth }}');
+    const finish = action('agent-finish');
+    expect(finish.inputs.auth).toMatchObject({ required: false, default: '' });
+    expect(finish.runs.steps.find((s) => s.uses === '$/actions/agent-telemetry')!.with!.auth).toBe('${{ inputs.auth }}');
+    const telemetry = action('agent-telemetry');
+    expect(telemetry.inputs.auth).toMatchObject({ required: false, default: '' });
+    expect(telemetry.runs.steps.find((s) => s.id === 'row')?.env?.TELEMETRY_AUTH).toBe('${{ inputs.auth }}');
+  });
+
+  it('every lane hands the finish block its own agent step\'s `auth`, and no secret', () => {
+    type Workflow = { jobs: Record<string, { steps?: Step[] }> };
+    const files = [
+      ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => join('.github/workflows', f)),
+      'tests/fixtures/agent-direct-lane.yml',
+    ];
+    let calls = 0;
+    for (const path of files) {
+      const doc = parse(readFileSync(path, 'utf8')) as Workflow;
+      for (const job of Object.values(doc.jobs ?? {})) {
+        const finish = (job.steps ?? []).find((s) => s.uses === '$/actions/agent-finish');
+        if (!finish) continue;
+        calls += 1;
+        expect(finish.with?.auth, path).toBe('${{ steps.agent.outputs.auth }}');
+        for (const v of Object.values(finish.with ?? {})) expect(String(v), path).not.toMatch(/secrets\.|claude-token|anthropic-api-key/i);
+      }
+    }
+    // The twelve lane jobs, the blocks smoke, and the direct-lane fixture.
+    expect(calls).toBe(14);
   });
 });
 

@@ -179,6 +179,7 @@ jobs:
           lane: review
           tag: smoke
           prompt-cache-ttl: ${{ steps.agent.outputs.prompt-cache-ttl }}
+          auth: ${{ steps.agent.outputs.auth }}
 
       - name: Check the finish block classified the run and wrote its telemetry row
         env:
@@ -192,6 +193,7 @@ jobs:
           # The version-2 row beside it, validated before it was written (plan 0002 §8, S1).
           # Run row version 2, not 3: the agent step never runs, so it says no TTL and the row
           # records none (#546). A collector or ingest function from an older release, which
-          # knows no version 3, still accepts this row.
+          # knows no version 3, still accepts this row. Nor does it say which credential it ran
+          # on, so the row has no `auth` (plan 0009 §12).
           jq -c '{kanon_version, tag, lane, reason}' kanon-telemetry.json
-          jq -e '.schema_version == 2 and .row_kind == "run" and .tag == "smoke" and .lane == "review" and .reason == "none" and .num_turns == 20 and (has("failed_stage") | not) and (has("prompt_cache_ttl") | not)' kanon-telemetry.json
+          jq -e '.schema_version == 2 and .row_kind == "run" and .tag == "smoke" and .lane == "review" and .reason == "none" and .num_turns == 20 and (has("failed_stage") | not) and (has("prompt_cache_ttl") | not) and (has("auth") | not)' kanon-telemetry.json

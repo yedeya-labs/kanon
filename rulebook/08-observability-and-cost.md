@@ -177,6 +177,7 @@ These rules decide what leaves an adopter's project, where it is kept, and who m
 - the outcome, and a bail or failure reason chosen from a fixed list of codes;
 - the run's identity: its run id and attempt, its trigger, and when it was recorded;
 - its configuration: effort, turn cap, compaction window, the prompt-cache TTL it was pinned at, and configuration fingerprint;
+- which kind of Claude credential it ran on, `subscription` or `api-key`, chosen by which secret was mapped, never anything the credential holds;
 - work-size and output counts;
 - the verdict, and diagnostic codes: terminal reason, API status, error flag and execution-file form;
 - attribution codes: the Kanon version, the failed stage, and a Kanon error code from Kanon's own list.

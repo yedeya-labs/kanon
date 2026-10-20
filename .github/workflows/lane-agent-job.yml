@@ -536,6 +536,7 @@ jobs:
           job-started-at: ${{ steps.job.outputs.started-at }}
           timeout-minutes: ${{ inputs.timeout-minutes }}
           prompt-cache-ttl: ${{ steps.agent.outputs.prompt-cache-ttl }}
+          auth: ${{ steps.agent.outputs.auth }}
 
       # THE RA-2519 BREADCRUMBS. A PR lane's recovery (`reviseRecovery` in the pipeline
       # library's `lead-reconcile.mjs` for the implementer, `brief-revise-recovery.mjs` for

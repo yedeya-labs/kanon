@@ -74,9 +74,6 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
     // step in the same job to read whole, where `rows` is one line for another job. Kanon's
     // lanes read `rows`.
     'qa-store': { dir: 'cost-rows.json for a step after the block, in the same job' },
-    // Which Claude credential the agent ran on (plan 0009 §10, step A1). The run's telemetry
-    // row reads it once the store accepts the field (plan 0009 §12); until then no lane does.
-    'agent-run': { auth: 'subscription or api-key, for the telemetry row plan 0009 §12 adds' },
   };
 
   /**
@@ -135,7 +132,7 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
     expect(ACTIONS.map((b) => `${b}: ${[...readOutputsOf(b)].sort().join(' ') || 'nothing'}`)).toEqual([
       'agent-classify: kind retry',
       'agent-finish: kind retry',
-      'agent-run: claude-args execution_file prompt-cache-ttl started-at',
+      'agent-run: auth claude-args execution_file prompt-cache-ttl started-at',
       'agent-setup: kanon-error',
       'agent-telemetry: nothing',
       'dco: nothing',

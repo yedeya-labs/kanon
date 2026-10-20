@@ -137,3 +137,4 @@ jobs:
           started-at: ${{ steps.agent.outputs.started-at }}
           github-token: ${{ steps.app-token.outputs.token }}
           prompt-cache-ttl: ${{ steps.agent.outputs.prompt-cache-ttl }}
+          auth: ${{ steps.agent.outputs.auth }}

@@ -57,7 +57,7 @@ import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 // The classifier lives in the `agent-classify` block's directory (RA-2691), so the block can
 // run it from its own path; this imports the same file.
 import { classifyResult, parseMaxTurns, parseObjects, readConfiguredModel, readResult } from "../agent-classify/classify-agent-result.mjs";
-import { LANE_ROLES, PROMPT_CACHE_TTLS, STAGES, TERMINAL_REASONS, describeErrors, validate } from "./schema.mjs";
+import { AUTHS, LANE_ROLES, PROMPT_CACHE_TTLS, STAGES, TERMINAL_REASONS, describeErrors, validate } from "./schema.mjs";
 import { isCliEntry } from "../../scripts/lib/cli-entry.mjs";
 import { markedRole } from "../../scripts/lib/role-marker.mjs";
 import { openItems } from "../../scripts/merge-reconcile-gate.mjs";
@@ -950,6 +950,11 @@ export function buildRowV2(row, classification, extra) {
   // THE TTL THE RUN WAS PINNED AT (#546), as `agent-run` said it. A value outside the list is
   // left out, never written as `default`: a lane that didn't say is not a lane that didn't pin.
   const ttl = PROMPT_CACHE_TTLS.includes(extra.prompt_cache_ttl) ? extra.prompt_cache_ttl : undefined;
+  // WHICH CREDENTIAL THE RUN RAN ON (plan 0009 §12, A6), as `agent-run`'s `auth` output said it:
+  // a name chosen by which secret the caller mapped, never anything read from it. A value outside
+  // the list is left out, never written as `subscription`: a lane that didn't say is unknown. It
+  // is a version-2 field (Owner decision 10), so it never raises the row's version.
+  const auth = AUTHS.includes(extra.auth) ? extra.auth : undefined;
   // THE TWO COUNTS #173 ASKED FOR, each a whole number or absent.
   const reviewOpen = Number.isInteger(extra.review_open_items) && extra.review_open_items >= 0 ? extra.review_open_items : undefined;
   const acCount = Number.isInteger(extra.issue_ac_count) && extra.issue_ac_count >= 0 ? extra.issue_ac_count : undefined;
@@ -986,6 +991,7 @@ export function buildRowV2(row, classification, extra) {
     max_turns: row.max_turns ?? undefined,
     autocompact: row.autocompact ?? undefined,
     config_fingerprint: row.config_fingerprint ?? undefined,
+    auth,
     prompt_cache_ttl: ttl,
     total_cost_usd: row.total_cost_usd ?? undefined,
     num_turns: row.num_turns ?? undefined,
@@ -1037,6 +1043,7 @@ function readExtra(args, env, path) {
     job_started_at: args.job_started_at ?? env.TELEMETRY_JOB_STARTED_AT ?? "",
     timeout_minutes: args.timeout_minutes ?? env.TELEMETRY_TIMEOUT_MINUTES ?? "",
     prompt_cache_ttl: args.prompt_cache_ttl ?? env.TELEMETRY_PROMPT_CACHE_TTL ?? "",
+    auth: args.auth ?? env.TELEMETRY_AUTH ?? "",
     transcript: transcriptCounts(objects),
   };
 }

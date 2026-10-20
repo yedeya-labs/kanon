@@ -113,7 +113,8 @@ outputs:
   auth:
     description: >-
       Which credential the agent ran on, `subscription` or `api-key`: a name, never anything the
-      secret holds. No Kanon lane reads it yet; the run's telemetry row will (plan 0009 §12).
+      secret holds. Every lane hands it to `agent-finish` as `auth`, for the run's telemetry row
+      (plan 0009 §12, step A6).
     value: ${{ steps.credential.outputs.auth }}
   prompt-cache-ttl:
     description: >-
