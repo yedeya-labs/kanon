@@ -97,7 +97,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-MERGE-13`
 
 - **2026-10-12.** The Owner decided that a pull request with no behaviour change proves itself with a characterization test: the red-test check concludes skipped, never failed, and the pull request states the mutations that turn its test red. [#666](https://github.com/yedeya-labs/kanon/issues/666)
-- **2026-10-20.** The red-test check reads which files are tests, and their runners, from the default branch's stack document instead of the pull request's, and fails a pull request that changes them instead of skipping it. It runs its verifier with Kanon's Node by absolute path, after the pull request's setup hook. [#761](https://github.com/yedeya-labs/kanon/issues/761)
+- **2026-10-20.** The red-test check reads which files are tests, and their runners, from the default branch's stack document instead of the pull request's, and fails a pull request that changes them instead of skipping it. It runs its verifier with Kanon's Node by absolute path, after the pull request's setup hook. The Owner decided that refusing is right, so a new tests tree or runner lands first in its own pull request, and that the rule states what the check guards against: a test that proves nothing, not a pull request built to defeat it. [#761](https://github.com/yedeya-labs/kanon/issues/761)
 
 ## `K-MERGE-17`
 
