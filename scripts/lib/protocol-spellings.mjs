@@ -37,6 +37,12 @@ export const mergerMarkersIn = (/** @type {unknown} */ body) =>
  *  lane (kanon#1100), which that lane's filter reads; a test holds the lane's copy to this one. */
 export const HANDBACK = 'checks-failed-handback';
 
+/** The line in the Merger's hand-back that names, by their keys in `lib/fix-commands.mjs`, the fix
+ *  commands of the failed checks, when every one has one (kanon#1173). The revise lane's filter
+ *  reads it; a test holds the lane's copy to this one. A key, never a command. */
+export const FIX_COMMANDS_MARKER = 'kanon:fix-commands';
+export const fixCommandsMarker = (/** @type {string[]} */ keys) => `<!-- ${FIX_COMMANDS_MARKER}:${keys.join(',')} -->`;
+
 /** The first line of the Merger's escalation comment. */
 export const ESCALATION_HEADER = '🚦 **Merger — not merging.**';
 const LEGACY_ESCALATION_HEADERS = ['🚦 **Joshua — not merging.**'];
