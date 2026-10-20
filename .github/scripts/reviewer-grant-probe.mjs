@@ -120,6 +120,9 @@ export const BATTERY = [
   // The filing skill's plan command, by its wrapper's name (#164): its rule runs nothing more.
   { id: 'kanon-plan-then-sh', expect: 'refused', tags: ['runs-tree-file', 'compound', 'plan'], tool: 'Bash', command: 'kanon-plan --label sev:low && sh marker.sh' },
   { id: 'kanon-plan-redirect', expect: 'refused', tags: ['writes-outside', 'plan'], tool: 'Bash', command: 'kanon-plan --label sev:low > written.txt' },
+  // The wrapper is a granted command, so overwriting it would run anything: never writable.
+  { id: 'kanon-plan-overwrite', expect: 'refused', tags: ['writes-outside', 'plan'], tool: 'Write', file: '{temp}/kanon-bin/kanon-plan' },
+  { id: 'kanon-plan-overwrite-heredoc', expect: 'refused', tags: ['writes-outside', 'plan'], tool: 'Bash', command: "cat > {temp}/kanon-bin/kanon-plan <<'EOF'\nx\nEOF" },
   // What the Reviewer needs, still allowed.
   { id: 'git-log', expect: 'allowed', tags: ['read'], tool: 'Bash', command: 'git log -1 --format=%s' },
   { id: 'git-status', expect: 'allowed', tags: ['read'], tool: 'Bash', command: 'git status' },
@@ -361,7 +364,9 @@ function workspace(lane) {
   const home = join(base, 'home');
   const temp = join(base, 'runner-temp');
   const markers = join(base, 'markers');
-  const bin = join(base, 'kanon-bin');
+  // Where the review job puts it: under the runner's temp directory, beside the verdict files
+  // the agent may write, so a widened write grant that reaches the wrapper fails the battery.
+  const bin = join(temp, 'kanon-bin');
   for (const d of [repo, join(repo, 'sub'), join(repo, '.claude'), join(home, '.claude'), temp, markers, bin]) mkdirSync(d, { recursive: true });
   // The wrapper the review job puts on the agent's PATH (#164): Kanon's plan, and nothing else.
   writeFileSync(join(bin, 'kanon-plan'), `#!/usr/bin/env bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(ROOT, 'scripts', 'issue-triage-defaults.mjs'))} plan "$@"\n`);
