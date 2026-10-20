@@ -57,14 +57,14 @@ describe('the chain: an ordered list, whose last is production (plan 0010 §4, d
   });
 
   it('declares no environment with no section, no list, or an empty list', () => {
-    const none = { environments: [], chain: [], ciWait: DEFAULT_CI_WAIT, reference: null, fallback: null };
+    const none = { environments: [], chain: [], ciWait: DEFAULT_CI_WAIT, reference: null, fallback: null, smokeSchedule: [] };
     expect(parseDeployDeclaration('# Adoption record\n\n## Choices\n\n- **Overseer:** `installed`\n')).toEqual(none);
     expect(parseDeployDeclaration(RECORD(['Nothing deploys yet.']))).toEqual(none);
     expect(parseDeployDeclaration(RECORD(['- **Environments:**']))).toEqual(none);
   });
 
   it("reads Kanon's own record as declaring nothing: no environment and no reference deploy", () => {
-    expect(readDeployDeclaration(ROOT)).toEqual({ environments: [], chain: [], ciWait: DEFAULT_CI_WAIT, reference: null, fallback: null });
+    expect(readDeployDeclaration(ROOT)).toEqual({ environments: [], chain: [], ciWait: DEFAULT_CI_WAIT, reference: null, fallback: null, smokeSchedule: [] });
   });
 
   it("leaves `## Plan`'s prose `Environments` bullet, which `kanon init` writes, as prose", () => {
@@ -96,6 +96,7 @@ describe('the reference deploy (K-PROJ-11), in `## Deploy`', () => {
       ciWait: DEFAULT_CI_WAIT,
       reference: { environment: 'preview', workflow: 'deploy-preview.yml', job: 'ship' },
       fallback: null,
+      smokeSchedule: [],
     });
   });
 
@@ -115,6 +116,7 @@ describe('the reference deploy (K-PROJ-11), in `## Deploy`', () => {
       ciWait: 120,
       reference: { environment: 'staging', workflow: 'deploy.yml', job: 'staging / deploy' },
       fallback: 'no-reviewers',
+      smokeSchedule: [],
     });
   });
 
@@ -170,6 +172,84 @@ describe('what the parser refuses, each a DeclarationError naming the file and t
 
   it('ignores a declaration inside a fenced block, as an example', () => {
     expect(parseDeployDeclaration(RECORD(['```markdown', '- **Environments:** `a`, `a`', '- **CI wait:** `0`', '```'])).environments).toEqual([]);
+  });
+});
+
+/**
+ * Plan 0013 §4.3, step S1: the optional `Smoke schedule` bullet, one code span per environment,
+ * its name and then a five-field cron. `kanon init` writes one `schedule:` entry per span into the
+ * smoke caller (S6), and `deploy-smoke.yml`'s `route` job matches `github.event.schedule` to one
+ * environment by its cron string (S5), which is why two spans may not share a cron. The parser
+ * reads the bullet; who may have a schedule is doctor's (`deploy.smoke-schedule-reviewers`,
+ * `deploy.smoke-schedule-production`, S7), not the parser's.
+ */
+describe('the smoke schedule (plan 0013 §4.3)', () => {
+  const WITH = (...spans: string[]) => RECORD([
+    '- **Environments:** `staging`, `production`',
+    `- **Smoke schedule:** ${spans.map((s) => `\`${s}\``).join(', ')}`,
+  ]);
+  it('declares none without the bullet, and reads one span', () => {
+    expect(parseDeployDeclaration(RECORD(['- **Environments:** `staging`, `production`'])).smokeSchedule).toEqual([]);
+    expect(parseDeployDeclaration(WITH('staging 0 3 * * *')).smokeSchedule).toEqual([
+      { environment: 'staging', cron: '0 3 * * *' },
+    ]);
+  });
+
+  it('reads two spans, in the order written, production among them (decision 8)', () => {
+    expect(parseDeployDeclaration(WITH('production 0 5 * * 1-5', 'staging 0 3 * * *')).smokeSchedule).toEqual([
+      { environment: 'production', cron: '0 5 * * 1-5' },
+      { environment: 'staging', cron: '0 3 * * *' },
+    ]);
+  });
+
+  it.each([
+    [
+      'an environment the `Environments` list does not declare',
+      ['qa 0 3 * * *'],
+      /adoption\.md:14: `Smoke schedule` names `qa`, which `Environments` doesn't declare: name one of `staging`, `production`/,
+    ],
+    [
+      'an environment named twice',
+      ['staging 0 3 * * *', 'staging 0 4 * * *'],
+      /adoption\.md:14: `Smoke schedule` names `staging` twice: one cron per environment/,
+    ],
+    [
+      'a cron of four fields',
+      ['staging 0 3 * *'],
+      /adoption\.md:14: `Smoke schedule`'s span `staging 0 3 \* \*` isn't an environment and a five-field cron/,
+    ],
+    [
+      'a cron of six fields',
+      ['staging 0 3 * * * *'],
+      /adoption\.md:14: `Smoke schedule`'s span `staging 0 3 \* \* \* \*` isn't an environment and a five-field cron/,
+    ],
+    [
+      'two spans with one cron',
+      ['staging 0 3 * * *', 'production 0 3 * * *'],
+      /adoption\.md:14: `Smoke schedule` gives `production` the same cron as `staging`, `0 3 \* \* \*`/,
+    ],
+    [
+      'an empty span',
+      ['staging 0 3 * * *', ''],
+      /adoption\.md:14: `Smoke schedule` has an empty code span/,
+    ],
+  ])('refuses %s, naming the line', (_what, spans, message) => {
+    // `WITH`'s bullet is the second of `RECORD`'s `## Deploy` list, so line `FIRST + 1`.
+    expect(FIRST + 1).toBe(14);
+    fails(WITH(...spans), message);
+    expect(() => parseDeployDeclaration(WITH(...spans))).toThrow(/\(K-LAYOUT-10\)$/);
+  });
+
+  it('refuses a schedule where the record declares no environment, since a schedule is per declared environment', () => {
+    fails(
+      RECORD(['- **Smoke schedule:** `staging 0 3 * * *`']),
+      /adoption\.md:13: `Smoke schedule` names `staging`, but the record declares no `Environments`/,
+    );
+  });
+
+  it('refuses a value that is not a list of code spans, and one written outside `## Deploy`', () => {
+    fails(RECORD(['- **Environments:** `staging`', '- **Smoke schedule:** staging 0 3 * * *']), /adoption\.md:14: `Smoke schedule` isn't a list of code spans/);
+    fails(RECORD([], '- **Smoke schedule:** `staging 0 3 * * *`\n'), /adoption\.md:10 declares `Smoke schedule` outside `## Deploy`/);
   });
 });
 

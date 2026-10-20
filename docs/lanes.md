@@ -408,7 +408,10 @@ The deploy lane deploys your published releases to the environments your adoptio
 ## Deploy
 - **Environments:** `staging`, `production`
 - **CI wait:** `90`
+- **Smoke schedule:** `staging 0 3 * * *`
 ```
+
+The smoke schedule is optional, and says how often the smoke check runs on an environment outside a deploy: one code span per environment, its name as the list spells it, then a five-field cron. Without the bullet, no environment has one. Each environment takes at most one cron, and no two environments take the same cron string, because the cron is what tells one scheduled run from another. Production may have one; an environment with required reviewers may not, since each of its runs would hold the deploy's slot while it waited for a person ([plan 0013](plans/0013-smoke-lifecycle.md) §4.3). **Nothing reads it yet:** the workflow and the caller that would run it are being built, and the lane's own smoke step, after each deploy, runs as it does today.
 
 The CI wait is how long the gate waits for the release commit's CI, in minutes from 1 to 360; without it, 90. The gate never waits longer than 345 minutes, whatever the record declares, so the wait ends in `ci-timeout` inside the gate job's 360-minute limit rather than in a cancellation. The lane reads the section **at the release's commit**, through [`scripts/lib/deploy-declaration.mjs`](../scripts/lib/deploy-declaration.mjs), so the declaration that deploys a release is the one reviewed with it.
 

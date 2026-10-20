@@ -11,10 +11,11 @@
 //   - **Reference deploy workflow:** `deploy.yml`
 //   - **Reference deploy job:** `staging / deploy`
 //   - **Fallback:** `no-reviewers`
+//   - **Smoke schedule:** `staging 0 3 * * *`
 //
 // Each bullet is a `- ` at the start of its line, its bold label, and its value as one code span
-// with nothing after it; the environments are code spans separated by `, `. Every bullet is
-// optional.
+// with nothing after it; the environments, and the smoke schedule's spans, are code spans
+// separated by `, `. Every bullet is optional.
 //
 // THE CHAIN (plan 0010 decision 2). The environments, in order, form a straight line: each deploys
 // only after the one before it succeeded on the same release. The last is production; every other
@@ -33,6 +34,17 @@
 //
 // THE FALLBACK'S MARKER (plan 0010 §13): `no-environments` or `no-reviewers`, present only where
 // the plan can't protect the chain; the record still states the fallback under `## Plan`.
+//
+// THE SMOKE SCHEDULE (plan 0013 §4.3): how often a smoke run happens outside a deploy, one code
+// span per environment, its declared name and then a five-field cron. Absent, no environment has
+// one, and smoke runs happen on demand alone. `kanon init` writes one `schedule:` entry per span
+// into the smoke caller, and the scheduled run tells the environments apart by the cron string
+// GitHub hands it, so two spans may not share one cron. A span naming an environment the
+// `Environments` list doesn't declare, an environment twice, a cron of other than five fields, or
+// two spans with one cron throws, naming the line. Which environments may have one at all is
+// doctor's (`deploy.smoke-schedule-reviewers`, `deploy.smoke-schedule-production`), not the
+// parser's: production may, and an environment with required reviewers may not, because each run
+// would hold the deploy's concurrency slot while it waited for a person.
 //
 // THE BULLETS MOVED AT ONCE (plan 0010, follow-up decision 1). The reference deploy's three
 // bullets used to sit under `## Choices`. They are read from `## Deploy` only, with no period of
@@ -71,12 +83,22 @@ export const LABELS = /** @type {const} */ ({
   job: 'Reference deploy job',
 });
 
-/** The chain's bold labels (plan 0010 §4). */
+/** The chain's bold labels (plan 0010 §4), and the smoke schedule's (plan 0013 §4.3). */
 export const CHAIN_LABELS = /** @type {const} */ ({
   environments: 'Environments',
   ciWait: 'CI wait',
   fallback: 'Fallback',
+  smokeSchedule: 'Smoke schedule',
 });
+
+/** The labels whose value is a list of code spans, not one span. */
+const SPAN_LIST_LABELS = /** @type {readonly string[]} */ ([CHAIN_LABELS.environments, CHAIN_LABELS.smokeSchedule]);
+
+/** How many fields a cron has, as GitHub's `schedule:` writes it (plan 0013 §4.3). */
+export const CRON_FIELDS = 5;
+
+/** One cron field: digits, names, and the operators GitHub's cron takes. */
+const CRON_FIELD = /^[A-Za-z0-9*,\-/?]+$/;
 
 /** The CI wait when the record declares none, and its bounds, in minutes (plan 0010 decision 9). */
 export const DEFAULT_CI_WAIT = 90;
@@ -94,12 +116,14 @@ export { DeclarationError };
 /**
  * @typedef {{ environment: string, workflow: string, job: string }} ReferenceDeploy
  * @typedef {{ environment: string, position: number, role: 'production' | 'pre-production' }} Link
+ * @typedef {{ environment: string, cron: string }} SmokeSchedule
  * @typedef {{
  *   environments: string[],
  *   chain: Link[],
  *   ciWait: number,
  *   reference: ReferenceDeploy | null,
  *   fallback: typeof FALLBACKS[number] | null,
+ *   smokeSchedule: SmokeSchedule[],
  * }} DeployDeclaration
  */
 
@@ -134,6 +158,12 @@ const WORKFLOW = /^[A-Za-z0-9._-]+\.ya?ml$/;
 
 /** The example the messages give. */
 const EXAMPLE = `- **${LABELS.environment}:** \`staging\``;
+
+/** How each span-list bullet is written, for the message that refuses another shape. */
+const SPAN_LIST_HOW = /** @type {Record<string, string>} */ ({
+  [CHAIN_LABELS.environments]: `write each environment as a code span, in deploy order, separated by \`, \`, as in: - **${CHAIN_LABELS.environments}:** \`staging\`, \`production\``,
+  [CHAIN_LABELS.smokeSchedule]: `write each environment's schedule as a code span, its name and then a five-field cron, separated by \`, \`, as in: - **${CHAIN_LABELS.smokeSchedule}:** \`staging 0 3 * * *\``,
+});
 
 /**
  * Each line's enclosing `#` or `##` section, by its heading's text, outside fenced blocks; `null`
@@ -237,9 +267,9 @@ export function parseDeployDeclaration(text) {
     const first = found[label];
     if (first) throw fail(`${ADOPTION_RECORD}:${line} repeats \`${label}\`, already declared on line ${first.line}`);
     const rest = /** @type {string} */ (entry[2]);
-    if (label === CHAIN_LABELS.environments) {
+    if (SPAN_LIST_LABELS.includes(label)) {
       if (rest.trim() !== '' && !SPAN_LIST.test(rest)) {
-        throw fail(`${ADOPTION_RECORD}:${line}: \`${label}\` isn't a list of code spans: write each environment as a code span, in deploy order, separated by \`, \`, as in: - **${label}:** \`staging\`, \`production\``);
+        throw fail(`${ADOPTION_RECORD}:${line}: \`${label}\` isn't a list of code spans: ${SPAN_LIST_HOW[label]}`);
       }
       found[label] = { value: rest, line };
       continue;
@@ -260,6 +290,35 @@ export function parseDeployDeclaration(text) {
       const value = spanValue(name, listed.line, CHAIN_LABELS.environments);
       if (environments.includes(value)) throw fail(`${ADOPTION_RECORD}:${listed.line}: \`${CHAIN_LABELS.environments}\` names \`${value}\` twice: each environment is one link of the chain`);
       environments.push(value);
+    }
+  }
+
+  // The smoke schedule (plan 0013 §4.3): one span per environment, its name and then a cron.
+  /** @type {SmokeSchedule[]} */
+  const smokeSchedule = [];
+  const scheduled = found[CHAIN_LABELS.smokeSchedule];
+  if (scheduled) {
+    const label = CHAIN_LABELS.smokeSchedule;
+    const { line } = scheduled;
+    for (const [, span = ''] of scheduled.value.matchAll(/`([^`]*)`/g)) {
+      const value = spanValue(span, line, label);
+      const [environment = '', ...fields] = value.split(/\s+/);
+      if (fields.length !== CRON_FIELDS || !fields.every((f) => CRON_FIELD.test(f))) {
+        throw fail(`${ADOPTION_RECORD}:${line}: \`${label}\`'s span \`${value}\` isn't an environment and a five-field cron: ${SPAN_LIST_HOW[label]}`);
+      }
+      if (!environments.includes(environment)) {
+        throw fail(environments.length
+          ? `${ADOPTION_RECORD}:${line}: \`${label}\` names \`${environment}\`, which \`${CHAIN_LABELS.environments}\` doesn't declare: name one of ${environments.map((e) => `\`${e}\``).join(', ')}`
+          : `${ADOPTION_RECORD}:${line}: \`${label}\` names \`${environment}\`, but the record declares no \`${CHAIN_LABELS.environments}\`: a smoke schedule is per declared environment`);
+      }
+      const twice = smokeSchedule.find((s) => s.environment === environment);
+      if (twice) throw fail(`${ADOPTION_RECORD}:${line}: \`${label}\` names \`${environment}\` twice: one cron per environment`);
+      const cron = fields.join(' ');
+      const shared = smokeSchedule.find((s) => s.cron === cron);
+      if (shared) {
+        throw fail(`${ADOPTION_RECORD}:${line}: \`${label}\` gives \`${environment}\` the same cron as \`${shared.environment}\`, \`${cron}\`: each environment needs a cron of its own, since the cron string is what tells the scheduled runs apart`);
+      }
+      smokeSchedule.push({ environment, cron });
     }
   }
 
@@ -307,7 +366,7 @@ export function parseDeployDeclaration(text) {
     position: i + 1,
     role: i === environments.length - 1 ? ROLES.production : ROLES.preProduction,
   }));
-  return { environments, chain, ciWait, reference, fallback };
+  return { environments, chain, ciWait, reference, fallback, smokeSchedule };
 }
 
 /**

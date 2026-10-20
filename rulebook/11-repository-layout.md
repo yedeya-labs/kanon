@@ -29,6 +29,8 @@ What a file *contains* is still the project's (its specs, its signals, its escal
 | `.github/actions/qa-store/action.yml` | The QA store hook, when the adopter runs a store | `K-OBS-17` |
 | `.github/actions/notify/action.yml` | The notify hook, which posts the lanes' chat messages, when the adopter posts any: Kanon's Slack hook, its generic JSON webhook hook, or the adopter's own | `K-OBS-19` |
 | `.github/actions/build/action.yml`, `.github/actions/deploy/action.yml`, `.github/actions/smoke/action.yml` | The deploy lane's build, deploy and smoke hooks, when the adoption record declares a deploy environment | `K-SHIP-12` |
+| `.github/actions/smoke-reset/action.yml` | The reset the smoke check starts from, when the adopter's check writes to the system it checks. Optional: without it, each run starts from whatever the one before it left | `K-SHIP-13` |
+| `.github/workflows/smoke.yml` | The caller that runs the smoke check outside a deploy, on demand and on the adoption record's `Smoke schedule`, when the record declares a deploy environment | `K-SHIP-13` |
 | `docs/qa/stack.md` | The stack document: the project's gates, schema procedure, isolation rules and generated files | `K-LAYOUT-17` |
 | `docs/qa/triage-fix-playbook.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md`, `docs/qa/lead-playbook.md` | The Implementer's, Reviewer's, Explorer's and Lead's playbooks | `K-LAYOUT-17` |
 | `docs/qa/overseer-playbook.md` | The Overseer's playbook, when the adopter installs the Overseer | `K-LAYOUT-17` |
@@ -208,10 +210,10 @@ A project with high-risk paths of its own declares them before the first brief i
 - `## Bootstrap`: `in bootstrap since YYYY-MM-DD`, or `ended YYYY-MM-DD`, and every bootstrap exception (`K-ADOPT-5`);
 - `## Mechanisms`: every mechanism the rulebook names, each `installed YYYY-MM-DD` or `not yet installed` (`K-ADOPT-9`);
 - `## Choices`: the project's own decisions that Kanon leaves to it, such as its chat channel and whether its production promotion is human-gated (`K-MERGE-4`);
-- `## Deploy`: the deploy declaration, after `## Choices`: the environments the deploy lane deploys to, its CI wait, the fallback's marker, and the reference environment's deploy (`K-PROJ-11`). It may be left out;
+- `## Deploy`: the deploy declaration, after `## Choices`: the environments the deploy lane deploys to, its CI wait, the fallback's marker, the smoke schedule, and the reference environment's deploy (`K-PROJ-11`). It may be left out;
 - `## Data`: whether the repository holds private or sensitive material, after `## Choices`. It may be left out.
 
-The deploy is declared in the `## Deploy` section, each bullet a `- ` at the start of its line, its bold label, and its value as one code span with nothing after it, and the environments as code spans separated by `, ` ([plan 0010](../docs/plans/0010-deployment-lane.md) §4). Every bullet is optional:
+The deploy is declared in the `## Deploy` section, each bullet a `- ` at the start of its line, its bold label, and its value as one code span with nothing after it, and the environments, like the smoke schedule's spans, as code spans separated by `, ` ([plan 0010](../docs/plans/0010-deployment-lane.md) §4, [plan 0013](../docs/plans/0013-smoke-lifecycle.md) §4.3). Every bullet is optional:
 
 ```markdown
 ## Deploy
@@ -222,13 +224,16 @@ The deploy is declared in the `## Deploy` section, each bullet a `- ` at the sta
 - **Reference deploy workflow:** `deploy.yml`
 - **Reference deploy job:** `staging / deploy`
 - **Fallback:** `no-reviewers`
+- **Smoke schedule:** `staging 0 3 * * *`
 ```
 
 The environments are the names the project gives them, in the order a release deploys to them: a straight line, each deployed only after the one before it succeeded on the same release. The last is production, and every other one is pre-production; with one, that one is production. **A record without the section, or without the environments, declares none, and the repository has no deploy lane.** The CI wait is how many minutes the deploy lane's gate waits for the release commit's CI, from 1 to 360; **without it, 90**. The gate never waits longer than 345 minutes, whatever the record declares, so the wait ends in `ci-timeout` inside the gate job's 360-minute limit rather than in a cancellation. The fallback's marker is present only where the plan can't protect the chain (`K-ADOPT-3`): `no-environments` where it provides no environments, `no-reviewers` where it provides environments but no required reviewers. The record still states the fallback under `## Plan`.
 
+The smoke schedule is how often the smoke check runs on an environment outside a deploy, one code span per environment: the environment's name as the list spells it, then a five-field cron. **Without the bullet, no environment has one,** and a smoke run outside a deploy happens only when a person asks for it. Each environment takes at most one cron, and no two environments take the same cron string, because the cron is what tells one scheduled run from another. Which environments may have one at all is not the record's: production may, and an environment with required reviewers may not, since each of its runs would hold the deploy's slot while it waited for a person ([plan 0013](../docs/plans/0013-smoke-lifecycle.md) §4.3).
+
 The reference environment's deploy (`K-PROJ-11`) is the last three bullets. The environment is the name the project gives it. The workflow is the file name, in `.github/workflows/`, of the workflow that deploys there. The job is the name of the job whose success is the deploy, exactly as a run of that workflow lists it: its `name:`, or its key when it has none, and for a job of the deploy lane's caller, the caller's job name and the called job's, as `staging / deploy` above. `kanon init` writes the first environment of the chain as the reference, with the caller it writes and that environment's job; the record may name another declared environment on purpose. Without a chain, the three bullets stand on their own: a project that deploys with a workflow of its own keeps a `## Deploy` section holding only them, naming any environment, workflow and job. A record declares all three or none of them. A record with none declares no reference environment, and then no project can close (`K-PROJ-11`).
 
-An environment named twice, an empty code span, a CI wait outside 1 to 360, a reference environment not in the environments when they are declared, some of the reference bullets but not all three, a marker other than `no-environments` or `no-reviewers`, a bullet written twice or in another shape, a list item under `## Deploy` that declares nothing, the `## Deploy` heading written twice, a workflow that isn't a file name, or a deploy bullet outside `## Deploy` is malformed. A reference bullet under `## Choices`, where the reference deploy used to be declared, is malformed too: it belongs in `## Deploy`.
+An environment named twice, an empty code span, a CI wait outside 1 to 360, a reference environment not in the environments when they are declared, some of the reference bullets but not all three, a marker other than `no-environments` or `no-reviewers`, a smoke schedule naming an environment the list doesn't declare, naming one twice, writing a cron of other than five fields, or giving two environments one cron, a bullet written twice or in another shape, a list item under `## Deploy` that declares nothing, the `## Deploy` heading written twice, a workflow that isn't a file name, or a deploy bullet outside `## Deploy` is malformed. A reference bullet under `## Choices`, where the reference deploy used to be declared, is malformed too: it belongs in `## Deploy`.
 
 Whether the Overseer is installed is declared under `## Choices` in one bullet, its value `installed` or `not installed` as one code span with nothing after it:
 
