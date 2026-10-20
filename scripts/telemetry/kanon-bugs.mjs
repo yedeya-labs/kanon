@@ -42,8 +42,8 @@
 // plan 0002 decision 7), imported, not restated. Everything else is `private`. An adopter that
 // declares its own figures (`publish_own_figures_as`, given as `own`, the map the aggregate
 // takes) is left out of that count, as the aggregate leaves it out of every cross-adopter cell:
-// the Owner's own projects declare it, Kanon, the operator's repository and the e2e harness
-// (plan 0012 §6.2), so they never make up the three (#1094). Its runs still count everywhere
+// the Owner's own projects declare it (docs/telemetry.md, "Kanon's own bugs", lists them under
+// `--own`), so they never make up the three (#1094). Its runs still count everywhere
 // else: in the signal, its classification and its adopter count, and in both rates of a rise.
 //
 // NOTHING IDENTIFYING LEAVES. A row's lane, stage, error and reason are read only when they are

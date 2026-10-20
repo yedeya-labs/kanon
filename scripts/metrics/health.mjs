@@ -27,8 +27,8 @@
 //    decision 7, imported from the aggregate, not restated); below, it is withheld without
 //    saying how many there are. An adopter that declares its own figures (`publish_own_figures_as`,
 //    given as `own`, the map the aggregate takes) is left out of it, count and distribution, as
-//    the aggregate leaves it out of every cross-adopter cell: the Owner's own projects declare it,
-//    Kanon, the operator's repository and the e2e harness (plan 0012 §6.2), so they never make up
+//    the aggregate leaves it out of every cross-adopter cell: the Owner's own projects declare it
+//    (docs/telemetry.md, "Kanon's own bugs", lists them under `--own`), so they never make up
 //    the three (#1094). Its output holds numbers only, so no key can reach it.
 
 import { RULE_IDS } from '../../actions/agent-telemetry/schema.mjs';
