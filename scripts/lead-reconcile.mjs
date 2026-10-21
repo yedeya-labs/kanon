@@ -1961,7 +1961,10 @@ export function standingChangesRequest(pr) {
  *  reached from the other side, and it renders as progress.
  *
  *  Age, not mere absence: a PR pushed a minute ago has no review either, and calling
- *  that a stall would fire on every healthy PR in the window CI takes to run. */
+ *  that a stall would fire on every healthy PR in the window CI takes to run.
+ *
+ *  No lane passes `QA_LEAD_REVIEW_STALL_HOURS`, so in a lane the window is always 4 hours and is
+ *  not an adopter setting; the variable only moves it for a local run (#1214). */
 export const AWAITING_REVIEW_HOURS = Number(process.env.QA_LEAD_REVIEW_STALL_HOURS || 4);
 export function awaitingReview(prs, now = Date.now(), hours = AWAITING_REVIEW_HOURS) {
   return prs.filter((pr) => {

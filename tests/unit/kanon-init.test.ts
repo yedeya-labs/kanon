@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
@@ -423,6 +423,30 @@ describe('kanon init and the required check (#444)', () => {
       const again = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps']));
       expect(again.files.find((f) => f.path === '.github/workflows/lane-check.yml')!.status).toBe('same');
     });
+  });
+});
+describe('the ci.yml kanon init writes, and the lanes that read it (#1214)', () => {
+  // How each lane that reads `ci.yml` is named in the texts that say who needs that file. A lane
+  // that gains a `# READS WORKFLOW: ci.yml` line and has no name here fails the first case, so the
+  // header and the rulebook's layout table are updated with it.
+  const NAMES: Record<string, string> = {
+    'agent-review.yml': 'the review lane',
+    'agent-lead-reconcile.yml': 'the reconciler',
+    'agent-dispatch-sweep.yml': 'the dispatch sweep',
+  };
+  const readers = readdirSync(join(ROOT, '.github/workflows'))
+    .filter((f) => /^agent-.*\.yml$/.test(f))
+    .filter((f) => /^# READS WORKFLOW: ci\.yml$/m.test(readFileSync(join(ROOT, '.github/workflows', f), 'utf8')));
+
+  it('names every lane whose workflow carries `# READS WORKFLOW: ci.yml`', () => {
+    expect(readers.length).toBeGreaterThan(0);
+    for (const f of readers) expect(NAMES[f], `${f} reads ci.yml but has no name in NAMES`).toBeDefined();
+    const header = ciFile('v1.2.3', 'main').split('\n').filter((l) => l.startsWith('#')).map((l) => l.replace(/^# ?/, '')).join(' ');
+    const row = readFileSync(join(ROOT, 'rulebook/11-repository-layout.md'), 'utf8').split('\n').find((l) => l.startsWith('| `.github/workflows/ci.yml` |'))!;
+    for (const f of readers) {
+      expect(header, `the ci.yml header omits ${f}`).toContain(NAMES[f]);
+      expect(row, `K-LAYOUT-18's layout row omits ${f}`).toContain(NAMES[f]);
+    }
   });
 });
 describe('kanon init and telemetry (#428)', () => {
