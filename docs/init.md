@@ -165,7 +165,7 @@ The pin is `pin` in the JSON document, and the summary's *Pin* line; `kanon` sta
 - **Within a version,** fields, statuses and finding ids may be added, and a consumer ignores what it doesn't know. Nothing is removed, renamed, retyped or given another meaning.
 - **Anything else is a new version,** `kanon-init/v2`, shipped in a breaking release and named in its release notes.
 
-`tests/unit/kanon-init.test.ts` holds the document's fields, the statuses, the finding ids and the flags to the tables on this page.
+`tests/unit/kanon-init-json-flags.test.ts` holds the document's fields, the statuses, the finding ids and the flags to the tables on this page.
 
 ### Decided by the Owner (2026-10-06)
 
