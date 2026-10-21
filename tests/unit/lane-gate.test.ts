@@ -1,13 +1,14 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { decide, triggeringActor } from '../../scripts/lane-gate.mjs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { decide, isTransient, main, readWithRetry, triggeringActor } from '../../scripts/lane-gate.mjs';
 import { parseAppRegister } from '../../scripts/app-register.mjs';
 import { checkCallerPin, kanonRefsOf, localCallsOf, parseWorkflowRef } from '../../scripts/caller-pin.mjs';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
-import { IMPLEMENTER_LOGIN } from './helpers/register.js';
-import { type Workflow, read, LANES, TRIGGERS, gateOf, gateProblems, REPO, type Actor, pullsWith, eventsOf, runGate, MEMBER, STRANGER, caller, STACKED, REPOSITORY } from './helpers/lane-gate.js';
+import { IMPLEMENTER_LOGIN, REGISTER_FIXTURE } from './helpers/register.js';
+import { writeStub } from './helpers/stub-bin.js';
+import { type Workflow, read, LANES, TRIGGERS, gateOf, gateProblems, REPO, type Actor, pullsWith, eventsOf, runGate, MEMBER, STRANGER, caller, STACKED, REPOSITORY, GH_STUB, PERMS, eventFor, flakeCalls, type Trigger } from './helpers/lane-gate.js';
 import { SPAWNS } from './helpers/spawns.js';
 import { GATED, NOTIFY_IF, NOTIFYING_LANES, notifyJob } from './helpers/notify-jobs.js';
 
@@ -432,6 +433,191 @@ describe('the review lane on CI completion judges the review label’s applier (
     const r = runGate('agent-rebase.yml', 'ci-finished', MEMBER, { STUB_EVENTS: eventsOf(['a-stranger', 'review:please']) });
     expect(r.outputs.member, r.output).toBe('true');
     expect(r.outputs.actor).toBe('a-member');
+  });
+});
+
+/**
+ * kanon#1160: on #1156, `commits/<sha>/pulls` answered an empty body once, `JSON.parse` threw
+ * `unexpected end of JSON input`, and the review CI's completion should have started was dropped.
+ * Each of the gate's reads now retries a transient answer, 4 attempts at 1, 2 and 4 s, and still
+ * fails closed when every attempt fails. A refusal or a 404 is never retried.
+ *
+ * These run `main` in this process with the stub `gh` on `PATH`, so the backoff's sleep is
+ * injected and recorded rather than waited out.
+ */
+// Its cases spawn the stub `gh`, so the block takes the spawn budget (#436).
+describe('the gate retries a transient read, and only a transient one (kanon#1160)', SPAWNS, () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const gate = (extra: Record<string, string>, { trigger = 'ci-finished' as Trigger, env: more = {} as Record<string, string> } = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'lane-gate-retry-'));
+    writeStub(join(dir, 'gh'), GH_STUB);
+    const ev = eventFor(trigger, MEMBER);
+    const eventPath = join(dir, 'event.json');
+    writeFileSync(eventPath, JSON.stringify({ ...ev.payload, repository: { default_branch: 'main' } }));
+    const outputPath = join(dir, 'output');
+    writeFileSync(outputPath, '');
+    const env: Record<string, string> = {
+      PATH: `${dir}:${process.env.PATH}`,
+      GH_TOKEN: 'unused',
+      GITHUB_REPOSITORY: REPO,
+      GITHUB_EVENT_NAME: ev.name,
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_OUTPUT: outputPath,
+      GITHUB_STEP_SUMMARY: join(dir, 'summary'),
+      GITHUB_ACTOR: '',
+      GITHUB_TRIGGERING_ACTOR: '',
+      GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/caller.yml@refs/heads/main`,
+      GITHUB_WORKFLOW_SHA: 'e'.repeat(40),
+      LANE_GATE_WORKFLOW_RUN: trigger === 'ci-finished' ? 'review-label' : '',
+      STUB_REGISTER: REGISTER_FIXTURE,
+      STUB_PERMS: JSON.stringify(PERMS),
+      STUB_PULLS: pullsWith(['review:please']),
+      STUB_EVENTS: eventsOf(['a-member', 'review:please']),
+      ...ev.env,
+      ...more,
+      ...extra,
+    };
+    // `gh` inherits this process's environment, so the stub reads its answers from there, and a
+    // second run in one case starts from none of the first's.
+    vi.unstubAllEnvs();
+    for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => void lines.push(a.join(' ')));
+    vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => void lines.push(a.join(' ')));
+    const sleeps: number[] = [];
+    const status = main(process.env, { sleep: (ms: number) => void sleeps.push(ms) });
+    const outputs = Object.fromEntries(readFileSync(outputPath, 'utf8').split('\n').filter(Boolean).map((l) => l.split(/=(.*)/s).slice(0, 2)));
+    return { status, output: lines.join('\n'), outputs, sleeps, calls: (arm: string) => flakeCalls(dir, arm) };
+  };
+
+  it('decides when commits/<sha>/pulls answers empty once, then answers', () => {
+    const r = gate({ STUB_PULLS_FLAKES: 'empty' });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member, r.output).toBe('true');
+    expect(r.outputs.actor).toBe('a-member');
+    expect(r.calls('pulls')).toBe(2);
+    expect(r.sleeps).toEqual([1000]);
+  });
+
+  it('fails by name, closed, when commits/<sha>/pulls answers empty every time', () => {
+    const r = gate({ STUB_PULLS_FLAKES: 'empty,empty,empty,empty' });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error title=Membership gate::could not read who applied the review label for c{40} on example-org\/example-repo after 4 attempts: unexpected end of JSON input/i);
+    expect(r.outputs.member).toBeUndefined();
+    expect(r.calls('pulls')).toBe(4);
+    expect(r.sleeps).toEqual([1000, 2000, 4000]);
+  });
+
+  it('never retries a 404, and fails by name', () => {
+    const r = gate({ STUB_PULLS_FLAKES: '404' });
+    expect(r.status).toBe(1);
+    expect(r.output).toContain('::error title=Membership gate::could not read who applied the review label');
+    expect(r.output).toContain('HTTP 404');
+    expect(r.output).not.toContain('attempts');
+    expect(r.calls('pulls')).toBe(1);
+    expect(r.sleeps).toEqual([]);
+  });
+
+  it('never retries a plain 403 refusal', () => {
+    const r = gate({ STUB_PULLS_FLAKES: '403' });
+    expect(r.status).toBe(1);
+    expect(r.output).toContain('Resource not accessible by integration');
+    expect(r.calls('pulls')).toBe(1);
+    expect(r.sleeps).toEqual([]);
+  });
+
+  it.each([
+    ['a truncated body', 'truncated'],
+    ['a 5xx', '502'],
+    ['a 429', '429'],
+    ['a secondary rate limit', 'secondary'],
+  ])('retries %s, then decides', (_, kind) => {
+    const r = gate({ STUB_PULLS_FLAKES: `${kind},${kind}` });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member, r.output).toBe('true');
+    expect(r.calls('pulls')).toBe(3);
+    expect(r.sleeps).toEqual([1000, 2000]);
+  });
+
+  it('retries the issue events read the same way', () => {
+    const r = gate({ STUB_EVENTS_FLAKES: 'empty,502' });
+    expect(r.outputs.member, r.output).toBe('true');
+    expect(r.calls('events')).toBe(3);
+    const failed = gate({ STUB_EVENTS_FLAKES: '502,502,502,502' });
+    expect(failed.status).toBe(1);
+    expect(failed.output).toMatch(/could not read who applied the review label .* after 4 attempts: gh: Bad Gateway \(HTTP 502\)/);
+  });
+
+  it('retries the permission lookup, and fails it by name after 4 attempts', () => {
+    const label = { trigger: 'pr-label' as Trigger };
+    const r = gate({ STUB_PERMISSION_FLAKES: 'empty' }, label);
+    expect(r.outputs.member, r.output).toBe('true');
+    expect(r.calls('permission')).toBe(2);
+    const failed = gate({ STUB_PERMISSION_FLAKES: '502,502,502,502' }, label);
+    expect(failed.status).toBe(1);
+    expect(failed.output).toContain("::error title=Membership gate::could not read a-member's permission on example-org/example-repo after 4 attempts: gh: Bad Gateway (HTTP 502)");
+  });
+
+  it('retries the caller-pin read, and still reads its 404 as no caller after one call', () => {
+    const stacked = { trigger: 'pr-label' as Trigger, env: { ...STACKED, STUB_CALLER_BRANCH: caller('v0.10.0'), STUB_CALLER_MAIN: caller('v0.10.0') } };
+    const r = gate({ STUB_CALLER_FLAKES: '502' }, stacked);
+    expect(r.outputs.member, r.output).toBe('true');
+    expect(r.calls('caller')).toBe(3);
+    const failed = gate({ STUB_CALLER_FLAKES: '502,502,502,502' }, stacked);
+    expect(failed.status).toBe(1);
+    expect(failed.output).toContain(`::error title=Membership gate::could not read the caller .github/workflows/review.yml at ${'f'.repeat(40)}`);
+    expect(failed.output).toContain('after 4 attempts');
+    // The default branch has no caller: one 404, no retry, and a refusal by name.
+    const none = gate({}, { ...stacked, env: { ...STACKED, STUB_CALLER_BRANCH: caller('v0.10.0') } });
+    expect(none.status, none.output).toBe(0);
+    expect(none.outputs.member).toBe('false');
+    expect(none.calls('caller')).toBe(2);
+    expect(none.sleeps).toEqual([]);
+  });
+
+  describe('readWithRetry', () => {
+    const answers = (...steps: (() => string)[]) => {
+      let n = 0;
+      const read = () => steps[Math.min(n++, steps.length - 1)]!();
+      return { read, calls: () => n };
+    };
+    const ghFails = (stderr: string) => () => {
+      throw Object.assign(new Error('Command failed: gh api'), { stderr });
+    };
+    it('reads the register’s 404 once, so the gate still reads it as no register', () => {
+      const a = answers(ghFails('gh: Not Found (HTTP 404)'), () => 'never');
+      const sleeps: number[] = [];
+      expect(() => readWithRetry(a.read, { sleep: (ms) => void sleeps.push(ms) })).toThrow();
+      expect(a.calls()).toBe(1);
+      expect(sleeps).toEqual([]);
+    });
+    it('rethrows a refusal as it came, after a transient failure', () => {
+      const a = answers(() => JSON.parse(''), ghFails('gh: Not Found (HTTP 404)'));
+      let thrown: unknown;
+      try {
+        readWithRetry(a.read, { sleep: () => {} });
+      } catch (e) {
+        thrown = e;
+      }
+      expect((thrown as { stderr?: string }).stderr).toBe('gh: Not Found (HTTP 404)');
+      expect(a.calls()).toBe(2);
+    });
+    it('names what is transient, and nothing else', () => {
+      const fails = (stderr: string) => Object.assign(new Error('Command failed'), { stderr });
+      expect(isTransient(new SyntaxError('Unexpected end of JSON input'))).toBe(true);
+      for (const t of ['gh: Server Error (HTTP 500)', 'HTTP 503: Service Unavailable', 'gh: Too Many Requests (HTTP 429)',
+        'gh: You have exceeded a secondary rate limit (HTTP 403)', 'HTTP 403: abuse detection mechanism triggered']) {
+        expect(isTransient(fails(t)), t).toBe(true);
+      }
+      for (const t of ['gh: Not Found (HTTP 404)', 'gh: Bad credentials (HTTP 401)', 'gh: Resource not accessible by integration (HTTP 403)',
+        'gh: Validation Failed (HTTP 422)', 'error connecting to api.github.com']) {
+        expect(isTransient(fails(t)), t).toBe(false);
+      }
+    });
   });
 });
 

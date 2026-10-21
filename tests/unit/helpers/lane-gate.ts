@@ -184,9 +184,41 @@ export const PERMS: Record<string, { role_name: string; permissions: Record<stri
   'a-stranger': { role_name: 'read', permissions: { admin: false, maintain: false, push: false, triage: false, pull: true } },
 };
 
+/**
+ * kanon#1160: a read's answers before its real one, call by call. Each arm logs its calls to
+ * `<arm>.calls` beside the stub, and `STUB_<ARM>_FLAKES` lists what its first calls answer:
+ * `empty` (exit 0 with no body, the `unexpected end of JSON input` GitHub gave #1156),
+ * `truncated`, `502`, `429`, `secondary` (a 403 for a secondary rate limit), `403` or `404`.
+ */
+export const flakeCalls = (dir: string, arm: string): number => {
+  try {
+    return readFileSync(join(dir, `${arm}.calls`), 'utf8').split('\n').filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+};
+
 export const GH_STUB = `#!/usr/bin/env bash
+flake() {
+  local log; log="$(dirname "$0")/$1.calls"
+  printf '%s\\n' "$1" >> "$log"
+  local n; n="$(wc -l < "$log")"
+  local kinds; IFS=, read -ra kinds <<< "$2"
+  case "\${kinds[$((n - 1))]:-}" in
+    '') return 0 ;;
+    empty) exit 0 ;;
+    truncated) printf '%s' '[{"number": 7, "state": "op'; exit 0 ;;
+    502) echo "gh: Bad Gateway (HTTP 502)" >&2; exit 1 ;;
+    429) echo "gh: Too Many Requests (HTTP 429)" >&2; exit 1 ;;
+    secondary) echo "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)" >&2; exit 1 ;;
+    403) echo "gh: Resource not accessible by integration (HTTP 403)" >&2; exit 1 ;;
+    404) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+    *) echo "unknown flake: \${kinds[$((n - 1))]}" >&2; exit 3 ;;
+  esac
+}
 ${GH_REGISTER_ARM}
 if [ "\${1:-}" = "api" ] && [[ "\${2:-}" =~ /collaborators/([^/]+)/permission$ ]]; then
+  flake permission "\${STUB_PERMISSION_FLAKES:-}"
   [ -z "\${STUB_PERMISSION_FAILS:-}" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
   login="$(printf '%b' "\${BASH_REMATCH[1]//%/\\\\x}")"
   entry="$(printf '%s' "$STUB_PERMS" | jq -c --arg l "$login" '.[$l] // {role_name: "", permissions: {admin: false, maintain: false, push: false, triage: false, pull: false}}')"
@@ -197,16 +229,19 @@ if [ "\${1:-}" = "api" ] && [[ "\${2:-}" =~ /collaborators/([^/]+)/permission$ ]
 fi
 # kanon#81: the review lane's CI completion asks who applied the review label.
 if [ "\${1:-}" = "api" ] && [[ "$*" == *"/commits/"*"/pulls"* ]]; then
+  flake pulls "\${STUB_PULLS_FLAKES:-}"
   [ -z "\${STUB_PULLS_FAILS:-}" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
   printf '%s' "\${STUB_PULLS:-[]}"; exit 0
 fi
 if [ "\${1:-}" = "api" ] && [[ "$*" == *"/issues/"*"/events"* ]]; then
+  flake events "\${STUB_EVENTS_FLAKES:-}"
   printf '%s' "\${STUB_EVENTS:-[[]]}"; exit 0
 fi
 # kanon#69: the caller, at the branch's commit (STUB_CALLER_BRANCH) and at main (STUB_CALLER_MAIN).
 if [ "\${1:-}" = "api" ] && [[ "\${2:-}" == */contents/.github/workflows/*"?ref="* ]]; then
   printf '%s\n' "$2" >> "\${STUB_CALLS:-/dev/null}"
-  [ -z "\${STUB_CALLER_FAILS:-}" ] || { echo "HTTP 500: Server Error" >&2; exit 1; }
+  flake caller "\${STUB_CALLER_FLAKES:-}"
+  [ -z "\${STUB_CALLER_FAILS:-}" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
   # kanon#118: a local wrapper the caller calls, at the branch's commit and at main.
   case "\${2##*/workflows/}" in
     lanes.yml?ref=main) body="\${STUB_WRAPPER_MAIN:-}" ;;

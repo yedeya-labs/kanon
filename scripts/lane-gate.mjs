@@ -105,6 +105,16 @@
 // (`K-MERGE-17`). A missing register means no App is registered, so a bot is refused; a
 // malformed one, or any failed API call, fails the step by name rather than guessing.
 //
+// A TRANSIENT READ IS RETRIED (kanon#1160). On #1156 `commits/<sha>/pulls` answered an empty
+// body once, and the review CI's completion should have started was dropped for good, since
+// nothing re-asks a failed filter. So every read the gate makes, with its parse, goes through
+// `readWithRetry`: 4 attempts, waiting 1, 2 and 4 s between them. Transient is an empty or
+// truncated JSON body (the parse's `SyntaxError`), a 5xx, a 429, or a 403 for a secondary rate
+// limit. A 404, a 401, a plain 403 refusal and anything else fail at once, as before, so a
+// register's or a caller's 404 still reads as none. When every attempt fails, the step still
+// fails closed, by name, saying `after 4 attempts`. Telling the pull request that its review was
+// dropped is a follow-up, a sweep that re-asks (Owner decision on #1160).
+//
 // THE CALLER'S KANON PIN IS CHECKED TOO, for a member (kanon#69): a lane run from a branch
 // other than the default whose caller pins a different Kanon version than the default branch's
 // caller is refused the same way. See `caller-pin.mjs`.
@@ -291,8 +301,65 @@ const stderrOf = (e) => {
   return String(err.stderr || err.message || e).trim();
 };
 
-/** Run the gate for this job's event, and write its outputs and summary. */
-export function main(env = process.env) {
+/** How many times the gate tries a read before it fails closed (kanon#1160). */
+export const READ_ATTEMPTS = 4;
+
+/** Block for `ms`: `main` is synchronous, and the gate has Node's builtins alone. @param {number} ms */
+const sleepSync = (ms) => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
+/**
+ * Is a failed read worth another try? An empty or truncated body (the parse's `SyntaxError`), a
+ * 5xx, a 429, or a 403 for a secondary rate limit. A refusal, a 404 and anything else are not.
+ *
+ * @param {unknown} e
+ * @returns {boolean}
+ */
+export function isTransient(e) {
+  if (e instanceof SyntaxError) return true;
+  const said = stderrOf(e);
+  return /\bHTTP (5\d\d|429)\b/.test(said) || (/\bHTTP 403\b/.test(said) && /secondary rate limit|abuse/i.test(said));
+}
+
+/**
+ * `read()`, again after a transient failure, waiting 1, 2, then 4 s. A failure that isn't
+ * transient is thrown as it came; when every attempt fails, the last failure is thrown with the
+ * number of attempts on it, for `afterAttempts`.
+ *
+ * @template T
+ * @param {() => T} read the read and its parse, together: the parse is what throws on an empty body
+ * @param {{ attempts?: number, sleep?: (ms: number) => void }} [options]
+ * @returns {T}
+ */
+export function readWithRetry(read, { attempts = READ_ATTEMPTS, sleep = sleepSync } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return read();
+    } catch (e) {
+      if (!isTransient(e)) throw e;
+      if (attempt >= attempts) throw Object.assign(new Error(stderrOf(e)), { attempts: attempt });
+      sleep(1000 * 2 ** (attempt - 1));
+    }
+  }
+}
+
+/** ` after N attempts` for a read `readWithRetry` gave up on, else nothing. @param {unknown} e @returns {string} */
+const afterAttempts = (e) => {
+  const n = /** @type {{ attempts?: number }} */ (e).attempts;
+  return n && n > 1 ? ` after ${n} attempts` : '';
+};
+
+/**
+ * Run the gate for this job's event, and write its outputs and summary.
+ *
+ * @param {Record<string, string | undefined>} [env]
+ * @param {{ sleep?: (ms: number) => void }} [options] the retry's wait, which a test records instead
+ * @returns {number}
+ */
+export function main(env = process.env, { sleep = sleepSync } = {}) {
+  /** @template T @param {() => T} read @returns {T} */
+  const retried = (read) => readWithRetry(read, { sleep });
   const repo = env.GITHUB_REPOSITORY;
   if (!repo) {
     console.error('lane-gate: GITHUB_REPOSITORY must be set; the runner sets it, and the gate never guesses a repository');
@@ -323,11 +390,11 @@ export function main(env = process.env) {
     try {
       who = reviewLabeller(
         wr.head_sha,
-        () => JSON.parse(ghApi([`repos/${repo}/commits/${wr.head_sha}/pulls`])),
-        (n) => JSON.parse(ghApi(['--paginate', '--slurp', `repos/${repo}/issues/${n}/events?per_page=100`])).flat(),
+        () => retried(() => JSON.parse(ghApi([`repos/${repo}/commits/${wr.head_sha}/pulls`]))),
+        (n) => retried(() => JSON.parse(ghApi(['--paginate', '--slurp', `repos/${repo}/issues/${n}/events?per_page=100`]))).flat(),
       );
     } catch (e) {
-      console.log(`::error title=Membership gate::could not read who applied the review label for ${wr.head_sha ?? 'the head'} on ${repo}: ${stderrOf(e)}`);
+      console.log(`::error title=Membership gate::could not read who applied the review label for ${wr.head_sha ?? 'the head'} on ${repo}${afterAttempts(e)}: ${stderrOf(e)}`);
       return 1;
     }
   } else {
@@ -346,18 +413,18 @@ export function main(env = process.env) {
       registeredApps: () => {
         let text;
         try {
-          text = ghApi([`repos/${repo}/contents/docs/qa/agent-identities.md`, '-H', 'Accept: application/vnd.github.raw']);
+          text = retried(() => ghApi([`repos/${repo}/contents/docs/qa/agent-identities.md`, '-H', 'Accept: application/vnd.github.raw']));
         } catch (e) {
           if (/\b404\b/.test(stderrOf(e))) return new Map();
-          throw new Error(`could not read the App register from the default branch of ${repo}: ${stderrOf(e)}`);
+          throw new Error(`could not read the App register from the default branch of ${repo}${afterAttempts(e)}: ${stderrOf(e)}`);
         }
         return parseAppRegister(text);
       },
       permissionOf: (login) => {
         try {
-          return JSON.parse(ghApi([`repos/${repo}/collaborators/${encodeURIComponent(login)}/permission`, '--jq', '{permissions: .user.permissions, role_name}']));
+          return retried(() => JSON.parse(ghApi([`repos/${repo}/collaborators/${encodeURIComponent(login)}/permission`, '--jq', '{permissions: .user.permissions, role_name}'])));
         } catch (e) {
-          throw new Error(`could not read ${login}'s permission on ${repo}: ${stderrOf(e)}`);
+          throw new Error(`could not read ${login}'s permission on ${repo}${afterAttempts(e)}: ${stderrOf(e)}`);
         }
       },
     });
@@ -369,10 +436,10 @@ export function main(env = process.env) {
         { workflowRef: env.GITHUB_WORKFLOW_REF, workflowSha: env.GITHUB_WORKFLOW_SHA, repo, defaultBranch: event.repository?.default_branch },
         (path, ref) => {
           try {
-            return ghApi([`repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`, '-H', 'Accept: application/vnd.github.raw']);
+            return retried(() => ghApi([`repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`, '-H', 'Accept: application/vnd.github.raw']));
           } catch (e) {
             if (/\b404\b/.test(stderrOf(e))) return null;
-            throw new Error(`could not read the caller ${path} at ${ref} on ${repo}: ${stderrOf(e)}`);
+            throw new Error(`could not read the caller ${path} at ${ref} on ${repo}${afterAttempts(e)}: ${stderrOf(e)}`);
           }
         },
       );
