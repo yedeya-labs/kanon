@@ -176,17 +176,28 @@ laneCheck(() => {
     };
     it('refuses a second entry that reaches every pin but groups none of Kanon, naming the `kanon` group as the fix (kanon#1126)', () => {
       const r = red(reaching({ groups: undefined }), RELEASE);
-      expect(r.out).toContain('Add the `kanon` group `kanon init` writes');
+      expect(r.out).toContain("Add the `kanon` group `kanon init` writes as that entry's first group");
+      expect(r.out).not.toContain('duplicate key');
       expect(r.out).toContain('kanon: { patterns: ["yedeya-labs/kanon*"] }');
       expect(r.out).not.toContain("doesn't reach");
     });
-    it("refuses a group that takes in Kanon's actions but not its lanes' workflows (kanon#1126)", () =>
-      red(reaching({ groups: { kanon: { patterns: ['yedeya-labs/kanon'] } } }), RELEASE));
-    it("refuses the first entry too, when another group takes in Kanon's lanes before its own (kanon#1126)", () =>
-      red((t) => t.edit(DEP, (d) => {
+    // kanon#1159: where the entry already has a `kanon` group, adding one would write a duplicate
+    // key, so the fix changes that group: its patterns, what narrows it, and its place first.
+    const CHANGE = ["Change that entry's `kanon` group, without adding a second one", 'set its `patterns` to `["yedeya-labs/kanon*"]`',
+      'remove any `exclude-patterns`, `update-types`, `dependency-type`, `group-by` or `applies-to` it sets', "move it first under the entry's `groups:`"];
+    it("refuses a group that takes in Kanon's actions but not its lanes' workflows, naming a change to it as the fix (kanon#1126, kanon#1159)", () => {
+      const r = red(reaching({ groups: { kanon: { patterns: ['yedeya-labs/kanon'] } } }), RELEASE);
+      for (const said of CHANGE) expect(r.out).toContain(said);
+      expect(r.out).not.toContain('Add the `kanon` group');
+    });
+    it("refuses the first entry too, when another group takes in Kanon's lanes before its own, naming the move (kanon#1126, kanon#1159)", () => {
+      const r = red((t) => t.edit(DEP, (d) => {
         const u = (d as Dep).updates[0]!;
         u.groups = { lanes: { patterns: ['*/.github/workflows/*'] }, ...(u.groups as object) };
-      }), ungrouped(0, 'directory: /')));
+      }), ungrouped(0, 'directory: /'));
+      for (const said of CHANGE) expect(r.out).toContain(said);
+      expect(r.out).not.toContain('Add the `kanon` group');
+    });
     it('passes a second entry that groups Kanon, by the `kanon` group or a catch-all, or ignores it (kanon#1126)', () => {
       for (const more of [
         { groups: { kanon: { patterns: ['yedeya-labs/kanon*'] } } },

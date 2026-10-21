@@ -27,7 +27,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FIXED_CALLERS, callerNameFindings, kanonVersion } from './caller-names.mjs';
 import { declarationFindings } from './declarations.mjs';
-import { KANON_GROUP, directoriesLine, entryName, groupsKanon, kanonEntries, unreached, updatedFrom } from './dependabot-reach.mjs';
+import { KANON_GROUP, directoriesLine, entryName, groupsKanon, kanonEntries, kanonGroupFix, unreached, updatedFrom } from './dependabot-reach.mjs';
 import { pullRequestMovesOnlyKanonRefs } from './refs-only.mjs';
 import { LEDGER, readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
 
@@ -793,7 +793,7 @@ if (!isFile(DEP)) {
       // Reaching every file is one pull request only for the updates a group takes in: Dependabot
       // opens an ungrouped update as a pull request of its own, per dependency and per directory,
       // and each lane's workflow is a Kanon dependency of its own (kanon#1126).
-      if (!groupsKanon(e)) fail(DEP, `its Kanon entry ${entryName(dep, e)} proposes Kanon upgrades but puts them in no one group: Dependabot opens an update no group takes in as a pull request of its own, one per dependency and per directory, and each Kanon lane's workflow is a dependency of its own, so each upgrade pull request moves only some of the pins and fails the one-version rule. Add the \`kanon\` group \`kanon init\` writes, first under that entry's \`groups:\`, \`${KANON_GROUP}\`, or leave Kanon out of the entry with \`ignore: [{ dependency-name: "yedeya-labs/kanon*" }]\` (K-ADOPT-11)`);
+      if (!groupsKanon(e)) fail(DEP, `its Kanon entry ${entryName(dep, e)} proposes Kanon upgrades but puts them in no one group: Dependabot opens an update no group takes in as a pull request of its own, one per dependency and per directory, and each Kanon lane's workflow is a dependency of its own, so each upgrade pull request moves only some of the pins and fails the one-version rule. ${kanonGroupFix(e)}, \`${KANON_GROUP}\`, or leave Kanon out of the entry with \`ignore: [{ dependency-name: "yedeya-labs/kanon*" }]\` (K-ADOPT-11)`);
       const left = unreached(e, files).filter((f) => !nowhere.includes(f));
       if (!left.length) continue;
       fail(DEP, `its Kanon entry ${entryName(dep, e)} doesn't reach ${left.join(', ')}, which ${left.length > 1 ? 'pin' : 'pins'} Kanon: Dependabot reads .github/workflows/ from \`/\`, and a composite action only from its own directory, so the upgrade pull request leaves ${left.length > 1 ? 'them' : 'it'} at the old release and fails the one-version rule. Write that entry's directories as \`${directoriesLine(e, files)}\`, in place of any \`directory:\` (K-ADOPT-11)`);

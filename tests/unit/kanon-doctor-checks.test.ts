@@ -182,7 +182,8 @@ describe('kanon doctor on what an installation lacks', () => {
       expect(ids(r)).toEqual(['pin.dependabot-ungrouped .github/dependabot.yml']);
       expect(r.json.findings[0]).toMatchObject({ category: 'pin', blocking: true });
       expect(r.json.findings[0].message).toContain('Kanon entry at `updates[1]` (`target-branch: release`, `directories: ["/","/.github/actions/*"]`) proposes Kanon upgrades but puts them in no one group');
-      expect(r.json.findings[0].fix.text).toContain('`kanon` group `kanon init` writes');
+      expect(r.json.findings[0].fix.text).toContain("Add the `kanon` group `kanon init` writes as that entry's first group");
+      expect(r.json.findings[0].fix.text).not.toContain('duplicate key');
       expect(r.json.findings[0].fix.commands).toEqual(['kanon: { patterns: ["yedeya-labs/kanon*"] }']);
       expect(r.status).toBe(EXIT.findings);
     });
@@ -192,6 +193,15 @@ describe('kanon doctor on what an installation lacks', () => {
       files['.github/dependabot.yml'] = withEntry(files, releaseEntry('    groups:', '      kanon:', '        patterns: ["yedeya-labs/kanon"]'));
       const r = await run(checkout(files), fakeGitHub(), ['--json']);
       expect(ids(r)).toEqual(['pin.dependabot-ungrouped .github/dependabot.yml']);
+      // kanon#1159: the entry already has a `kanon` group, so adding one would write a duplicate
+      // key; the fix changes that group, and moves it first, ahead of any group that takes Kanon in.
+      const { text, commands } = r.json.findings[0].fix;
+      expect(text).not.toContain('Add the `kanon` group');
+      expect(text).toContain("Change that entry's `kanon` group, without adding a second one");
+      expect(text).toContain('set its `patterns` to `["yedeya-labs/kanon*"]`');
+      expect(text).toContain('remove any `exclude-patterns`, `update-types`, `dependency-type`, `group-by` or `applies-to` it sets');
+      expect(text).toContain("move it first under the entry's `groups:`");
+      expect(commands).toEqual(['kanon: { patterns: ["yedeya-labs/kanon*"] }']);
     });
 
     it('passes an entry that groups Kanon, or that ignores it (kanon#1126)', async () => {

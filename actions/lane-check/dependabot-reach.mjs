@@ -162,6 +162,20 @@ export const groupsKanon = (entry) => {
 export const KANON_GROUP = 'kanon: { patterns: ["yedeya-labs/kanon*"] }';
 
 /**
+ * How the fix for an entry `groupsKanon` refuses gets the `kanon` group in, one clause both
+ * lane-check and `kanon doctor` say (kanon#1159). Where the entry has no group named `kanon`, add
+ * it. Where it has one, adding a second writes a duplicate key in the one `groups:` map, which a
+ * YAML parser refuses or reads as one of the two (Kanon's own reads the last), so the fix changes
+ * that group instead: its `patterns` take in only part of Kanon, or a setting narrows the updates
+ * it takes in, or an earlier group takes Kanon in first, since Dependabot puts a dependency in the
+ * first group that matches it, so the group moves first as well.
+ * @param {unknown} entry @returns {string}
+ */
+export const kanonGroupFix = (entry) => (isMap(entry) && isMap(entry.groups) && Object.hasOwn(entry.groups, 'kanon')
+  ? "Change that entry's `kanon` group, without adding a second one, which would be a duplicate key: set its `patterns` to `[\"yedeya-labs/kanon*\"]`, remove any `exclude-patterns`, `update-types`, `dependency-type`, `group-by` or `applies-to` it sets, and move it first under the entry's `groups:`, so it is the `kanon` group `kanon init` writes"
+  : "Add the `kanon` group `kanon init` writes as that entry's first group, under its `groups:`");
+
+/**
  * The entries of the parsed `.github/dependabot.yml`, `doc`, that would open a Kanon upgrade pull
  * request, in order. None when `updates` isn't a list, which Dependabot refuses.
  * @param {unknown} doc @param {string[]} files @returns {unknown[]}
