@@ -230,6 +230,7 @@ export const DETECTORS: Array<[string, Detector]> = [
   ['The project reconciler and its closure module', calls('agent-lead-reconcile.yml')],
   ["The intake path's single-label test", unbuilt('Kanon has no intake path for untrusted reports, and no test of one')],
   ['The spec guard', runs('spec-guard.mjs')],
+  ['The id allocator and its test', runs('spec-ids.mjs')],
   ['The locked-set ratchet', runs('locked-set.mjs')],
   ['The coverage and acceptance-criteria tools', runs('spec-coverage.mjs')],
   ["The brief guard on this repository's briefs", runs('brief-guard.mjs')],
@@ -307,8 +308,9 @@ describe("Kanon's adoption record says what runs here (K-ADOPT-9, #1236)", () =>
     expect(detect(runs('workflow-health.mjs'))).toBe(true);
     expect(detect(action('lane-check'))).toBe(true);
     expect(detect(calls('agent-explore.yml'))).toBe(false);
-    // The smoke runs run the spec guard on a fixture, which is not this repository.
-    expect(detect(runs('spec-guard.mjs'))).toBe(false);
+    // The spec guard runs on this repository's specs since #1237, not only on the smoke's fixture.
+    expect(detect(runs('spec-guard.mjs'))).toBe(true);
+    expect(detect(runs('locked-set.mjs'))).toBe(false);
   });
 });
 
