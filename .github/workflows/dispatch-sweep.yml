@@ -5,6 +5,11 @@ name: Dispatch sweep (Lead)
 on:
   schedule:
     - cron: "30 4 * * *"
+  # The re-ask: a real run of a lane this one recovers asks for it too, since a schedule runs late
+  # and drops ticks. The lane admits no run that skipped and none of this caller (docs/lanes.md).
+  workflow_run:
+    workflows: [Implement, Triage (Implementer)]
+    types: [completed]
   workflow_dispatch:
     inputs:
       apply:

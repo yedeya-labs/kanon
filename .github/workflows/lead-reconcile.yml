@@ -9,6 +9,11 @@ on:
     types: [closed]
   schedule:
     - cron: "7 * * * *"
+  # The re-ask: a real run of a lane this one recovers asks for it too, since a schedule runs late
+  # and drops ticks. The lane admits no run that skipped and none of this caller (docs/lanes.md).
+  workflow_run:
+    workflows: [Review (Reviewer), Implement (Implementer) — revise, Lead (Lead) — revise, Implement]
+    types: [completed]
   workflow_dispatch:
     inputs:
       project:
