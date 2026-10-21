@@ -25,6 +25,14 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** The Reviewer moved onto the filing skill, and its playbook's "Capturing follow-ups" names no milestone, in Kanon's own playbook and in the baseline, so the test holds that section to restating no routing for both the Reviewer and merge reconcile, and merge reconcile's prompt no longer says the skill overrides it. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 - **2026-10-20.** The Lead's reconcile tick, last, files a brief's issues with the labels and milestone `plan` gives, the brief's milestone transcribed, and stops on an item `plan` refuses. The test now holds every lane prompt that files an issue to the skill, not only the lanes it lists. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 
+## `K-WORK-9`
+
+- **2026-10-20.** The planning module's `plan` refuses a reviewer follow-up with no severity, so the Lead's reconcile tick stops on such a brief item, and the brief guard reports it on the brief's pull request. [#164](https://github.com/yedeya-labs/kanon/issues/164)
+
+## `K-WORK-11`
+
+- **2026-10-20.** No longer prose only for pipeline work: `plan`, which the filing skill runs, refuses it on a roadmap milestone and never makes it a candidate, so the Lead's reconcile tick stops on such a brief item, and the brief guard reports it on the brief's pull request. [#164](https://github.com/yedeya-labs/kanon/issues/164), [#1163](https://github.com/yedeya-labs/kanon/issues/1163)
+
 ## `K-WORK-12`
 
 - **2026-10-20.** The Merger applies `agent:revise` too, to hand an approved head whose checks failed back to the Implementer's revise lane; the label's description says so. [#1100](https://github.com/yedeya-labs/kanon/issues/1100)

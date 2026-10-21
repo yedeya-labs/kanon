@@ -346,11 +346,15 @@ describe('the decomposition, read as the reconciler reads it', () => {
     expect(problems(noMilestone).join('\n')).toContain('carries no **Milestone:**');
   });
 
-  /** The fixture with Issue A on `milestone`, checked against `list` as the repository's milestones. */
+  /**
+   * The fixture with Issue A on `milestone`, checked against `list` as the repository's milestones.
+   * Issue A is product work here: pipeline work never goes on a roadmap milestone (`K-WORK-11`),
+   * which the planning module's case below holds.
+   */
   const onMilestone = (milestone: string, list?: () => { title: string; due_on: string | null; state: string }[]) =>
     checkBrief(
       'docs/projects/1.md',
-      withSection('Decomposition', SECTIONS[2][1].replace('Development Automation', milestone)),
+      withSection('Decomposition', SECTIONS[2][1].replace('Development Automation · **Labels:** `pipeline-improvement`', `${milestone} · **Labels:** \`enhancement\``)),
       list ? { milestones: list } : undefined,
     ).map((f) => f.problem).join('\n');
   const repo = [
@@ -374,6 +378,22 @@ describe('the decomposition, read as the reconciler reads it', () => {
     // The reference adopter's gate and epic are its own: on another repository they are typos.
     expect(onMilestone('Production Ready', () => repo)).toContain("isn't a bucket (Product Backlog, Development Automation) or a milestone of this repository");
     expect(onMilestone('AI Capabilities', () => repo)).toContain('or a milestone of this repository');
+  });
+
+  // kanon#164: the tick files each item through the planning module's `plan()` and stops on one
+  // it refuses. The guard makes the same call, so the stop is a finding on the brief's PR.
+  it('reports an item the planning module refuses to file, naming the rule', () => {
+    const pipelineOnRoadmap = checkBrief(
+      'docs/projects/1.md',
+      withSection('Decomposition', SECTIONS[2][1].replace('Development Automation', 'Launch')),
+      { milestones: () => repo },
+    ).map((f) => f.problem).join('\n');
+    expect(pipelineOnRoadmap).toContain('the planning module refuses to file it');
+    expect(pipelineOnRoadmap).toContain('K-WORK-11');
+    const noSeverity = problems(withSection('Decomposition', SECTIONS[2][1].replace('`sev:high`', '`follow-up` · `agent:reviewer`')));
+    expect(noSeverity.join('\n')).toContain('the planning module refuses to file it');
+    expect(noSeverity.join('\n')).toContain('K-WORK-9');
+    expect(problems(brief()).join('\n')).not.toContain('planning module');
   });
 
   it('reports a milestone with no due date, which is neither a bucket nor a roadmap milestone', () => {

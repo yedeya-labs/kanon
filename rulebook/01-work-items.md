@@ -97,7 +97,7 @@ This chapter governs the issue: how it is labelled, which milestone it belongs t
 
 **Why.** Severity is a claim about reachability and impact, and that evidence lives in the diff and its callers, so only the filer can make it. It cannot be inferred later from the issue's prose. When the reference adopter measured, 2 of 149 reviewer follow-ups carried any severity, so a hole letting anyone register for free sorted exactly like a stale comment. Rate by evidence, not by confidence.
 
-**Enforced by.** The issue-opened automation labels a severity-less reviewer follow-up `qa:needs-severity` and comments on it. The rubric itself is prose only.
+**Enforced by.** The issue-opened automation labels a severity-less reviewer follow-up `qa:needs-severity` and comments on it. A filer through the planning module's `plan` can't file one without a severity: `plan` refuses it, so the Lead's reconcile tick stops on such a brief item and the brief guard reports it on the brief's pull request. The rubric itself is prose only.
 
 **Class.** framework
 
@@ -124,7 +124,7 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 
 **Why.** Both are ongoing streams. An incoming bug stream on the gate would wreck the burndown, since the gate could never be finished. Pipeline work is ongoing improvement however severe an instance of it is, so it belongs in the platform bucket (`K-WORK-4`).
 
-**Enforced by.** A label guard fails when the Explorer's lane applies `gate-candidate` or a roadmap milestone, checked both statically and against the live repository. The pipeline-work half is prose only.
+**Enforced by.** A label guard fails when the Explorer's lane applies `gate-candidate` or a roadmap milestone, checked both statically and against the live repository. For pipeline work, which `plan` in [`scripts/issue-triage-defaults.mjs`](../scripts/issue-triage-defaults.mjs) knows by the `pipeline-improvement` label or the pipeline subject, `plan` refuses a roadmap milestone, never makes it a candidate, and refuses a `gate-candidate` label the rule doesn't give. The filing skill, [`skills/file-issue/SKILL.md`](../skills/file-issue/SKILL.md), runs `plan`, and the Lead's reconcile tick calls it for each brief item, so neither a filer through the skill nor the tick can file pipeline work on a roadmap milestone: the tick stops on such a brief item, and the brief guard reports it on the brief's pull request (`tests/library/lead-reconcile.test.ts`, `tests/library/brief-guard.test.ts`). Filers not on the skill, and a person placing pipeline work on one by hand, are prose only.
 
 **Class.** framework
 
