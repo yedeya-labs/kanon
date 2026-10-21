@@ -24,9 +24,9 @@ import { GATED, NOTIFY_IF, NOTIFYING_LANES, notifyJob } from './helpers/notify-j
  *   3. the actor rules themselves, per event.
  *
  * Split by area across tests/unit/lane-gate*.test.ts (kanon#381), with the helpers they share in
- * tests/unit/helpers/lane-gate.ts. Half 2 is lane-gate-run.test.ts and
- * lane-gate-run-second-half.test.ts, and the same run from a stacked base (kanon#69) is
- * lane-gate-stacked.test.ts.
+ * tests/unit/helpers/lane-gate.ts. Half 2 is lane-gate-run.test.ts and its two sibling thirds,
+ * lane-gate-run-second-third.test.ts and lane-gate-run-last-third.test.ts, and the same run from
+ * a stacked base (kanon#69) is lane-gate-stacked.test.ts.
  */
 
 describe('every lane carries the membership gate (K-AGENT-45)', () => {

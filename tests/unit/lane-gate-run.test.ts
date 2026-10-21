@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LEAD_LOGIN, REGISTER_FIXTURE } from './helpers/register.js';
 import { PERMS, runGate, MEMBER, STRANGER, LANES, read, gateOf } from './helpers/lane-gate.js';
-import { BACKSTOP, describeGateRun, laneHalf } from './helpers/lane-gate-run.js';
+import { BACKSTOP, describeGateRun, third } from './helpers/lane-gate-run.js';
 import { SPAWNS } from './helpers/spawns.js';
 
 // Each case runs a lane's gate step in `bash` against a stub `gh`, so every case takes the spawn
@@ -12,10 +12,10 @@ vi.setConfig({ testTimeout: SPAWNS.timeout });
 //
 // One of the lane-gate files split by area (kanon#381): vitest runs one file's cases serially.
 // tests/unit/lane-gate.test.ts says what the gate is; the helpers they share are in
-// tests/unit/helpers/lane-gate.ts. The first half of the lanes runs here and the second in
-// lane-gate-run-second-half.test.ts, with the four cases each in tests/unit/helpers/lane-gate-run.ts
-// (#1204).
-describeGateRun(laneHalf(1));
+// tests/unit/helpers/lane-gate.ts. The first third of the lanes' triggers runs here, the others in
+// lane-gate-run-second-third.test.ts and lane-gate-run-last-third.test.ts, with the four cases each
+// in tests/unit/helpers/lane-gate-run.ts (#1204).
+describeGateRun(third(1));
 
 // Issue #990: the gate step itself, reading a default branch's register that holds Other App rows.
 describe('a lane\'s gate step and an App that isn\'t an agent', () => {

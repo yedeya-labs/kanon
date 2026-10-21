@@ -1,26 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { LEAD_LOGIN } from './register.js';
-import { CASES, LANES, MEMBER, PERMS, runGate, STRANGER } from './lane-gate.js';
+import { CASES, MEMBER, PERMS, runGate, STRANGER } from './lane-gate.js';
 
 /**
  * kanon#46 half 2, the gate step of each lane, executed, for each trigger of its caller: the four
  * cases tests/unit/lane-gate-run*.test.ts run for each. A file runs its cases one after another,
- * so the lanes are split in two halves, one file each, to run in parallel (#1204). Every lane is
- * in exactly one half, and a lane added later lands in one of them by its name.
+ * and in two halves each half still took 40% of a full run beside a second one, so the lanes and
+ * triggers are split in thirds, one file each, to run in parallel (#1204). Every lane and trigger
+ * is in exactly one third, and one added later lands in one of them.
  */
 
 /** The issue backstop's opened issue is the one trigger that admits anyone, so it is held to its own cases. */
 export const BACKSTOP = 'agent-issue-backstop.yml';
 
-/** The first or the second half of the lanes, by name. */
-export const laneHalf = (half: 1 | 2): string[] => {
-  const cut = Math.ceil(LANES.length / 2);
-  return half === 1 ? LANES.slice(0, cut) : LANES.slice(cut);
+const RUN_CASES = CASES.filter(([file, trigger]) => !(file === BACKSTOP && trigger === 'issue-opened'));
+
+/** The first, second or last third of the lanes' triggers, in the order of the lanes' names. */
+export const third = (part: 1 | 2 | 3) => {
+  const size = Math.ceil(RUN_CASES.length / 3);
+  return RUN_CASES.slice((part - 1) * size, part * size);
 };
 
-/** The four cases, for each trigger of each of `lanes`. */
-export const describeGateRun = (lanes: string[]) =>
-  describe.each(CASES.filter(([file, trigger]) => lanes.includes(file) && !(file === BACKSTOP && trigger === 'issue-opened')))('%s on a %s', (file, trigger) => {
+/** The four cases, for each lane and trigger of `cases`. */
+export const describeGateRun = (cases: typeof RUN_CASES) =>
+  describe.each(cases)('%s on a %s', (file, trigger) => {
     it('refuses a non-member, visibly', () => {
       const r = runGate(file, trigger, STRANGER);
       expect(r.status, r.output).toBe(0);
