@@ -11,7 +11,7 @@ import { PIPELINE_ROUTING } from '../../scripts/workflow-health.mjs';
  */
 const FILERS = ['scripts/overseer-file.mjs', 'scripts/workflow-health.mjs'];
 
-describe('a script that files from code asks plan() for its routing (K-WORK-8)', () => {
+describe("the Overseer's filer and workflow-health ask plan() for their routing (K-WORK-8)", () => {
   it.each(FILERS)('%s names no bucket and passes no --milestone of its own', (file) => {
     const src = readFileSync(file, 'utf8');
     expect(src).toMatch(/import \{[^}]*\bplan\b[^}]*\} from '\.\/issue-triage-defaults\.mjs'/);
