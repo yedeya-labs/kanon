@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { validate } from '../../scripts/lib/notify-contract.mjs';
-import { API, buildReleaseMessage, main, produce } from '../../scripts/announce-release.mjs';
+import { API, EXCERPT, buildReleaseMessage, main, produce } from '../../scripts/announce-release.mjs';
 
 /**
  * kanon#1190: `announce-release.mjs` is the producer of `release` messages, one per published
@@ -84,12 +84,64 @@ describe('a valid `release` message', () => {
     expect(m.summary).toBe('**acme/widgets** published the release **v1.4.0**, “The \\*\\*big\\*\\* one”.');
   });
 
-  it('with notes of no known section, or none, it has no sections and still validates', () => {
-    for (const body of ['Just a line, no headings.', '', null]) {
+  it('with an empty body, or none, it has no sections and still validates', () => {
+    for (const body of ['', '  \n\n', null]) {
       const m: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body }, runUrl: RUN });
       expect(validate(m), String(body)).toEqual({ ok: true });
       expect(m.sections, String(body)).toBeUndefined();
     }
+  });
+
+  // kanon#1196: a body not in release-please's format still reaches the message.
+  it("reads GitHub's auto-generated notes by each bullet's conventional-commit prefix, and passes over New Contributors", () => {
+    const body = [
+      "## What's Changed",
+      '* feat: add **bold** export by @alice in https://github.com/acme/widgets/pull/31',
+      '* fix(ui): mend the header by @bob in https://github.com/acme/widgets/pull/32',
+      '* feat(ci): cache the build by @bob in https://github.com/acme/widgets/pull/33',
+      '* chore(deps): bump lodash from 4.17.20 to 4.17.21 by @dependabot[bot] in https://github.com/acme/widgets/pull/34',
+      '* docs: explain the export by @alice in https://github.com/acme/widgets/pull/35',
+      '* Tidy the readme by @carol in https://github.com/acme/widgets/pull/36',
+      '',
+      '## New Contributors',
+      '* @carol made their first contribution in https://github.com/acme/widgets/pull/36',
+      '',
+      '**Full Changelog**: https://github.com/acme/widgets/compare/v1.3.0...v1.4.0',
+    ].join('\n');
+    const m: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body }, runUrl: RUN });
+    expect(validate(m)).toEqual({ ok: true });
+    expect(m.sections).toEqual([
+      { heading: 'Features', body: '- add \\*\\*bold\\*\\* export ([#31](https://github.com/acme/widgets/pull/31))' },
+      { heading: 'Fixes', body: '- ui: mend the header ([#32](https://github.com/acme/widgets/pull/32))' },
+      { heading: 'Maintenance', body: '1 dependency update · ci, docs updates' },
+      { heading: 'Changes', body: '- Tidy the readme ([#36](https://github.com/acme/widgets/pull/36))' },
+    ]);
+  });
+
+  it('reads a hand-written body with no headings: its bullets as Changes, or, with none, a bounded excerpt under Notes', () => {
+    const listed: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body: '- Faster _search_\n- A new logo' }, runUrl: RUN });
+    expect(validate(listed)).toEqual({ ok: true });
+    expect(listed.sections).toEqual([{ heading: 'Changes', body: '- Faster \\_search\\_\n- A new logo' }]);
+
+    const line: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body: 'Just a line, with **no** headings.' }, runUrl: RUN });
+    expect(validate(line)).toEqual({ ok: true });
+    expect(line.sections).toEqual([{ heading: 'Notes', body: 'Just a line, with \\*\\*no\\*\\* headings.' }]);
+
+    const long = Array.from({ length: 40 }, (_, i) => `Paragraph ${i}.`).join('\n\n');
+    const cut: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body: long }, runUrl: RUN });
+    expect(validate(cut)).toEqual({ ok: true });
+    expect(cut.sections[0].body.split('\n')).toEqual([...Array.from({ length: EXCERPT.lines }, (_, i) => `Paragraph ${i}.`), '…']);
+
+    const wide: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body: 'z'.repeat(5000) }, runUrl: RUN });
+    expect(validate(wide)).toEqual({ ok: true });
+    expect(wide.sections[0].body).toBe(`${'z'.repeat(EXCERPT.chars)}\n…`);
+  });
+
+  it("release-please's body is read as before: the other formats' reading never runs once it sorts a note", () => {
+    const body = ['## [1.4.1](https://github.com/acme/widgets/compare/v1.4.0...v1.4.1) (2026-10-21)', '### Miscellaneous Chores', '* **ci:** speed up', '* feat: a stray subject'].join('\n');
+    const m: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body }, runUrl: RUN });
+    expect(validate(m)).toEqual({ ok: true });
+    expect(m.sections).toEqual([{ heading: 'Maintenance', body: 'ci updates' }]);
   });
 
   it('a tag with characters a URL path escapes is linked escaped', () => {
