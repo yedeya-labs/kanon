@@ -231,7 +231,7 @@
     "agent-dispatch-sweep": {
       "name": "Dispatch sweep",
       "group": "sweeps",
-      "does": "Re-dispatches, once a day, an implement or triage run that never happened, and reports what waits on a person.",
+      "does": "Re-dispatches, once a day, an implement or triage run that never happened, re-asks the review of a labelled pull request with none on its head, and reports what waits on a person.",
       "needs": [],
       "cost": "No model; a short job daily, and a short check when an implement or triage run completes.",
       "minutes": "Not measured: Kanon's caller is new and had not run yet; it runs once a day, with no model.",
