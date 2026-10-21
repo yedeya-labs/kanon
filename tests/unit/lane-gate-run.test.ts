@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LEAD_LOGIN, REGISTER_FIXTURE } from './helpers/register.js';
-import { PERMS, runGate, MEMBER, STRANGER, CASES, LANES, read, gateOf } from './helpers/lane-gate.js';
+import { PERMS, runGate, MEMBER, STRANGER, LANES, read, gateOf } from './helpers/lane-gate.js';
+import { BACKSTOP, describeGateRun, laneHalf } from './helpers/lane-gate-run.js';
 import { SPAWNS } from './helpers/spawns.js';
 
 // Each case runs a lane's gate step in `bash` against a stub `gh`, so every case takes the spawn
@@ -11,43 +12,10 @@ vi.setConfig({ testTimeout: SPAWNS.timeout });
 //
 // One of the lane-gate files split by area (kanon#381): vitest runs one file's cases serially.
 // tests/unit/lane-gate.test.ts says what the gate is; the helpers they share are in
-// tests/unit/helpers/lane-gate.ts.
-
-// The issue backstop's opened issue is the one trigger that admits anyone (below), so it is held
-// to its own cases rather than these.
-const BACKSTOP = 'agent-issue-backstop.yml';
-describe.each(CASES.filter(([file, trigger]) => !(file === BACKSTOP && trigger === 'issue-opened')))('%s on a %s', (file, trigger) => {
-  it('refuses a non-member, visibly', () => {
-    const r = runGate(file, trigger, STRANGER);
-    expect(r.status, r.output).toBe(0);
-    expect(r.outputs.member).toBe('false');
-    expect(r.summary).toContain('Membership gate: refused.');
-    expect(r.summary).toContain('a-stranger');
-    expect(r.output).toContain('::notice title=Membership gate::');
-  });
-  it('admits a member', () => {
-    const r = runGate(file, trigger, MEMBER);
-    expect(r.status, r.output).toBe(0);
-    expect(r.outputs.member).toBe('true');
-    expect(r.summary).toContain('a-member');
-  });
-  it('admits a registered agent App', () => {
-    const r = runGate(file, trigger, { login: `${LEAD_LOGIN}[bot]`, association: 'NONE' });
-    expect(r.status, r.output).toBe(0);
-    expect(r.outputs.member).toBe('true');
-    expect(r.summary).toContain("the repository's Implementer, Lead App");
-  });
-  it('refuses a bot outside the App register', () => {
-    // Even one the permission lookup would pass: a bot is judged by the register alone.
-    const r = runGate(file, trigger, { login: 'dependabot[bot]', association: 'COLLABORATOR' }, {
-      STUB_PERMS: JSON.stringify({ 'dependabot[bot]': PERMS['a-member'] }),
-    });
-    expect(r.status, r.output).toBe(0);
-    expect(r.outputs.member).toBe('false');
-    expect(r.summary).toContain('dependabot[bot]');
-    expect(r.summary).toContain('not in the App register');
-  });
-});
+// tests/unit/helpers/lane-gate.ts. The first half of the lanes runs here and the second in
+// lane-gate-run-second-half.test.ts, with the four cases each in tests/unit/helpers/lane-gate-run.ts
+// (#1204).
+describeGateRun(laneHalf(1));
 
 // Issue #990: the gate step itself, reading a default branch's register that holds Other App rows.
 describe('a lane\'s gate step and an App that isn\'t an agent', () => {
@@ -67,17 +35,6 @@ describe('a lane\'s gate step and an App that isn\'t an agent', () => {
     const r = runGate(file, 'dispatch', { login: `${LEAD_LOGIN}[bot]`, association: 'NONE' }, { STUB_REGISTER: register });
     expect(r.status, r.output).toBe(0);
     expect(r.outputs.member).toBe('true');
-  });
-});
-
-// A schedule on a merge-queue repository runs as the queue, named without its `[bot]` suffix
-// (run 37638246558 failed red on it). Every scheduled lane admits it, without a permission lookup.
-describe.each(CASES.filter(([, trigger]) => trigger === 'schedule'))('%s on a schedule run as the merge queue', (file) => {
-  it('admits it', () => {
-    const r = runGate(file, 'schedule', { login: 'github-merge-queue' }, { STUB_PERMISSION_FAILS: '1' });
-    expect(r.status, r.output).toBe(0);
-    expect(r.outputs.member).toBe('true');
-    expect(r.summary).toContain('github-merge-queue[bot]');
   });
 });
 

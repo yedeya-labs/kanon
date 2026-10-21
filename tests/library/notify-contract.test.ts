@@ -309,7 +309,12 @@ describe('`fit`', () => {
     source: SOURCE,
   });
 
-  it('on generated drafts far past every limit, always returns a valid message that says what it cut', () => {
+  // 30 s, not the 5 s default (#1204): this case starts no process, but it is the one CPU-bound case
+  // in the library tier. 300 drafts of up to about half a megabyte each go through `fit`, which
+  // takes about 0.9 s alone on a 16-core Mac, 3.5 s in a full run at load 36, and 7–8 s at load
+  // 50–65, where the 5 s default failed it. The loop is bounded, so it cannot hang: the budget only
+  // covers a starved CPU, and fewer drafts would test less.
+  it('on generated drafts far past every limit, always returns a valid message that says what it cut', { timeout: 30_000 }, () => {
     const r = r0(42);
     for (let i = 0; i < 300; i++) {
       const m = fit(huge(r));

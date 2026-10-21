@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, normalize } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -52,13 +52,32 @@ describe("the CLI's import graph holds no symbolic link (PR #600)", () => {
   });
 });
 
+/** Whether a path exists, a link to nothing included. */
+const lstatExists = (p: string) => { try { lstatSync(p); return true; } catch { return false; } };
+
 describe('the CLI, packed and installed as npm installs it, runs', SPAWNS, () => {
   const dir = mkdtempSync(join(tmpdir(), 'kanon-cli-install-'));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   it('npm pack, then npm install of the tarball, then `kanon --help`', () => {
+    // A GitHub install packs a clone, so this packs a copy of what a commit of the working tree
+    // would hold: the files git tracks, and the new ones .gitignore doesn't name. Never the
+    // checkout itself: `npm pack` there also walks into every repository nested in it, which git
+    // leaves out. A checkout holding agent worktrees under .claude/worktrees/ packed 25,000 files,
+    // 68 MB, taking 20 s on an idle machine, and the pack timed out under load (#1204). This tree
+    // packs in about a second.
+    const clone = join(dir, 'clone');
+    const listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { encoding: 'utf8', timeout: 25_000 });
+    // A nested repository is listed as its directory, with a trailing slash, and not entered.
+    for (const f of new Set(listed.split('\0').filter((p) => p && !p.endsWith('/')))) {
+      // A tracked file deleted in the working tree is not in the tree being tested.
+      if (!lstatExists(f)) continue;
+      mkdirSync(dirname(join(clone, f)), { recursive: true });
+      // A link stays a link, as in a clone, so the pack below still drops it.
+      cpSync(f, join(clone, f), { verbatimSymlinks: true });
+    }
     // `npm pack` applies the same filter pacote applies to a GitHub install: no links.
-    const tgz = execFileSync('npm', ['pack', '--ignore-scripts', '--silent', '--pack-destination', dir], { encoding: 'utf8', timeout: 25_000 }).trim().split('\n').pop()!;
+    const tgz = execFileSync('npm', ['pack', '--ignore-scripts', '--silent', '--pack-destination', dir], { cwd: clone, encoding: 'utf8', timeout: 25_000 }).trim().split('\n').pop()!;
     const app = join(dir, 'app');
     mkdirSync(app);
     writeFileSync(join(app, 'package.json'), '{"private":true}');
