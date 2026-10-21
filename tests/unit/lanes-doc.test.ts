@@ -305,15 +305,16 @@ describe("docs/lanes.md's features table is the features of docs/lanes.json (pla
 
 /**
  * The deploy lane's table (plan 0010, step D4), built from `requirements.json`'s `deploy` entry:
- * docs/lanes.json's description, the hooks the two workflows call and the environment secret the
- * deploy hook receives.
+ * docs/lanes.json's description, the hooks the two workflows call, the optional reset hook (plan
+ * 0013 §6), and the environment secret the deploy hook receives.
  */
-type Deploy = { workflows: Record<string, string>; hooks: Array<{ path: string }>; environmentSecrets: string[]; catalogue: { does: string; needs: string[]; cost: string } };
+type Deploy = { workflows: Record<string, string>; hooks: Array<{ path: string }>; optionalHooks?: Array<{ path: string }>; environmentSecrets: string[]; catalogue: { does: string; needs: string[]; cost: string } };
 const deployTable = (): string => {
   const d = (loadRequirements() as unknown as { deploy: Deploy }).deploy;
   const needs = [
     ...d.catalogue.needs,
     ...d.hooks.map((h) => `\`${h.path}\``),
+    ...(d.optionalHooks ?? []).map((h) => `\`${h.path}\`, if you want one (optional)`),
     ...d.environmentSecrets.map((s) => `the environment secret \`${s}\`, if your deploy needs one`),
   ];
   const files = Object.values(d.workflows).map((f) => `\`${f}.yml\``).join(' and ');
@@ -332,7 +333,7 @@ describe("docs/lanes.md's deploy-lane table is the requirements' deploy entry (p
 
   it('names both workflows and both hooks, so the check above is not vacuous', () => {
     const t = deployTable();
-    for (const s of ['`deploy-release.yml`', '`deploy.yml`', '`.github/actions/deploy/action.yml`', '`.github/actions/smoke/action.yml`', '`KANON_DEPLOY_SECRET`']) expect(t).toContain(s);
+    for (const s of ['`deploy-release.yml`', '`deploy.yml`', '`.github/actions/deploy/action.yml`', '`.github/actions/smoke/action.yml`', '`.github/actions/smoke-reset/action.yml`, if you want one (optional)', '`KANON_DEPLOY_SECRET`']) expect(t).toContain(s);
   });
 });
 

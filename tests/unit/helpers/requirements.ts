@@ -213,22 +213,32 @@ export const buildRequirements = (root: string) => {
     return Object.fromEntries(Object.entries(g).sort(([a], [b]) => a.localeCompare(b)));
   };
   const deployHooks: Record<string, Set<string>> = {};
+  // An OPTIONAL hook (plan 0013 §6, the reset hook): its step runs only when its file exists,
+  // `if: hashFiles('<its action.yml>') != ''`, so a repository without it deploys as before. It is
+  // listed apart, under `optionalHooks`, which a release's `kanon init` writes no stub for and a
+  // `kanon doctor` from before it never reads, so neither asks for a file the lane doesn't need.
+  const optional = new Set<string>();
   for (const doc of Object.values(deployDocs)) {
     for (const j of Object.values((doc.jobs ?? {}) as Record<string, Doc>)) {
       for (const s of (j.steps ?? []) as Doc[]) {
         const m = /^\.\/(\.github\/actions\/[a-z-]+)$/.exec(String(s.uses ?? ''));
         if (!m) continue;
-        const set = (deployHooks[`${m[1]}/action.yml`] ??= new Set());
+        const path = `${m[1]}/action.yml`;
+        const set = (deployHooks[path] ??= new Set());
         for (const k of Object.keys(s.with ?? {})) set.add(k);
+        if (String(s.if ?? '').replace(/\s+/g, ' ').trim() === `hashFiles('${path}') != ''`) optional.add(path);
       }
     }
   }
+  const hookList = (keep: (path: string) => boolean) => Object.entries(deployHooks).filter(([path]) => keep(path))
+    .sort(([a], [b]) => a.localeCompare(b)).map(([path, inputs]) => ({ path, inputs: [...inputs].sort() }));
   const deploy = {
     workflows: deployFiles,
     inputs: Object.fromEntries(Object.values(deployFiles).map((f) => [f, Object.fromEntries(Object.entries(((deployDocs[f]!.on.workflow_call ?? {}).inputs ?? {}) as Record<string, Doc>)
       .map(([k, v]) => [k, { type: v.type ?? 'string', description: String(v.description ?? '').trim() }]))])),
     grants: Object.fromEntries(Object.values(deployFiles).map((f) => [f, deployGrant(deployDocs[f]!)])),
-    hooks: Object.entries(deployHooks).sort(([a], [b]) => a.localeCompare(b)).map(([path, inputs]) => ({ path, inputs: [...inputs].sort() })),
+    hooks: hookList((path) => !optional.has(path)),
+    optionalHooks: hookList((path) => optional.has(path)),
     // The environment's own secrets: every secret a job that sets `environment:` reads (the deploy
     // hook's `KANON_DEPLOY_SECRET`), not the announcement's, which `notify` reads outside it.
     environmentSecrets: [...new Set(Object.values(deployDocs).flatMap((doc) => Object.values((doc.jobs ?? {}) as Record<string, Doc>)

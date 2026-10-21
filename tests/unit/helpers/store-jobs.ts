@@ -518,6 +518,8 @@ export const ID_TOKEN_HOLDERS: IdTokenHolder[] = [
 export const DEPLOY_FILES = ['deploy-release.yml', 'deploy.yml'];
 /** The one secret the deploy lane reads, in the deploy hook step's `env:` of `deploy.yml`'s `deploy` job alone. */
 const DEPLOY_SECRET = { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' };
+/** What the reset and smoke hooks' steps get beside their inputs (plan 0013 §6): the trigger, never a secret. */
+const SMOKE_TRIGGER = { KANON_SMOKE_TRIGGER: 'deploy' };
 const DEPLOY_JOB_KEYS = ['name', 'needs', 'if', 'runs-on', 'timeout-minutes', 'environment', 'concurrency', 'permissions', 'outputs', 'steps'];
 const MARK = 'echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"';
 /** A step as the shapes below read it: the action it uses, or what it runs. */
@@ -551,8 +553,10 @@ export function isDeployProbeJob(file: string | undefined, name: string, j: Job)
  * environment the declaration names, with `contents: read`, `deployments: read` and
  * `id-token: write` alone; Kanon's supersede check, a checkout of the release's commit that
  * persists no credential, the build's download and Kanon's check of its digest (plan 0010 D5),
- * the adopter's deploy and smoke hooks, and the marks that time them; and one secret,
- * `KANON_DEPLOY_SECRET`, in the deploy hook step's `env:` alone. It never runs the build hook.
+ * the adopter's deploy hook, its optional reset hook (with the summary step that says when it is
+ * absent) and its smoke hook, and the marks that time them (plan 0013 §6, §7.1); and one secret,
+ * `KANON_DEPLOY_SECRET`, in the deploy hook step's `env:` alone. The reset and smoke hooks get
+ * `KANON_SMOKE_TRIGGER` and nothing else. It never runs the build hook.
  */
 export function isDeployEnvJob(file: string | undefined, name: string, j: Job): boolean {
   if (file !== 'deploy.yml' || name !== 'deploy' || !only(j, DEPLOY_JOB_KEYS)) return false;
@@ -560,7 +564,7 @@ export function isDeployEnvJob(file: string | undefined, name: string, j: Job): 
   if (JSON.stringify(j.permissions) !== JSON.stringify({ contents: 'read', deployments: 'read', 'id-token': 'write' })) return false;
   const steps = j.steps ?? [];
   const hook = steps[8];
-  return steps.length === 12
+  return steps.length === 15
     && runs(steps[0]) === MARK
     && runs(steps[1]) === '$/actions/kanon-path'
     && runs(steps[2]) === 'node "$KANON/scripts/deploy-gate.mjs" supersede' && only(steps[2]!.env, ['GH_TOKEN', 'ENVIRONMENT', 'SHA', 'FALLBACK', 'ROLE'])
@@ -571,8 +575,11 @@ export function isDeployEnvJob(file: string | undefined, name: string, j: Job): 
     && runs(steps[7]) === MARK
     && hook?.uses === './.github/actions/deploy' && hook.with?.probe === 'false' && JSON.stringify(hook.env) === JSON.stringify(DEPLOY_SECRET)
     && runs(steps[9]) === MARK
-    && steps[10]!.uses === './.github/actions/smoke'
-    && runs(steps[11]) === MARK
+    && runs(steps[10]).startsWith('echo "No reset hook') && steps[10]!.env === undefined && steps[10]!.uses === undefined
+    && steps[11]!.uses === './.github/actions/smoke-reset' && JSON.stringify(steps[11]!.env) === JSON.stringify(SMOKE_TRIGGER)
+    && runs(steps[12]) === MARK
+    && steps[13]!.uses === './.github/actions/smoke' && JSON.stringify(steps[13]!.env) === JSON.stringify(SMOKE_TRIGGER)
+    && runs(steps[14]) === MARK
     && steps.every((s, i) => i === 8 || noSecret(s)) && noSecret({ ...j, steps: [] });
 }
 

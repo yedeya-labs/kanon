@@ -1636,6 +1636,16 @@
         ]
       }
     ],
+    "optionalHooks": [
+      {
+        "path": ".github/actions/smoke-reset/action.yml",
+        "inputs": [
+          "environment",
+          "release",
+          "role"
+        ]
+      }
+    ],
     "environmentSecrets": [
       "KANON_DEPLOY_SECRET"
     ],

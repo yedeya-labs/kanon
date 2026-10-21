@@ -8,7 +8,9 @@ import { validate } from '../../actions/agent-telemetry/schema.mjs';
 import {
   classifyEnvironment, classifyRelease, DEPLOY_ARTIFACT_FILE, deployArtifactName, environmentRow, isHeld, releaseRow,
 } from '../../scripts/deploy-row.mjs';
-import { issueOf, issueTitle, report, reportFrom } from '../../scripts/deploy-report.mjs';
+import { callerFile, issueOf, issueTitle, report, reportFrom, smokeIssueTitle } from '../../scripts/deploy-report.mjs';
+import { deployCallerFile } from '../../cli/init.mjs';
+import { loadRequirements } from '../../cli/callers.mjs';
 import * as collected from '../../scripts/lib/telemetry-artifacts.mjs';
 import { CI_POLL_MS, CI_WAIT_CEILING, deployCheck, GATE_MARGIN_MINUTES } from '../../scripts/deploy-gate.mjs';
 import { BUILD_DIR, buildArtifactName, checkBuild, listFiles, readBuild, treeDigest } from '../../scripts/deploy-build.mjs';
@@ -156,6 +158,7 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
       }
     }
   }
+  out.push(...smokeProblems(w));
   const declare = w[ENV]?.jobs.declare;
   if (declare && JSON.stringify(declare.permissions) !== '{"contents":"read"}') out.push(`${ENV}:declare: holds more than contents: read`);
   const inputs = Object.keys(w[ENV]?.on?.workflow_call?.inputs ?? {}).sort();
@@ -190,9 +193,45 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
   return out;
 }
 
+// ── Live, smoke failed (plan 0013 §6, §7.1, step S4) ──────────────────────────────────────
+
+const RESET_HOOK = '.github/actions/smoke-reset/action.yml';
+
+/** Everything wrong with the reset and smoke steps and the `verdict` job. */
+function smokeProblems(w: Record<string, Workflow>): string[] {
+  const out: string[] = [];
+  const dep = w[ENV]?.jobs.deploy;
+  if (!dep) return out;
+  const ds = dep.steps ?? [];
+  const reset = ds.find((s) => s.uses === './.github/actions/smoke-reset');
+  const smoke = ds.find((s) => s.uses === './.github/actions/smoke');
+  for (const [name, s] of [['reset', reset], ['smoke', smoke]] as const) {
+    if (!s) { out.push(`${ENV}:deploy: has no ${name} step`); continue; }
+    if (s['continue-on-error'] !== true) out.push(`${ENV}:deploy:${name}: doesn't continue on error, so a failed ${name} fails the deploy job and GitHub marks a live release's deployment failed`);
+    if (s.id !== name) out.push(`${ENV}:deploy:${name}: isn't the step \`${name}\`, whose outcome the job outputs`);
+    if (JSON.stringify(s.env) !== '{"KANON_SMOKE_TRIGGER":"deploy"}') out.push(`${ENV}:deploy:${name}: isn't handed KANON_SMOKE_TRIGGER=deploy, and nothing else`);
+  }
+  if (reset && String(reset.if ?? '') !== `hashFiles('${RESET_HOOK}') != ''`) out.push(`${ENV}:deploy:reset: runs whether or not the reset hook exists`);
+  if (smoke && String(smoke.if ?? '') !== "steps.reset.outcome != 'failure'") out.push(`${ENV}:deploy:smoke: runs after a failed reset, on data in an unknown state`);
+  if (reset && smoke && ds.indexOf(reset) > ds.indexOf(smoke)) out.push(`${ENV}:deploy: the reset runs after the smoke check`);
+  if (dep.outputs?.['reset-outcome'] !== '${{ steps.reset.outcome }}' || dep.outputs?.['smoke-outcome'] !== '${{ steps.smoke.outcome }}') out.push(`${ENV}:deploy: doesn't output the reset's and the smoke check's outcomes`);
+  const v = w[ENV]?.jobs.verdict;
+  if (!v) return [...out, `${ENV}: has no verdict job, so a failed smoke check no longer stops the chain`];
+  if (JSON.stringify(v.needs) !== '"deploy"' || v.if !== 'always()') out.push(`${ENV}:verdict: doesn't run after the deploy job, whatever it concluded`);
+  if (JSON.stringify(v.permissions) !== '{}') out.push(`${ENV}:verdict: holds a permission`);
+  const vs = v.steps ?? [];
+  if (vs.length !== 1 || vs[0]!.uses !== undefined || vs[0]!.env?.RESET !== '${{ needs.deploy.outputs.reset-outcome }}' || vs[0]!.env?.SMOKE !== '${{ needs.deploy.outputs.smoke-outcome }}') out.push(`${ENV}:verdict: isn't one step reading the reset's and the smoke check's outcomes`);
+  for (const [name, j] of Object.entries(w[ENV]?.jobs ?? {})) {
+    if (([] as string[]).concat(j.needs ?? []).includes('verdict')) out.push(`${ENV}:${name}: waits for the verdict, which fails on a live release`);
+  }
+  return out;
+}
+
 // ── The build (plan 0010 decision 8, step D5) ─────────────────────────────────────────────
 
 type Needed = Record<string, { result: string; outputs?: Record<string, string> }>;
+/** A step's place in its job, for `jobRuns` reading a step's `if:`: the steps so far, whether one failed the job, and the checkout's files. */
+type StepContext = { steps: Record<string, { outcome: string; conclusion: string; outputs: Record<string, string> }>; failed: boolean; files: string[] };
 
 /**
  * Whether a job whose `if:` is `expression` runs, given its needed jobs' results and outputs, as
@@ -201,8 +240,10 @@ type Needed = Record<string, { result: string; outputs?: Record<string, string> 
  * `needs.<job>.outputs.<name>`, strings, `==`, `!=`, `!`, `&&`, `||` and the four status
  * functions; anything else throws, so a new `if:` can't pass for a reason this doesn't read.
  */
-export function jobRuns(expression: string | undefined, needs: Needed, runCancelled = false): boolean {
+export function jobRuns(expression: string | undefined, needs: Needed, runCancelled = false, ctx?: StepContext): boolean {
   let text = String(expression ?? '').trim().replace(/^\$\{\{([\s\S]*)\}\}$/, '$1').trim();
+  // A step's `hashFiles('<path>')`: non-empty when the file is in the checkout (`ctx.files`).
+  text = text.replace(/hashFiles\('([^']*)'\)/g, (_m, path: string) => (ctx?.files.includes(path) ? "'digest'" : "''"));
   if (!/\b(?:always|success|failure|cancelled)\s*\(/.test(text)) text = text ? `success() && (${text})` : 'success()';
   const tokens = [...text.matchAll(/\s*('(?:[^']|'')*'|==|!=|&&|\|\||[!()]|[A-Za-z_][\w.-]*)/g)].map((m) => m[1]!);
   if (tokens.join('').replace(/\s/g, '') !== text.replace(/\s/g, '')) throw new Error(`can't read ${text}`);
@@ -210,6 +251,12 @@ export function jobRuns(expression: string | undefined, needs: Needed, runCancel
   const results = Object.values(needs).map((n) => n.result);
   const value = (t: string): string | boolean => {
     if (t.startsWith("'")) return t.slice(1, -1).replace(/''/g, "'");
+    const st = /^steps\.([\w-]+)\.(outcome|conclusion|outputs\.([\w-]+))$/.exec(t);
+    if (st && ctx) {
+      const done = ctx.steps[st[1]!];
+      if (!done) return '';
+      return st[2] === 'outputs.' + st[3] ? done.outputs[st[3]!] ?? '' : done[st[2] as 'outcome' | 'conclusion'];
+    }
     const m = /^needs\.([\w-]+)\.(result|outputs\.([\w-]+))$/.exec(t);
     if (!m) throw new Error(`can't read ${t}`);
     const n = needs[m[1]!];
@@ -224,8 +271,9 @@ export function jobRuns(expression: string | undefined, needs: Needed, runCancel
       i += 2;
       if (t === 'always') return true;
       if (t === 'cancelled') return runCancelled;
-      if (t === 'success') return !runCancelled && results.every((r) => r === 'success');
-      if (t === 'failure') return results.some((r) => r === 'failure');
+      // Inside a job (`ctx`), the status functions read the job's own steps so far.
+      if (t === 'success') return !runCancelled && (ctx ? !ctx.failed : results.every((r) => r === 'success'));
+      if (t === 'failure') return ctx ? ctx.failed : results.some((r) => r === 'failure');
       throw new Error(`can't call ${t}`);
     }
     const left = value(t);
@@ -333,7 +381,7 @@ describe('the deploy lane holds its shape', () => {
 
   it('reads the jobs it is about, so the checks are not vacuous', () => {
     expect(Object.keys(PARSED[RELEASE]!.jobs)).toEqual(['gate', 'probe', 'build', 'record', 'report']);
-    expect(Object.keys(PARSED[ENV]!.jobs)).toEqual(['declare', 'deploy', 'record', 'report', 'announce', 'notify']);
+    expect(Object.keys(PARSED[ENV]!.jobs)).toEqual(['declare', 'deploy', 'verdict', 'record', 'report', 'announce', 'notify']);
     // The run lists the environment's job as `<caller job> / deploy` (kanon#890), which the reference deploy names.
     expect(PARSED[ENV]!.jobs.deploy!.name).toBe('deploy');
     expect(step(PARSED[ENV]!.jobs.deploy!, 'deploy').env).toEqual({ KANON_DEPLOY_SECRET: ALLOWED_SECRET });
@@ -348,14 +396,19 @@ describe('the deploy lane holds its shape', () => {
     expect(checkouts[3]!.with).toEqual({ 'persist-credentials': false, 'sparse-checkout': '.github/actions/notify' });
   });
 
-  it('the hooks get the inputs plan 0010 §7 lists, and the smoke hook never the secret', () => {
+  it('the hooks get the inputs plan 0010 §7 and plan 0013 §6 list, and the reset and smoke hooks never the secret, only the trigger', () => {
     const dep = PARSED[ENV]!.jobs.deploy!;
     const hooks = (dep.steps ?? []).filter((s) => String(s.uses ?? '').startsWith('./'));
     expect(hooks.map((s) => [s.uses, Object.keys(s.with ?? {})])).toEqual([
       ['./.github/actions/deploy', ['environment', 'role', 'release', 'sha', 'artifact', 'probe', 'environments']],
+      ['./.github/actions/smoke-reset', ['environment', 'role', 'release']],
       ['./.github/actions/smoke', ['environment', 'role', 'release']],
     ]);
-    expect(hooks[1]!.env).toBeUndefined();
+    // Neither the reset's step nor the smoke's references KANON_DEPLOY_SECRET, or any secret.
+    for (const h of hooks.slice(1)) {
+      expect(h.env).toEqual({ KANON_SMOKE_TRIGGER: 'deploy' });
+      expect(JSON.stringify(h)).not.toMatch(/secrets\.|KANON_DEPLOY_SECRET/);
+    }
     const build = (PARSED[RELEASE]!.jobs.build!.steps ?? []).filter((s) => String(s.uses ?? '').startsWith('./'));
     expect(build.map((s) => [s.uses, Object.keys(s.with ?? {})])).toEqual([[BUILD_HOOK, ['release', 'sha', 'output']]]);
     expect(build[0]!.env).toBeUndefined();
@@ -472,6 +525,20 @@ describe('the deploy lane holds its shape', () => {
       red((w) => { step(job(w, ENV, 'deploy'), 'deploy').with!.role = '${{ vars.DEPLOY_ROLE }}'; }, /reads a repository variable/);
       red((w) => { job(w, ENV, 'declare').environment = 'production'; }, /declare: sets an environment/);
     });
+  });
+
+  describe('the mutations plan 0013 S4 names each turn the shape red', () => {
+    const red = (change: (w: Record<string, Workflow>) => void, problem: RegExp) => {
+      const found = mutate(change);
+      expect(found.some((p) => problem.test(p)), `expected a problem matching ${problem}, got ${JSON.stringify(found)}`).toBe(true);
+    };
+    it('`continue-on-error` left off the smoke step', () => red((w) => { delete step(job(w, ENV, 'deploy'), 'smoke')['continue-on-error']; }, /smoke: doesn't continue on error/));
+    it('`continue-on-error` left off the reset step', () => red((w) => { delete step(job(w, ENV, 'deploy'), 'reset')['continue-on-error']; }, /reset: doesn't continue on error/));
+    it('the verdict job dropped', () => red((w) => { delete w[ENV]!.jobs.verdict; }, /no verdict job/));
+    it('the reset step run whether or not the hook exists', () => red((w) => { delete step(job(w, ENV, 'deploy'), 'reset').if; }, /whether or not the reset hook exists/));
+    it('the smoke step run after a failed reset', () => red((w) => { delete step(job(w, ENV, 'deploy'), 'smoke').if; }, /after a failed reset/));
+    it('`KANON_DEPLOY_SECRET` handed to the reset step', () => red((w) => { step(job(w, ENV, 'deploy'), 'reset').env!.KANON_DEPLOY_SECRET = ALLOWED_SECRET; }, /reset: references a secret/));
+    it('a write on the verdict job', () => red((w) => { job(w, ENV, 'verdict').permissions = { issues: 'write' }; }, /verdict: holds a permission/));
   });
 
   describe('the mutations plan 0010 D5 names each turn it red', () => {
@@ -974,5 +1041,193 @@ describe('deploy-build.mjs: one build, digested once and checked in every enviro
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("wasn't downloaded: it expired");
     expect(r.stderr).toContain('kanon-deploy-build-123456-1');
+  });
+});
+
+// ── Live, smoke failed, from the workflow to the row and the chain (plan 0013 §7.1, step S4) ──
+
+/**
+ * The deploy job of `deploy.yml`, run on paper as GitHub runs it: each step's `if:` read with
+ * `jobRuns` against the steps so far, a hook whose `action.yml` isn't in the checkout failing as
+ * GitHub's missing action does, a failing step under `continue-on-error: true` concluding
+ * `success`, and the job's outputs resolved from the steps. `fail` names the steps that fail.
+ */
+function runDeployJob(w: Record<string, Workflow>, { fail = [] as string[], files = [] as string[] } = {}) {
+  const dep = job(w, ENV, 'deploy');
+  const ctx: StepContext = { steps: {}, failed: false, files };
+  let minute = 10;
+  for (const s of dep.steps ?? []) {
+    const id = s.id ?? s.name ?? String(s.uses);
+    if (!jobRuns(s.if, {}, false, ctx)) { ctx.steps[id] = { outcome: 'skipped', conclusion: 'skipped', outputs: {} }; continue; }
+    const hook = /^\.\/(\.github\/actions\/[a-z-]+)$/.exec(String(s.uses ?? ''))?.[1];
+    const outcome = fail.includes(id) || (hook && !files.includes(`${hook}/action.yml`)) ? 'failure' : 'success';
+    const conclusion = outcome === 'failure' && s['continue-on-error'] === true ? 'success' : outcome;
+    if (conclusion === 'failure') ctx.failed = true;
+    ctx.steps[id] = { outcome, conclusion, outputs: /\bat=\$\(date/.test(String(s.run ?? '')) ? { at: T(minute++) } : {} };
+  }
+  const resolve = (v: string) => {
+    const m = /^\$\{\{ steps\.([\w-]+)\.(outcome|outputs\.([\w-]+)) \}\}$/.exec(v);
+    const done = m ? ctx.steps[m[1]!] : undefined;
+    return !m || !done ? '' : m[2] === 'outcome' ? done.outcome : done.outputs[m[3]!] ?? '';
+  };
+  return { result: ctx.failed ? 'failure' : 'success', outputs: Object.fromEntries(Object.entries(dep.outputs ?? {}).map(([k, v]) => [k, resolve(v)])) };
+}
+
+/** The `verdict` job, run: its `if:` against the deploy job, then its script under bash with its `env:` resolved. */
+function runVerdict(w: Record<string, Workflow>, deploy: { result: string; outputs: Record<string, string> }) {
+  const v = w[ENV]?.jobs.verdict;
+  if (!v) return 'absent';
+  if (!jobRuns(v.if, { deploy })) return 'skipped';
+  const first = v.steps![0]!;
+  const env = Object.fromEntries(Object.entries(first.env ?? {}).map(([k, x]) => [k, String(x).replace(/^\$\{\{ needs\.deploy\.outputs\.([\w-]+) \}\}$/, (_m, o: string) => deploy.outputs[o] ?? '')]));
+  const r = spawnSync('bash', ['-c', String(first.run)], { env: { PATH: process.env.PATH, ...env }, encoding: 'utf8' });
+  return r.status === 0 ? 'success' : 'failure';
+}
+
+/** Whether the next environment's call starts: the caller `kanon init` writes, after this call concluded. */
+function nextStarts(call: string) {
+  const caller = parse(deployCallerFile(['staging', 'production'], loadRequirements(), 'v9.9.9')) as Workflow;
+  const next = caller.jobs['deploy-2']!;
+  expect(next.needs).toEqual(['release', 'deploy-1']);
+  return jobRuns(next.if, { release: { result: 'success' }, 'deploy-1': { result: call } });
+}
+
+describe('live, smoke failed: the deploy job succeeds, the verdict stops the chain (plan 0013 §7.1)', () => {
+  const HOOKS = ['.github/actions/deploy/action.yml', '.github/actions/smoke/action.yml'];
+  const WITH_RESET = [...HOOKS, RESET_HOOK];
+  const lane = (opts: { fail?: string[]; files?: string[] }, w = load()) => {
+    const deploy = runDeployJob(w, opts);
+    const verdict = runVerdict(w, deploy);
+    const call = [deploy.result, verdict].includes('failure') ? 'failure' : 'success';
+    const r = environmentRow({ ...RUN, NEEDS: JSON.stringify({ declare: declared('pre-production'), deploy }), ENVIRONMENT: 'staging', POSITION: '1' }, { api: () => ({ run_started_at: T(0) }) })!;
+    return { deploy, verdict, call, row: r, next: nextStarts(call) };
+  };
+
+  it('a failed smoke check: the deploy job concludes success, the verdict fails the call, and the next environment does not start', () => {
+    const run = lane({ fail: ['smoke'], files: HOOKS });
+    expect(run.deploy.result).toBe('success');
+    expect(run.deploy.outputs).toMatchObject({ 'deploy-outcome': 'success', 'reset-outcome': 'skipped', 'smoke-outcome': 'failure' });
+    expect(run.verdict).toBe('failure');
+    expect(run.call).toBe('failure');
+    expect(run.next).toBe(false);
+    expect(run.row).toMatchObject({ schema_version: 1, outcome: 'smoke_failed', failed_stage: 'smoke', role: 'pre-production' });
+    expect(validate(run.row)).toEqual({ ok: true });
+  });
+
+  it('a failed reset: the smoke check does not run, and the row is `smoke_failed` at `reset`, at version 2', () => {
+    const run = lane({ fail: ['reset'], files: WITH_RESET });
+    expect(run.deploy.result).toBe('success');
+    expect(run.deploy.outputs).toMatchObject({ 'reset-outcome': 'failure', 'smoke-outcome': 'skipped' });
+    expect(run.verdict).toBe('failure');
+    expect(run.next).toBe(false);
+    expect(run.row).toMatchObject({ schema_version: 2, outcome: 'smoke_failed', failed_stage: 'reset' });
+    expect(run.row.reset_ms).toBeGreaterThanOrEqual(0);
+    expect(run.row).not.toHaveProperty('smoke_ms');
+    expect(validate(run.row)).toEqual({ ok: true });
+  });
+
+  it('a passing reset and smoke check: `ok` at version 2 with both times, and the chain goes on', () => {
+    const run = lane({ files: WITH_RESET });
+    expect(run.verdict).toBe('success');
+    expect(run.next).toBe(true);
+    expect(run.row).toMatchObject({ schema_version: 2, outcome: 'ok', reset_ms: 60_000, smoke_ms: 60_000 });
+    expect(validate(run.row)).toEqual({ ok: true });
+  });
+
+  it('no reset step runs when the hook is absent, the summary says so, and the row stays at version 1', () => {
+    const run = lane({ files: HOOKS });
+    expect(run.deploy.outputs['reset-outcome']).toBe('skipped');
+    expect(run.deploy.outputs['smoke-outcome']).toBe('success');
+    expect(run.next).toBe(true);
+    expect(run.row).toMatchObject({ schema_version: 1, outcome: 'ok' });
+    expect(run.row).not.toHaveProperty('reset_ms');
+    const said = (PARSED[ENV]!.jobs.deploy!.steps ?? []).find((x) => x.name === 'Say there is no reset hook')!;
+    expect(said.if).toBe(`hashFiles('${RESET_HOOK}') == ''`);
+    expect(said.run).toContain('$GITHUB_STEP_SUMMARY');
+  });
+
+  it('a failed deploy hook still fails the deploy job, runs neither the reset nor the smoke check, and the verdict adds nothing', () => {
+    const run = lane({ fail: ['deploy'], files: WITH_RESET });
+    expect(run.deploy.result).toBe('failure');
+    expect(run.deploy.outputs).toMatchObject({ 'reset-outcome': 'skipped', 'smoke-outcome': 'skipped' });
+    expect(run.verdict).toBe('success');
+    expect(run.next).toBe(false);
+    expect(run.row).toMatchObject({ schema_version: 1, outcome: 'failed', failed_stage: 'deploy' });
+  });
+
+  it('MUTATION: `continue-on-error` left off the smoke step fails the deploy job, which GitHub marks a failed deployment', () => {
+    const w = load();
+    delete step(job(w, ENV, 'deploy'), 'smoke')['continue-on-error'];
+    expect(lane({ fail: ['smoke'], files: HOOKS }, w).deploy.result).toBe('failure');
+  });
+
+  it('MUTATION: the verdict dropped lets the next environment start after a failed smoke check', () => {
+    const w = load();
+    delete w[ENV]!.jobs.verdict;
+    const run = lane({ fail: ['smoke'], files: HOOKS }, w);
+    expect(run.verdict).toBe('absent');
+    expect(run.next).toBe(true);
+  });
+
+  it('a cancel during the reset is `cancelled` at `reset`, during the smoke check at `smoke`', () => {
+    expect(classifyEnvironment({ declare: ok, deploy: { result: 'cancelled', outputs: { 'started-at': T(1), 'deploy-ended-at': T(2), 'reset-outcome': 'cancelled' } }, environment: 'staging' }))
+      .toEqual({ outcome: 'cancelled', failed_stage: 'reset' });
+    expect(classifyEnvironment({ declare: ok, deploy: { result: 'cancelled', outputs: { 'started-at': T(1), 'deploy-ended-at': T(2), 'reset-outcome': 'success' } }, environment: 'staging' }))
+      .toEqual({ outcome: 'cancelled', failed_stage: 'smoke' });
+  });
+});
+
+describe('the smoke issue (plan 0013 §7.2, decision 4)', () => {
+  const issues = (open: Array<{ number: number, title: string }> = []) => {
+    const writes: Array<{ path: string, method?: string, body?: unknown }> = [];
+    const api = (path: string, opts: { method?: string, body?: unknown } = {}) => {
+      if (!opts.method || opts.method === 'GET') return path.includes('page=1') ? open : [];
+      writes.push({ path, ...opts });
+      return { number: 42 };
+    };
+    return { api, writes };
+  };
+  const base = { repo: 'acme/app', release: 'v1.2.0', runUrl: 'https://github.com/acme/app/actions/runs/1', caller: 'deploy.yml' };
+
+  it('files `Smoke check on <environment> failed`, saying the release is live, the stage, the run and how to check it again, and closes the deploy issue', () => {
+    const { api, writes } = issues([{ number: 7, title: issueTitle('production') }]);
+    expect(report({ ...base, api, environment: 'production', role: 'production', position: 2, outcome: 'smoke_failed', failed_stage: 'smoke' })).toEqual({ action: 'filed', number: 42 });
+    expect(writes.map((x) => [x.method, x.path])).toEqual([
+      ['POST', 'repos/acme/app/issues/7/comments'],
+      ['PATCH', 'repos/acme/app/issues/7'],
+      ['POST', 'repos/acme/app/issues'],
+    ]);
+    expect(writes[1]!.body).toEqual({ state: 'closed', state_reason: 'completed' });
+    const filed = writes[2]!.body as { title: string, body: string, labels: string[] };
+    expect(filed.title).toBe('Smoke check on production failed');
+    expect(filed.labels).toEqual(['bug', 'sev:high']);
+    expect(filed.body).toContain('Release `v1.2.0` is live on `production`');
+    expect(filed.body).toContain('its smoke check failed at the `smoke` stage');
+    expect(filed.body).toContain('--ref v1.2.0 -f release=v1.2.0');
+    expect(filed.body).toContain(`Run: ${base.runUrl}`);
+    expect(filed.body).not.toMatch(/failed to deploy|deploy of release/);
+  });
+
+  it('a failed reset says the smoke check did not run; a later failure comments on the open smoke issue', () => {
+    const { api, writes } = issues([{ number: 9, title: smokeIssueTitle('staging') }]);
+    expect(report({ ...base, api, environment: 'staging', role: 'pre-production', position: 1, outcome: 'smoke_failed', failed_stage: 'reset' })).toEqual({ action: 'commented', number: 9 });
+    expect(writes).toHaveLength(1);
+    expect((writes[0]!.body as { body: string }).body).toContain("its reset hook failed, so its smoke check didn't run");
+  });
+
+  it('a failed deploy never touches the smoke issue, and an `ok` closes both', () => {
+    const failed = issues([{ number: 9, title: smokeIssueTitle('staging') }]);
+    expect(report({ ...base, api: failed.api, environment: 'staging', role: 'pre-production', position: 1, outcome: 'failed', failed_stage: 'deploy' })).toEqual({ action: 'filed', number: 42 });
+    expect((failed.writes[0]!.body as { title: string }).title).toBe('Deploy to staging failed');
+    const both = issues([{ number: 7, title: issueTitle('staging') }, { number: 9, title: smokeIssueTitle('staging') }]);
+    expect(report({ ...base, api: both.api, environment: 'staging', role: 'pre-production', position: 1, outcome: 'ok' })).toEqual({ action: 'closed', number: 7 });
+    expect(both.writes.filter((x) => x.method === 'PATCH').map((x) => x.path)).toEqual(['repos/acme/app/issues/7', 'repos/acme/app/issues/9']);
+  });
+
+  it("names the deploy caller's file from the runner's workflow ref", () => {
+    expect(callerFile('acme/app/.github/workflows/ship.yml@refs/tags/v1.2.0')).toBe('ship.yml');
+    expect(callerFile(undefined)).toBe('deploy.yml');
+    expect(reportFrom({ NEEDS: JSON.stringify({ declare: declared(), deploy: ok, record: { result: 'success', outputs: { outcome: 'smoke_failed', stage: 'smoke' } } }), ENVIRONMENT: 'staging', POSITION: '1', GITHUB_WORKFLOW_REF: 'acme/app/.github/workflows/deploy.yml@refs/tags/v1' }, 'environment'))
+      .toMatchObject({ outcome: 'smoke_failed', failed_stage: 'smoke', caller: 'deploy.yml' });
   });
 });

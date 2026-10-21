@@ -5,7 +5,8 @@
 # `build` output, step D5): the role (`production` for the last, `pre-production` for the
 # others) is read from the adoption record at the release's commit, never passed in.
 #
-#   declare → deploy (environment, concurrency, approval) → record → report → announce → notify
+#   declare → deploy (environment, concurrency, approval) → verdict
+#                                                        → record → report → announce → notify
 #
 # DECLARE (`scripts/deploy-gate.mjs declare`), with `contents: read` alone and no credential: the
 # release again, and the adoption record's `## Deploy` list at its commit must hold this
@@ -31,7 +32,11 @@
 # missing or different artifact fails the job at the `build` stage, before any hook runs, and
 # nothing is rebuilt here (plan 0010 decision 8). Then it runs the adopter's hooks:
 # `.github/actions/deploy`, which obtains the environment's credential and deploys the checked
-# directory, its `artifact` input, then `.github/actions/smoke`. The deploy hook's step alone
+# directory, its `artifact` input, then the optional `.github/actions/smoke-reset`, then
+# `.github/actions/smoke` (plan 0013 §6). LIVE, SMOKE FAILED (plan 0013 §7.1): the reset and
+# smoke steps continue on error, so the job succeeds when the deploy hook did and GitHub marks the
+# deployment `success`; their outcomes are outputs, `verdict` fails the call on either, and the
+# next environment's call, which `needs:` this one, doesn't start. The deploy hook's step alone
 # receives `KANON_DEPLOY_SECRET`, an environment secret, empty when the environment holds none
 # (plan 0010 §7, `K-AGENT-47`). It is an optional secret of this workflow, and the caller maps it
 # from `secrets.KANON_DEPLOY_SECRET`: GitHub evaluates that expression in this job's scope, where
@@ -40,15 +45,18 @@
 #
 # AFTER (plan 0010 §8): `record` writes this environment's `deploy` row (`scripts/deploy-row.mjs`),
 # reading the run's approvals to tell a rejection from a failure (kanon#890), and `report` files,
-# comments on or closes this environment's issue (`scripts/deploy-report.mjs`), with no checkout.
+# comments on or closes this environment's issues (`scripts/deploy-report.mjs`), with no checkout:
+# `Deploy to <environment> failed` for a failed deploy, `Smoke check on <environment> failed` for
+# a live release whose reset or smoke check failed, which also closes the deploy issue.
 #
 # THE ANNOUNCEMENT (`K-SHIP-10`; plan 0011 N9, plan 0010 §8; the Owner's decisions of
 # 2026-10-15). Each environment announces its own deploy. `announce` (`scripts/announce-deploy.mjs`)
 # writes one `deploy` message from the record's outcome: a deploy that landed names the releases
 # since the environment's previous successful GitHub deployment (`deployments: read`, nothing
 # written back), and a failure is `critical` on production and `warning` elsewhere, linking the run
-# and the issue `report` filed. A refusal, a rejection or a cancel announces nothing. It holds no
-# chat secret, and runs only when the run's commit has a notify hook. `notify` hands the message to
+# and the issue `report` filed. A deploy that landed and failed its smoke check gets the landed
+# message, flagged, at the failure's severity (plan 0013 §7.2). A refusal, a rejection or a cancel
+# announces nothing. It holds no chat secret, and runs only when the run's commit has a notify hook. `notify` hands the message to
 # the adopter's hook (`$/actions/notify`) with `KANON_CHAT_DEPLOY`, an optional secret of this
 # workflow, and no other: the one job here that holds it, of the shape
 # `tests/unit/helpers/notify-jobs.ts` holds every `notify` job to. A post that fails turns
@@ -147,6 +155,8 @@ jobs:
       deploy-started-at: ${{ steps.before-deploy.outputs.at }}
       deploy-ended-at: ${{ steps.after-deploy.outputs.at }}
       deploy-outcome: ${{ steps.deploy.outcome }}
+      reset-outcome: ${{ steps.reset.outcome }}
+      reset-ended-at: ${{ steps.after-reset.outputs.at }}
       smoke-outcome: ${{ steps.smoke.outcome }}
       ended-at: ${{ steps.end.outputs.at }}
     steps:
@@ -211,9 +221,39 @@ jobs:
         id: after-deploy
         if: always() && steps.deploy.outcome == 'success'
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      # THE RESET AND THE SMOKE CHECK (plan 0013 §6, §7.1): each `continue-on-error`, so once the
+      # deploy hook succeeded the job concludes `success` and GitHub marks the deployment `success`
+      # (measured, kanon#1166 item 1): the release is live. Their outcomes are output, and the
+      # `verdict` job fails the call on either, so the chain stops. The reset hook is optional:
+      # absent at the release's commit, its step is skipped and the summary says so. A failed
+      # reset skips the smoke check, whose data is then in an unknown state. Both get
+      # `KANON_SMOKE_TRIGGER`, `deploy` here, so a hook can tell a deploy's run from a scheduled one.
+      - name: Say there is no reset hook
+        if: hashFiles('.github/actions/smoke-reset/action.yml') == ''
+        run: |
+          echo "No reset hook at .github/actions/smoke-reset, so none ran: the smoke check starts from whatever the last run left (docs/lanes.md, \"The deploy lane\")." >> "$GITHUB_STEP_SUMMARY"
+      - name: Reset
+        id: reset
+        if: hashFiles('.github/actions/smoke-reset/action.yml') != ''
+        continue-on-error: true
+        uses: ./.github/actions/smoke-reset
+        env:
+          KANON_SMOKE_TRIGGER: deploy
+        with:
+          environment: ${{ inputs.environment }}
+          role: ${{ needs.declare.outputs.role }}
+          release: ${{ needs.declare.outputs.tag }}
+      - name: Mark the reset's end
+        id: after-reset
+        if: always() && (steps.reset.outcome == 'success' || steps.reset.outcome == 'failure' || steps.reset.outcome == 'cancelled')
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Smoke
         id: smoke
+        if: steps.reset.outcome != 'failure'
+        continue-on-error: true
         uses: ./.github/actions/smoke
+        env:
+          KANON_SMOKE_TRIGGER: deploy
         with:
           environment: ${{ inputs.environment }}
           role: ${{ needs.declare.outputs.role }}
@@ -222,6 +262,33 @@ jobs:
         id: end
         if: always()
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+  # THE VERDICT (plan 0013 §7.1): the deploy job succeeds when the deploy hook did, so this job
+  # fails the call when the reset or the smoke check failed. A failed job fails the call, and the
+  # next environment's call `needs:` this one, so the chain stops before it, as it did when a smoke
+  # failure failed the deploy job. No permissions, no checkout, no hook: it reads two outputs.
+  verdict:
+    needs: deploy
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Fail the call when the reset or the smoke check failed
+        env:
+          RESET: ${{ needs.deploy.outputs.reset-outcome }}
+          SMOKE: ${{ needs.deploy.outputs.smoke-outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$RESET" = failure ]; then
+            echo "::error::The release is live, but the reset hook failed, so the smoke check didn't run. The next environment doesn't start. The smoke issue says how to check it again."
+            exit 1
+          fi
+          if [ "$SMOKE" = failure ]; then
+            echo "::error::The release is live, but its smoke check failed. The next environment doesn't start. The smoke issue says how to check it again."
+            exit 1
+          fi
+          echo "The reset (${RESET:-not run}) and the smoke check (${SMOKE:-not run}) didn't fail."
 
   record:
     needs: [declare, deploy]

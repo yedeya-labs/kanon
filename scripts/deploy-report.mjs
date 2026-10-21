@@ -2,10 +2,14 @@
 // written by a script in the `report` jobs, never by a model, with the workflow token's
 // `issues: write` and nothing else: no checkout, no cloud credential.
 //
-// ONE ISSUE PER ENVIRONMENT, FOUND BY ITS TITLE, `Deploy to <environment> failed`.
-//   • A failure (`failed`, `smoke_failed`) or a refusal (`refused`, `K-SHIP-8`'s "announce a
-//     refusal") files the issue, or comments on it when one is open.
-//   • A successful deploy (`ok`) closes that environment's open issue, if there is one.
+// TWO ISSUES PER ENVIRONMENT AT MOST, EACH FOUND BY ITS TITLE.
+//   • `Deploy to <environment> failed`: a failure (`failed`) or a refusal (`refused`, `K-SHIP-8`'s
+//     "announce a refusal") files it, or comments on it when one is open.
+//   • `Smoke check on <environment> failed` (plan 0013 §7.2, decision 4): a deploy that landed and
+//     whose reset or smoke check failed (`smoke_failed`) files it, or comments on it, and CLOSES
+//     the deploy issue if one is open, since the deploy succeeded. The body says the release is
+//     live, the stage that failed, and how to check it again.
+//   • A successful deploy whose smoke check passed (`ok`) closes both, if open.
 //   • A rejection or a cancellation files nothing: a person decided it, and the run says so.
 // Labelled `bug`, and `sev:high` for production (the last environment), `sev:medium` for every
 // other one. The body holds the release, the stage, the refusal's code and the run's link, never
@@ -25,6 +29,7 @@
 //      ENVIRONMENT, POSITION  the call's own (`environment`); ENVIRONMENTS, the caller's list (`release`)
 //      RELEASE        the release's tag, for the body
 //      RUN_URL        the run's link
+//      GITHUB_WORKFLOW_REF  the runner's: the deploy caller's file, for the smoke issue's command
 //      GITHUB_REPOSITORY, GH_TOKEN (the job's `issues: write` token)
 //      GITHUB_OUTPUT  `issue=<number>` when a failure filed or commented on the environment's
 //                     issue, else `issue=`: the `announce` job links it (plan 0011 N9)
@@ -35,11 +40,14 @@ import { classifyEnvironment, classifyRelease } from './deploy-row.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { ROLES } from './lib/deploy-declaration.mjs';
 
-/** The outcomes that file, or comment on, the environment's issue. */
+/** The outcomes that file, or comment on, one of the environment's issues. */
 export const FILES = Object.freeze(['failed', 'smoke_failed', 'refused']);
 
-/** The issue's fixed title, by which it is found again. */
+/** The deploy issue's fixed title, by which it is found again. */
 export const issueTitle = (/** @type {string} */ environment) => `Deploy to ${environment} failed`;
+
+/** The smoke issue's fixed title (plan 0013 §7.2, decision 4), by which it is found again. */
+export const smokeIssueTitle = (/** @type {string} */ environment) => `Smoke check on ${environment} failed`;
 
 /** The severity label: production is `sev:high`, every other environment `sev:medium`. */
 export const severity = (/** @type {string} */ role) => (role === ROLES.production ? 'sev:high' : 'sev:medium');
@@ -48,11 +56,11 @@ export const severity = (/** @type {string} */ role) => (role === ROLES.producti
 const MAX_PAGES = 10;
 
 /**
- * The environment's open issue, by its exact title, or `null`.
+ * The open issue with exactly this title, or `null`: the environment's deploy issue by default.
  * @param {import('./deploy-gate.mjs').Api} api @param {string} repo @param {string} environment
+ * @param {string} [title]
  */
-export function findIssue(api, repo, environment) {
-  const title = issueTitle(environment);
+export function findIssue(api, repo, environment, title = issueTitle(environment)) {
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     const list = api(`repos/${repo}/issues?state=open&per_page=100&page=${page}`);
     const items = Array.isArray(list) ? list : [];
@@ -65,16 +73,38 @@ export function findIssue(api, repo, environment) {
 
 const WHAT = /** @type {Record<string, string>} */ ({
   failed: 'failed',
-  smoke_failed: 'deployed, but its smoke check failed',
   refused: 'was refused',
 });
 
 /**
- * @typedef {{ environment: string, role: string, position: number, outcome: string, failed_stage?: string, refusal?: string, release: string, runUrl: string }} Report
+ * @typedef {{ environment: string, role: string, position: number, outcome: string, failed_stage?: string, refusal?: string, release: string, runUrl: string, caller?: string }} Report
  */
+
+/**
+ * The deploy caller's file, from the runner's `GITHUB_WORKFLOW_REF`, which in a called workflow
+ * names the caller (`owner/repo/.github/workflows/deploy.yml@refs/tags/v1.2.0`); `deploy.yml`, the
+ * name `kanon init` writes, when it can't be read.
+ * @param {string | undefined} ref
+ */
+export const callerFile = (ref) => /\/\.github\/workflows\/([A-Za-z0-9._-]+\.ya?ml)@/.exec(String(ref ?? ''))?.[1] ?? 'deploy.yml';
+
+/**
+ * The text of a failed reset or smoke check after a deploy that landed (plan 0013 §7.2): the
+ * release is live, the stage that failed, the run, and how to check it again. No log line.
+ * @param {Report} r
+ */
+export function smokeText(r) {
+  const tag = r.release || 'unknown';
+  const what = r.failed_stage === 'reset' ? 'its reset hook failed, so its smoke check didn\'t run' : `its smoke check failed${r.failed_stage ? ` at the \`${r.failed_stage}\` stage` : ''}`;
+  const again = r.release
+    ? `To check it again, deploy the release again: \`gh workflow run ${r.caller ?? 'deploy.yml'} --ref ${r.release} -f release=${r.release}\`. That deploys it to each environment in order, from the first, with the reset and the smoke check after each, and goes on past this one once its check passes.`
+    : 'To check it again, dispatch the deploy caller at the release\'s tag.';
+  return `Release \`${tag}\` is live on \`${r.environment}\` (${r.role}, environment ${r.position}), but ${what}. The environments after it don't start.\n\n${again}\n\nRun: ${r.runUrl}`;
+}
 
 /** The text of a failure, for the body or a comment: no log line. @param {Report} r */
 export function failureText(r) {
+  if (r.outcome === 'smoke_failed') return smokeText(r);
   const where = r.failed_stage ? ` at the \`${r.failed_stage}\` stage` : '';
   const code = r.refusal ? `, \`${r.refusal}\`` : '';
   return `The deploy of release \`${r.release || 'unknown'}\` to \`${r.environment}\` (${r.role}, environment ${r.position}) ${WHAT[r.outcome] ?? r.outcome}${where}${code}.\n\nRun: ${r.runUrl}`;
@@ -86,25 +116,42 @@ export function failureText(r) {
  * @returns {{ action: 'filed' | 'commented' | 'closed' | 'none', number?: number }}
  */
 export function report({ repo, api = ghApi, ...r }) {
-  const open = findIssue(api, repo, r.environment);
+  const tag = r.release || 'unknown';
+  /** Comments on an open issue and closes it. @param {{ number: number }} issue @param {string} why */
+  const close = (issue, why) => {
+    api(`repos/${repo}/issues/${issue.number}/comments`, { method: 'POST', body: { body: `${why}\n\nRun: ${r.runUrl}` } });
+    api(`repos/${repo}/issues/${issue.number}`, { method: 'PATCH', body: { state: 'closed', state_reason: 'completed' } });
+    return issue.number;
+  };
   if (r.outcome === 'ok') {
-    if (!open) return { action: 'none' };
-    api(`repos/${repo}/issues/${open.number}/comments`, { method: 'POST', body: { body: `Release \`${r.release || 'unknown'}\` deployed to \`${r.environment}\`: closing.\n\nRun: ${r.runUrl}` } });
-    api(`repos/${repo}/issues/${open.number}`, { method: 'PATCH', body: { state: 'closed', state_reason: 'completed' } });
-    return { action: 'closed', number: open.number };
+    // A deploy whose smoke check passed closes both of the environment's issues.
+    const deploy = findIssue(api, repo, r.environment);
+    const smoke = findIssue(api, repo, r.environment, smokeIssueTitle(r.environment));
+    const closed = [
+      ...(deploy ? [close(deploy, `Release \`${tag}\` deployed to \`${r.environment}\`: closing.`)] : []),
+      ...(smoke ? [close(smoke, `Release \`${tag}\` deployed to \`${r.environment}\` and its smoke check passed: closing.`)] : []),
+    ];
+    return closed.length ? { action: 'closed', number: closed[0] } : { action: 'none' };
   }
   if (!FILES.includes(r.outcome)) return { action: 'none' };
+  const smoke = r.outcome === 'smoke_failed';
+  if (smoke) {
+    // The deploy succeeded, so its issue, if open, closes (plan 0013 §7.2).
+    const deploy = findIssue(api, repo, r.environment);
+    if (deploy) close(deploy, `Release \`${tag}\` deployed to \`${r.environment}\`: closing. Its smoke check failed, which the issue \`${smokeIssueTitle(r.environment)}\` tracks.`);
+  }
+  const title = smoke ? smokeIssueTitle(r.environment) : issueTitle(r.environment);
+  const open = findIssue(api, repo, r.environment, title);
   if (open) {
     api(`repos/${repo}/issues/${open.number}/comments`, { method: 'POST', body: { body: failureText(r) } });
     return { action: 'commented', number: open.number };
   }
+  const footer = smoke
+    ? `The deploy lane files one smoke issue per environment (plan 0013 §7.2), comments on it at each later failed smoke check, and closes it at the next deploy to \`${r.environment}\` whose smoke check passes. It holds no log line: read the run.`
+    : `The deploy lane files one issue per environment (plan 0010 §8), comments on it at each later failure, and closes it at the next successful deploy to \`${r.environment}\`. It holds no log line: read the run.`;
   const created = api(`repos/${repo}/issues`, {
     method: 'POST',
-    body: {
-      title: issueTitle(r.environment),
-      body: `${failureText(r)}\n\nThe deploy lane files one issue per environment (plan 0010 §8), comments on it at each later failure, and closes it at the next successful deploy to \`${r.environment}\`. It holds no log line: read the run.`,
-      labels: ['bug', severity(r.role)],
-    },
+    body: { title, body: `${failureText(r)}\n\n${footer}`, labels: ['bug', severity(r.role)] },
   });
   return { action: 'filed', number: created?.number };
 }
@@ -124,7 +171,7 @@ export const issueOf = (done) => ((done.action === 'filed' || done.action === 'c
 export function reportFrom(env, kind) {
   const needs = JSON.parse(env.NEEDS || '{}');
   const rec = needs.record?.outputs ?? {};
-  const base = { release: String(env.RELEASE ?? ''), runUrl: String(env.RUN_URL ?? '') };
+  const base = { release: String(env.RELEASE ?? ''), runUrl: String(env.RUN_URL ?? ''), caller: callerFile(env.GITHUB_WORKFLOW_REF) };
   if (kind === 'release') {
     const ending = rec.written === 'true' ? { outcome: rec.outcome, failed_stage: rec.stage || undefined, refusal: rec.refusal || undefined } : classifyRelease(needs);
     if (!ending || rec.written === 'false') return null;

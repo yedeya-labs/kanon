@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { issueTitle, failureText } from '../../scripts/deploy-report.mjs';
+import { issueTitle, failureText, smokeIssueTitle } from '../../scripts/deploy-report.mjs';
 import { commentRules, failedLogs, LOG_CHARS, namesRun, REPORT_AUTHOR, reportedIssues, runUrl, tail } from '../../scripts/deploy-diagnose.mjs';
 import { writeStub } from './helpers/stub-bin.js';
 
@@ -166,6 +166,17 @@ describe("the issues the run's report jobs wrote on", () => {
     expect(a.calls[0]).toMatch(/^repos\/acme\/app\/issues\?state=open&labels=bug&per_page=100&page=1$/);
   });
 
+  it('finds the smoke issue a live release with a failed smoke check filed, by its own title (plan 0013 §7.2)', () => {
+    const smoke = failureText({ environment: 'production', role: 'production', position: 2, outcome: 'smoke_failed', failed_stage: 'smoke', release: 'v1.2.0', runUrl: URL });
+    const a = api({
+      issues: [
+        { ...filed(21, 'production', smoke), title: smokeIssueTitle('production') },
+        { ...filed(22, 'staging', smoke), title: 'Smoke check on staging flaked' },
+      ],
+    });
+    expect(reportedIssues({ api: a, repo: REPO, url: URL, since: '2026-10-15T10:00:00Z' })).toEqual([{ number: 21, environment: 'production' }]);
+  });
+
   it('finds none for a run that filed nothing', () => {
     expect(reportedIssues({ api: api({ issues: [filed(5, 'staging', text(77))] }), repo: REPO, url: URL, since: '2026-10-15T10:00:00Z' })).toEqual([]);
   });
@@ -206,6 +217,24 @@ describe("the failed jobs' logs", () => {
     expect(r.log.startsWith('=== staging / deploy ===\n')).toBe(true);
     expect(r.log).toContain('(cut)');
     expect(r.log.length).toBeLessThanOrEqual(LOG_CHARS + 10);
+  });
+});
+
+describe("a failed verdict brings its environment's deploy job's log (plan 0013 §7.1)", () => {
+  it('reads the green deploy job whose reset or smoke check failed, right before its verdict, and no other green job', () => {
+    const a = api({
+      jobs: [
+        { id: 1, name: 'staging / deploy', conclusion: 'success' },
+        { id: 2, name: 'staging / verdict', conclusion: 'failure' },
+        { id: 3, name: 'staging / record', conclusion: 'success' },
+        { id: 4, name: 'production / deploy', conclusion: 'skipped' },
+      ],
+      logs: { 1: 'Error: the smoke check could not sign up', 2: 'The release is live, but its smoke check failed.' },
+    });
+    const r = failedLogs({ api: a, repo: REPO, id: 123, attempt: 1 });
+    expect(r.jobs).toEqual(['staging / deploy', 'staging / verdict']);
+    expect(r.log).toContain('=== staging / deploy ===\nError: the smoke check could not sign up');
+    expect(a.calls.some((c) => c.endsWith('/jobs/3/logs'))).toBe(false);
   });
 });
 

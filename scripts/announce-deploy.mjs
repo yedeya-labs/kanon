@@ -16,9 +16,15 @@
  *   releases of the deployed tag's line count (a release-please component prefix, `widgets-v1.2.3`,
  *   kanon#1039). Under the `no-environments` fallback GitHub records no deployment, so none is read
  *   and each deploy announces its own release alone (kanon#1038).
- * - `failed` or `smoke_failed`: a failure, `critical` for production and `warning` for any other
- *   environment (plan 0011 §3.2), naming the release, the stage that failed, the run, and the
- *   environment's issue when the `report` job filed or commented on one.
+ * - `smoke_failed`: LIVE, SMOKE FAILED (plan 0013 §7.2, `K-SHIP-10`). The deploy landed, so it is
+ *   the landed message, flagged: the same range and the same Features, Fixes and Maintenance
+ *   sections as `ok`, titled "… is live on <environment>, and its smoke check failed", with a
+ *   field naming the stage that failed (`reset` or `smoke`) and the smoke issue's link,
+ *   `critical` for production and `warning` elsewhere. Never skipped, even when the range is
+ *   empty (a redeploy): then it names the deployed release alone. Never "failed to deploy".
+ * - `failed`: a failure, `critical` for production and `warning` for any other environment (plan
+ *   0011 §3.2), naming the release, the stage that failed, the run, and the environment's issue
+ *   when the `report` job filed or commented on one.
  * - anything else (`refused`, `rejected`, `cancelled`, or no row): nothing. A refusal is reported
  *   on the environment's issue (`K-SHIP-8`), and a rejection or a cancel is a person's choice.
  *
@@ -67,9 +73,12 @@ const ENVIRONMENT = /^[^\r\n]{1,255}$/;
 /** A commit SHA, shown in the summary as code. */
 const COMMIT = /^[0-9a-f]{7,40}$/i;
 
-/** The outcomes announced as a landed deploy, and as a failure; any other announces nothing. */
-export const LANDED = Object.freeze(['ok']);
-export const FAILED = Object.freeze(['failed', 'smoke_failed']);
+/**
+ * The outcomes announced as a landed deploy, and as a failure; any other announces nothing. A
+ * deploy whose reset or smoke check failed landed (plan 0013 §7.1): it is announced as live, flagged.
+ */
+export const LANDED = Object.freeze(['ok', 'smoke_failed']);
+export const FAILED = Object.freeze(['failed']);
 /** How many deployments, newest first, are read for the previous successful one. */
 const DEPLOYMENTS_READ = 30;
 
@@ -128,10 +137,14 @@ export function selectReleases(releases, version, last) {
 
 /**
  * One `deploy` message for the releases a deploy brought live, fitted to the contract (§3.3).
- * @param {{ repo: string, stage: string, sha?: string, server?: string, runUrl: string, releases: Release[] }} args
+ * With `smoke`, the same message flagged (plan 0013 §7.2): the reset or the smoke check failed
+ * after the deploy landed, so it is titled "… and its smoke check failed", leads with a section
+ * naming the stage, links the run and the smoke issue, and is `critical` on production, `warning`
+ * elsewhere. `version` names the deployed release when `releases` holds none.
+ * @param {{ repo: string, stage: string, sha?: string, server?: string, runUrl: string, releases: Release[], version?: string, smoke?: { role: string, failedStage?: string, issue?: number | null } }} args
  * @returns {Record<string, any>}
  */
-export function buildDeployMessage({ repo, stage, sha, server = 'https://github.com', runUrl, releases }) {
+export function buildDeployMessage({ repo, stage, sha, server = 'https://github.com', runUrl, releases, version, smoke }) {
   /** @type {string[]} */ const features = [];
   /** @type {string[]} */ const fixes = [];
   /** @type {string[]} */ const maint = [];
@@ -144,19 +157,29 @@ export function buildDeployMessage({ repo, stage, sha, server = 'https://github.
     }
   }
 
-  const versions = releases.map((r) => r.tag_name);
+  const versions = releases.length ? releases.map((r) => r.tag_name) : version ? [version] : [];
   const first = versions[0] ?? '';
   const newest = versions.at(-1) ?? '';
   const isRange = versions.length > 1;
-  const title = isRange
+  const live = isRange
     ? `${first} to ${newest} (${versions.length} releases) are live on ${stage}`
     : `${first} is live on ${stage}`;
+  const title = smoke ? `${live}, and ${isRange ? 'the' : 'its'} smoke check failed` : live;
   const build = sha && COMMIT.test(sha) ? ` Build \`${sha.slice(0, 7)}\`.` : '';
+  const flag = !smoke ? ''
+    : ` ${smoke.failedStage === 'reset' ? "The reset hook failed, so the smoke check didn't run" : 'The smoke check failed'}: the release is live and unchecked, and the environments after **${literal(stage)}** don't start.`;
   const summary = isRange
-    ? `**${literal(first)}** to **${literal(newest)}**, ${versions.length} releases, are now live on **${literal(stage)}**.${build}`
-    : `**${literal(first)}** is now live on **${literal(stage)}**.${build}`;
+    ? `**${literal(first)}** to **${literal(newest)}**, ${versions.length} releases, are now live on **${literal(stage)}**.${build}${flag}`
+    : `**${literal(first)}** is now live on **${literal(stage)}**.${build}${flag}`;
 
   const sections = [
+    ...(smoke
+      ? [{
+        heading: 'Smoke check',
+        body: 'Nothing rolls back: a person decides. The smoke issue says how to check it again.',
+        fields: [{ label: 'Smoke check', value: `failed at ${smoke.failedStage || 'smoke'}` }],
+      }]
+      : []),
     { heading: 'Features', body: kanonList(features) },
     { heading: 'Fixes', body: kanonList(fixes) },
     { heading: 'Maintenance', body: kanonMaint(maint) },
@@ -168,11 +191,15 @@ export function buildDeployMessage({ repo, stage, sha, server = 'https://github.
 
   return fit({
     kind: 'deploy',
-    severity: 'info',
+    severity: smoke ? failureSeverity(smoke.role) : 'info',
     title,
     summary,
     sections,
-    links: [{ label: 'Release notes', url: notes }],
+    links: [
+      ...(smoke ? [{ label: 'Run', url: runUrl }] : []),
+      ...(smoke?.issue ? [{ label: `Smoke issue #${smoke.issue}`, url: `${server}/${repo}/issues/${smoke.issue}` }] : []),
+      { label: 'Release notes', url: notes },
+    ],
     source: { repository: repo, lane: 'deploy', run_url: runUrl },
   });
 }
@@ -186,18 +213,16 @@ export const failureSeverity = (role) => (role === ROLES.preProduction ? 'warnin
 
 /**
  * One `deploy` message for a deploy that failed: the environment, the release, the stage that
- * failed, the run, and the environment's issue when known.
- * @param {{ repo: string, stage: string, role: string, version: string, outcome: string, failedStage?: string, issue?: number | null, sha?: string, server?: string, runUrl: string }} args
+ * failed, the run, and the environment's issue when known. Never for a deploy that landed and
+ * failed its smoke check, which `buildDeployMessage` flags instead (plan 0013 §7.2).
+ * @param {{ repo: string, stage: string, role: string, version: string, failedStage?: string, issue?: number | null, sha?: string, server?: string, runUrl: string }} args
  * @returns {Record<string, any>}
  */
-export function buildFailureMessage({ repo, stage, role, version, outcome, failedStage, issue, sha, server = 'https://github.com', runUrl }) {
-  const smoke = outcome === 'smoke_failed';
-  const title = smoke ? `${version} failed its smoke check on ${stage}` : `${version} failed to deploy to ${stage}`;
+export function buildFailureMessage({ repo, stage, role, version, failedStage, issue, sha, server = 'https://github.com', runUrl }) {
+  const title = `${version} failed to deploy to ${stage}`;
   const at = failedStage ? ` at the **${literal(failedStage)}** stage` : '';
   const build = sha && COMMIT.test(sha) ? ` Build \`${sha.slice(0, 7)}\`.` : '';
-  const summary = smoke
-    ? `**${literal(version)}** was deployed to **${literal(stage)}** and failed its smoke check.${build}`
-    : `**${literal(version)}** did not deploy to **${literal(stage)}**: it failed${at}.${build}`;
+  const summary = `**${literal(version)}** did not deploy to **${literal(stage)}**: it failed${at}.${build}`;
   const fields = [
     { label: 'Environment', value: stage },
     { label: 'Release', value: version },
@@ -305,9 +330,9 @@ export async function produce({ env, io, out }) {
   /** @type {Record<string, any>} */
   let message;
   let what;
+  const issue = /^\d+$/.test(String(env.ISSUE ?? '')) ? Number(env.ISSUE) : null;
   if (FAILED.includes(outcome)) {
-    const issue = /^\d+$/.test(String(env.ISSUE ?? '')) ? Number(env.ISSUE) : null;
-    message = buildFailureMessage({ repo, stage, role, version: tag, outcome, failedStage: env.FAILED_STAGE || undefined, issue, sha: env.SHA, server, runUrl });
+    message = buildFailureMessage({ repo, stage, role, version: tag, failedStage: env.FAILED_STAGE || undefined, issue, sha: env.SHA, server, runUrl });
     what = `the failure of ${tag} on ${stage}`;
   } else if (LANDED.includes(outcome)) {
     const gh = github(io, repo, token);
@@ -320,16 +345,19 @@ export async function produce({ env, io, out }) {
     const last = fallback ? null : await previousRelease(gh, { stage, runId, releases, tag });
     const deployed = releases.find((r) => !r.draft && sameRelease(r.tag_name, version));
     const alone = () => (deployed ? [deployed] : []);
-    const toAnnounce = isPre(version) || deployed?.prerelease || (last && cmp(version, last) < 0)
+    const ranged = isPre(version) || deployed?.prerelease || (last && cmp(version, last) < 0)
       ? alone()
       : last && cmp(version, last) === 0 && !isPre(last) ? [] : selectReleases(releases, version, last);
-    if (toAnnounce.length === 0) {
+    // A smoke-failed deploy is never skipped (`K-SHIP-10`): a redeploy names its release alone.
+    const smoke = outcome === 'smoke_failed' ? { role, failedStage: env.FAILED_STAGE || undefined, issue } : undefined;
+    const toAnnounce = smoke && ranged.length === 0 ? alone() : ranged;
+    if (toAnnounce.length === 0 && !smoke) {
       out.log(`Nothing new to announce (deployed ${version} to ${stage}; the previous successful deployment there was ${last ?? (fallback ? 'not recorded under the no-environments fallback' : 'none')}).`);
       output('');
       return 0;
     }
-    message = buildDeployMessage({ repo, stage, sha: env.SHA, server, runUrl, releases: toAnnounce });
-    what = `${toAnnounce.map((r) => r.tag_name).join(', ')} on ${stage} (previous successful deployment: ${last ?? 'none'})`;
+    message = buildDeployMessage({ repo, stage, sha: env.SHA, server, runUrl, releases: toAnnounce, version, smoke });
+    what = `${toAnnounce.map((r) => r.tag_name).join(', ') || version} on ${stage}${smoke ? ', live with its smoke check failed,' : ''} (previous successful deployment: ${last ?? 'none'})`;
   } else {
     out.log(`Nothing to announce: ${stage}'s outcome is ${outcome ? `\`${outcome}\`` : 'unrecorded'}, neither a deploy that landed nor one that failed.`);
     output('');

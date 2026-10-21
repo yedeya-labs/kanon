@@ -15,7 +15,8 @@
 # - `gate` runs only on a `workflow_run` whose conclusion is `failure`: a success, a cancellation
 #   or a skipped run is never diagnosed. After the membership gate, `scripts/deploy-diagnose.mjs`
 #   finds the issues the run's `report` jobs filed or commented on (`Deploy to <environment>
-#   failed`, labelled `bug`, holding the line `Run: <the run's link>` by `github-actions[bot]`),
+#   failed`, or `Smoke check on <environment> failed` for a live release whose reset or smoke check
+#   failed, labelled `bug`, holding the line `Run: <the run's link>` by `github-actions[bot]`),
 #   and reads the tail of each failed job's log with this job's `actions: read`. No issue, no agent.
 # - `diagnose` is the spine (`agent-lane.yml`) with the project setup off (`K-AGENT-50`, as the
 #   Lead's lanes run): nothing is installed, and its shell is an allow-list that runs nothing from
@@ -170,7 +171,11 @@ jobs:
 
         HOW TO DIAGNOSE.
         1. Read the failed jobs' logs below. A job named `<environment> / deploy` ran the
-           project's deploy and smoke hooks (`.github/actions/deploy`, `.github/actions/smoke`);
+           project's deploy hook, then its optional reset hook and its smoke hook
+           (`.github/actions/deploy`, `.github/actions/smoke-reset`, `.github/actions/smoke`).
+           A failed `<environment> / verdict` means the release deployed and is live, and the
+           reset or the smoke hook failed: its deploy job's log, given just before it, holds
+           that hook's output, and the issue is titled `Smoke check on <environment> failed`;
            `release / build` ran its build hook (`.github/actions/build`); `release / gate`,
            `release / probe` and `<environment> / declare` are Kanon's checks, and their
            message names a refusal code (docs/lanes.md, "The deploy lane", lists them).
