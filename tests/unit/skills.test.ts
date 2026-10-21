@@ -1061,12 +1061,28 @@ describe('the mandate skill (#853)', () => {
     }
   });
 
-  it('files the tracking issue through the filing skill, on its bucket, and creates no milestone', () => {
+  it('files the tracking issue through the filing skill, on its bucket', () => {
     const file = steps(7, 8);
     expect(file).toContain('read and follow `skills/file-issue/SKILL.md` in this plugin');
     expect(file).toMatch(/Pass no `--explicit-milestone`/);
-    expect(file).toMatch(/\*\*You create no milestone\.\*\*/);
     expect(ALL_SKILLS.map((x) => x.dir)).toContain('file-issue');
+  });
+
+  it('creates a roadmap milestone, dated, only when the Stakeholder asks, before the Lead plans', () => {
+    const file = steps(7, 8);
+    // K-PROJ-11 allows a roadmap milestone created for one project; the skill no longer hands the command over.
+    expect(read('rulebook/07-projects.md')).toContain('A project gets no milestone kind and no bucket of its own');
+    expect(file).not.toMatch(/create no milestone/i);
+    expect(file).toContain('**A new roadmap milestone, only when the Stakeholder asks for one.**');
+    expect(file).toContain('create it before you file the tracking issue');
+    expect(file).toContain('**Confirm its title and due date with the person**');
+    expect(file).toContain("**Show the command, then, on a yes, run it** in the person's own session");
+    expect(file).toContain("`gh api repos/<owner>/<repo>/milestones -f title='<title>' -f due_on=<YYYY-MM-DD>T00:00:00Z`");
+    expect(file).toMatch(/never create one without it, and never create a bucket/);
+    // Where the decomposition lands: the brief guard needs the milestone to exist, and pipeline work never goes there.
+    expect(file).toMatch(/\*\*Where the decomposition lands\.\*\*[^\n]*accepts a roadmap milestone there only when it already exists in the repository with a due date/);
+    expect(file).toMatch(/pipeline work and the Explorer's bugs never go on a roadmap milestone \(`K-WORK-11`\)/);
+    expect(read('docs/skills.md')).not.toMatch(/creates no milestone/);
   });
 
   it("dispatches the Lead's lanes only with inputs those lanes take", () => {

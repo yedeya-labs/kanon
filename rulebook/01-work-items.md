@@ -26,7 +26,7 @@ This chapter governs the issue: how it is labelled, which milestone it belongs t
 
 ### `K-WORK-3` There are exactly two kinds of milestone, told apart by the due date
 
-**Rule.** A milestone is either a **bucket** (an ongoing stream of work that never completes and has **no due date**) or a **roadmap milestone** (a finite piece of work, prioritised by the stakeholder, closed when finished, and **always created with a due date**). Never give a bucket a due date, and never create a roadmap milestone without one.
+**Rule.** A milestone is either a **bucket** (an ongoing stream of work that never completes and has **no due date**) or a **roadmap milestone** (a finite piece of work, prioritised by the stakeholder, closed when finished, and **always created with a due date**). Never give a bucket a due date, and never create a roadmap milestone without one. A roadmap milestone may be created for a single project's work (`K-PROJ-11`); its title and due date are the Stakeholder's decision, whoever types the command (`K-WORK-5`).
 
 **Why.** The due date is the only difference between the two kinds that can be read from the repository, so every surface that treats them differently (progress digests, the guard that keeps agents off the roadmap) asks exactly that question. A roadmap milestone created without a due date reads as a bucket everywhere: no burndown, and no guard stopping an agent from routing into it. Nothing mechanical can notice, because telling an undated roadmap milestone from a bucket would mean naming it, and names are project content.
 

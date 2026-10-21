@@ -12,6 +12,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-14.** The Owner decided that a rule records no history of its own: a rule whose premise changed is rewritten so its Why states the premise that holds now, and the change is recorded here, not in a "Premise changed" note beside the rule. [#578](https://github.com/yedeya-labs/kanon/issues/578), [#859](https://github.com/yedeya-labs/kanon/pull/859)
 
+## `K-WORK-3`
+
+- **2026-10-21.** The Owner decided that a roadmap milestone may be created for a single project's work, its title and due date the Stakeholder's decision whoever creates it. [#853](https://github.com/yedeya-labs/kanon/issues/853)
+
 ## `K-WORK-4`
 
 - **2026-10-20.** The filing skill's `plan` takes the filer's judgment of the subject, so pipeline work reaches the platform bucket without the `pipeline-improvement` label. Replaying the backstop's shadow over a week of filings found filers routing review follow-ups about the pipeline there, rightly, where a label-only `plan` sent them to the product bucket. [#164](https://github.com/yedeya-labs/kanon/issues/164)
@@ -157,6 +161,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-PROJ-11`
 
 - **2026-10-20.** The dispatch phase can be withheld on its own: with `lead:file-only` on the tracking issue every other phase runs, each tick names the issues it did not dispatch, and removing the label resumes dispatch. Before, the only stop was `needs:human`, which also stopped the filing. [#1113](https://github.com/yedeya-labs/kanon/issues/1113)
+- **2026-10-21.** The Owner decided that a roadmap milestone created for, and filled by, one project is allowed: what stays forbidden is a milestone kind or a bucket of a project's own. Before, the rule forbade a project any milestone of its own, which also ruled out a dated roadmap milestone the Stakeholder created for it. [#853](https://github.com/yedeya-labs/kanon/issues/853)
 
 ## `K-PROJ-16`
 
