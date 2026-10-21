@@ -21,8 +21,29 @@
 //   - has no Review run queued or in progress on that head (`review-run-evidence.mjs`);
 //   - whose `ci.yml` runs on that head have all completed, as the review lane's filter reads CI;
 //   - whose head was pushed at least the reconciler's stall window ago, `AWAITING_REVIEW_HOURS`
-//     (`K-MERGE-14`'s waiting threshold), and which the sweep has not re-asked before.
+//     (`K-MERGE-14`'s waiting threshold), and which the sweep has not re-asked before;
+//   - whose head the review lane does not decline BY DESIGN (kanon#1213), below.
 // A fork's head is never re-asked: the review lane refuses one before it reads anything.
+//
+// ── A HEAD THE LANE DECLINES ON PURPOSE IS NOT A DROPPED REVIEW (kanon#1213) ──
+// The lane's filter decides `review=false`, and posts nothing, on a labelled, CI-complete head
+// in two arms: the head commit carries `[skip-review]`, or on a code PR the Reviewer already
+// reviewed, only docs changed since that verdict. Such a run concludes `success`, so every
+// check above passes. Re-asking it posts a comment saying a review was dropped, and churns a
+// label whose run the filter declines again by the same arm (the Lead's label is not an
+// explicit request), and the Overseer would count the head as a finding.
+//
+// THE FILTER'S OWN DECISION, NOT A COPY OF ITS RULES. The filter is inline shell in
+// `agent-review.yml`, not a module this script can import, and a second copy of its arms (the
+// marker's position, the docs and guarded-docs sets, the last verdict's stamped commit, the
+// judging inputs) would drift from the first. So the sweep reads what the filter decided: its
+// `decide` prints `→ review=<bool> (<reason>) pr=[<n>] head=[<sha>]`, and the newest finished
+// Review run on the head whose `filter` job printed a decision for that head settles it. Only
+// the two arms in `DECLINED_BY_DESIGN` hold the head; their reasons are pinned to the filter's
+// `decide` lines by the tests. Every other outcome is still re-asked:
+//   - the filter failed or never decided (#1156: its membership gate failed): no decision line;
+//   - the filter deferred to CI, and CI's completion event was lost: a different reason;
+//   - the log can't be read: unreadable is not a decline, so the head is re-asked as before.
 //
 // ── ONCE PER HEAD, AND THE MARKER IS THE BOUND ──────────────────────────────
 // Before it re-asks, it posts one comment of the Lead's on the pull request, carrying
@@ -72,8 +93,55 @@ const MARKER_RE = /<!--\s*qa:review-reask sha=([0-9a-f]{40})\s*-->/gi;
  * @typedef {{ author?: { login?: string } | null, body?: string | null, state?: string, commit?: { oid?: string } | null }} Review
  * @typedef {{ author?: { login?: string } | null, body?: string | null }} Comment
  * @typedef {{ number: number, headRefOid: string, isCrossRepository?: boolean, labels?: Label[], reviews?: Review[], comments?: Comment[], commits?: { committedDate?: string }[] }} Pr
- * @typedef {{ id?: number, status?: string, conclusion?: string | null }} Run
+ * @typedef {{ id?: number, status?: string, conclusion?: string | null, createdAt?: string }} Run
+ * @typedef {{ run?: number, review: boolean, reason: string }} Decision
  */
+
+/**
+ * The review lane's filter arms that decline a head by design (kanon#1213): the reason each
+ * prints, as `agent-review.yml`'s `decide` spells it, and what the sweep says instead.
+ */
+export const DECLINED_BY_DESIGN = [
+  {
+    arm: 'skip-marker',
+    reason: /^the head commit carries the skip marker, on its subject line or alone on a line of its own$/,
+    why: 'its head commit carries `[skip-review]`',
+  },
+  {
+    arm: 'docs-only',
+    reason: /^only docs changed since [0-9a-f]{7}, on a code PR$/,
+    why: "only docs changed since the Reviewer's last verdict, on a code PR",
+  },
+];
+
+/** The line the filter's `decide` prints, which the job log carries behind a timestamp. */
+const DECISION_RE = /→ review=(true|false) \((.*)\) pr=\[\d*\] head=\[([0-9a-f]*)\]/;
+
+/**
+ * The filter's decision for `sha` in one `filter` job's log, or `null` when it printed none.
+ * @param {string} log
+ * @param {string} sha
+ * @returns {Decision | null}
+ */
+export function filterDecision(log, sha) {
+  const head = String(sha).toLowerCase();
+  /** @type {Decision | null} */
+  let found = null;
+  for (const line of String(log ?? '').split(/\r?\n/)) {
+    const m = DECISION_RE.exec(line);
+    if (m && String(m[3]).toLowerCase() === head) found = { review: m[1] === 'true', reason: String(m[2]) };
+  }
+  return found;
+}
+
+/**
+ * The by-design arm a decision declined by, or `null`.
+ * @param {Decision | null | undefined} decision
+ */
+export function declinedByDesign(decision) {
+  if (!decision || decision.review) return null;
+  return DECLINED_BY_DESIGN.find((d) => d.reason.test(decision.reason)) ?? null;
+}
 
 /** @param {Pr} pr */
 const carriesLabel = (pr) => (pr.labels ?? []).some((l) => ((typeof l === 'string' ? l : l?.name) ?? '').toLowerCase() === REASK_LABEL);
@@ -107,11 +175,13 @@ export function reaskedHeads(comments) {
 /**
  * What this pass re-asks. PURE: every read that decides it is an argument.
  * @param {Pr[]} prs open pull requests, as `gh pr view --json` returns them
- * @param {{ ciSettled: (sha: string) => boolean | null, runsFor: (sha: string, since: string) => Run[] | null, now?: number, hours?: number }} io
+ * @param {{ ciSettled: (sha: string) => boolean | null, runsFor: (sha: string, since: string) => Run[] | null,
+ *   decisionFor?: (sha: string, runs: Run[]) => Decision | null, now?: number, hours?: number }} io
  *   `ciSettled`: whether CI's runs on the head all completed, `null` when unreadable; `runsFor`:
- *   the head's Review runs, `null` when unreadable
+ *   the head's Review runs, `null` when unreadable; `decisionFor`: the filter's latest decision
+ *   on the head, from those runs, `null` when none was found or read
  */
-export function reaskPlan(prs, { ciSettled, runsFor, now = Date.now(), hours = AWAITING_REVIEW_HOURS }) {
+export function reaskPlan(prs, { ciSettled, runsFor, decisionFor = () => null, now = Date.now(), hours = AWAITING_REVIEW_HOURS }) {
   /** @type {{ number: number, sha: string }[]} */
   const reask = [];
   /** @type {{ number: number, sha: string, why: string }[]} */
@@ -140,6 +210,12 @@ export function reaskPlan(prs, { ciSettled, runsFor, now = Date.now(), hours = A
     if (!Array.isArray(runs)) { hold('could not read the Review runs for this head'); continue; }
     const live = runs.find((r) => r.status !== 'completed');
     if (live) { hold(`Review run ${live.id ?? '?'} is ${live.status ?? 'unfinished'} on this head`); continue; }
+    const decision = decisionFor(sha, runs);
+    const declined = declinedByDesign(decision);
+    if (declined) {
+      hold(`the review lane declines this head by design: ${declined.why} (Review run ${decision?.run ?? '?'}'s filter). It is not a dropped review; to have it reviewed anyway, remove and re-add the label by hand`);
+      continue;
+    }
     reask.push({ number: pr.number, sha });
   }
   return { reask, held, reviewed };
@@ -198,6 +274,38 @@ export function ciSettled(sha, { repo, gh }) {
   }
 }
 
+/** How many of a head's finished Review runs the sweep reads, newest first, for a decision. */
+export const DECISION_RUNS_READ = 10;
+
+/**
+ * The filter's latest decision on `sha`: the newest finished Review run whose `filter` job
+ * printed one for that head (kanon#1213). `null` when none did, or a read failed: an unreadable
+ * log is not a decline, so the head is re-asked as before.
+ * @param {string} sha
+ * @param {Run[]} runs
+ * @param {{ repo: string, gh: (args: string[]) => string }} io
+ * @returns {Decision | null}
+ */
+export function filterDecisionFor(sha, runs, { repo, gh }) {
+  const finished = runs
+    .filter((r) => r.status === 'completed' && r.conclusion !== 'skipped' && r.id != null)
+    .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')) || Number(b.id) - Number(a.id))
+    .slice(0, DECISION_RUNS_READ);
+  try {
+    for (const r of finished) {
+      const jobs = /** @type {{ jobs?: { id?: number, name?: string }[] }} */ (JSON.parse(gh(['api', `repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`]))).jobs ?? [];
+      // A called lane's job is named `<caller's job> / filter`; the lane run directly, `filter`.
+      const filter = jobs.find((j) => j.name === 'filter' || String(j.name ?? '').endsWith(' / filter'));
+      if (filter?.id == null) continue;
+      const decision = filterDecision(gh(['api', `repos/${repo}/actions/jobs/${filter.id}/logs`]), sha);
+      if (decision) return { ...decision, run: r.id };
+    }
+  } catch (e) {
+    warn(`could not read the review filter's decision on ${sha.slice(0, 7)}, so it is re-asked as a dropped review: ${firstLine(e)}`);
+  }
+  return null;
+}
+
 /**
  * Read, plan, and (with `apply`) re-ask each pull request in the plan. Never throws.
  * @param {{ repo: string, apply: boolean, gh: (args: string[]) => string, summary?: (text: string) => void, now?: number,
@@ -226,6 +334,7 @@ export function run({ repo, apply, gh, summary = () => {}, now = Date.now(), run
   const plan = reaskPlan(prs, {
     ciSettled: (sha) => ciSettled(sha, { repo, gh }),
     runsFor: runsFor ?? ((sha, since) => reviewRunsFor(sha, { repo, json, since })),
+    decisionFor: (sha, runs) => filterDecisionFor(sha, runs, { repo, gh }),
     now,
   });
   /** @type {number[]} */

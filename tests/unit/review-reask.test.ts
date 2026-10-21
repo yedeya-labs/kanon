@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import {
-  LEAD_LOGIN, REASK_LABEL, REVIEWER_LOGIN, reaskMarker, reaskPlan, reaskedHeads, reviewedHead, run,
+  DECISION_RUNS_READ, LEAD_LOGIN, REASK_LABEL, REVIEWER_LOGIN, declinedByDesign, filterDecision, filterDecisionFor,
+  reaskMarker, reaskPlan, reaskedHeads, reviewedHead, run,
 } from '../../scripts/review-reask.mjs';
 import { headerLine } from '../../scripts/lib/role-marker.mjs';
 
@@ -139,7 +140,7 @@ describe('reviewedHead', () => {
 
 /** A fake repository: open PRs by number, CI done, and every `gh` call recorded. Comments the
  *  sweep posts are kept, so a second pass reads them. */
-const fakeRepo = (prs: Pr[], { failComment = false } = {}) => {
+const fakeRepo = (prs: Pr[], { failComment = false, logs = {} as Record<number, string> } = {}) => {
   const calls: string[][] = [];
   const byNumber = new Map(prs.map((p) => [p.number, p]));
   const gh = (args: string[]): string => {
@@ -160,6 +161,10 @@ const fakeRepo = (prs: Pr[], { failComment = false } = {}) => {
         return '{}';
       }
       if (/\/labels/.test(path)) return '[]';
+      const jobs = /^repos\/o\/r\/actions\/runs\/(\d+)\/jobs/.exec(path);
+      if (jobs && logs[Number(jobs[1])] !== undefined) return JSON.stringify({ jobs: [{ id: Number(jobs[1]) * 10, name: 'review / filter' }] });
+      const log = /^repos\/o\/r\/actions\/jobs\/(\d+)\/logs$/.exec(path);
+      if (log && logs[Number(log[1]) / 10] !== undefined) return logs[Number(log[1]) / 10]!;
     }
     throw new Error(`unexpected gh ${args.join(' ')}`);
   };
@@ -223,6 +228,114 @@ describe('run (kanon#1197)', () => {
     run({ ...io, apply: false, gh: repo.gh });
     const ci = repo.calls.find((c) => c[0] === 'run' && c[1] === 'list')!;
     expect(ci).toEqual(expect.arrayContaining(['--workflow', 'ci.yml', '--commit', HEAD]));
+  });
+});
+
+// ── kanon#1213: a head the review lane declines by design is not a dropped review ───────────
+
+/** The line the review filter's `decide` prints, as a job log carries it. */
+const line = (review: boolean, reason: string, sha = HEAD) =>
+  `2026-10-21T02:10:00.0000000Z → review=${review} (${reason}) pr=[1] head=[${sha}]`;
+const SKIP = 'the head commit carries the skip marker, on its subject line or alone on a line of its own';
+const DOCS = 'only docs changed since bbbbbbb, on a code PR';
+
+describe('filterDecision and declinedByDesign (kanon#1213)', () => {
+  it("reads the filter's decision for the head, the last one it printed", () => {
+    const log = ['  PR: [1]', line(true, 'code changed since bbbbbbb'), line(false, SKIP)].join('\n');
+    expect(filterDecision(log, HEAD)).toEqual({ review: false, reason: SKIP });
+    expect(filterDecision(log, OLD), 'a decision on another head is not this one').toBeNull();
+    expect(filterDecision('no decision here', HEAD)).toBeNull();
+  });
+
+  it('declines by design only on the skip marker and on a docs-only push to a code PR', () => {
+    expect(declinedByDesign({ review: false, reason: SKIP })?.arm).toBe('skip-marker');
+    expect(declinedByDesign({ review: false, reason: DOCS })?.arm).toBe('docs-only');
+    for (const reason of [
+      'CI still running (ci) — its completion fires the review', `already reviewed ${HEAD.slice(0, 7)}`,
+      'PR #1 carries no review label', `${SKIP} too`,
+    ]) expect(declinedByDesign({ review: false, reason }), reason).toBeNull();
+    expect(declinedByDesign({ review: true, reason: SKIP }), 'a review is never a decline').toBeNull();
+    expect(declinedByDesign(null)).toBeNull();
+  });
+});
+
+describe('reaskPlan on a head the lane declines by design (kanon#1213)', () => {
+  const withDecision = (decision: { review: boolean; reason: string } | null) =>
+    reaskPlan([pr(1)], { ciSettled: () => true, runsFor: () => [done(7, 'success')], decisionFor: () => (decision ? { ...decision, run: 7 } : null), now: NOW, hours: 4 });
+
+  it('holds a head whose filter declined it by the skip marker or as docs-only, and says which', () => {
+    expect(withDecision({ review: false, reason: SKIP })).toMatchObject({ reask: [], held: [{ number: 1, why: expect.stringMatching(/declines this head by design: its head commit carries `\[skip-review\]` \(Review run 7/) }] });
+    expect(withDecision({ review: false, reason: DOCS })).toMatchObject({ reask: [], held: [{ number: 1, why: expect.stringMatching(/by design: only docs changed/) }] });
+  });
+
+  it('still re-asks a CI deferral, a decision to review, and a head with no decision found (#1156)', () => {
+    expect(withDecision({ review: false, reason: 'CI still running (ci) — its completion fires the review' }).reask).toEqual([{ number: 1, sha: HEAD }]);
+    expect(withDecision({ review: true, reason: 'code changed since bbbbbbb' }).reask).toEqual([{ number: 1, sha: HEAD }]);
+    expect(withDecision(null).reask).toEqual([{ number: 1, sha: HEAD }]);
+  });
+});
+
+describe('filterDecisionFor (kanon#1213)', () => {
+  const at = (id: number, createdAt: string, conclusion = 'success') => ({ id, status: 'completed', conclusion, createdAt });
+  const repoWith = (logs: Record<number, string>, names: Record<number, string> = {}) => {
+    const calls: string[] = [];
+    const gh = (args: string[]) => {
+      const path = args[1]!;
+      calls.push(path);
+      const jobs = /runs\/(\d+)\/jobs/.exec(path);
+      if (jobs) return JSON.stringify({ jobs: [{ id: 1, name: 'review / review' }, { id: Number(jobs[1]) * 10, name: names[Number(jobs[1])] ?? 'review / filter' }] });
+      const log = /jobs\/(\d+)\/logs/.exec(path);
+      if (log && logs[Number(log[1]) / 10] !== undefined) return logs[Number(log[1]) / 10]!;
+      throw new Error(`HTTP 404 ${path}`);
+    };
+    return { gh, calls };
+  };
+
+  it("takes the newest finished run's decision, from its filter job, and names the run", () => {
+    const r = repoWith({ 1: line(false, SKIP), 2: line(true, 'code changed since bbbbbbb') });
+    const runs = [at(1, '2026-10-21T02:05:00Z'), at(2, '2026-10-21T03:05:00Z')];
+    expect(filterDecisionFor(HEAD, runs, { repo: 'o/r', gh: r.gh })).toEqual({ review: true, reason: 'code changed since bbbbbbb', run: 2 });
+    expect(r.calls).toContain('repos/o/r/actions/jobs/20/logs');
+    expect(r.calls).not.toContain('repos/o/r/actions/jobs/1/logs');
+  });
+
+  it('passes over a run whose filter printed no decision, and a skipped run, to an older decision', () => {
+    const r = repoWith({ 1: line(false, SKIP), 2: 'the membership gate failed', 3: line(true, 'x') });
+    const runs = [at(1, '2026-10-21T02:05:00Z'), at(2, '2026-10-21T03:05:00Z', 'failure'), at(3, '2026-10-21T04:05:00Z', 'skipped')];
+    expect(filterDecisionFor(HEAD, runs, { repo: 'o/r', gh: r.gh })).toEqual({ review: false, reason: SKIP, run: 1 });
+  });
+
+  it("reads the lane's own filter job, called or not, and no other job", () => {
+    expect(filterDecisionFor(HEAD, [at(1, 'x')], { repo: 'o/r', gh: repoWith({ 1: line(false, SKIP) }, { 1: 'filter' }).gh })?.run).toBe(1);
+    expect(filterDecisionFor(HEAD, [at(1, 'x')], { repo: 'o/r', gh: repoWith({ 1: line(false, SKIP) }, { 1: 'review / prefilter' }).gh })).toBeNull();
+  });
+
+  it('reads at most DECISION_RUNS_READ runs', () => {
+    const r = repoWith({});
+    const runs = Array.from({ length: DECISION_RUNS_READ + 5 }, (_, i) => at(i + 1, `2026-10-21T02:${String(i).padStart(2, '0')}:00Z`));
+    filterDecisionFor(HEAD, runs, { repo: 'o/r', gh: (a) => { try { return r.gh(a); } catch { return ''; } } });
+    expect(r.calls.filter((c) => c.endsWith('/jobs?per_page=100'))).toHaveLength(DECISION_RUNS_READ);
+  });
+
+  it('reads an unreadable log as no decision, so the head is re-asked', () => {
+    expect(filterDecisionFor(HEAD, [at(1, 'x')], { repo: 'o/r', gh: () => { throw new Error('HTTP 502'); } })).toBeNull();
+  });
+});
+
+describe('run on a head the lane declines by design (kanon#1213)', () => {
+  it('posts nothing and churns no label, and the summary says why', () => {
+    const repo = fakeRepo([pr(1)], { logs: { 5: line(false, SKIP) } });
+    let text = '';
+    const out = run({ repo: 'o/r', now: NOW, runsFor: () => [{ id: 5, status: 'completed', conclusion: 'success' }], apply: true, gh: repo.gh, summary: (t) => { text += t; } });
+    expect(out.reasked).toEqual([]);
+    expect(writes(repo.calls)).toEqual([]);
+    expect(text).toMatch(/#1 `aaaaaaa`: not re-asked, the review lane declines this head by design/);
+  });
+
+  it('still re-asks when the run\'s filter declined only to wait for CI', () => {
+    const repo = fakeRepo([pr(1)], { logs: { 5: line(false, 'CI still running (ci) — its completion fires the review') } });
+    const out = run({ repo: 'o/r', now: NOW, runsFor: () => [{ id: 5, status: 'completed', conclusion: 'success' }], apply: true, gh: repo.gh });
+    expect(out.reasked).toEqual([1]);
   });
 });
 

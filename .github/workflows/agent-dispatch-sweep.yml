@@ -57,7 +57,7 @@
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY
 # The Author App (the Lead's) needs `Issues: write`, `Pull requests: read` and `Actions: read`
 # (the run that triggered each telemetry row, the run artifacts without a store, and the Review
-# and CI runs on a head whose review it re-asks).
+# and CI runs on a head whose review it re-asks, with the Review filter's job log).
 #
 # `lane-check` requires the workflow on the line below (K-LAYOUT-18): the review re-ask waits
 # for CI to settle on a head, and asks Actions about that file's runs, as the review lane's
@@ -360,7 +360,9 @@ jobs:
       # re-delivery on a timer, on this job's Lead token, with no grant of its own. For each open
       # `review:please` pull request with no Reviewer review on its head, no Review run pending on
       # it and CI completed, it posts one marker comment naming the head and removes and re-adds
-      # the label, which starts the review lane. Once per head: the marker is the bound.
+      # the label, which starts the review lane. Once per head: the marker is the bound. A head
+      # the lane's filter declined by design (`[skip-review]`, or a docs-only push on a reviewed
+      # code PR) is held, not re-asked (kanon#1213).
       # `scripts/review-reask.mjs` says what it re-asks. `!cancelled()`, as for the steps above.
       - name: Re-ask the review on a labelled pull request with none on its head
         if: ${{ !cancelled() && steps.app-token.outcome == 'success' }}

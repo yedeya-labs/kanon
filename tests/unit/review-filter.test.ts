@@ -8,6 +8,7 @@ import { writeStub } from './helpers/stub-bin.js';
 import { handedIn, readFlattened, workflowText } from './helpers/called-workflow.js';
 import { headerLine } from '../../scripts/lib/role-marker.mjs';
 import { SPAWNS } from './helpers/spawns.js';
+import { DECLINED_BY_DESIGN, declinedByDesign, filterDecision } from '../../scripts/review-reask.mjs';
 
 // Its cases run the review filter's step in `bash` against a stub `gh`, so every case takes the
 // spawn budget (#436).
@@ -1252,5 +1253,39 @@ describe('an already-reviewed head is not reviewed again, whatever the PR contai
     const flaky = runDecide({ lastReviewed: HEAD, reviewsFail: true, pushed: ['src/a.ts'], prFiles: ['src/a.ts'] });
     expect(flaky.review, 'a failed read still reviews to be safe').toBe('true');
     expect(flaky.stdout).toContain("could not read this PR's reviews");
+  });
+});
+
+// kanon#1213: the dispatch sweep's review re-ask holds a head the filter declined by design, and
+// it knows that only from the line this step prints. So the sweep's reader runs on this step's
+// real output: each by-design arm reads as that arm, and every other decision reads as none.
+describe("the review re-ask reads this step's decision (kanon#1213)", () => {
+  const armOf = (r: ReturnType<typeof runDecide>) => declinedByDesign(filterDecision(r.stdout, HEAD))?.arm ?? null;
+
+  it('reads a skip-marker decline as that arm, and a docs-only push on a code PR as the docs arm', () => {
+    const skip = runDecide({ message: 'fix: x [skip-review]', pushed: ['src/a.ts'], prFiles: ['src/a.ts'] });
+    expect(skip.review).toBe('false');
+    expect(armOf(skip)).toBe('skip-marker');
+    const docs = runDecide({ pushed: ['README.md'], prFiles: ['README.md', 'src/app/page.tsx'] });
+    expect(docs.review).toBe('false');
+    expect(armOf(docs)).toBe('docs-only');
+  });
+
+  it('reads every other decision as no by-design decline, a CI deferral and a review included', () => {
+    const pending = runDecide({ event: 'pull_request_target', action: 'labeled', ciPending: true, prFiles: ['src/a.ts'], pushed: ['src/a.ts'] });
+    expect(pending.review).toBe('false');
+    expect(filterDecision(pending.stdout, HEAD), 'the deferral is a decision').not.toBeNull();
+    expect(armOf(pending)).toBeNull();
+    const code = runDecide({ pushed: ['src/a.ts'], prFiles: ['src/a.ts'] });
+    expect(code.review).toBe('true');
+    expect(armOf(code)).toBeNull();
+    const reviewed = runDecide({ lastReviewed: HEAD, pushed: ['src/a.ts'], prFiles: ['src/a.ts'] });
+    expect(reviewed.review).toBe('false');
+    expect(armOf(reviewed)).toBeNull();
+  });
+
+  it("names each by-design arm's reason in this step, once", () => {
+    const reasons = [...String(decide.run).matchAll(/decide false "([^"]*)"/g)].map((m) => m[1]!.replace('${LAST:0:7}', 'abcdef1'));
+    for (const d of DECLINED_BY_DESIGN) expect(reasons.filter((r) => d.reason.test(r)), d.arm).toHaveLength(1);
   });
 });
