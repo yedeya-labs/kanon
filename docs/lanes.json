@@ -18,7 +18,7 @@
       "does": "Reviews a pull request labelled `review:please` (or `agent:triage` / `agent:implement`) once CI finishes on its head, or one you dispatch it for, and approves it or requests changes.",
       "needs": ["your CI at `.github/workflows/ci.yml`, whose runs it reads"],
       "cost": "A model run per reviewed head.",
-      "minutes": "At Kanon's pace, about 327 runner-minutes a day: about 5 per reviewed head, while a run on a head with no review label, or one already reviewed, stops in under a minute.",
+      "minutes": "At Kanon's pace, about 369 runner-minutes a day: about 5 per reviewed head, while a run on a head with no review label, or one already reviewed, stops in under a minute.",
       "recommend": "always",
       "when": "Always, and first: its App's approval is what ends bootstrap (`K-ADOPT-6`)."
     },
@@ -28,7 +28,7 @@
       "does": "After a reviewed pull request merges, files a follow-up issue for each review suggestion it didn't apply.",
       "needs": [],
       "cost": "A model run per merged pull request the Reviewer reviewed, except one whose reviews are all the Reviewer's and whose latest verdict declares zero open items.",
-      "minutes": "At Kanon's pace, about 38 runner-minutes a day: about 4 per model run, while a run its filter skips takes under a minute.",
+      "minutes": "At Kanon's pace, about 42 runner-minutes a day: about 4 per model run, while a run its filter skips takes under a minute.",
       "recommend": [],
       "when": "When the Reviewer's suggestions that a merge left out should become issues rather than be lost."
     },
@@ -38,7 +38,7 @@
       "does": "Builds a feature or resolves a spec delta from an issue labelled `agent:implement`, and opens a pull request.",
       "needs": [],
       "cost": "A model run per labelled issue.",
-      "minutes": "At Kanon's pace, about 183 runner-minutes a day: about 13 per labelled issue, while a run for any other label skips and bills nothing.",
+      "minutes": "At Kanon's pace, about 162 runner-minutes a day: about 13 per labelled issue, while a run for any other label skips and bills nothing.",
       "recommend": [],
       "when": "When you want agents to write code from the issues you label, once the Reviewer runs green."
     },
@@ -48,7 +48,7 @@
       "does": "Revises the Implementer's own pull request when the Reviewer requests changes, or when the Merger hands back an approved head whose checks failed.",
       "needs": [],
       "cost": "A model run per change request, capped in rounds.",
-      "minutes": "At Kanon's pace, about 104 runner-minutes a day: about 10 per round, while a review or label on any other pull request stops in under a minute.",
+      "minutes": "At Kanon's pace, about 94 runner-minutes a day: about 10 per round, while a review or label on any other pull request stops in under a minute.",
       "recommend": ["agent-implement"],
       "requires": ["agent-implement"],
       "when": "With implement: without it, a change request on the Implementer's pull request waits for a person."
@@ -99,7 +99,7 @@
       "does": "Reproduces a bug labelled `qa:needs-triage`, rates it, and proposes a fix as a pull request.",
       "needs": [],
       "cost": "A model run per labelled issue.",
-      "minutes": "At Kanon's pace, under a runner-minute a day in the runs sampled: a run for any label but `qa:needs-triage` skips and bills nothing, and the sample missed Kanon's few triage runs, about six a week, each a model run.",
+      "minutes": "At Kanon's pace, about 8.3 runner-minutes a day: about 11 per issue labelled `qa:needs-triage`, while a run for any other label skips and bills nothing.",
       "recommend": ["agent-explore", "agent-code-audit"],
       "when": "When you file bugs for the agents to fix, or with explore or the code audit, whose findings it triages."
     },
@@ -109,7 +109,7 @@
       "does": "Gives an issue opened with no milestone a bucket milestone (`K-WORK-1`), and flags a reviewer follow-up filed with no severity or, at a gate severity, without `gate-candidate`.",
       "needs": ["the two bucket milestones, which `kanon milestones` creates"],
       "cost": "No model; a short job per opened issue.",
-      "minutes": "At Kanon's pace, about 16 runner-minutes a day, measured over its first half day: about a minute per opened issue, with no model.",
+      "minutes": "At Kanon's pace, about 32 runner-minutes a day, measured over its first 0.6 days: about a minute per opened issue, with no model.",
       "recommend": ["agent-implement", "agent-triage"],
       "when": "With implement or triage, once the Author App is installed: an issue filed by hand or through an issue form otherwise stays bare, and drops out of every progress report (`K-WORK-1`)."
     },
@@ -129,7 +129,7 @@
       "does": "Revises the Lead's own brief pull request when the Reviewer requests changes.",
       "needs": [],
       "cost": "A model run per change request, capped in rounds.",
-      "minutes": "At Kanon's pace, about 26 runner-minutes a day, nearly all of it runs on pull requests that aren't the Lead's briefs, each stopping in under a minute.",
+      "minutes": "At Kanon's pace, about 34 runner-minutes a day: about 9.5 per round on a Lead's brief, while a run on any other pull request stops in under a minute.",
       "recommend": ["agent-lead"],
       "requires": ["agent-lead"],
       "when": "With the Lead's brief: without it, a change request on a brief waits for a person."
@@ -151,7 +151,7 @@
       "does": "Drives an approved brief to done: files its issues, labels them for the Implementer in order, and closes the project once its merges are deployed.",
       "needs": ["project briefs under `docs/projects/`", "your reference environment's deploy declaration (docs/lanes.md)"],
       "cost": "No model; a short job on each merge and an hourly heartbeat, and a short check when a review, revise or implement run completes.",
-      "minutes": "At Kanon's pace, about 53 runner-minutes a day: about a minute per closed pull request or issue, and per hourly heartbeat.",
+      "minutes": "At Kanon's pace, about 62 runner-minutes a day: about a minute per closed pull request or issue, and per hourly heartbeat.",
       "recommend": ["agent-lead"],
       "requires": ["agent-lead"],
       "when": "With the Lead's brief: it is what turns an approved brief into work."
@@ -162,7 +162,7 @@
       "does": "Runs the tests that cite a project's acceptance criteria, and has the Explorer file what fails.",
       "needs": ["project briefs under `docs/projects/`"],
       "cost": "A model run per project verified.",
-      "minutes": "At Kanon's pace, about 2.5 runner-minutes a day: a run for any other label skips, and Kanon verified no project while measured.",
+      "minutes": "At Kanon's pace, about 2.6 runner-minutes a day: a run for any other label skips, and Kanon verified no project while measured.",
       "recommend": ["agent-lead-reconcile"],
       "requires": ["agent-lead-reconcile"],
       "when": "With the reconciler, which asks it to verify a project before closing it."
@@ -213,7 +213,7 @@
       "does": "Merges, with no person, an Implementer pull request the Reviewer approved with every check green, inside the green zone (`K-MERGE-4`).",
       "needs": [],
       "cost": "No model; a short job per review, per CI run on the default branch, and hourly.",
-      "minutes": "At Kanon's pace, about 69 runner-minutes a day: about a minute per review, per CI run on the default branch and per hourly sweep.",
+      "minutes": "At Kanon's pace, about 58 runner-minutes a day: about a minute per review, per CI run on the default branch and per hourly sweep.",
       "recommend": [],
       "when": "Once you have merged the Implementer's approved pull requests by hand for a while, and trust the green zone.",
       "mergeQueue": "Through a merge queue, a merge doesn't start its sweep: the queue's push runs CI as `github-merge-queue[bot]`, which the lane's gate turns away, so it sweeps on a review and hourly (#79)."
@@ -224,7 +224,7 @@
       "does": "Resolves a merge conflict on an agent's pull request, so its CI and review can resume.",
       "needs": [],
       "cost": "A model run per conflicting agent pull request, checked on each CI run and daily.",
-      "minutes": "At Kanon's pace, about 57 runner-minutes a day: about 9 per conflict it resolves, while the check on each CI run takes about a minute.",
+      "minutes": "At Kanon's pace, about 54 runner-minutes a day: about a minute for the check on each CI run, and about 2 for most runs that go past it, longer for a conflict the model resolves.",
       "recommend": ["agent-implement", "agent-triage"],
       "when": "With implement or triage, whose pull requests otherwise wait for a person when they conflict: a person's rebase takes one out of the Implementer's chain, so the revise lane refuses it."
     },
@@ -234,7 +234,7 @@
       "does": "Re-dispatches, once a day, an implement or triage run that never happened, re-asks the review of a labelled pull request with none on its head, and reports what waits on a person.",
       "needs": [],
       "cost": "No model; a short job daily, and a short check when an implement or triage run completes.",
-      "minutes": "At Kanon's pace, about 3 runner-minutes a day: one run a day, with no model.",
+      "minutes": "At Kanon's pace, about 3.7 runner-minutes a day: a short run daily and on each run that re-asks it, with no model.",
       "recommend": ["agent-implement", "agent-triage"],
       "when": "With implement or triage, so a label whose event never arrived still starts its run."
     }
