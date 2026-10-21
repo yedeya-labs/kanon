@@ -72,7 +72,7 @@ import { ARTIFACT_FILE, LISTING_SLACK, listTelemetryArtifacts, MAX_PAGES, readZi
 import { LANES as TELEMETRY_LANES, TERMINAL_REASONS } from '../actions/agent-telemetry/schema.mjs';
 import { defaultEscalationFile, ESCALATION_FILE, inPipelineCode, parseEscalationFile } from '../scripts/lib/escalation-paths.mjs';
 import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
-import { KANON_GROUP, directoriesLine, entryName, groupsKanon, kanonEntries, unreached, updatedFrom } from '../actions/lane-check/dependabot-reach.mjs';
+import { KANON_GROUP, directoriesLine, entryName, groupsKanon, kanonEntries, kanonGroupFix, unreached, updatedFrom } from '../actions/lane-check/dependabot-reach.mjs';
 import { renderNotice } from '../actions/agent-classify/classify-agent-result.mjs';
 
 // The reporter check lives in its own module, which `kanon init` shares (#444).
@@ -1386,7 +1386,7 @@ export const diagnose = async (deps, opts) => {
     // Kanon dependency of its own. lane-check fails the same entries (kanon#1126).
     if (!groupsKanon(e)) {
       find('pin.dependabot-ungrouped', DEPENDABOT, `${DEPENDABOT}'s Kanon entry ${entryName(dependabot, e)} proposes Kanon upgrades but puts them in no one group. Dependabot opens an update no group takes in as a pull request of its own, one per dependency and per directory, and each Kanon lane's workflow is a dependency of its own, so each upgrade pull request moves only some of the pins, and lane-check fails the mix (K-ADOPT-11).`, {
-        text: "Add the `kanon` group `kanon init` writes as that entry's first group, under its `groups:`, with this line; or, if the entry isn't meant to propose Kanon, leave Kanon out of it with `ignore: [{ dependency-name: \"yedeya-labs/kanon*\" }]`.",
+        text: `${kanonGroupFix(e)}, with this line; or, if the entry isn't meant to propose Kanon, leave Kanon out of it with \`ignore: [{ dependency-name: "yedeya-labs/kanon*" }]\`.`,
         commands: [KANON_GROUP],
       });
     }
