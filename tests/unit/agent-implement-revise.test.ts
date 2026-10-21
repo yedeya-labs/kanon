@@ -134,9 +134,21 @@ describe('what it acts on', () => {
         expect(run([theMergers, later])).toBe(theMergers.body);
       });
 
-      it('fails rather than compose a hand-back mandate without the login or head', () => {
-        const r = runWorkflowStep(mandateStep, { env: { RESET: 'false', MODE: 'handback', PR: '1', ROUND: '1', REPO: 'o/r', MERGER: '', HEAD_SHA: HEAD_OID } });
+      // The step's static HANDBACK_RULE is passed, as runMandate does: without it the
+      // heredoc's unbound variable aborts under `set -u` and the test stays green with
+      // the guard deleted (kanon#1178). The guard's own message is what proves it fired.
+      it.each([
+        ['the login', { MERGER: '', HEAD_SHA: HEAD_OID }],
+        ['the head', { MERGER, HEAD_SHA: '' }],
+      ])('fails rather than compose a hand-back mandate without %s', (_, missing) => {
+        const r = runWorkflowStep(mandateStep, {
+          env: {
+            RESET: 'false', MODE: 'handback', PR: '1', ROUND: '1', REPO: 'o/r',
+            HANDBACK_RULE: mandateStep.env.HANDBACK_RULE, ...missing,
+          },
+        });
         expect(r.status).not.toBe(0);
+        expect(r.stderr).toContain("a hand-back mandate needs the Merger's login and the head the filter verified");
       });
     });
   });

@@ -866,9 +866,9 @@ if (isCliEntry(import.meta.url)) {
     const [line, ...rest] = planOutputs(r, areas);
     console.log(line);
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, [line, ...rest].map((l) => `${l}\n`).join(''));
-    // THE PLAN EXITS 0 ON EVERY RESULT IT REACHES, a refusal included. A failed `scope` job skips
-    // `Red-test verification` behind it, and a ruleset counts a skipped required check as
-    // passing, so a refusal is carried to the verifying job (`areas_changed`), which fails.
+    // THE PLAN EXITS 0 ON EVERY RESULT IT REACHES, a refusal included. A failed `scope` job makes
+    // `Red-test verification` fail with the generic "Red-test scope failed" (kanon#1189). A refusal
+    // is carried to the verifying job instead (`areas_changed`), which fails with its own message.
     process.exit(0);
   }
   process.exit(exitCodeFor(r));

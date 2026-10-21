@@ -60,6 +60,7 @@ import { join } from 'node:path';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { laneCallersIn } from './lib/lane-caller.mjs';
 import { beforeApply } from './lib/labels.mjs';
+import { plan } from './issue-triage-defaults.mjs';
 import {
   classifySchedule,
   ESCALATED as SCHEDULE_ESCALATED,
@@ -70,6 +71,14 @@ import {
   scheduleCrons,
   silentSetIn,
 } from './lib/schedule-silence.mjs';
+
+/**
+ * The `--label` and `--milestone` arguments of every issue this check files, from the planning
+ * module's `plan()`, the one home of the routing rule (`K-WORK-8`, kanon#1194). Each is pipeline
+ * work, so it names that subject and `plan()` picks the bucket. The labels are fixed, so a
+ * `PlanRefusal` here is a defect in this file, and it fails the run rather than file bare.
+ */
+export const PIPELINE_ROUTING = () => plan(['pipeline-improvement'], { subject: 'pipeline' }).args;
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -654,10 +663,9 @@ function auditHeartbeat() {
   const body = renderAuditFinding(verdict);
   if (!existing) {
     // ONE CALL, `--label` AND `--milestone` together (K-WORK-2) — a bare create races
-    // the default-milestone backstop. Pipeline work goes to the platform bucket (K-WORK-4).
+    // the default-milestone backstop. `plan()` picks the bucket (K-WORK-4, K-WORK-8).
     const url = gh(['issue', 'create', '--repo', REPO, '--title', AUDIT_TITLE,
-      '--body', body, '--label', 'pipeline-improvement',
-      '--milestone', 'Development Automation']).trim();
+      '--body', body, ...PIPELINE_ROUTING()]).trim();
     console.log(`filed: ${url}`);
     return 0;
   }
@@ -738,10 +746,9 @@ function redCheck() {
   if (!existing) {
     // ONE CALL, `--label` AND `--milestone` together (K-WORK-2): a bare create races
     // the default-milestone backstop, and a wrong milestone is harder to spot than a
-    // missing one. Pipeline work goes to the platform bucket (K-WORK-4).
+    // missing one. `plan()` picks the bucket (K-WORK-4, K-WORK-8).
     const url = gh(['issue', 'create', '--repo', REPO, '--title', HEALTH_TITLE,
-      '--body', body, '--label', 'pipeline-improvement',
-      '--milestone', 'Development Automation']).trim();
+      '--body', body, ...PIPELINE_ROUTING()]).trim();
     console.log(`filed: ${url}`);
     return;
   }
@@ -868,8 +875,7 @@ function scheduleHeartbeat() {
   if (!existing) {
     // ONE CALL, `--label` AND `--milestone` together (K-WORK-2).
     const url = gh(['issue', 'create', '--repo', REPO, '--title', SCHEDULE_TITLE,
-      '--body', body, '--label', 'pipeline-improvement',
-      '--milestone', 'Development Automation']).trim();
+      '--body', body, ...PIPELINE_ROUTING()]).trim();
     console.log(`filed: ${url}`);
     return 0;
   }
