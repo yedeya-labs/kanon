@@ -542,7 +542,7 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
       });
       const deployOnly = (r: Result) => notifyIds(r).filter((x: string) => x.endsWith(DEPLOY_CALLER_PATH));
 
-      it('notes a failing announcement in the latest release run, read at its tag, with the run to read and re-run (#1046)', async () => {
+      it('notes a failing announcement in the latest release run, read at its tag, with the run to read (#1046)', async () => {
         const g = github({ secrets: held(DEPLOY_SECRET), deployRuns: [deployRun(901, 'failed')] });
         const r = await check(deployFiles(), g);
         expect(notifyIds(r)).toEqual([`notify.failing ${DEPLOY_CALLER_PATH}`]);
@@ -552,9 +552,15 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
         expect(f.message).toContain('production / notify');
         expect(f.message).toContain('a release at v1.0.0');
         expect(f.message).toContain('deploy was failed, through the slack hook');
-        expect(f.fix.commands).toEqual([`gh run view 901 -R ${REPO} --log-failed`, `gh run rerun 901 -R ${REPO} --failed`]);
-        // A deploy run's failed jobs can include a deploy job: the fix says what the re-run takes with it.
-        expect(f.fix.text).toMatch(/a failed deploy job of the run too/);
+        // A deploy run is never re-run to repost (kanon#1048): `--job` and `--failed` both re-run
+        // every job after the failed notify, the next environment's deploy among them.
+        expect(f.fix.commands).toEqual([`gh run view 901 -R ${REPO} --log-failed`]);
+        expect(f.fix.text).toMatch(/Don't re-run the deploy run/);
+        expect(f.fix.text).toMatch(/next environment's deploy/);
+        expect(f.fix.text).not.toMatch(/gh run rerun/);
+        // The range starts at this deployment, so the next deploy doesn't repost what landed here.
+        expect(f.fix.text).toMatch(/the next deploy there doesn't announce/);
+        expect(f.fix.text).toMatch(/post it by hand/);
         // The deploy caller's runs are listed at every ref, not the default branch's alone; the digest's still are.
         expect(g.paths.filter((p) => p.includes('/deploy.yml/runs?'))).toEqual([`repos/${REPO}/actions/workflows/deploy.yml/runs?status=completed&per_page=10`]);
         expect(g.paths.filter((p) => p.includes(`/${LANE}.yml/runs?`))).toEqual([`repos/${REPO}/actions/workflows/${LANE}.yml/runs?branch=main&status=completed&per_page=10`]);
