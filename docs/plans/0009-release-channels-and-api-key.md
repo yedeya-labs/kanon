@@ -259,7 +259,7 @@ A security fix, or a fix for a candidate or stable release that breaks adopters,
 
 **The cost docs** (#579's last item): `docs/lanes.md` gains, per lane, what one reviewed pull request and one implemented issue cost, in two columns:
 - **API key:** dollars at list price, the median and 90th percentile per reviewed head and per implemented issue, read from Kanon's own rows in the hosted store, with their window and sample size. **Not run** when the plan was written: only the per-item figure existed ($1.72 median per merged item on Kanon, [§8](#8-today-measured)). Step A7 measured the per-lane figures on 2026-10-21, from Kanon's run rows as each lane's run artifact holds them, the rows the collector sends the store, over 2026-10-07 to 2026-10-21 ([What a model run costs](../lanes.md#what-a-model-run-costs)).
-- **Subscription:** the same runs' token counts, and the sentence that the subscription's weekly limit isn't published as a number, so Kanon can't say how many reviews a week it allows. The existing "$15 per fed issue, measured on the reference adopter" sentence keeps its source and gains its window.
+- **Subscription:** the same runs' token counts, and the sentence that the subscription's weekly limit isn't published as a number, so Kanon can't say how many reviews a week it allows. The reference adopter's "$15 per fed issue" sentence, whose window was never recorded, was replaced by Kanon's measured cost per implemented issue, with its window and sample (Owner decision 2026-10-21), as the A7 row says.
 
 ## 13. Security posture
 
@@ -333,7 +333,7 @@ S is the releases track, A the API-key track. **Touches** names the files each s
 
 - **Releases:** the promotion runs daily for under a minute with no model, and Kanon is public, so its Actions minutes are free (ADR 0011). The pin job adds one pull request a week, reviewed by the Reviewer like any other: about one review run, a few dollars at list price on Kanon's median.
 - **The API key:** the smoke on a key (A8) costs one review run per candidate, at most a few dollars a week, on the Owner's key. Nothing else in Kanon moves to a key unless the Owner decides it.
-- **For an adopter:** nothing for the channel. On a key, what its runs cost at list price, which the cost docs (A7) will state per lane.
+- **For an adopter:** nothing for the channel. On a key, what its runs cost at list price, which the cost docs (A7) state per lane: [What a model run costs](../lanes.md#what-a-model-run-costs).
 
 ## Out of scope
 
