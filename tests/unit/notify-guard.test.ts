@@ -487,6 +487,24 @@ describe('the deploy lane, wired (plan 0011 N9; the Owner\'s decisions of 2026-1
     expect(notifyLaneProblems({ ...DOCS, 'agent-weekly-digest.yml': weekly })).toEqual(['agent-weekly-digest.yml:notify: its step hands the block `position`']);
   });
 
+  it("continues on error, so a failed post leaves its environment's call green and the next environment deploys (kanon#1048)", () => {
+    expect(DOCS[DEPLOY]!.jobs!.notify!['continue-on-error']).toBe(true);
+    expect(notifyJob('deploy', 'announce')['continue-on-error']).toBe(true);
+    for (const value of [undefined, false, "${{ inputs.position != '1' }}"]) {
+      const wf = lane();
+      if (value === undefined) delete wf.jobs!.notify!['continue-on-error'];
+      else wf.jobs!.notify!['continue-on-error'] = value;
+      expect(notifyLaneProblems(with_(wf)), String(value)).toEqual([`${DEPLOY}:notify: its continue-on-error is not \`true\`, so a failed post fails the environment's call and holds the next environment's deploy (kanon#1048)`]);
+    }
+    // A digest's or the release announcement's notify job stays red-and-failing: it may not continue on error.
+    for (const file of ['agent-weekly-digest.yml', 'agent-release-announce.yml']) {
+      expect(notifyJob(NOTIFYING_LANES[file]!, 'x')['continue-on-error']).toBeUndefined();
+      const other = structuredClone(DOCS[file]!);
+      other.jobs!.notify!['continue-on-error'] = true;
+      expect(notifyLaneProblems({ ...DOCS, [file]: other })).toEqual([`${file}:notify: the job declares \`continue-on-error:\``]);
+    }
+  });
+
   it('fails a pull_request trigger on the deploy lane', () => {
     const wf = lane() as ReturnType<typeof lane> & { on: Record<string, unknown> };
     wf.on.pull_request = null;

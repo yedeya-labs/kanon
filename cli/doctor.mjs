@@ -2876,8 +2876,15 @@ export const diagnose = async (deps, opts) => {
       const where = latest.tag
         ? `The latest notify job that ran at a release's tag, \`${String(failing.job.name)}\` in ${run.html_url} (${run.event === 'release' ? 'a release' : 'a dispatch'} at ${String(run.head_branch)}, ${date}),`
         : `The latest notify job on ${s.defaultBranch}, in ${run.html_url} of ${date},`;
-      find('notify.failing', file, `${where} says ${said.kind ? `${String(said.kind)} was` : 'its message was'} ${String(said.outcome)}${said.hook ? `, through the ${String(said.hook)} hook` : ''}: the hook's step failed, or Kanon refused the message, so nothing was posted. The producing job stays green (K-SHIP-10).`, {
-        text: `Read the job's log for the hook's error, fix the hook or the kind's secret, then re-run the failed job, which posts the same message again (plan 0011 §5.4)${latest.tag ? `. Re-running the failed jobs re-runs a failed deploy job of the run too, and the jobs that need it` : ''}:`,
+      // A deploy run is never re-run to post again (kanon#1048): the sandbox's probe measured that a
+      // re-run of a `notify` job, by `--job` or `--failed`, re-runs every job after it, the next
+      // environment's deploy among them. The announced range starts at the environment's previous
+      // successful deployment, so the next deploy there doesn't repeat a landed deploy's releases.
+      find('notify.failing', file, `${where} says ${said.kind ? `${String(said.kind)} was` : 'its message was'} ${String(said.outcome)}${said.hook ? `, through the ${String(said.hook)} hook` : ''}: the hook's step failed, or Kanon refused the message, so nothing was posted. The producing job stays green (K-SHIP-10).`, latest.tag ? {
+        text: `Read the job's log for the hook's error, and fix the hook or the kind's secret. Don't re-run the deploy run to post it: a re-run of the failed notify job, by job or with the failed jobs, re-runs every job after it, the next environment's deploy among them (kanon#1048). Nothing posts this message again: when the deploy landed, the next deploy there doesn't announce its releases, since its range starts at this deployment, so post it by hand if it can't go unannounced (plan 0011 §5.4):`,
+        commands: [`gh run view ${run.id} -R ${repo} --log-failed`],
+      } : {
+        text: `Read the job's log for the hook's error, fix the hook or the kind's secret, then re-run the failed job, which posts the same message again (plan 0011 §5.4):`,
         commands: [`gh run view ${run.id} -R ${repo} --log-failed`, `gh run rerun ${run.id} -R ${repo} --failed`],
       });
     }

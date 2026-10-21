@@ -35,6 +35,7 @@ type Step = { id?: string; name?: string; uses?: string; run?: string; if?: stri
 type Job = {
   name?: string; 'timeout-minutes'?: number; needs?: string | string[]; if?: string; uses?: string; environment?: unknown; permissions?: Record<string, string> | string;
   concurrency?: { group?: string; 'cancel-in-progress'?: boolean; queue?: string } | string; steps?: Step[]; secrets?: unknown; with?: Record<string, unknown>; outputs?: Record<string, string>;
+  'continue-on-error'?: boolean | string;
 };
 type Workflow = { on?: { workflow_call?: { inputs?: Record<string, unknown>; secrets?: Record<string, unknown> } }; permissions?: unknown; jobs: Record<string, Job> };
 
@@ -113,6 +114,12 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
       }
       // Kanon declares no environment: only the environment job sets one, from the declaration.
       if (j.environment !== undefined && !(file === ENV && name === 'deploy')) out.push(`${at}: sets an environment`);
+      // A failed post never fails its environment's call, so it never holds the next environment's
+      // deploy (kanon#1048); any other job's failure fails the call and stops the chain.
+      const continues = j['continue-on-error'] !== undefined && j['continue-on-error'] !== false;
+      if (file === ENV && name === 'notify') {
+        if (j['continue-on-error'] !== true) out.push(`${at}: doesn't continue on error, so a failed post fails the environment's call and holds the next environment's deploy (kanon#1048)`);
+      } else if (continues) out.push(`${at}: continues on error, so its failure doesn't stop the chain; only deploy.yml's notify job may`);
     }
   }
   const dep = w[ENV]?.jobs.deploy;
@@ -539,6 +546,29 @@ describe('the deploy lane holds its shape', () => {
     it('the smoke step run after a failed reset', () => red((w) => { delete step(job(w, ENV, 'deploy'), 'smoke').if; }, /after a failed reset/));
     it('`KANON_DEPLOY_SECRET` handed to the reset step', () => red((w) => { step(job(w, ENV, 'deploy'), 'reset').env!.KANON_DEPLOY_SECRET = ALLOWED_SECRET; }, /reset: references a secret/));
     it('a write on the verdict job', () => red((w) => { job(w, ENV, 'verdict').permissions = { issues: 'write' }; }, /verdict: holds a permission/));
+  });
+
+  describe("a failed post never holds the next environment's deploy (kanon#1048)", () => {
+    const red = (change: (w: Record<string, Workflow>) => void, problem: RegExp) => {
+      const found = mutate(change);
+      expect(found.some((p) => problem.test(p)), `expected a problem matching ${problem}, got ${JSON.stringify(found)}`).toBe(true);
+    };
+    it('the notify job continues on error, and no other job of the lane does', () => {
+      expect(PARSED[ENV]!.jobs.notify!['continue-on-error']).toBe(true);
+      const others = LANE.flatMap((f) => Object.entries(PARSED[f]!.jobs).filter(([n, j]) => !(f === ENV && n === 'notify') && j['continue-on-error'] !== undefined));
+      expect(others).toEqual([]);
+    });
+    it('`continue-on-error` left off the notify job, or false', () => {
+      red((w) => { delete job(w, ENV, 'notify')['continue-on-error']; }, /notify: doesn't continue on error/);
+      red((w) => { job(w, ENV, 'notify')['continue-on-error'] = false; }, /notify: doesn't continue on error/);
+      red((w) => { job(w, ENV, 'notify')['continue-on-error'] = "${{ inputs.position != '1' }}"; }, /notify: doesn't continue on error/);
+    });
+    it('`continue-on-error` on the deploy, verdict, announce or release jobs', () => {
+      red((w) => { job(w, ENV, 'deploy')['continue-on-error'] = true; }, /deploy\.yml:deploy: continues on error/);
+      red((w) => { job(w, ENV, 'verdict')['continue-on-error'] = true; }, /deploy\.yml:verdict: continues on error/);
+      red((w) => { job(w, ENV, 'announce')['continue-on-error'] = true; }, /deploy\.yml:announce: continues on error/);
+      red((w) => { job(w, RELEASE, 'build')['continue-on-error'] = true; }, /deploy-release\.yml:build: continues on error/);
+    });
   });
 
   describe('the mutations plan 0010 D5 names each turn it red', () => {

@@ -23,7 +23,9 @@ import { TAGS } from '../../../actions/agent-telemetry/schema.mjs';
  *   `message-artifact` output as `artifact` (never a name it builds: after "Re-run failed jobs"
  *   its own attempt is one past the producer's), and the kind's secret as `secret`.
  *
- * **The deploy lane's** (`deploy.yml`, plan 0011 N9) differs in its gate alone, by `GATED`: it has
+ * **The deploy lane's** (`deploy.yml`, plan 0011 N9) differs in its gate, by `GATED`, and in that
+ * it continues on error, so a failed post never holds the next environment's deploy (kanon#1048),
+ * while it still concludes `failure` for doctor; a digest's may not. As for its gate: it has
  * no membership gate, no dry run and no gate-decided hook, so its gate is `declare`, which admits
  * only a published release or a dispatch naming one (`held == 'false'`, which `deploy-gate.mjs`
  * sets only then, so never on a pull request), its hook's presence is the producer's output, and it
@@ -58,11 +60,15 @@ export const MESSAGE_OUTPUT = 'message-artifact';
 /** The deploy lane's one `if:` (plan 0011 N9): past an admitting `declare`, with a hook, never in a cancelled run. */
 export const DEPLOY_NOTIFY_IF = "!cancelled() && needs.declare.outputs.held == 'false' && needs.announce.outputs.hook == 'present'";
 
-/** How a kind's `notify` job is gated: its gate's job (`undefined`: the membership gate's), its `if:`, and what else it hands the block. */
-export type Gated = { gate?: string; if: string; with?: Record<string, string> };
+/**
+ * How a kind's `notify` job is gated: its gate's job (`undefined`: the membership gate's), its
+ * `if:`, what else it hands the block, and whether it continues on error.
+ */
+export type Gated = { gate?: string; if: string; with?: Record<string, string>; continueOnError?: true };
 /** Each kind's gating; a kind not listed is gated by the membership gate, with `NOTIFY_IF`. */
 export const GATED: Record<string, Gated> = {
-  deploy: { gate: 'declare', if: DEPLOY_NOTIFY_IF, with: { position: '${{ inputs.position }}' } },
+  // A failed post never fails the environment's call, so it never holds the next environment's deploy (kanon#1048).
+  deploy: { gate: 'declare', if: DEPLOY_NOTIFY_IF, with: { position: '${{ inputs.position }}' }, continueOnError: true },
 };
 const gatingOf = (kind: string): Gated => GATED[kind] ?? { if: NOTIFY_IF };
 
@@ -101,6 +107,7 @@ export const notifyJobsOf = (wf: Workflow): string[] =>
 export const notifyJob = (kind: string, producer: string): Job => ({
   needs: [gatingOf(kind).gate ?? 'gate', producer],
   if: `\${{ ${gatingOf(kind).if} }}`,
+  ...(gatingOf(kind).continueOnError ? { 'continue-on-error': true } : {}),
   'runs-on': 'ubuntu-latest',
   'timeout-minutes': 5,
   permissions: { contents: 'read' },
@@ -131,8 +138,9 @@ export const notifyJobProblems = (wf: Workflow, id: string, kind: string): strin
   const secret = KIND_SECRETS[kind];
   if (!secret) return [`${kind} is not a message kind`];
   if (id !== NOTIFY_JOB) problems.push(`the job is called ${id}, not ${NOTIFY_JOB}`);
-  for (const k of Object.keys(job)) if (!JOB_KEYS.has(k)) problems.push(`the job declares \`${k}:\``);
   const gating = gatingOf(kind);
+  for (const k of Object.keys(job)) if (!JOB_KEYS.has(k) && !(k === 'continue-on-error' && gating.continueOnError)) problems.push(`the job declares \`${k}:\``);
+  if (gating.continueOnError && job['continue-on-error'] !== true) problems.push('its continue-on-error is not `true`, so a failed post fails the environment\'s call and holds the next environment\'s deploy (kanon#1048)');
   const gate = gating.gate ?? gateJobOf(wf);
   const producers = producersOf(wf);
   if (producers.length !== 1) problems.push(`the lane has ${producers.length} producing jobs, not one`);

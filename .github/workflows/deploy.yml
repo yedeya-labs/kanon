@@ -61,6 +61,9 @@
 # workflow, and no other: the one job here that holds it, of the shape
 # `tests/unit/helpers/notify-jobs.ts` holds every `notify` job to. A post that fails turns
 # `notify` red and leaves every deploy job green, so a failure to announce is never a deploy's.
+# `notify` continues on error, so a failed post leaves the environment's call green and the next
+# environment deploys (kanon#1048). Never re-run the run to post again: a re-run of `notify`, by
+# job or with the failed jobs, re-runs every job after it, the next environment's deploy too.
 #
 # NO MODEL IN THE DEPLOY PATH (plan 0010 §9): no agent, no Claude credential, no App key or App
 # token (`tests/unit/deploy-lane.test.ts`).
@@ -418,9 +421,13 @@ jobs:
   # never in a cancelled run, and after a failed `announce` too, so a message not
   # posted is recorded as `skipped`. Its position keeps its telemetry row's artifact apart from
   # the other environments' in the same run.
+  # A failed post never blocks a deploy (kanon#1048, the Owner's decision of 2026-10-20): the job
+  # still concludes `failure`, red, for doctor's `notify.failing`, but the environment's call
+  # succeeds, so the next environment deploys as it would have. The sandbox's probe measured it.
   notify:
     needs: [declare, announce]
     if: ${{ !cancelled() && needs.declare.outputs.held == 'false' && needs.announce.outputs.hook == 'present' }}
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
