@@ -1,0 +1,107 @@
+# Kanon runs the guards it ships on its own repository (#1236).
+#
+# Each job runs one of Kanon's guards the way `K-ADOPT-11` tells an adopter to: `kanon-path` at
+# the release Kanon pins, then `node "$KANON/scripts/<guard>.mjs"` in the checked-out tree. The
+# guard is Kanon's at that pin, read from the runner's action cache, so a pull request can't
+# change the guard that judges it (the Owner's decision of 2026-10-14: Kanon's own workflows run
+# its library only at a pinned release). The PR's own copy of each guard is tested by its test
+# under tests/. Dependabot's `kanon` group moves the pin with the others, and `lane-check` holds
+# every Kanon reference to one version.
+#
+# NOT REQUIRED CHECKS. None of these is in the `main` ruleset. A red one shows on the pull request,
+# and the Merger, which merges only with every check green, waits on it.
+#
+# CHEAP ON PURPOSE. No model, no install (each guard needs only Node, which `kanon-path` sets up),
+# a shallow checkout, sparse where the guard reads one directory, and the `paths` below, so a pull
+# request that touches none of what these guards read starts no runner at all:
+#   - the spec guard reads `docs/qa/specs/` only (`K-SPEC-2`, `K-SPEC-3`);
+#   - the brief guard reads the briefs under `docs/projects/`, and `docs/qa/exemptions.md` when
+#     Kanon has one (`K-PROJ-4`, `K-LAYOUT-12`, `K-LAYOUT-13`), and reads the repository's
+#     milestones only when a brief names one;
+#   - the label guard reads every label the pipeline applies, in `.github/workflows/`,
+#     `.github/ISSUE_TEMPLATE/` and `docs/qa/` (Kanon declares no pipeline code of its own in
+#     `docs/qa/escalation-paths.md`), and checks them against the repository's live labels,
+#     milestones and open issues (`K-WORK-5`, `K-WORK-11`, `K-WORK-12`). Those live facts change
+#     without a pull request, so it also runs weekly, and on a dispatch.
+# A job whose files didn't change still runs when another's did: a path filter is the workflow's,
+# and each guard takes seconds.
+name: Shipped guards
+
+on:
+  pull_request:
+    paths:
+      - docs/qa/**
+      - docs/projects/**
+      - .github/workflows/**
+      - .github/ISSUE_TEMPLATE/**
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shipped-guards-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spec-guard:
+    name: Spec guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: docs/qa/specs
+          persist-credentials: false
+      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.42.0
+        id: kanon
+      - name: spec-guard (Kanon's, at the pinned release)
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+        run: node "$KANON/scripts/spec-guard.mjs"
+
+  brief-guard:
+    name: Brief guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            docs/projects
+            docs/qa
+          persist-credentials: false
+      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.42.0
+        id: kanon
+      - name: brief-guard (Kanon's, at the pinned release)
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/brief-guard.mjs"
+
+  label-guard:
+    name: Label guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.42.0
+        id: kanon
+      - name: label-guard (Kanon's, at the pinned release)
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: node "$KANON/scripts/label-guard.mjs"

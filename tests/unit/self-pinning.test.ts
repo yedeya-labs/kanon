@@ -119,6 +119,11 @@ const EXEMPT = new Set([
   // telemetry.yml calls the telemetry collector (plan 0002 S7), at the same release: its job
   // holds the store's writer credentials, so the code that runs with them is a released one.
   '.github/workflows/telemetry.yml: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@vX.Y.Z',
+  // Kanon runs what it ships on itself (#1236), as an adopter does and at the same release: the
+  // red-test check through its thin caller, and the guards through `kanon-path`. Through `$/` or
+  // the checkout, a pull request would bring the check or the guard that judges it.
+  '.github/workflows/red-test-check.yml: yedeya-labs/kanon/.github/workflows/red-test.yml@vX.Y.Z',
+  '.github/workflows/shipped-guards.yml: yedeya-labs/kanon/actions/kanon-path@vX.Y.Z',
   '.github/workflows/test-database-smoke.yml: ./.github/actions/project-setup',
   // The deploy lane calls the ADOPTER's deploy and smoke hooks (plan 0010 §7, step D4), the first
   // exception's reason again: the adopter's code at the release's commit, in the checkout the

@@ -422,7 +422,7 @@ The lanes' prompts state the process and never your stack. What your stack decid
 
 **What you leave out is a documented default** ([plan 0005](plans/0005-lean-installation.md) §5.2). A stack-document section you omit, other than `## Gates`, means none: no schema, nothing to isolate, no generated files. A playbook you don't write is Kanon's baseline for the role, [`rulebook/templates/playbooks/`](../rulebook/templates/playbooks/) at the release you pin: the lane's `agent-setup` block puts it in place before the agent starts, keeps it out of the agent's commits, and says so in the job summary and in the agent's prompt, so an agent asked to write that playbook stages it with `git add -f`. Write your own, starting from a copy, when you want the Reviewer to check your project's own risks. `lane-check` fails when the stack document or a capability ledger a lane you call reads is missing, or the stack document has no `## Gates`, and names each default it takes.
 
-**Your code areas.** The stack document may also say where your code and tests are, under `## Code areas`, one bullet per area: a path in backticks, for a `tests` tree optionally its runner in backticks, an em dash, its kind, a colon, and what it holds.
+<a id="code-areas"></a>**Your code areas.** The stack document may also say where your code and tests are, under `## Code areas`, one bullet per area: a path in backticks, for a `tests` tree optionally its runner in backticks, an em dash, its kind, a colon, and what it holds.
 
 ```markdown
 ## Code areas

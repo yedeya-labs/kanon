@@ -1,0 +1,30 @@
+# Kanon runs its own red-test check on itself (`K-MERGE-13`, #1236).
+#
+# A thin caller of the reusable `red-test.yml`, written exactly as docs/lanes.md ("The red-test
+# check") gives it to an adopter. It is named `red-test-check.yml` because `red-test.yml` is the
+# reusable workflow itself.
+#
+# IT CALLS KANON'S LAST RELEASE, NEVER `$/` (`K-ADOPT-11`, the Owner's decision of 2026-10-14).
+# The verifier script is Kanon's at this pin, read from the runner's action cache, so a pull
+# request can't change the check that judges it. A change to the check is first exercised here
+# one release later. Dependabot's `kanon` group moves this pin with the others, and
+# `lane-check` (in CI) holds every Kanon reference to one version.
+#
+# Only an agent's pull request, one labelled `agent:implement` or `agent:triage`, is checked; a
+# person's concludes skipped. Kanon's project-setup hook installs Node and its dependencies,
+# Kanon declares no test database, and `docs/qa/stack.md`'s `## Code areas` names `tests/` and
+# its runner, vitest, so the check runs each changed test file with vitest.
+#
+# It runs no agent, mints no token and takes no secret, so it grants reading the code only.
+name: Red-test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  red-test:
+    uses: yedeya-labs/kanon/.github/workflows/red-test.yml@candidate-v0.42.0

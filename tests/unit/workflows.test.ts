@@ -804,6 +804,57 @@ describe("step 14: Kanon reads its telemetry's aggregate, through the lane at it
   });
 });
 
+// #1236: Kanon runs the checks and guards it ships on itself, the way an adopter does, at the release
+// its callers pin (`K-ADOPT-11`), so a pull request can't bring the check or the guard that judges it.
+describe('#1236 Kanon runs what it ships: the red-test check and the guards, at its last release', () => {
+  it('calls the red-test check from a thin caller, as docs/lanes.md gives it, at an exact release', () => {
+    const { wf } = load('red-test-check.yml');
+    const jobs = Object.values(wf.jobs) as (Job & { with?: unknown; secrets?: unknown })[];
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.uses).toMatch(releasedUses('.github/workflows/red-test.yml'));
+    expect(jobs[0]?.with).toBeUndefined();
+    expect(jobs[0]?.secrets).toBeUndefined();
+    expect(wf.on).toEqual({ pull_request: { types: ['opened', 'synchronize', 'reopened', 'labeled', 'unlabeled'] } });
+    expect(wf.permissions).toEqual({ contents: 'read' });
+  });
+
+  const { wf } = load('shipped-guards.yml');
+  const GUARDS: Record<string, string> = { 'Spec guard': 'spec-guard.mjs', 'Brief guard': 'brief-guard.mjs', 'Label guard': 'label-guard.mjs' };
+
+  it.each(Object.entries(GUARDS))("%s runs Kanon's %s from `kanon-path` at an exact release, never the checkout's copy", (check, script) => {
+    const job = Object.values(wf.jobs).find((j) => j.name === check)!;
+    const steps = job.steps;
+    const kanon = steps.filter((s) => s.uses?.includes('kanon-path'));
+    expect(kanon.map((s) => s.uses)).toEqual([expect.stringMatching(releasedUses('actions/kanon-path'))]);
+    // The checkout comes first, and keeps no credential.
+    expect(steps[0]?.uses).toMatch(/^actions\/checkout@/);
+    expect(steps[0]?.with?.['persist-credentials']).toBe(false);
+    const runs = steps.map((s) => s.run).filter((r): r is string => typeof r === 'string');
+    expect(runs).toEqual([`node "$KANON/scripts/${script}"`]);
+    const run = steps.find((s) => s.run)!;
+    expect(run.env?.KANON).toBe(`\${{ steps.${kanon[0]!.id}.outputs.path }}`);
+    expect(steps.filter((s) => s['continue-on-error'])).toEqual([]);
+  });
+
+  it('reads the code at the top, and adds only `issues: read`, for the guards that read the live repository', () => {
+    expect(wf.permissions).toEqual({ contents: 'read' });
+    for (const job of Object.values(wf.jobs)) {
+      expect(job.permissions ?? { contents: 'read' }).toEqual(
+        job.name === 'Spec guard' ? { contents: 'read' } : { contents: 'read', issues: 'read' },
+      );
+    }
+  });
+
+  it('starts on a pull request only for the files the guards read, and the label guard alone on its schedule', () => {
+    const on = wf.on as { pull_request: { paths: string[] }; schedule: unknown[] };
+    expect([...on.pull_request.paths].sort()).toEqual(['.github/ISSUE_TEMPLATE/**', '.github/workflows/**', 'docs/projects/**', 'docs/qa/**']);
+    expect(on.schedule).toHaveLength(1);
+    for (const job of Object.values(wf.jobs)) {
+      expect(job.if).toBe(job.name === 'Label guard' ? undefined : "github.event_name == 'pull_request'");
+    }
+  });
+});
+
 // The ruleset on main (id 24259403) requires these checks by name. A merge queue waits
 // for each one on the queue's branch, so each must report there under the same name it
 // reports under on the pull request (K-MERGE-7). The agent blocks smoke run joins them
