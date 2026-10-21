@@ -33,8 +33,11 @@
 //   A run that finds nothing files nothing, which is a valid outcome.
 //
 // THE MILESTONE IS THE PROJECT'S ROUTING (`K-WORK-4`; the Owner's decision on kanon#476), from
-// the issue's own labels through the backstop's `decide()` (`issue-triage-defaults.mjs`), as for
-// every filer: a bucket, never a roadmap milestone (`K-WORK-5`). Nothing here fixes one.
+// the planning module's `plan()` (`issue-triage-defaults.mjs`), the one home of the routing rule
+// (`K-WORK-8`, kanon#1220), as for every filer: a bucket, never a roadmap milestone (`K-WORK-5`).
+// Nothing here fixes one. Its findings are about Kanon's lanes, which the Owner's decision counts
+// as product work, so it names that subject and `plan()` picks the bucket and the labels. A
+// finding `plan()` refuses is neither filed nor drafted, and turns the step red.
 //
 // FILED HERE, OR DRAFTED (the Owner's decision on kanon#471). Every finding is about Kanon's lanes,
 // so it goes by the repository's `Upstream findings:` choice (`K-LAYOUT-10`), as the Overseer's
@@ -92,7 +95,7 @@ import { AggregateError, checkAggregate } from './aggregate-read.mjs';
 import { appPersona } from './app-register.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
-import { decide } from './issue-triage-defaults.mjs';
+import { PlanRefusal, plan } from './issue-triage-defaults.mjs';
 import { buildRows, notWritten, readUpstream, renderSent, sendFromEnv, sentSentence } from './lib/finding-rows.mjs';
 import { scrubContext, upstreamChoice } from './overseer-file.mjs';
 import { signed } from './lib/role-marker.mjs';
@@ -105,11 +108,13 @@ export const REPORT = 'qa-telemetry-findings.json';
  */
 export const labelsFor = (kind, severity) => [...LABELS[kind], ...(kind === 'bug' ? [severity] : [])];
 /**
- * The bucket an issue with these labels goes to, by the backstop's routing (`K-WORK-4`).
+ * A finding's labels and bucket, and the `--label` and `--milestone` arguments that file it,
+ * from `plan()` (`K-WORK-4`, `K-WORK-8`). A `PlanRefusal` throws, and `fileFindings` reports it
+ * as that finding not filed.
  * @param {string[]} labels
- * @returns {string}
+ * @returns {{ milestone: string, labels: string[], args: string[] }}
  */
-export const milestoneFor = (labels) => /** @type {string} */ (decide({ labels }).milestone);
+export const routingFor = (labels) => plan(labels, { subject: 'product' });
 /** At most this many new issues a run. */
 export const MAX_FILED = 3;
 export const SEVERITIES = ['sev:critical', 'sev:high', 'sev:medium', 'sev:low'];
@@ -363,12 +368,13 @@ function sendFindings({ repo, gh, a, drafts, level, send, log }) {
 
 /**
  * The whole step. Returns the exit code; prints its annotations through `log` and its summary
- * through `summary`. With `sent` or `sent with evidence`, `send` is where its rows go.
+ * through `summary`. With `sent` or `sent with evidence`, `send` is where its rows go. `route` is
+ * `routingFor`, which a test replaces to make `plan()` refuse.
  * @param {{ repo: string, text: string | null, aggregateText: string | null, agentOutcome: string, gh: Gh,
- *   log?: (line: string) => void, summary?: (line: string) => void, upstream?: string, send?: Send }} o
+ *   log?: (line: string) => void, summary?: (line: string) => void, upstream?: string, send?: Send, route?: typeof routingFor }} o
  * @returns {number}
  */
-export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log = console.log, summary = () => {}, upstream: declared, send }) {
+export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log = console.log, summary = () => {}, upstream: declared, send, route = routingFor }) {
   const { upstream: choice, unknown, level } = upstreamChoice(declared);
   if (unknown !== undefined) {
     log(`::warning title=telemetry explorer upstream choice::the lane passed \`${unknown}\`, which is neither \`drafted\` nor \`filed here\`, so the findings are drafted, not filed (K-LAYOUT-10)`);
@@ -410,23 +416,29 @@ export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log 
 
   if (choice !== 'filed here') {
     const seenDraft = new Set();
-    /** @type {Array<{ f: Finding, c: Checked }>} */
+    /** @type {Array<{ f: Finding, c: Checked, r: ReturnType<typeof routingFor> }>} */
     const drafts = [];
     for (const { f, c } of ok) {
       if (seenDraft.has(c.signature)) { summary(`- **Held:** "${f.title}": another finding this run has the same signature.`); continue; }
       seenDraft.add(c.signature);
-      drafts.push({ f, c });
+      try {
+        drafts.push({ f, c, r: route(labelsFor(c.kind, f.severity)) });
+      } catch (e) {
+        if (!(e instanceof PlanRefusal)) throw e;
+        failed += 1;
+        log(`::error title=telemetry finding not drafted::"${f.title}": plan() refused its routing: ${e.message}`);
+        summary(`- **Refused:** "${f.title}": plan() refused its routing: ${e.message}.`);
+      }
     }
     const sent = level ? sendFindings({ repo, gh, a, drafts, level, send, log }) : null;
     if (sent?.failed) failed += 1;
     if (level && drafts.length) summary(sentSentence(level));
-    for (const { f, c } of drafts) {
-      const names = labelsFor(c.kind, f.severity);
+    for (const { f, c, r } of drafts) {
       const block = sent?.blocks.get(c.signature);
-      summary(`\n### Draft: ${f.title}\n\nLabels: ${names.map((l) => `\`${l}\``).join(', ')}. Milestone: ${milestoneFor(names)}.\n\n${f.body.trim()}\n\n${renderEvidence(c, a)}\n${block ? `\n${block}\n` : ''}`);
+      summary(`\n### Draft: ${f.title}\n\nLabels: ${r.labels.map((l) => `\`${l}\``).join(', ')}. Milestone: ${r.milestone}.\n\n${f.body.trim()}\n\n${renderEvidence(c, a)}\n${block ? `\n${block}\n` : ''}`);
     }
-    log(`${seenDraft.size} finding(s) drafted in the run's summary, none filed: this repository's adoption record doesn't say \`Upstream findings: filed here\` (K-LAYOUT-10).`);
-    summary(`- ${report.findings.length} finding(s) in the report, ${seenDraft.size} drafted above and not filed (this repository doesn't declare \`Upstream findings: filed here\`), ${report.held_back.length} candidate(s) the agent held back.`);
+    log(`${drafts.length} finding(s) drafted in the run's summary, none filed: this repository's adoption record doesn't say \`Upstream findings: filed here\` (K-LAYOUT-10).`);
+    summary(`- ${report.findings.length} finding(s) in the report, ${drafts.length} drafted above and not filed (this repository doesn't declare \`Upstream findings: filed here\`), ${report.held_back.length} candidate(s) the agent held back.`);
     if (sent) summary(`- ${sent.written} finding row(s) written for Kanon's telemetry store, at \`${level}\`.`);
     if (agentOutcome === 'failure') log(`::warning title=telemetry explorer exited non-zero after writing its report::The agent exited non-zero, but its ${REPORT} was valid, so it was drafted from.`);
     return failed > 0 ? 1 : 0;
@@ -459,18 +471,18 @@ export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log 
         continue;
       }
       if (filed >= MAX_FILED) { summary(`- **Held:** "${f.title}": ${MAX_FILED} issues were filed this run already.`); continue; }
-      const names = labelsFor(c.kind, f.severity);
-      const labels = names.flatMap((l) => ['--label', l]);
+      const routed = route(labelsFor(c.kind, f.severity)).args;
       // The agent's prose holds no HTML comment (`proseProblem`), so no marker of its own can
       // stand in for the Explorer's header.
-      const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...labels, '--milestone', milestoneFor(names)],
+      const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...routed],
         signed(`${f.body.trim()}\n\n${evidence}`, 'Explorer', appPersona('Explorer'))));
       filed += 1;
       log(`filed #${number} (${c.kind}): ${f.title}`);
       summary(`- **Filed:** #${number} (${c.kind})`);
     } catch (e) {
       failed += 1;
-      log(`::error title=telemetry finding not filed::"${f.title}": ${String(/** @type {Error} */ (e).message).split('\n')[0]}`);
+      const why = String(/** @type {Error} */ (e).message).split('\n')[0];
+      log(`::error title=telemetry finding not filed::"${f.title}": ${e instanceof PlanRefusal ? `plan() refused its routing: ${why}` : why}`);
     }
   }
   summary(`- ${report.findings.length} finding(s) in the report, ${filed} filed, ${report.held_back.length} candidate(s) the agent held back.`);
