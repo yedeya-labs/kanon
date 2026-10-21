@@ -3,10 +3,11 @@ import { ROOT } from './helpers/adopter.js';
 import { validate } from '../../actions/agent-telemetry/schema.mjs';
 import { kanonFileIn } from '../../scripts/lib/finding-rows.mjs';
 import { checkAggregate } from '../../scripts/aggregate-read.mjs';
+import { PlanRefusal } from '../../scripts/issue-triage-defaults.mjs';
 import {
   LABELS,
   MAX_FILED,
-  milestoneFor,
+  routingFor,
   checkFinding,
   fileFindings,
   parseReport,
@@ -56,10 +57,10 @@ const fakeGh = (open: Array<{ number: number; body: string }> = []) => {
   };
   return { gh, calls, creates: () => calls.filter((c) => c.args[1] === 'create'), comments: () => calls.filter((c) => c.args[1] === 'comment') };
 };
-const run = (text: string | null, gh = fakeGh(), aggregateText: string | null = JSON.stringify(AGG), upstream: string | null = 'filed here') => {
+const run = (text: string | null, gh = fakeGh(), aggregateText: string | null = JSON.stringify(AGG), upstream: string | null = 'filed here', route?: typeof routingFor) => {
   const log: string[] = [];
   const summary: string[] = [];
-  const code = fileFindings({ repo: 'o/r', text, aggregateText, agentOutcome: 'success', gh: gh.gh, log: (l) => log.push(l), summary: (l) => summary.push(l), upstream: upstream ?? undefined });
+  const code = fileFindings({ repo: 'o/r', text, aggregateText, agentOutcome: 'success', gh: gh.gh, log: (l) => log.push(l), summary: (l) => summary.push(l), upstream: upstream ?? undefined, ...(route ? { route } : {}) });
   return { code, log, summary, gh };
 };
 
@@ -271,11 +272,39 @@ describe('drafted, unless the repository declares `filed here` (kanon#471, as th
   });
 });
 
-describe('milestoneFor: the backstop\'s routing, never a fixed bucket (K-WORK-4, kanon#476)', () => {
-  it('routes by the labels, as the backstop does for every filer', () => {
-    expect(milestoneFor([...LABELS.bug, 'sev:high'])).toBe('Product Backlog');
-    expect(milestoneFor(LABELS['spec-delta'])).toBe('Product Backlog');
-    expect(milestoneFor([...LABELS['spec-delta'], 'pipeline-improvement'])).toBe('Development Automation');
+describe('routingFor: plan()\'s routing, never a fixed bucket (K-WORK-4, K-WORK-8, kanon#476, kanon#1220)', () => {
+  it('routes each kind as product work, to the bucket plan() names for it', () => {
+    expect(routingFor([...LABELS.bug, 'sev:high']).milestone).toBe('Product Backlog');
+    expect(routingFor(LABELS['spec-delta']).milestone).toBe('Product Backlog');
+    expect(routingFor([...LABELS.bug, 'sev:high']).labels).toEqual([...LABELS.bug, 'sev:high']);
+  });
+
+  it('throws plan()\'s refusal rather than route round it', () => {
+    expect(() => routingFor([...LABELS['spec-delta'], 'pipeline-improvement'])).toThrow(PlanRefusal);
+  });
+
+  const refuseSpecDelta: typeof routingFor = (labels) => {
+    if (labels.includes('spec-delta')) throw new PlanRefusal('a refusal');
+    return routingFor(labels);
+  };
+  const two = () => report([finding(), finding({ title: 'A tail cost', body: 'The tail is far above the median.', severity: '', signals: [], cells: [ownRef] })]);
+
+  it('files no issue for a finding plan() refuses, files the rest, and turns the step red', () => {
+    const { code, gh, log } = run(two(), fakeGh(), JSON.stringify(AGG), 'filed here', refuseSpecDelta);
+    expect(code).toBe(1);
+    expect(gh.creates().map((c) => c.args[c.args.indexOf('--title') + 1])).toEqual([finding().title]);
+    expect(log.join('\n')).toContain('::error title=telemetry finding not filed::"A tail cost": plan() refused its routing: a refusal');
+  });
+
+  it('drafts no finding plan() refuses, drafts the rest, and turns the step red', () => {
+    const { code, gh, summary, log } = run(two(), fakeGh(), JSON.stringify(AGG), 'drafted', refuseSpecDelta);
+    expect(code).toBe(1);
+    expect(gh.calls).toEqual([]);
+    const text = summary.join('\n');
+    expect(text).toContain(`### Draft: ${finding().title}`);
+    expect(text).not.toContain('### Draft: A tail cost');
+    expect(text).toContain('- **Refused:** "A tail cost": plan() refused its routing: a refusal.');
+    expect(log.join('\n')).toContain('::error title=telemetry finding not drafted::"A tail cost": plan() refused its routing: a refusal');
   });
 });
 
