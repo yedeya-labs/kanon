@@ -144,6 +144,67 @@ describe('a valid `release` message', () => {
     expect(m.sections).toEqual([{ heading: 'Maintenance', body: 'ci updates' }]);
   });
 
+  // kanon#1208: a Features or Fixes heading alone no longer picks release-please's reading.
+  it("reads GitHub's categorized notes by each bullet's prefix, else its category, and keeps every category's bullets", () => {
+    const body = [
+      "## What's Changed",
+      '### Exciting New Features 🎉',
+      '* Add x by @u in https://github.com/o/r/pull/1',
+      '### Other Changes',
+      '* Tidy y by @u in https://github.com/o/r/pull/2',
+      '* feat: add z by @u in https://github.com/o/r/pull/3',
+      '## New Contributors',
+      '* @u made their first contribution in https://github.com/o/r/pull/1',
+    ].join('\n');
+    const m: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body }, runUrl: RUN });
+    expect(validate(m)).toEqual({ ok: true });
+    expect(m.sections).toEqual([
+      { heading: 'Features', body: '- Add x ([#1](https://github.com/o/r/pull/1))\n- add z ([#3](https://github.com/o/r/pull/3))' },
+      { heading: 'Changes', body: '- Tidy y ([#2](https://github.com/o/r/pull/2))' },
+    ]);
+  });
+
+  it('reads a hand-written body with a Bug fixes heading and another heading: both sections reach the message', () => {
+    const body = ['## Bug fixes', '- The header no longer flickers', '## Other', '- A new logo'].join('\n');
+    const m: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body }, runUrl: RUN });
+    expect(validate(m)).toEqual({ ok: true });
+    expect(m.sections).toEqual([
+      { heading: 'Fixes', body: '- The header no longer flickers' },
+      { heading: 'Changes', body: '- A new logo' },
+    ]);
+  });
+
+  it('a `Word: text` bullet whose word is no conventional-commit type is a Change, its text kept', () => {
+    const body = ['- Breaking: drop Node 16', '- Windows: fix a crash on start', '- Note: the API is unchanged', '- fix: mend the footer'].join('\n');
+    const m: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body }, runUrl: RUN });
+    expect(validate(m)).toEqual({ ok: true });
+    expect(m.sections).toEqual([
+      { heading: 'Fixes', body: '- mend the footer' },
+      { heading: 'Changes', body: '- Breaking: drop Node 16\n- Windows: fix a crash on start\n- Note: the API is unchanged' },
+    ]);
+  });
+
+  it("release-please's body with only unscoped bullets is read as before, by its commit links or its version heading", () => {
+    const C = 'https://github.com/acme/widgets/commit';
+    const linked = [
+      '### Features',
+      '',
+      `* add x ([#41](https://github.com/acme/widgets/issues/41)) ([abc1234](${C}/abc1234def5678))`,
+      '',
+      '### Miscellaneous Chores',
+      '',
+      `* tidy y ([def5678](${C}/def5678abc1234))`,
+    ].join('\n');
+    const byLink: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body: linked }, runUrl: RUN });
+    expect(validate(byLink)).toEqual({ ok: true });
+    expect(byLink.sections).toEqual([{ heading: 'Features', body: '- add x ([#41](https://github.com/acme/widgets/issues/41))' }]);
+
+    const headed = ['## [1.4.2](https://github.com/acme/widgets/compare/v1.4.1...v1.4.2) (2026-10-21)', '### Bug Fixes', '* mend x', '### Miscellaneous Chores', '* tidy y'].join('\n');
+    const byHeading: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, body: headed }, runUrl: RUN });
+    expect(validate(byHeading)).toEqual({ ok: true });
+    expect(byHeading.sections).toEqual([{ heading: 'Fixes', body: '- mend x' }]);
+  });
+
   it('a tag with characters a URL path escapes is linked escaped', () => {
     const m: Any = buildReleaseMessage({ repo: REPO, release: { ...RELEASE, tag_name: 'widgets@1.4.0', name: '' }, runUrl: RUN });
     expect(validate(m)).toEqual({ ok: true });
