@@ -2161,6 +2161,16 @@ describe('a file-only project files its issues and dispatches none (kanon#1113)'
     expect(r.stopped).toMatch(/remove the label/i);
   });
 
+  it('names every eligible issue, not only the ones a dispatching tick would label within its slots and budget (kanon#1182)', () => {
+    const w = worldFrom(BRIEF(['a', 'b']), [{ number: 1, title: 'a' }, { number: 2, title: 'b' }]);
+    // One slot: a dispatching tick labels #1 alone, and the file-only report still names both.
+    expect(dispatched(nextActions(w, { wip: 1 })).map((a) => a.number)).toEqual([1]);
+    expect(nextActions({ ...w, fileOnly: true }, { wip: 1 }).stopped).toMatch(/dispatch disabled: #1, #2\./);
+    // The same under a budget of one.
+    expect(dispatched(nextActions(w, { wip: 3, budgetLeft: 1 })).map((a) => a.number)).toEqual([1]);
+    expect(nextActions({ ...w, fileOnly: true }, { wip: 3, budgetLeft: 1 }).stopped).toMatch(/dispatch disabled: #1, #2\./);
+  });
+
   it('says so in its summary on every tick, filing or not', () => {
     const filing = { ...worldFrom(BRIEF(['a'])), fileOnly: true };
     expect(report(filing, nextActions(filing))).toMatch(/\*\*File-only:\*\* the tracking issue carries `lead:file-only`/);

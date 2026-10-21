@@ -204,7 +204,7 @@ const HELD_MARKER = '<!-- qa:lead-held -->';
  * a decision, and lost the filing with it.
  *
  * With this label every phase runs as usual and the reconcile phase adds no `agent:implement`:
- * it reports the issues it would have dispatched instead. An issue a person labels
+ * it reports the issues eligible for dispatch instead. An issue a person labels
  * `agent:implement` by hand is still dispatched by that label, and the tick reconciles it like
  * any other in-flight issue. Removing the label resumes dispatch on the next tick. `needs:human`
  * still outranks it: a held project does nothing at all.
@@ -1249,22 +1249,23 @@ function nextActionsCore(world, {
       .filter((i) => !(i.dependsOn ?? []).some((d) => openNumbers.has(d)))
       .filter((i) => !(i.unfiledDeps ?? []).length)
       .sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
-    // BOUNDED BY THE TICK BUDGET AS WELL AS BY WIP (RA-1447). This sliced on `slots`
-    // alone, so `QA_LEAD_TICK_BUDGET` bounded only the FILE branch — the budget did
-    // not mean what its name says. Invisible while a tick reconciled one project and
-    // the budget defaulted to Infinity; it stops being invisible the moment the budget
-    // is SHARED across projects, because then one project could spend more than the
-    // whole tick was allowed and the next would still be asked for more.
     // FILE-ONLY: THE SAME ELIGIBILITY, NO DISPATCH (kanon#1113). Decided after the filters, so
-    // the report names every issue eligible for dispatch (a dispatching tick labels as many of
-    // them as its slots and budget allow), and removing the label dispatches on the next tick
-    // with nothing else to change.
+    // the report names every issue eligible for dispatch, not only the ones a dispatching tick
+    // would label (as many as its slots and budget allow), and removing the label dispatches on
+    // the next tick with nothing else to change. With no free slot, the WIP stop above comes
+    // first and names none.
     if (world.fileOnly && eligible.length) {
       return {
         phase, actions: [],
         stopped: `file-only: the tracking issue carries \`${FILE_ONLY}\`, so this tick dispatches nothing to the implement lane. Eligible, dispatch disabled: ${eligible.map((i) => `#${i.number}`).join(', ')}. Remove the label and the next tick dispatches them`,
       };
     }
+    // BOUNDED BY THE TICK BUDGET AS WELL AS BY WIP (RA-1447). This sliced on `slots`
+    // alone, so `QA_LEAD_TICK_BUDGET` bounded only the FILE branch — the budget did
+    // not mean what its name says. Invisible while a tick reconciled one project and
+    // the budget defaulted to Infinity; it stops being invisible the moment the budget
+    // is SHARED across projects, because then one project could spend more than the
+    // whole tick was allowed and the next would still be asked for more.
     const actions = eligible.slice(0, Math.min(slots, budgetLeft))
       .map((i) => ({ kind: 'dispatch', number: i.number, title: i.title }));
     if (actions.length) return { phase, actions };
