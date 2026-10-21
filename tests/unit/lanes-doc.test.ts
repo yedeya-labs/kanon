@@ -493,12 +493,24 @@ describe("docs/lanes.md's cost figures each name their window and sample size (p
     expect(section).toMatch(/none ran on a key/);
   });
 
-  it("dates the backlog feeder's figure from the reference adopter, and sets Kanon's measured one beside it", () => {
+  // Owner decision 2026-10-21: the feeder's cost is Kanon's measured figure per implemented issue,
+  // the per-item table's, and its monthly estimate states the issues it assumes and the arithmetic.
+  it("prices the backlog feeder from Kanon's implemented-issue figure, with the month's arithmetic shown", () => {
     const feeder = doc.split('\n').find((l) => l.startsWith('**What it costs.** Each fed issue')) ?? '';
-    expect(feeder).toContain('measured on the reference adopter as read on 2026-10-08');
+    expect(feeder).not.toMatch(/\$15\b|\$450|reference adopter/);
     const kanon = moneyStatements(feeder).find((s) => s.startsWith('On Kanon')) ?? '';
     expect(kanon).toMatch(WINDOW);
     expect(kanon).toMatch(SAMPLE);
+    const item = section.split('\n').find((l) => l.startsWith('| An implemented issue |')) ?? '';
+    const [median, p90] = [...item.matchAll(/\$(\d+\.\d\d)/g)].map((m) => m[1]!);
+    expect(median && p90, 'the per-item table gives an implemented issue a median and a 90th percentile').toBeTruthy();
+    expect(kanon).toContain(`$${median} at API list price at the median and $${p90} at the 90th percentile`);
+    const sums = [...feeder.matchAll(/(\d+) × \$(\d+\.\d\d) = \$(\d+\.\d\d)/g)];
+    expect(sums.map((m) => m[2])).toEqual([median, p90]);
+    for (const [, n, each, total] of sums) {
+      expect(feeder).toContain(`assume ${n} fed issues a month`);
+      expect(Number(n) * Number(each), `${n} × $${each}`).toBeCloseTo(Number(total), 2);
+    }
   });
 
   it('fails a row or a sentence that loses its window or its sample (the checks are not vacuous)', () => {
