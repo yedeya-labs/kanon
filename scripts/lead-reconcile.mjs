@@ -204,7 +204,7 @@ const HELD_MARKER = '<!-- qa:lead-held -->';
  * a decision, and lost the filing with it.
  *
  * With this label every phase runs as usual and the reconcile phase adds no `agent:implement`:
- * it reports the issues it would have dispatched instead. An issue a person labels
+ * it reports the issues eligible for dispatch instead. An issue a person labels
  * `agent:implement` by hand is still dispatched by that label, and the tick reconciles it like
  * any other in-flight issue. Removing the label resumes dispatch on the next tick. `needs:human`
  * still outranks it: a held project does nothing at all.
