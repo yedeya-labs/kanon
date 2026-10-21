@@ -421,3 +421,91 @@ describe("docs/lanes.md's turn-budget table is each lane's default and ceiling (
     expect(between(read('docs/lanes.md'), '## The turn budget\n', '## Old spellings')).toContain(OPEN);
   });
 });
+
+/**
+ * Plan 0009 step A7: docs/lanes.md's "What a model run costs" states, per lane that runs a model,
+ * what a run costs at API list price and in tokens, measured on Kanon's own run rows. A cost figure
+ * is only as good as what it was measured over, so each one names its window and its sample size,
+ * a lane with no runs says why it isn't measured, and a sample too small for a 90th percentile
+ * says so rather than printing one.
+ */
+const WINDOW = /(\d{4}-\d\d-\d\d) to (\d{4}-\d\d-\d\d)/;
+const SAMPLE = /\b(\d[\d,]*) (runs?|pull requests|issues|items)\b/;
+const MONEY = /\$\d/;
+const TOO_FEW = 'too few runs for a 90th percentile';
+
+/** Every sentence of the section's prose and every row of its tables that states a dollar figure. */
+const moneyStatements = (section: string): string[] =>
+  section.split('\n')
+    .filter((l) => !l.startsWith('|---'))
+    .flatMap((l) => (l.startsWith('|') ? [l] : l.split(/(?<=\.)\s+(?=[A-Z[*])/)))
+    .filter((s) => MONEY.test(s));
+
+/** One cost row's failures, as messages; empty when it holds. */
+const costRowProblems = (row: string): string[] => {
+  const [lane, sample, money, tokens] = row.split('|').slice(1, -1).map((c) => c.trim());
+  const out: string[] = [];
+  if (sample!.startsWith('Not measured: ')) {
+    if (money !== '—' || tokens !== '—') out.push(`${lane}: not measured, yet it states a figure`);
+    return out;
+  }
+  const m = /^(\d+) runs?, (\d{4}-\d\d-\d\d) to (\d{4}-\d\d-\d\d)$/.exec(sample!);
+  if (!m) return [`${lane}: "${sample}" names no sample size and window`];
+  if (!(Number(m[1]) >= 1) || !(m[2]! < m[3]!)) out.push(`${lane}: the sample or window is empty`);
+  const few = Number(m[1]) < 10;
+  for (const [col, cell, figure] of [['money', money!, /^\$\d+\.\d\d/], ['tokens', tokens!, /^\d+(\.\d)?[kM]/]] as const) {
+    if (!figure.test(cell)) out.push(`${lane}: the ${col} cell "${cell}" starts with no median`);
+    if (few !== cell.includes(TOO_FEW)) out.push(`${lane}: the ${col} cell must say "${TOO_FEW}" exactly when fewer than 10 runs were measured`);
+    if (!few && !/\(\$?\d[\d.]*[kM]?\)$/.test(cell)) out.push(`${lane}: the ${col} cell gives no 90th percentile`);
+  }
+  return out;
+};
+
+describe("docs/lanes.md's cost figures each name their window and sample size (plan 0009 A7)", () => {
+  const doc = read('docs/lanes.md');
+  const section = between(doc, '## What a model run costs\n', '## Paying with an API key\n');
+  const rows = between(section, '<!-- lane-cost:table -->', '<!-- /lane-cost:table -->').split('\n').filter((l) => /^\| `agent-/.test(l));
+  const req = loadRequirements() as unknown as { lanes: Record<string, { claude?: string[] }> };
+  const modelLanes = Object.entries(req.lanes).filter(([, l]) => l.claude).map(([lane]) => `${lane}.yml`).sort();
+
+  it('has one row per lane that runs a model, and finds them, so the checks below are not vacuous', () => {
+    expect(modelLanes.length).toBeGreaterThanOrEqual(16);
+    expect(rows.map((r) => ticked(r)[0]).sort()).toEqual(modelLanes);
+    expect(rows.filter((r) => MONEY.test(r)).length).toBeGreaterThanOrEqual(5);
+  });
+
+  it.each(rows.map((r) => [ticked(r)[0], r]))('%s: its figures name their sample size and window, or say why it is not measured', (_lane, row) => {
+    expect(costRowProblems(row)).toEqual([]);
+  });
+
+  it('states no dollar figure, in a table or a sentence, without a window and a sample size', () => {
+    const statements = moneyStatements(section);
+    expect(statements.length).toBeGreaterThan(rows.filter((r) => MONEY.test(r)).length);
+    for (const s of statements) {
+      expect(s, `"${s}" names no window`).toMatch(WINDOW);
+      expect(s, `"${s}" names no sample size`).toMatch(SAMPLE);
+    }
+  });
+
+  it('says the key column is list price, and what the subscription column can and cannot say', () => {
+    expect(section).toContain('at API list price');
+    expect(section).toContain("doesn't publish the weekly limit as a number");
+    expect(section).toMatch(/none ran on a key/);
+  });
+
+  it("dates the backlog feeder's figure from the reference adopter, and sets Kanon's measured one beside it", () => {
+    const feeder = doc.split('\n').find((l) => l.startsWith('**What it costs.** Each fed issue')) ?? '';
+    expect(feeder).toContain('measured on the reference adopter as read on 2026-10-08');
+    const kanon = moneyStatements(feeder).find((s) => s.startsWith('On Kanon')) ?? '';
+    expect(kanon).toMatch(WINDOW);
+    expect(kanon).toMatch(SAMPLE);
+  });
+
+  it('fails a row or a sentence that loses its window or its sample (the checks are not vacuous)', () => {
+    expect(costRowProblems('| `agent-x.yml` | 12 runs | $1.00 ($2.00) | 1.0M (2.0M) |')).not.toEqual([]);
+    expect(costRowProblems('| `agent-x.yml` | 3 runs, 2026-10-07 to 2026-10-21 | $1.00 ($2.00) | 1.0M (2.0M) |')).not.toEqual([]);
+    expect(costRowProblems('| `agent-x.yml` | Not measured: no caller | $1.00 | — |')).not.toEqual([]);
+    expect(costRowProblems('| `agent-x.yml` | 12 runs, 2026-10-07 to 2026-10-21 | $1.00 ($2.00) | 1.0M (2.0M) |')).toEqual([]);
+    expect(moneyStatements('It cost $5 a day. Over 9 runs from 2026-10-07 to 2026-10-21 it cost $4.')).toEqual(['It cost $5 a day.', 'Over 9 runs from 2026-10-07 to 2026-10-21 it cost $4.']);
+  });
+});
