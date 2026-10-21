@@ -49,7 +49,7 @@ The "Its short and skipped runs" column is held to the lanes' jobs by [`tests/un
 
 Kanon is a busy repository: about twenty-five pull requests a day, nearly all of them the agents'. The report says how busy it was over the days measured. Every lane Kanon called through the window has its 7 days measured ([#807](https://github.com/yedeya-labs/kanon/issues/807)), except the issue backstop, whose caller Kanon added on 2026-10-20: its "Days measured" under one rests on its first hours, so read it as rough until the figures are refreshed. A lane Kanon doesn't call is not measured, and one whose caller didn't run in the window shows no runs.
 
-The triage lane shows how the sample is drawn ([#1211](https://github.com/yedeya-labs/kanon/issues/1211), below). Nearly all of its runs are skipped ones, about 600 in the window, and the 7 that lasted past a minute are its model runs. The report reads all 7, so triage measures about 8.3 runner-minutes a day. Before #1211, one sample of 100 runs across both groups missed every triage model run and measured the lane at 0.
+The triage lane shows how the sample is drawn ([#1211](https://github.com/yedeya-labs/kanon/issues/1211), below). Nearly all of its runs are skipped ones, about 600 in the window, and the 7 that lasted past a minute include its 6 model runs. The report reads all 7, so triage measures about 8.3 runner-minutes a day. Before #1211, one sample of 100 runs across both groups missed every triage model run and measured the lane at 0.
 
 <!-- actions-minutes:report -->
 
