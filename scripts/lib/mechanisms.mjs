@@ -29,7 +29,8 @@
 // mechanism table, or one headed otherwise, has no rows: then any bullet names no row.
 //
 // What else a row says, and whether an `installed` status is true, this module doesn't check:
-// Kanon's own record is held to its format by `tests/unit/adoption-record.test.ts`.
+// Kanon's own record is held to its format by `tests/unit/adoption-record.test.ts`, and each
+// row's status to what its workflows run by `tests/unit/adoption-mechanisms.test.ts`.
 //
 // Node built-ins only: `kanon doctor` imports it.
 
