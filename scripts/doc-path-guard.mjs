@@ -17,6 +17,9 @@
 //   1. A MARKDOWN LINK TARGET in any tracked `.md` — `[x](../y.md)` — resolves, relative
 //      to the linking file, to a tracked file or directory. The unambiguous subset: a link
 //      is a claim that a reader can follow it. 165 local links, 0 broken.
+//      Only what renders as a link counts: a `[x](y)` inside an inline code span is literal
+//      text, so code spans are blanked before links are read (kanon#1238). Rule 2 still
+//      reads inside them.
 //
 //   2. A PATH NAMED IN TEXT — `docs/…`, `scripts/…`, `.github/…` with a file extension —
 //      in any tracked markdown (minus the dated briefs) — `docs/**`, and also AGENTS.md,
@@ -63,6 +66,36 @@ import { codeAreasDefaults, isTestPath, readCodeAreas } from './lib/code-areas.m
 
 /** A markdown inline link or image target: `](target)` or `](target "title")`. */
 const LINK = /\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+
+/**
+ * The line with every inline code span blanked to spaces, so rule 1 reads only links that
+ * render as links (kanon#1238): `[x](y)` inside backticks is literal text. CommonMark's rule:
+ * a run of N backticks opens a span that only a run of exactly N closes, so a double-backtick
+ * span may hold a single backtick, and a run with no matching closer is literal text, not a
+ * span. Rule 2 does NOT read through this — a path in backticks is its common case.
+ */
+export const blankCodeSpans = (line) => {
+  let out = '';
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] !== '`') { out += line[i]; i += 1; continue; }
+    let open = i;
+    while (line[open] === '`') open += 1;
+    const n = open - i;
+    let close = -1;
+    for (let k = open; k < line.length;) {
+      if (line[k] !== '`') { k += 1; continue; }
+      let end = k;
+      while (line[end] === '`') end += 1;
+      if (end - k === n) { close = end; break; }
+      k = end;
+    }
+    if (close === -1) { out += line.slice(i, open); i = open; continue; }
+    out += ' '.repeat(close - i);
+    i = close;
+  }
+  return out;
+};
 
 /** Rule 2's path shape. The look-behind keeps it off the tail of a longer path or URL. */
 const TEXT_PATH = /(?<![\w./@~-])((?:docs|scripts|\.github)\/[\w./[\]-]*[\w\]]\.(?:md|mjs|cjs|js|ts|tsx|py|go|yml|yaml|sh|json))(?![\w/])/g;
@@ -193,7 +226,7 @@ export const auditPaths = (files, readFile, tracked, exemptions, areas) => {
       if (skip.has(i)) return;
       const at = `${file}:${i + 1}`;
       if (isMd) {
-        for (const m of line.matchAll(LINK)) {
+        for (const m of blankCodeSpans(line).matchAll(LINK)) {
           const raw = m[1];
           if (isExternal(raw) || raw.startsWith('<')) continue;
           const fragment = raw.includes('#') ? raw.slice(raw.indexOf('#') + 1) : '';
