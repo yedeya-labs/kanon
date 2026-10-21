@@ -59,6 +59,8 @@ const SITES: Site[] = [
   { file: 'scripts/lib/lane-caller.mjs', line: "l.startsWith('agent-')", reaches: 'callers' },
   { file: 'scripts/lead-reconcile.mjs', line: "'--workflow', deploy.workflow,", reaches: 'declared' },
   { file: 'scripts/review-recovery.mjs', line: "'--workflow', 'ci.yml'", reaches: 'ci.yml' },
+  // The dispatch sweep's review re-ask waits for CI on a head, as the review lane's filter does (kanon#1197).
+  { file: 'scripts/review-reask.mjs', line: "'--workflow', 'ci.yml'", reaches: 'ci.yml' },
   { file: 'scripts/workflow-health.mjs', line: "f.startsWith('agent-')", reaches: 'callers' },
   { file: 'scripts/workflow-health.mjs', line: "'--workflow', file,", reaches: 'callers' },
   { file: 'scripts/workflow-health.mjs', line: 'actions/workflows/${encodeURIComponent(file)}', reaches: 'callers' },
@@ -138,8 +140,8 @@ describe('every workflow Kanon reaches by file name is one K-LAYOUT-18 fixes', (
     }
   });
 
-  it('the lanes that read CI declare it: the review lane and the reconciler', () => {
-    expect(LANES.filter((l) => declaredReads(l).includes('ci.yml')).sort()).toEqual(['agent-lead-reconcile.yml', 'agent-review.yml']);
+  it('the lanes that read CI declare it: the review lane, the reconciler and the dispatch sweep', () => {
+    expect(LANES.filter((l) => declaredReads(l).includes('ci.yml')).sort()).toEqual(['agent-dispatch-sweep.yml', 'agent-lead-reconcile.yml', 'agent-review.yml']);
   });
 });
 

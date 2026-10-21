@@ -56,7 +56,13 @@
 # Lead's row in the App register + these secrets (plan 0001 §8):
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY
 # The Author App (the Lead's) needs `Issues: write`, `Pull requests: read` and `Actions: read`
-# (the run that triggered each telemetry row, and the run artifacts without a store).
+# (the run that triggered each telemetry row, the run artifacts without a store, and the Review
+# and CI runs on a head whose review it re-asks).
+#
+# `lane-check` requires the workflow on the line below (K-LAYOUT-18): the review re-ask waits
+# for CI to settle on a head, and asks Actions about that file's runs, as the review lane's
+# filter does (`scripts/review-reask.mjs`, kanon#1197).
+# READS WORKFLOW: ci.yml
 # KANON ROLE: Lead
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
 # role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
@@ -276,9 +282,11 @@ jobs:
           client-id: ${{ secrets.AUTHOR_APP_ID }}
           private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           # Narrowed to what the sweep uses (`K-AGENT-46`): it comments on, labels and
-          # re-labels issues, and takes `gate-candidate` off a decided one (`issues`), lists
-          # the open pull requests that close them (`pull-requests`), and reads the run behind
-          # each cost row, and the run artifacts without a store (`actions`).
+          # re-labels issues, takes `gate-candidate` off a decided one, and comments on and
+          # re-labels a pull request whose review it re-asks (`issues`), lists the open pull
+          # requests that close them and the ones awaiting a review (`pull-requests`), and reads
+          # the run behind each cost row, the run artifacts without a store, and a re-asked
+          # head's Review and CI runs (`actions`).
           permission-issues: write
           permission-pull-requests: read
           permission-actions: read
@@ -347,3 +355,17 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           APPLY: ${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}
         run: node "$KANON/scripts/gate-candidate-exit.mjs"
+
+      # THE REVIEW RE-ASK (kanon#1197). Not a dispatch of an issue, but the same kind of job: a
+      # re-delivery on a timer, on this job's Lead token, with no grant of its own. For each open
+      # `review:please` pull request with no Reviewer review on its head, no Review run pending on
+      # it and CI completed, it posts one marker comment naming the head and removes and re-adds
+      # the label, which starts the review lane. Once per head: the marker is the bound.
+      # `scripts/review-reask.mjs` says what it re-asks. `!cancelled()`, as for the steps above.
+      - name: Re-ask the review on a labelled pull request with none on its head
+        if: ${{ !cancelled() && steps.app-token.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          APPLY: ${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}
+        run: node "$KANON/scripts/review-reask.mjs"
