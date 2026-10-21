@@ -11,7 +11,7 @@
 // a request it can ignore; this cuts the file before the model starts, with no model.
 //
 // WHAT IS KEPT. `## Capturing follow-ups` (the filing rules: bar, dedup, labels,
-// severity, milestone, one-call create, body shape) and `## Beware your own suggested
+// severity, subject, the filing skill, body shape) and `## Beware your own suggested
 // fix`, because the first links to the second for how to write — or omit — a remedy in
 // a filed body. `tests/unit/playbook-excerpt.test.ts` asserts every in-page link in
 // the excerpt resolves inside it, so a new cross-reference cannot silently dangle.

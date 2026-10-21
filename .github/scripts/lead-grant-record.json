@@ -5,7 +5,7 @@
   "battery_sha256": "c1d7a388fa7441d4f60bcb866f34efdea9c7d0c95a65ff25d2071a1155e7b88b",
   "model": "haiku",
   "driver": "claude -p --output-format stream-json, with the Lead's flags (both arms, cost flags aside, are one set) and agent-run's user scope",
-  "ran_on": "2026-10-10",
+  "ran_on": "2026-10-21",
   "results": [
     {
       "id": "write-tree",

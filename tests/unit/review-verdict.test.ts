@@ -983,6 +983,9 @@ describe("the Reviewer's shell is an allow-list that runs no PR code (kanon#248)
     'Bash(gh pr review:*)', 'Bash(gh pr edit:*)',
     'Bash(gh issue view:*)', 'Bash(gh issue list:*)', 'Bash(gh issue create:*)', 'Bash(gh label list:*)',
     'Bash(gh run view:*)', 'Bash(gh run list:*)', 'Bash(gh search:*)', 'Bash(gh api:*)',
+    // kanon#164: the filing skill's plan command, by name. A wrapper the job writes runs Kanon's
+    // script and nothing else (the next describe runs it).
+    'Bash(kanon-plan:*)',
   ];
 
   it('grants exactly the pinned list', () => {
@@ -1066,6 +1069,51 @@ describe("the Reviewer's shell is an allow-list that runs no PR code (kanon#248)
     expect(prompt).toContain('No process substitution (`diff <(…)`)');
     expect(prompt).toContain('No pipe into `sort` or another command');
     expect(prompt).toContain('`grep -f` and `git diff --color-moved` were refused');
+  });
+});
+
+/**
+ * kanon#164 — the Reviewer files its follow-ups through the filing skill, whose plan command is
+ * `node "$KANON/scripts/issue-triage-defaults.mjs" plan`. Its allow-list names no interpreter and
+ * no path behind a variable, so the job puts one wrapper on the PATH, `kanon-plan`, as the Lead's
+ * lanes do for their scripts. These run the step and then the wrapper it writes: it runs Kanon's
+ * own script, with `plan` fixed as its first argument, so the one rule the list gains runs
+ * nothing else.
+ */
+describe("the Reviewer's plan command is one wrapper around Kanon's script (kanon#164)", SPAWNS, () => {
+  type S = { id?: string; name?: string; uses?: string; if?: string; env?: Record<string, string>; run?: string };
+  const steps = wf.jobs.review.steps as S[];
+  const wrap = steps.find((x) => x.name === "Put the filing skill's plan command on the agent's PATH")!;
+
+  it('runs after the kanon step, before the agent, from the kanon step\'s output', () => {
+    expect(steps.indexOf(wrap)).toBeGreaterThan(steps.findIndex((x) => x.id === 'kanon'));
+    expect(steps.indexOf(wrap)).toBeLessThan(steps.findIndex((x) => x.id === 'agent'));
+    expect(wrap.env!.KANON_ROOT).toBe('${{ steps.kanon.outputs.path }}');
+  });
+
+  it('writes kanon-plan, which runs the planning module\'s plan and nothing else', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'review-plan-'));
+    const r = runWorkflowStep(wrap as Parameters<typeof runWorkflowStep>[0], {
+      dir, env: { KANON_ROOT: process.cwd(), RUNNER_TEMP: dir },
+    });
+    expect(r.status).toBe(0);
+    const bin = r.pathFile.trim();
+    expect(bin).toBe(join(dir, 'kanon-bin'));
+    const run = (...args: string[]) => {
+      try {
+        return { code: 0, out: execFileSync(join(bin, 'kanon-plan'), args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
+      } catch (e) {
+        const err = e as { status: number; stdout: string };
+        return { code: err.status, out: err.stdout };
+      }
+    };
+    const planned = run('--label', 'follow-up', '--label', 'agent:reviewer', '--label', 'sev:low', '--subject', 'product');
+    expect(planned.code).toBe(0);
+    expect(JSON.parse(planned.out)).toHaveProperty('ghArgs');
+    // A follow-up with no severity is refused, as the skill says (exit 1, `{refused}`).
+    expect(run('--label', 'follow-up', '--label', 'agent:reviewer').code).toBe(1);
+    // `plan` is fixed: a word that would pick the backstop's mode is a flag plan does not take.
+    expect(run('decide').code).toBe(2);
   });
 });
 

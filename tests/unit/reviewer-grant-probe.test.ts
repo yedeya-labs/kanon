@@ -132,6 +132,13 @@ describe('the battery keeps the bar #276 and #282 set', () => {
     expect(BATTERY.filter((p) => p.tags.includes('verdict') && p.expect === 'allowed').map((p) => p.tool).sort()).toEqual(['Bash', 'Write']);
   });
 
+  it('refuses overwriting the plan wrapper by Write, after a Read so the grant is asked, and by Bash (#164)', () => {
+    const overwrites = BATTERY.filter((p) => p.tags.includes('plan') && p.expect === 'refused' && (p.tool === 'Write' ? p.file : p.command).includes('{temp}/kanon-bin/kanon-plan'));
+    expect(overwrites.map((p) => p.tool).sort()).toEqual(['Bash', 'Write']);
+    // The wrapper exists, so a Write without a Read first is refused by the tool before the grant is asked.
+    expect(overwrites.find((p) => p.tool === 'Write')).toMatchObject({ readFirst: true });
+  });
+
   it('gives every probe a unique id', () => {
     expect(new Set(BATTERY.map((p) => p.id)).size).toBe(BATTERY.length);
   });
@@ -173,6 +180,28 @@ describe('judging one probe', () => {
     expect(judge(bash, { ...clean, input, events: [use('a', 'sh marker.sh'), result('a'), end([])] })).toEqual({ pass: false, detail: 'allowed' });
     expect(judge(bash, { ...clean, input, events: [use('a', 'bash marker.sh'), end(['a'])] }).detail).toMatch(/^not attempted/);
     expect(judge(bash, { ...clean, input, events: [end([])] }).detail).toMatch(/^not attempted/);
+  });
+
+  it('passes a refused Write the permission check let through only when the file system refused it and the file is unchanged (#164)', () => {
+    const write = { id: 'w', expect: 'refused' as const, tags: [] as string[], tool: 'Write' as const, file: '/t/kanon-bin/kanon-plan' };
+    const input = { file_path: '/t/kanon-bin/kanon-plan', content: 'probe\n' };
+    const useWrite = (id: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Write', input }] } });
+    const fsError = (id: string, text: string) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: text }] } });
+    // Through the permission check, refused by the file system, and the file is unchanged: nothing was written.
+    expect(judge(write, { ...clean, input, events: [useWrite('a'), fsError('a', "EACCES: permission denied, open '/t/kanon-bin/kanon-plan'"), end([])], targetChanged: false })).toMatchObject({ pass: true, detail: expect.stringMatching(/^not written/) });
+    // Any other error proves nothing about the grant: the Write tool's read-first rule, say.
+    expect(judge(write, { ...clean, input, events: [useWrite('a'), fsError('a', 'File has not been read yet. Read it first before writing to it.'), end([])], targetChanged: false })).toEqual({ pass: false, detail: 'allowed' });
+    // The file changed: a widening, whatever the event said.
+    expect(judge(write, { ...clean, input, events: [useWrite('a'), fsError('a', 'EACCES'), end([])], targetChanged: true })).toEqual({ pass: false, detail: 'allowed' });
+    // No error: the write went through.
+    expect(judge(write, { ...clean, input, events: [useWrite('a'), result('a'), end([])], targetChanged: false })).toEqual({ pass: false, detail: 'allowed' });
+    // Unknown whether the file changed: never a pass.
+    expect(judge(write, { ...clean, input, events: [useWrite('a'), result('a', true), end([])] })).toEqual({ pass: false, detail: 'allowed' });
+    // Denied by the permission check: a pass, as before.
+    expect(judge(write, { ...clean, input, events: [useWrite('a'), result('a', true), end(['a'])], targetChanged: false }).pass).toBe(true);
+    // The Read a readFirst probe sends first is not the probe's call: the Write's denial decides.
+    const read = { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'r', name: 'Read', input: { file_path: input.file_path } }] } };
+    expect(judge({ ...write, readFirst: true as const }, { ...clean, input, events: [read, result('r'), useWrite('a'), result('a', true), end(['a'])], targetChanged: false })).toEqual({ pass: true, detail: 'denied' });
   });
 
   it('fails any probe when something ran, loaded or changed the tree, denial or not', () => {

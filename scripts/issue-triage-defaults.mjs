@@ -66,7 +66,7 @@
  * was a filer's subject (`K-WORK-4`), which `plan()` now takes from the filer (migration step 2).
  *
  * THE FILING SKILL (kanon#164, migration step 2): `skills/file-issue/SKILL.md` is how a filer
- * asks `plan()`. The Explorer's sweep, the code audit, verify-acs and merge-reconcile file through it; the other filers move one at a time.
+ * asks `plan()`. The Explorer's sweep, the code audit, verify-acs, merge-reconcile and the Reviewer file through it; the Lead's reconciler moves last.
  *
  * Exercised by tests/unit/issue-triage-defaults.test.ts. Run it locally exactly
  * as the workflow does:
