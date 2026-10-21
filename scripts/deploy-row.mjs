@@ -26,6 +26,13 @@
 // self-review unticked lists as `skipped`) admitted it, so anything else is `failed`. A waiting
 // job whose run was cancelled concludes `cancelled`, at `approval`.
 //
+// LIVE, SMOKE FAILED (plan 0013 §6, §7.1). The reset and smoke steps continue on error, so once
+// the deploy hook succeeded the deploy job succeeds, and the step outcomes it outputs
+// (`reset-outcome`, `smoke-outcome`) are read before `ok`: a failed reset is `smoke_failed` at
+// `reset`, a failed smoke check `smoke_failed` at `smoke`. A row that carries the reset's
+// `reset_ms`, or stops at `reset`, is written at version 2 (plan 0013 §8); every other row stays
+// at version 1, so an intake from before version 2 still takes it.
+//
 // WHAT THE ROW CARRIES (§10): the environment's role and position, never its name; no commit, no
 // tag, no URL. The row is validated with the schema before it is written: a row that fails is a
 // bug here, and the step fails by field name, never by echoing a value (ADR 0007).
@@ -109,6 +116,17 @@ export function rejectedIn(approvals, environment) {
 }
 
 /**
+ * A failed reset or smoke check, from the deploy job's step outcomes, or `null` when neither failed.
+ * @param {Record<string, string | undefined>} o the deploy job's outputs
+ * @returns {Ending | null}
+ */
+const smokeEnding = (o) => {
+  if (o['reset-outcome'] === 'failure') return { outcome: 'smoke_failed', failed_stage: 'reset' };
+  if (o['smoke-outcome'] === 'failure') return { outcome: 'smoke_failed', failed_stage: 'smoke' };
+  return null;
+};
+
+/**
  * How one environment's call ended.
  * @param {{ declare?: JobResult, deploy?: JobResult, approvals?: () => unknown, environment: string }} o
  *   `approvals` is read only when the deploy job failed before its first step.
@@ -124,15 +142,19 @@ export function classifyEnvironment({ declare, deploy, approvals = () => [], env
   const started = Boolean(o['started-at']);
   switch (deploy?.result) {
     case 'success':
-      return { outcome: 'ok' };
+      // LIVE, SMOKE FAILED (plan 0013 §7.1): the reset and smoke steps continue on error, so a
+      // job whose deploy hook succeeded succeeds whatever they said. Their outcomes are read
+      // before `ok`, the reset's first, since a failed reset skips the smoke check.
+      return smokeEnding(o) ?? { outcome: 'ok' };
     case 'failure':
       if (refusalOf(deploy)) return stopped(deploy, 'deploy');
       if (!started) return rejectedIn(approvals(), environment) ? { outcome: 'rejected', failed_stage: 'approval' } : { outcome: 'failed', failed_stage: 'approval' };
       if (o['build-failed'] === 'true') return { outcome: 'failed', failed_stage: 'build' };
-      if (o['smoke-outcome'] === 'failure') return { outcome: 'smoke_failed', failed_stage: 'smoke' };
-      return { outcome: 'failed', failed_stage: 'deploy' };
+      // A job from before plan 0013, whose smoke step failed it.
+      return smokeEnding(o) ?? { outcome: 'failed', failed_stage: 'deploy' };
     case 'cancelled':
-      return { outcome: 'cancelled', failed_stage: o['deploy-ended-at'] ? 'smoke' : started ? 'deploy' : 'approval' };
+      // After the deploy hook ended: in the reset when it ran and didn't finish, else in the smoke check.
+      return { outcome: 'cancelled', failed_stage: o['deploy-ended-at'] ? (o['reset-outcome'] === 'cancelled' ? 'reset' : 'smoke') : started ? 'deploy' : 'approval' };
     default:
       // Skipped after its declaration passed: it never reached a runner.
       return { outcome: 'cancelled', failed_stage: 'approval' };
@@ -147,11 +169,21 @@ export const between = (/** @type {string | undefined} */ from, /** @type {strin
 };
 
 /**
- * One row, validated. Undefined fields are left out.
+ * The deploy row's version (plan 0013 §8): 2 when the row carries the reset hook's duration or
+ * stops at its stage, else 1, so a row an intake from before version 2 can store is still written
+ * as one (plan 0002 §2.2).
+ * @param {Record<string, unknown>} fields
+ */
+export const rowVersion = (fields) => (fields.reset_ms !== undefined || fields.failed_stage === 'reset' ? 2 : 1);
+
+/**
+ * One row, validated, at the version its fields need. Undefined fields are left out.
  * @param {Record<string, unknown>} fields
  */
 export function buildRow(fields) {
-  const row = Object.fromEntries(Object.entries({ schema_version: 1, row_kind: 'deploy', tag: 'run', ...fields }).filter(([, v]) => v !== undefined && v !== ''));
+  const kept = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined && v !== ''));
+  /** @type {Record<string, any>} */
+  const row = { schema_version: rowVersion(kept), row_kind: 'deploy', tag: 'run', ...kept };
   const v = validate(row);
   if (!v.ok) throw new Error(`the deploy row doesn't validate: ${describeErrors(v.errors)}`);
   return row;
@@ -197,6 +229,25 @@ const buildMs = (text) => {
     return undefined;
   }
 };
+
+/** The reset step's outcomes that mean it ran (plan 0013 §6). */
+const RESET_RAN = Object.freeze(['success', 'failure', 'cancelled']);
+
+/**
+ * The reset hook's and the smoke hook's durations, from the deploy job's marks. The reset runs
+ * from the deploy's end to its own mark; the smoke check from there, or from the deploy's end when
+ * no reset ran, to the job's end. A reset that failed or was cancelled ran no smoke check, so the
+ * row carries no `smoke_ms`.
+ * @param {Record<string, string | undefined>} o the deploy job's outputs
+ */
+export function hookTimes(o) {
+  const ran = RESET_RAN.includes(String(o['reset-outcome'] ?? ''));
+  if (!ran) return { smoke_ms: between(o['deploy-ended-at'], o['ended-at']) };
+  return {
+    reset_ms: between(o['deploy-ended-at'], o['reset-ended-at'] || o['ended-at']),
+    smoke_ms: o['reset-outcome'] === 'success' ? between(o['reset-ended-at'], o['ended-at']) : undefined,
+  };
+}
 
 /**
  * Whether this environment's call writes no row because it is HELD (kanon#894): production on a
@@ -246,7 +297,7 @@ export function environmentRow(env, { now = new Date(), api = ghApi } = {}) {
     wait_ms: between(runStarted, o['started-at']),
     build_ms: buildMs(env.BUILD),
     deploy_ms: between(o['deploy-started-at'], o['deploy-ended-at']),
-    smoke_ms: between(o['deploy-ended-at'], o['ended-at']),
+    ...hookTimes(o),
     duration_ms: between(o['started-at'], o['ended-at']),
     since_release_ms: between(d['published-at'], o['ended-at']),
   });

@@ -46,7 +46,7 @@ describe('requirements.json', () => {
     });
   });
 
-  it("names the deploy lane's workflows, the grant each caller job makes, its three hooks with their inputs, its one environment secret, the secrets it declares and its declaration (plan 0010 §12, D4, D5, kanon#1049)", () => {
+  it("names the deploy lane's workflows, the grant each caller job makes, its three hooks and its optional fourth with their inputs, its one environment secret, the secrets it declares and its declaration (plan 0010 §12, D4, D5, kanon#1049)", () => {
     // `kanon init` writes the deploy caller (D6) and `kanon doctor` checks it (D7) from this entry.
     const deploy = built.deploy as Record<string, unknown>;
     expect(deploy.workflows).toEqual({ release: 'deploy-release', environment: 'deploy' });
@@ -62,6 +62,10 @@ describe('requirements.json', () => {
       { path: '.github/actions/deploy/action.yml', inputs: ['artifact', 'environment', 'environments', 'probe', 'release', 'role', 'sha'] },
       { path: '.github/actions/smoke/action.yml', inputs: ['environment', 'release', 'role'] },
     ]);
+    // The fourth, optional (plan 0013 §6): the reset hook, whose step runs only when its file
+    // exists. Listed apart, so no `kanon init` writes it a stub and no `kanon doctor` from before
+    // it asks for it.
+    expect(deploy.optionalHooks).toEqual([{ path: '.github/actions/smoke-reset/action.yml', inputs: ['environment', 'release', 'role'] }]);
     expect(deploy.environmentSecrets).toEqual(['KANON_DEPLOY_SECRET']);
     // deploy.yml declares it beside the announcement's, both optional, so the caller maps it by
     // name and GitHub resolves it in the deploy job's scope, the environment's first (kanon#1049).

@@ -278,19 +278,19 @@ describe('a failed deploy posts too (the Owner\'s decision of 2026-10-15)', () =
     expect(g.requests).toEqual([]);
   });
 
-  it('is a warning on any other environment, and a smoke failure says so', async () => {
+  it('is a warning on any other environment', async () => {
     const g = fakeGithub();
-    expect(await produce({ env: { ...FAIL, STAGE: 'staging', ROLE: 'pre-production', OUTCOME: 'smoke_failed', FAILED_STAGE: 'smoke', ISSUE: '' }, io: g.io, out: g.out })).toBe(0);
+    expect(await produce({ env: { ...FAIL, STAGE: 'staging', ROLE: 'pre-production', ISSUE: '' }, io: g.io, out: g.out })).toBe(0);
     const m = JSON.parse(g.files['message.json'] ?? '');
     expect(validate(m)).toEqual({ ok: true });
-    expect(m).toMatchObject({ severity: 'warning', title: 'v0.1.3 failed its smoke check on staging' });
+    expect(m).toMatchObject({ severity: 'warning', title: 'v0.1.3 failed to deploy to staging' });
     expect(m.links).toEqual([{ label: 'Run', url: RUN }]);
     expect(failureSeverity('production')).toBe('critical');
     expect(failureSeverity('pre-production')).toBe('warning');
   });
 
   it('keeps text nobody controls literal', () => {
-    const m = buildFailureMessage({ repo: REPO, stage: 'prod_eu', role: 'production', version: 'v1.0.0', outcome: 'failed', failedStage: 'build', runUrl: RUN });
+    const m = buildFailureMessage({ repo: REPO, stage: 'prod_eu', role: 'production', version: 'v1.0.0', failedStage: 'build', runUrl: RUN });
     expect(validate(m)).toEqual({ ok: true });
     expect(m.summary).toContain('**prod\\_eu**');
   });
@@ -300,6 +300,61 @@ describe('a failed deploy posts too (the Owner\'s decision of 2026-10-15)', () =
     expect(await produce({ env: { ...ENV, OUTCOME: outcome }, io: g.io, out: g.out })).toBe(0);
     expect(g.files).toEqual({ 'out.txt': 'message=\n' });
     expect(g.requests).toEqual([]);
+  });
+});
+
+describe('live, smoke failed: the landed message, flagged (plan 0013 §7.2, `K-SHIP-10`)', () => {
+  const SMOKE = { ...ENV, OUTCOME: 'smoke_failed', FAILED_STAGE: 'smoke', ISSUE: '51', SHA: 'abc1234def' };
+  const message = (g: ReturnType<typeof fakeGithub>) => JSON.parse(g.files['message.json'] ?? 'null');
+
+  it('says the release is live and its smoke check failed, with the same sections a landed deploy gets, critical on production', async () => {
+    const g = fakeGithub([OWN, { id: 99, ref: 'v0.1.2', sha: SHA(2), state: 'success' }]);
+    expect(await produce({ env: SMOKE, io: g.io, out: g.out })).toBe(0);
+    const m = message(g);
+    expect(validate(m)).toEqual({ ok: true });
+    expect(m).toMatchObject({ kind: 'deploy', severity: 'critical', title: 'v0.1.3 is live on production, and its smoke check failed' });
+    expect(m.summary).toBe("**v0.1.3** is now live on **production**. Build `abc1234`. The smoke check failed: the release is live and unchecked, and the environments after **production** don't start.");
+    // The flag first, then what went live, exactly as an `ok` deploy lists it.
+    expect(m.sections.map((s: Any) => s.heading)).toEqual(['Smoke check', 'Features', 'Fixes', 'Maintenance']);
+    expect(m.sections[0].fields).toEqual([{ label: 'Smoke check', value: 'failed at smoke' }]);
+    const landed: Any = buildDeployMessage({ repo: REPO, stage: 'production', runUrl: RUN, releases: [release(3)] });
+    expect(m.sections.slice(1)).toEqual(landed.sections);
+    expect(m.links).toEqual([
+      { label: 'Run', url: RUN },
+      { label: 'Smoke issue #51', url: `https://github.com/${REPO}/issues/51` },
+      { label: 'Release notes', url: `https://github.com/${REPO}/releases/tag/v0.1.3` },
+    ]);
+    expect(JSON.stringify(m)).not.toMatch(/failed to deploy|did not deploy/);
+  });
+
+  it('is a warning elsewhere, and a failed reset says the smoke check did not run', async () => {
+    const g = fakeGithub();
+    expect(await produce({ env: { ...SMOKE, STAGE: 'staging', ROLE: 'pre-production', FAILED_STAGE: 'reset', ISSUE: '' }, io: g.io, out: g.out })).toBe(0);
+    const m = message(g);
+    expect(validate(m)).toEqual({ ok: true });
+    expect(m).toMatchObject({ severity: 'warning', title: 'v0.1.3 is live on staging, and its smoke check failed' });
+    expect(m.summary).toContain("The reset hook failed, so the smoke check didn't run");
+    expect(m.sections[0].fields).toEqual([{ label: 'Smoke check', value: 'failed at reset' }]);
+    expect(m.links.map((l: Any) => l.label)).toEqual(['Run', 'Release notes']);
+  });
+
+  it('is never skipped: a redeploy of the live release names it alone', async () => {
+    const g = fakeGithub([OWN, { id: 99, ref: 'v0.1.3', sha: SHA(3), state: 'success' }]);
+    expect(await produce({ env: SMOKE, io: g.io, out: g.out })).toBe(0);
+    expect(message(g).title).toBe('v0.1.3 is live on production, and its smoke check failed');
+    expect(g.files['out.txt']).toBe('message=message.json\n');
+  });
+
+  it('a range says the smoke check of the range failed', async () => {
+    const g = fakeGithub([OWN, { id: 99, ref: 'v0.1.1', sha: SHA(1), state: 'success' }]);
+    expect(await produce({ env: SMOKE, io: g.io, out: g.out })).toBe(0);
+    expect(message(g).title).toBe('v0.1.2 to v0.1.3 (2 releases) are live on production, and the smoke check failed');
+  });
+
+  it('MUTATION: announcing a `smoke_failed` with the failure template reads "failed to deploy" and drops the sections', () => {
+    const failure: Any = buildFailureMessage({ repo: REPO, stage: 'production', role: 'production', version: 'v0.1.3', failedStage: 'smoke', runUrl: RUN });
+    expect(failure.title).toBe('v0.1.3 failed to deploy to production');
+    expect(failure.sections.map((s: Any) => s.heading)).not.toContain('Features');
   });
 });
 

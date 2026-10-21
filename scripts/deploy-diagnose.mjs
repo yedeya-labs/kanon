@@ -4,7 +4,8 @@
 // `actions: read` and `issues: read`.
 //
 // THE ISSUES ARE THE ONES THE RUN'S `report` JOBS WROTE ON (plan 0010 §8). `scripts/deploy-report.mjs`
-// keeps one open issue per environment, titled `Deploy to <environment> failed` and labelled `bug`,
+// keeps one open issue per environment, titled `Deploy to <environment> failed` and labelled `bug`
+// (and, for a live release whose reset or smoke check failed, `Smoke check on <environment> failed`),
 // and every issue it files or comments on after a failure ends with the line `Run: <the run's
 // link>`, written with the workflow token, so by `github-actions[bot]`. An issue is this run's when
 // it is open, carries exactly that title and the `bug` label, and its body or a comment made since
@@ -33,8 +34,17 @@ import { isCliEntry } from './lib/cli-entry.mjs';
 
 /** The author of what the `report` jobs write: the workflow token's. */
 export const REPORT_AUTHOR = 'github-actions[bot]';
-/** The title the `report` jobs give an environment's issue (`issueTitle` in deploy-report.mjs). */
-export const TITLE = /^Deploy to (.+) failed$/;
+/**
+ * The titles the `report` jobs give an environment's issues: the deploy issue (`issueTitle` in
+ * deploy-report.mjs) and the smoke issue (`smokeIssueTitle`, plan 0013 §7.2), each with the
+ * environment's name as its one group.
+ */
+export const TITLE = /^(?:Deploy to (.+) failed|Smoke check on (.+) failed)$/;
+/** The environment an issue's title names, or `undefined`. @param {unknown} title */
+const environmentOf = (title) => {
+  const m = TITLE.exec(String(title ?? ''));
+  return m ? m[1] ?? m[2] : undefined;
+};
 /** The lines kept from the end of each failed job's log, and the most characters handed on in all. */
 export const LOG_LINES = 150;
 export const LOG_CHARS = 60_000;
@@ -81,7 +91,7 @@ export function reportedIssues({ api, repo, url, since }) {
     const filed = byReport(i.user) && namesRun(i.body, url);
     const commented = filed || pages(api, `repos/${repo}/issues/${i.number}/comments?since=${encodeURIComponent(since)}`)
       .some((c) => byReport(c?.user) && namesRun(c?.body, url));
-    if (filed || commented) hits.push({ number: Number(i.number), environment: /** @type {string} */ (TITLE.exec(i.title)?.[1]) });
+    if (filed || commented) hits.push({ number: Number(i.number), environment: /** @type {string} */ (environmentOf(i.title)) });
   }
   return hits.sort((a, b) => a.number - b.number);
 }
@@ -100,7 +110,10 @@ export const tail = (text, n = LOG_LINES) => String(text ?? '').replace(/\r/g, '
 
 /**
  * The failed jobs of the run's attempt, and the tail of each one's log, cut to `LOG_CHARS` in all.
- * A log that can't be read says so in its place.
+ * A log that can't be read says so in its place. LIVE, SMOKE FAILED (plan 0013 §7.1): a failed
+ * reset or smoke check leaves `<environment> / deploy` green and fails `<environment> / verdict`,
+ * whose log says only that; the hooks' output is in the deploy job's log, so a failed verdict
+ * brings its environment's deploy job in, right before it.
  * @param {{ api: import('./deploy-gate.mjs').Api, repo: string, id: string | number, attempt: string | number }} o
  */
 export function failedLogs({ api, repo, id, attempt }) {
@@ -111,7 +124,12 @@ export function failedLogs({ api, repo, id, attempt }) {
     jobs.push(...list);
     if (list.length < 100) break;
   }
-  const failed = jobs.filter((j) => j?.conclusion === 'failure');
+  const failed = jobs.flatMap((j) => {
+    if (j?.conclusion !== 'failure') return [];
+    const verdict = /^(.+) \/ verdict$/.exec(String(j.name ?? ''));
+    const deploy = verdict ? jobs.find((d) => d?.name === `${verdict[1]} / deploy` && d?.conclusion !== 'failure') : undefined;
+    return deploy ? [deploy, j] : [j];
+  });
   let left = LOG_CHARS;
   const blocks = [];
   for (const j of failed) {
@@ -155,7 +173,7 @@ if (isCliEntry(import.meta.url)) {
   out(`rules=${commentRules(issues.map((i) => i.number))}\n`);
   if (!issues.length) {
     out(output('log', ''));
-    say(`Deploy diagnose: no open \`Deploy to <environment> failed\` issue names ${url}, so there is nothing to diagnose.`);
+    say(`Deploy diagnose: no open \`Deploy to <environment> failed\` or \`Smoke check on <environment> failed\` issue names ${url}, so there is nothing to diagnose.`);
   }
   else {
     const { jobs, log } = failedLogs({ api: ghApi, repo, id: env.RUN_ID, attempt: env.RUN_ATTEMPT });
