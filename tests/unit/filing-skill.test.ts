@@ -1,11 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { BUCKET_MILESTONES, PLAN_FLAGS, cli } from '../../scripts/issue-triage-defaults.mjs';
 import { readFlattened } from './helpers/called-workflow.js';
 import { effectiveSteps } from './helpers/spine.js';
-import { agentPrompt, type WorkflowStep } from './helpers/workflow-step.js';
+import { agentPrompt, agentStep, type WorkflowStep } from './helpers/workflow-step.js';
 
 /**
  * #164, step 2: the filing skill, and the filers moved onto it (`K-WORK-8`: the routing rule has
@@ -224,6 +224,29 @@ describe('each filer moved onto the skill files through it, and restates no rout
     expect(prompt).toContain('In this run `$KANON` is `${{ steps.kanon.outputs.path }}`');
     expect(prompt).toContain('run `kanon-plan` with the same flags instead');
     expect(prompt).toContain('ALWAYS APPLY A `sev:*` (RA-729) TO EACH FOLLOW-UP ISSUE YOU FILE');
+  });
+
+  // #164's last guard: not only the lanes listed above. Every agent prompt in every lane workflow
+  // Kanon ships that files an issue (`gh issue create`) sends its agent to the skill and restates
+  // no routing, so a lane added later, or a smoke copy of one, can't file by a routing table of
+  // its own. A prompt that files nothing (the Lead's brief, which writes a `**Milestone:**` line
+  // for the reconcile tick to transcribe through `plan()`) is not a filer.
+  it('every lane prompt that files an issue goes through the skill, not a routing table of its own', () => {
+    const dir = join(ROOT, '.github/workflows');
+    const filers: string[] = [];
+    for (const file of readdirSync(dir).filter((f) => /^agent-.*\.yml$/.test(f))) {
+      const wf = readFlattened(join(dir, file)) as { jobs?: Record<string, { steps?: WorkflowStep[]; with?: { prompt?: unknown } }> };
+      for (const [job, j] of Object.entries(wf.jobs ?? {})) {
+        // A job that calls the agent through its steps, or one that hands a prompt to the spine.
+        const step = agentStep(effectiveSteps(j.steps ?? []));
+        const prompt = String(step?.with?.prompt ?? j.with?.prompt ?? '');
+        if (!/gh issue create/.test(prompt)) continue;
+        filers.push(`${file}#${job}`);
+        expect(prompt.replace(/\s+/g, ' '), `${file}#${job}`).toContain(`read and follow \`$KANON/${SKILL_PATH}\``);
+        expect(routingRestated(prompt), `${file}#${job}`).toEqual([]);
+      }
+    }
+    for (const { workflow, job } of MOVED) expect(filers, 'the scan finds each moved lane').toContain(`${workflow.split('/').pop()}#${job}`);
   });
 
   it('catches a prompt that restates the routing, each way it can', () => {

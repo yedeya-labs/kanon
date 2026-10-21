@@ -455,8 +455,66 @@ describe('the milestone fail-closed guard', () => {
   });
 
   it('carries the brief\'s milestone onto the action', () => {
-    const w = worldFrom(BRIEF(['a'], 'Production Ready'));
+    // Product work: the fixture's `pipeline-improvement` items never go on a roadmap milestone
+    // (`K-WORK-11`), which the next describe holds.
+    const w = worldFrom(BRIEF(['a'], 'Production Ready').replace('`pipeline-improvement`', '`enhancement`'));
     expect(nextActions(w).actions[0]).toMatchObject({ kind: 'file', milestone: 'Production Ready' });
+  });
+});
+
+/**
+ * kanon#164 — the Lead files through the planning module, last of #164's filers. Its filing is
+ * this tick's code, not a prompt, so it calls `plan()` directly: the brief's `**Milestone:**` goes
+ * in as `explicitMilestone`, transcribed from a brief a person approved (`K-WORK-5`), and the
+ * labels and milestone `gh issue create` receives are `plan()`'s, gate label included. An item
+ * `plan()` refuses stops the file phase before anything files.
+ */
+describe('the Lead files through the planning module (K-WORK-8, kanon#164)', () => {
+  const ITEM = (meta: string) => ['# Brief', '', '## Decomposition', '', '### Issue A — a', '', meta, '', 'It does a thing.', ''].join('\n');
+  const created = (actions: unknown[], world: Record<string, unknown> = {}) => {
+    const seen: string[][] = [];
+    execute({ ...worldFrom(ITEM('**Milestone:** Product Backlog')), ...world }, actions, { run: (a: string[]) => { seen.push(a); return 'https://x/issues/1'; } });
+    return seen.filter((c) => c[0] === 'issue' && c[1] === 'create');
+  };
+  /** The `--label` and `--milestone` pairs of one argv, in order. */
+  const routing = (argv: string[]) => argv.flatMap((a, i) => (a === '--label' || a === '--milestone' ? [a, argv[i + 1]!] : []));
+
+  it('files an item with the arguments plan() gives for its labels and the brief\'s milestone', () => {
+    const w = worldFrom(ITEM('**Milestone:** Production Ready · **Labels:** `enhancement` · `sev:high`'));
+    const [action] = nextActions(w).actions;
+    const [argv] = created([action]);
+    expect(routing(argv!)).toEqual(['--label', 'enhancement', '--label', 'sev:high', '--milestone', 'Production Ready']);
+  });
+
+  it('adds gate-candidate where K-WORK-10 gives it, as plan() does', () => {
+    const [argv] = created([{ kind: 'file', title: 'c', body: 'b', milestone: 'Product Backlog', labels: ['follow-up', 'agent:reviewer', 'sev:high'] }]);
+    expect(routing(argv!)).toEqual(['--label', 'follow-up', '--label', 'agent:reviewer', '--label', 'sev:high', '--label', 'gate-candidate', '--milestone', 'Product Backlog']);
+  });
+
+  it('stops before filing an item plan() refuses, and names the rule', () => {
+    const pipelineOnRoadmap = nextActions(worldFrom(BRIEF(['a', 'b'], 'Production Ready')));
+    expect(pipelineOnRoadmap.actions).toEqual([]);
+    expect(pipelineOnRoadmap.stopped).toMatch(/planning module refuses.*K-WORK-11/);
+    const noSeverity = nextActions(worldFrom(ITEM('**Milestone:** Product Backlog · **Labels:** `follow-up` · `agent:reviewer`')));
+    expect(noSeverity.actions).toEqual([]);
+    expect(noSeverity.stopped).toMatch(/K-WORK-9/);
+  });
+
+  it('files the QA issue on the bucket plan() chooses for pipeline work', () => {
+    const [argv] = created([{ kind: 'file-qa', title: 'QA', tag: null }]);
+    expect(routing(argv!)).toEqual(['--label', 'qa:verify', '--milestone', 'Development Automation']);
+  });
+
+  it('names no milestone of its own in a gh issue create', () => {
+    // Every create's routing arguments come from plan(): no `--milestone` literal and no bucket
+    // name beside `'issue', 'create'` in the tick's source.
+    const source = readFileSync(join(ROOT, 'scripts/lead-reconcile.mjs'), 'utf8');
+    const creates = [...source.matchAll(/'issue', 'create'[\s\S]*?\]\)\.trim\(\)/g)].map((m) => m[0]);
+    expect(creates.length, 'the check is not vacuous').toBe(2);
+    for (const c of creates) {
+      expect(c).not.toMatch(/'--milestone'|'--label', VERIFY|Product Backlog|Development Automation/);
+      expect(c).toMatch(/\.\.\.(briefFilingArgs\(a\)|qaIssueFilingArgs\(\))/);
+    }
   });
 });
 

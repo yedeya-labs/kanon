@@ -66,6 +66,10 @@ import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/deploy-d
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { laneCallerFile } from './lib/lane-caller.mjs';
 import { beforeApply, taxonomyLabel } from './lib/labels.mjs';
+// THE ROUTING HAS ONE HOME (`K-WORK-8`, kanon#164). Every issue this tick files takes its labels
+// and its milestone from the planning module's `plan()`, the copy the filing skill and the
+// issue backstop route by, so no filing here chooses a milestone of its own.
+import { PlanRefusal, plan } from './issue-triage-defaults.mjs';
 // What a commit message says it reverts lives in `lib/reverts.mjs`, shared with the metrics
 // detectors (plan 0003 §3.5), so the Lead and the escape rate read a revert the same way.
 // Re-exported, so every caller that imported them from here still does.
@@ -1067,6 +1071,26 @@ function nextActionsCore(world, {
       // the tick after it lands the issue is a member and the title is `already`.
       .filter((p) => !already.has(p.title) && !p.closes?.length && !world.searchTitles?.includes(p.title))
       .map((p) => ({ kind: 'file', ...p }));
+    // AN ITEM THE PLANNING MODULE REFUSES BLOCKS, before anything files (kanon#164). Filing is
+    // not undoable, and the refusal names a rule the brief's own line breaks: a reviewer
+    // follow-up with no `sev:*` (`K-WORK-9`), pipeline work on a roadmap milestone
+    // (`K-WORK-11`), a `gate-candidate` the rule does not give (`K-WORK-10`). A person fixes the
+    // brief's line; filing it anyway would put an issue on the milestone the rule refuses.
+    const refused = files.flatMap((p) => {
+      try {
+        briefFilingArgs(p);
+        return [];
+      } catch (err) {
+        if (!(err instanceof PlanRefusal)) throw err;
+        return [`“${p.title}”: ${err.message}`];
+      }
+    });
+    if (refused.length) {
+      return {
+        phase, actions: [],
+        stopped: `${refused.length} proposed issue(s) the planning module refuses to file — ${refused.join('; ')}. Fix the item's \`**Milestone:**\` or \`**Labels:**\` in the brief`,
+      };
+    }
     // Adoptions go out WITH the files, not instead of them. Returning them alone
     // stalled the brief's other issues for a whole tick for no reason: they are
     // different actions on different issues, and the "one KIND of action per tick"
@@ -3504,6 +3528,26 @@ export function adoptedProvenance(had, declared) {
   return had.filter((l) => (/^sev:/.test(l) || l === 'follow-up' || l === 'agent:reviewer') && !declared.includes(l));
 }
 
+/**
+ * The labels and the milestone of an issue filed from a decomposition item, as `gh issue create`
+ * arguments, from `plan()` (`K-WORK-8`, kanon#164). The brief's `**Milestone:**` is a person's
+ * approved choice, so it goes in as `explicitMilestone`, transcribed and never chosen here
+ * (`K-WORK-5`); `plan()` passes it through, adds `gate-candidate` where `K-WORK-10` gives it, and
+ * throws a `PlanRefusal` naming the rule an item breaks (a reviewer follow-up with no `sev:*`,
+ * pipeline work on a roadmap milestone, a `gate-candidate` the rule does not give).
+ *
+ * @param {{labels?: string[], milestone?: string}} item
+ * @returns {string[]}
+ */
+export const briefFilingArgs = (item) => plan(item.labels ?? [], { explicitMilestone: item.milestone ?? '' }).args;
+
+/**
+ * The project's QA issue, where verification is tracked: QA-pipeline work, so its subject is
+ * `pipeline` (`K-WORK-4`), and `plan()` chooses its milestone.
+ * @returns {string[]}
+ */
+export const qaIssueFilingArgs = () => plan([VERIFY], { subject: 'pipeline' }).args;
+
 export function execute(world, actions, { run = gh } = {}) {
   // TWO BUCKETS, NOT ONE (RA-1203). `failures` are what a retry cannot fix and hold the
   // project; `transient` are what a retry can, and turn the tick red instead.
@@ -3533,8 +3577,10 @@ export function execute(world, actions, { run = gh } = {}) {
           'issue', 'create', '--repo', REPO, '--title', a.title,
           // Signed as the Lead (plan 0005 §3.3). At the top, so the membership marker stays
           // the last line `declaresMembership` reads.
-          '--body', signed(body, 'Lead', appPersona('Lead')), '--milestone', a.milestone,
-          ...(a.labels ?? []).flatMap((l) => ['--label', l]),
+          '--body', signed(body, 'Lead', appPersona('Lead')),
+          // The brief's labels and its milestone, through `plan()` (kanon#164). The file phase
+          // stops on an item it refuses, so none reaches here, and one that did fails this action.
+          ...briefFilingArgs(a),
           // The mirror, at creation, wherever the marker is written (RA-1783). Only when
           // the label is known to exist: `--label` on a missing one fails the create.
           ...(world.labelReady ? ['--label', projectLabel(world.project)] : []),
@@ -3721,7 +3767,7 @@ export function execute(world, actions, { run = gh } = {}) {
         ].join('\n');
         const url = run([
           'issue', 'create', '--repo', REPO, '--title', a.title,
-          '--body', signed(body, 'Lead', appPersona('Lead')), '--milestone', 'Development Automation', '--label', VERIFY,
+          '--body', signed(body, 'Lead', appPersona('Lead')), ...qaIssueFilingArgs(),
           // The mirror at creation (RA-1783 review): a later `--add-label` on the QA issue
           // would raise a `labeled` event into `agent-verify-acs.yml`'s concurrency group.
           ...(world.labelReady ? ['--label', projectLabel(world.project)] : []),

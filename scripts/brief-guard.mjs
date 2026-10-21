@@ -42,7 +42,7 @@
 // on staging, `verify-acs` green) are no longer required sections, and two things a
 // brief may no longer CLAIM are checked below.
 //
-// WHAT THIS BUYS THAT A TICK DOES NOT. EIGHT of these checks are things
+// WHAT THIS BUYS THAT A TICK DOES NOT. NINE of these checks are things
 // `lead-reconcile.mjs` ALREADY refuses to act on, each named by the string it refuses
 // with rather than by a line number:
 //
@@ -54,6 +54,8 @@
 //   a stray `Closes #N`              "name a closing reference the parser does not read"
 //   an undeclared dependency         "a brief defect, not a wait"
 //   a dependency cycle               "dependency cycle in the brief"
+//   an item the planning module      "the planning module refuses to file"
+//     refuses (kanon#164)
 //
 // BY CONTENT, AND THE REASON IS THIS LIST'S OWN HISTORY (RA-1362). It has been wrong
 // three times in three rounds of one review: it said SIX over a list of six while the
@@ -91,11 +93,11 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { BUCKET_MILESTONES, DEFAULT_MILESTONE } from './issue-triage-defaults.mjs';
+import { BUCKET_MILESTONES, DEFAULT_MILESTONE, PlanRefusal } from './issue-triage-defaults.mjs';
 import { isDatedMilestone } from './lib/milestones.mjs';
 import { coordinatesIn } from './citation-guard.mjs';
 import { readExemptions } from './lib/exemptions.mjs';
-import { dependencyCycles, parseProposed } from './lead-reconcile.mjs';
+import { briefFilingArgs, dependencyCycles, parseProposed } from './lead-reconcile.mjs';
 import { isAcDeclaration } from './verify-acs.mjs';
 
 /**
@@ -1000,6 +1002,16 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
     } else {
       const why = milestoneProblem(p.milestone, milestones);
       if (why) findings.push({ at: at(0), problem: `${label} names milestone “${p.milestone}”, which ${why}` });
+      // THE TICK FILES THROUGH `plan()` (kanon#164), with this milestone as the one it
+      // transcribes, and stops on an item `plan()` refuses: pipeline work on a roadmap milestone
+      // (`K-WORK-11`), a reviewer follow-up with no `sev:*` (`K-WORK-9`), a `gate-candidate` the
+      // rule does not give (`K-WORK-10`). The same call here moves that stop into the diff.
+      try {
+        briefFilingArgs(p);
+      } catch (err) {
+        if (!(err instanceof PlanRefusal)) throw err;
+        findings.push({ at: at(0), problem: `${label}: the planning module refuses to file it — ${err.message}. The tick stops on it after the merge; fix its **Milestone:** or **Labels:**` });
+      }
     }
     if (!p.body || p.body.replace(/[-\s]/g, '') === '') {
       findings.push({ at: at(0), problem: `${label} would be filed with an EMPTY body — its acceptance criteria did not survive the parse, and filing is not undoable` });
@@ -1083,7 +1095,7 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
   // Both of these are decidable FROM THE BRIEF ALONE, before an issue is filed — and
   // `lead-reconcile.mjs` says so in both its own words: an unresolvable key is "a brief
   // defect, not a wait" and a cycle means "nothing in the cycle can ever be eligible".
-  // (By content, like the eight in the header. These two carried `:789` and `:807`
+  // (By content, like the nine in the header. These two carried `:789` and `:807`
   // through the commit that removed the others, and were 114 lines stale by the time a
   // reviewer measured them — which is the argument, not an exception to it.)
   // Today both surface as a stopped tick after the brief is merged, the
