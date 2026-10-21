@@ -166,3 +166,39 @@ describe('doc-path-guard gives each rule a remedy that works for it (kanon#176)'
     expect(r.exemptionsUsed.size).toBe(0);
   });
 });
+
+// kanon#1238: a `[x](y)` written inside an inline code span renders as literal text, so rule 1
+// must not read it as a link — and since a link finding can't be exempted, a false one could
+// only be cleared by rewording. Rule 2 still reads a path in backticks, its common case.
+describe('doc-path-guard reads only links that render, never one inside a code span (kanon#1238)', () => {
+  const tracked = ['docs/a.md', 'docs/b.md'];
+  const audit = (text: string) =>
+    auditPaths(['docs/a.md'], (p: string) => (p === 'docs/a.md' ? text : '# B\n'), tracked, [], UNDECLARED);
+  const linkFindings = (text: string) =>
+    audit(text).findings.filter((f: { rule: string }) => f.rule === 'link').map((f: { path: string }) => f.path);
+
+  it('does not read a link in a single-backtick span', () => {
+    expect(linkFindings('Write `[x](./missing.md)` for a link.\n')).toEqual([]);
+  });
+
+  it('does not read a link in a double-backtick span that holds a single backtick', () => {
+    expect(linkFindings('Write ``[a`b](./missing.md)`` literally.\n')).toEqual([]);
+  });
+
+  it('still reads a real link next to a code span on the same line', () => {
+    expect(linkFindings('Write `[x](./ok.md)` as [this](./missing.md).\n')).toEqual(['./missing.md']);
+    expect(audit('`[x](./gone.md)` then [b](./b.md).\n')).toMatchObject({ findings: [], links: 1 });
+  });
+
+  it('reads past an unclosed backtick, which opens no span', () => {
+    expect(linkFindings('A stray ` then [x](./missing.md).\n')).toEqual(['./missing.md']);
+    expect(linkFindings('A stray `` then [x](./missing.md) and a ` lone one.\n')).toEqual(['./missing.md']);
+  });
+
+  it('still reads a path in a code span as a text mention (rule 2), even one in a link it skips', () => {
+    expect(audit('See `docs/missing.md` and `[x](docs/gone.md)`.\n').findings).toEqual([
+      { at: 'docs/a.md:1', path: 'docs/missing.md', rule: 'text' },
+      { at: 'docs/a.md:1', path: 'docs/gone.md', rule: 'text' },
+    ]);
+  });
+});
