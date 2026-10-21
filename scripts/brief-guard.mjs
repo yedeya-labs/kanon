@@ -1004,7 +1004,7 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
       if (why) findings.push({ at: at(0), problem: `${label} names milestone “${p.milestone}”, which ${why}` });
       // THE TICK FILES THROUGH `plan()` (kanon#164), with this milestone as the one it
       // transcribes, and stops on an item `plan()` refuses: pipeline work on a roadmap milestone
-      // (`K-WORK-11`), a reviewer follow-up with no `sev:*` (`K-WORK-9`), a `gate-candidate` the
+      // (`K-WORK-11`) or the product bucket (`K-WORK-4`), a reviewer follow-up with no `sev:*` (`K-WORK-9`), a `gate-candidate` the
       // rule does not give (`K-WORK-10`). The same call here moves that stop into the diff.
       try {
         briefFilingArgs(p);

@@ -1074,7 +1074,7 @@ function nextActionsCore(world, {
     // AN ITEM THE PLANNING MODULE REFUSES BLOCKS, before anything files (kanon#164). Filing is
     // not undoable, and the refusal names a rule the brief's own line breaks: a reviewer
     // follow-up with no `sev:*` (`K-WORK-9`), pipeline work on a roadmap milestone
-    // (`K-WORK-11`), a `gate-candidate` the rule does not give (`K-WORK-10`). A person fixes the
+    // (`K-WORK-11`) or the product bucket (`K-WORK-4`), a `gate-candidate` the rule does not give (`K-WORK-10`). A person fixes the
     // brief's line; filing it anyway would put an issue on the milestone the rule refuses.
     const refused = files.flatMap((p) => {
       try {
@@ -3534,7 +3534,8 @@ export function adoptedProvenance(had, declared) {
  * approved choice, so it goes in as `explicitMilestone`, transcribed and never chosen here
  * (`K-WORK-5`); `plan()` passes it through, adds `gate-candidate` where `K-WORK-10` gives it, and
  * throws a `PlanRefusal` naming the rule an item breaks (a reviewer follow-up with no `sev:*`,
- * pipeline work on a roadmap milestone, a `gate-candidate` the rule does not give).
+ * pipeline work on a roadmap milestone or the product bucket, a `gate-candidate` the rule does not
+ * give).
  *
  * @param {{labels?: string[], milestone?: string}} item
  * @returns {string[]}

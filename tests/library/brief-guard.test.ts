@@ -396,6 +396,13 @@ describe('the decomposition, read as the reconciler reads it', () => {
     expect(problems(brief()).join('\n')).not.toContain('planning module');
   });
 
+  // kanon#1161: pipeline work has one bucket, a brief's included, so the backstop never makes it a candidate.
+  it('reports pipeline work a brief puts on the product bucket, naming the rule', () => {
+    const pipelineOnProduct = problems(withSection('Decomposition', SECTIONS[2][1].replace('Development Automation', 'Product Backlog'))).join('\n');
+    expect(pipelineOnProduct).toContain('the planning module refuses to file it');
+    expect(pipelineOnProduct).toContain('pipeline work goes to "Development Automation" (K-WORK-4)');
+  });
+
   it('reports a milestone with no due date, which is neither a bucket nor a roadmap milestone', () => {
     expect(onMilestone('Someday', () => repo)).toContain('has no due date, so it isn\'t a roadmap milestone');
   });
