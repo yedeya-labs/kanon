@@ -274,10 +274,12 @@ What the lanes tell people in chat, and where the code that posts it may run ([p
 
 ## Billing
 
-How an adopter pays for its agents is not a Kanon rule ([ADR 0004 §5](../docs/decisions/0004-disputed-rules.md)). Kanon works on a Claude subscription and on API billing. The trade-off, for documentation only:
+How an adopter pays for its agents is not a Kanon rule ([ADR 0004 §5](../docs/decisions/0004-disputed-rules.md)). Every lane that runs a model takes one Claude credential, and each caller chooses which ([plan 0009 §10](../docs/plans/0009-release-channels-and-api-key.md#10-the-secret-and-each-lanes-mapping)): the subscription's token, `CLAUDE_CODE_OAUTH_TOKEN`, or an Anthropic API key, `ANTHROPIC_API_KEY`. `lane-check` holds each caller to exactly one, and `kanon doctor` checks that the one it maps is present. The trade-off, for documentation only:
 
-- **Subscription.** For most Claude Code users the binding constraint is rate-limit quota, not money. Pipeline runs share the quota with hands-on work, so heavy agent activity can throttle the developer. Some Claude Code features (routines, for example) require a subscription.
-- **API billing.** Spend is per token and unbounded by quota, so `K-OBS-11` and `K-OBS-12` carry more weight. Contention with hands-on work disappears.
+- **Subscription.** For most Claude Code users the binding constraint is the subscription's usage limits, not money. Anthropic doesn't publish the weekly limit as a number, so Kanon can't say how many runs a week it allows. Pipeline runs share it with hands-on work, so heavy agent activity can throttle the developer, and a run that meets the limit ends `unavailable`, which doctor reports. Some Claude Code features (routines, for example) require a subscription.
+- **API key.** Spend is per token, with no weekly limit, so `K-OBS-11` and `K-OBS-12` carry more weight: `--max-budget-usd` bounds one run, and a spend limit on a Claude Console workspace kept for CI bounds the month ([Paying with an API key](../docs/lanes.md#paying-with-an-api-key)). Contention with hands-on work disappears.
+
+Every cost Kanon records is the CLI's `total_cost_usd`, at API list price ([plan 0003](../docs/plans/0003-metrics.md), decision 1). On a key that is what the key is billed, unless the account has its own rates; on the subscription it measures work, not money. Each run row says which credential ran it, `auth` (`K-OBS-16`). What a model run of each lane costs, under both, is measured on Kanon's own runs: [What a model run costs](../docs/lanes.md#what-a-model-run-costs). Kanon's own lanes run on the subscription ([plan 0009](../docs/plans/0009-release-channels-and-api-key.md), Owner decision 11).
 
 The reference adopter started on the subscription and planned to move to API billing only if contention throttled hands-on work. That is one team's commercial choice.
 
