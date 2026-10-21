@@ -8,7 +8,7 @@
     {
       "name": "kanon",
       "source": "./",
-      "description": "The agent-client skills that wrap kanon init and kanon doctor (ADR 0014)."
+      "description": "The agent-client skills that wrap kanon init and kanon doctor, and the one that starts a project for the Lead (ADR 0014)."
     }
   ]
 }

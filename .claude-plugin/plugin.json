@@ -1,7 +1,7 @@
 {
   "name": "kanon",
   "version": "0.42.0",
-  "description": "Install Kanon in a repository, keep it healthy, and move it to a new release, by driving the kanon command's JSON output: adopt, doctor and upgrade.",
+  "description": "Install Kanon in a repository, keep it healthy, and move it to a new release, by driving the kanon command's JSON output: adopt, doctor and upgrade. Start a project for the Lead and carry its brief to the merge: mandate.",
   "author": {
     "name": "Yedeya Labs"
   },

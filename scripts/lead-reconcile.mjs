@@ -2894,8 +2894,8 @@ function readWorld(project) {
   const proposed = briefMerged ? parseProposed(readFileSync(briefPath, 'utf8'), { knownLabels }) : [];
 
   // Everything carrying the project marker in its body, so no new label taxonomy
-  // and no per-project milestone — AGENTS.md is deliberate that there are four
-  // milestones, and a per-project one would corrupt the burndown.
+  // and no milestone kind of the project's own: its work sits on the buckets or on
+  // roadmap milestones, which may be one created for it (K-PROJ-11).
   const found = ghJson(['issue', 'list', '--repo', REPO, '--state', 'all', '--search',
     `"qa:project ${project}" in:body`, '--limit', '200',
     '--json', 'number,title,state,labels,body,closedAt']);
