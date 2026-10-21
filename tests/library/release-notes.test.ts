@@ -4,7 +4,7 @@
  * chat system's markup: each hook renders Kanon text for its own system.
  *
  * Both callers parse with the same functions (`parseSections`, `scopeOf`), and
- * only the deploy announcement calls `classify`: the two must read the same
+ * only the announcements (deploy and release, kanon#1190) call `classify`: the two must read the same
  * commit's scope identically, and a silent drift between them is
  * invisible until a stakeholder reads two posts that disagree. The Kanon-text
  * renderers are tested here too; announce-deploy.test.ts tests the message.

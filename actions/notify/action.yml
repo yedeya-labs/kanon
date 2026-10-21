@@ -52,7 +52,7 @@ author: yedeya-labs
 
 inputs:
   kind:
-    description: "The message's kind: `project-digest`, `weekly-digest` or `deploy`."
+    description: "The message's kind: `project-digest`, `weekly-digest`, `deploy` or `release`."
     required: true
   artifact:
     description: "The producing job's `message-artifact` output: the artifact's name, with the producer's attempt. Empty when it wrote no message."

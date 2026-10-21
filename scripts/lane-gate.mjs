@@ -55,6 +55,13 @@
 //                            actor is the user on the latest `labeled` event among the review
 //                            labels on it now. No such PR, or no review label: refused. A
 //                            fork's head is refused separately, by the lane's own filter.
+//   release `published`      whoever published it, `sender`, checked the same way: a person by
+//                            the permission lookup, an App by the register, where the Releaser
+//                            that publishes a promotion is (kanon#1190). Only the release
+//                            announcement acts on it. Only someone with write access, or an App
+//                            the repository installed, can publish a release; a release made
+//                            with the workflow token starts no run. Every other release action
+//                            is refused.
 //   workflow_dispatch        whoever ran it, `GITHUB_TRIGGERING_ACTOR` (else `GITHUB_ACTOR`),
 //                            checked the same way. Only someone with write access can
 //                            dispatch, so this cannot refuse a human today; it is checked
@@ -184,6 +191,10 @@ export function triggeringActor(eventName, event, env) {
           : found(event.sender?.login, 'user who closed it');
       }
       return { refuse: `the ${eventName} event's \`${event.action ?? ''}\` action is not one a lane acts on` };
+    case 'release':
+      return event.action === 'published'
+        ? found(event.sender?.login, 'user who published the release')
+        : { refuse: `the release event's \`${event.action ?? ''}\` action is not one a lane acts on` };
     case 'workflow_dispatch':
       return found(env.GITHUB_TRIGGERING_ACTOR || env.GITHUB_ACTOR, 'user who ran it');
     case 'workflow_run':

@@ -8,6 +8,7 @@ import {
   LIMITS,
   SCHEMAS,
   SEVERITIES,
+  SOURCE_LANES,
   describeErrors,
   fit,
   jsonSchema,
@@ -66,6 +67,16 @@ const FIXTURES: Record<string, Msg> = {
     links: [{ label: 'Release 2.4.0', url: 'https://github.com/acme/widgets/releases/tag/v2.4.0' }],
     source: { ...SOURCE, lane: 'deploy' },
   },
+  release: {
+    schema_version: 1,
+    kind: 'release',
+    severity: 'info',
+    title: 'Pre-release v2.5.0-rc.1 of acme/widgets',
+    summary: 'A **pre-release** (a candidate), **v2.5.0-rc.1**, is published.',
+    sections: [{ heading: 'Features', body: '- search: filter by tag ([#901](https://github.com/acme/widgets/pull/901))' }],
+    links: [{ label: 'Release v2.5.0-rc.1', url: 'https://github.com/acme/widgets/releases/tag/v2.5.0-rc.1' }],
+    source: { ...SOURCE, lane: 'release-announce' },
+  },
 };
 
 const clone = (m: Msg): Msg => structuredClone(m);
@@ -79,13 +90,13 @@ const SENTINEL = 'Zq7SENTINEL';
 const fill = (n: number) => (SENTINEL + 'x'.repeat(n)).slice(0, n);
 
 describe('the kinds, the severities and the secrets', () => {
-  it('a fixture of each of the three kinds validates', () => {
+  it('a fixture of each of the four kinds validates', () => {
     expect(Object.keys(FIXTURES)).toEqual([...KINDS]);
     for (const m of Object.values(FIXTURES)) expect(validate(m)).toEqual({ ok: true });
   });
 
   it('has no `health` kind, and refuses one (decision 13)', () => {
-    expect(KINDS).toEqual(['project-digest', 'weekly-digest', 'deploy']);
+    expect(KINDS).toEqual(['project-digest', 'weekly-digest', 'deploy', 'release']);
     expect(KINDS).not.toContain('health');
     expect(errorsOf({ ...base(), kind: 'health' })).toEqual([{ field: 'kind', problem: 'enum' }]);
   });
@@ -95,7 +106,18 @@ describe('the kinds, the severities and the secrets', () => {
       'project-digest': 'KANON_CHAT_PROJECT_DIGEST',
       'weekly-digest': 'KANON_CHAT_WEEKLY_DIGEST',
       deploy: 'KANON_CHAT_DEPLOY',
+      release: 'KANON_CHAT_RELEASE',
     });
+  });
+
+  // The `release` kind (kanon#1190) comes from a lane named for what it does, not for its kind, so
+  // the lanes are the kinds' producers by name: the digests and the deploy lane by their kind's,
+  // the release announcement as `release-announce`. No lane is called `release`.
+  it('admits each producing lane as `source.lane`, the release announcement as release-announce (kanon#1190)', () => {
+    expect(SOURCE_LANES).toEqual(['project-digest', 'weekly-digest', 'deploy', 'release-announce']);
+    const release = FIXTURES.release!;
+    expect(validate(release)).toEqual({ ok: true });
+    expect(errorsOf({ ...release, source: { ...SOURCE, lane: 'release' } })).toEqual([{ field: 'source.lane', problem: 'enum' }]);
   });
 
   it('has three severities and one version, the one `fit` writes', () => {

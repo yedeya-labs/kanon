@@ -91,8 +91,9 @@ export const releasePin = async (gh, release) => {
  * repository already has (`callerFile`'s `names`, #1023), on every conclusion: the dispatch sweep and
  * the reconciler recover those lanes' runs, so a real run of one asks for them besides the
  * schedule (docs/lanes.md, "Schedules are best effort"). The lane admits no run that skipped and
- * none of its own caller, and acts only when it hasn't inside its window.
- * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', merged?: boolean, schedule?: string, pinMoved?: boolean, deployRun?: boolean, reask?: string[] }>}
+ * none of its own caller, and acts only when it hasn't inside its window. `release` (kanon#1190) is a
+ * `release` of the repository, `published` only: a stable release and a pre-release alike, never a draft.
+ * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', merged?: boolean, schedule?: string, pinMoved?: boolean, deployRun?: boolean, reask?: string[], release?: boolean }>}
  */
 export const TRIGGERS = {
   'agent-triage': { name: 'Triage (Implementer)', job: 'triage', issues: ['labeled'], dispatch: { issue_number: true } },
@@ -117,6 +118,7 @@ export const TRIGGERS = {
   'agent-explore-telemetry': { name: 'Explore the telemetry (Explorer)', job: 'explore', schedule: '30 6 * * 2', dispatch: {} },
   'agent-overseer': { name: 'Overseer (Overseer)', job: 'oversee', schedule: '0 6 * * 1', dispatch: {}, pinMoved: true },
   'agent-deploy-diagnose': { name: 'Deploy diagnose (Explorer)', job: 'diagnose', deployRun: true, dispatch: {} },
+  'agent-release-announce': { name: 'Release announcement', job: 'announce', release: true, dispatch: { tag: true, dry_run: false } },
 };
 
 /** The deploy lane's caller's `name:`, which `kanon init` writes and the diagnose lane's caller follows by it. */
@@ -189,6 +191,7 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   if (t.pr) out.push('  pull_request:', `    types: [${t.pr.join(', ')}]`);
   if (t.prTarget) out.push('  pull_request_target:', `    types: [${t.prTarget.join(', ')}]`);
   if (t.issues) out.push('  issues:', `    types: [${t.issues.join(', ')}]`);
+  if (t.release) out.push('  release:', '    types: [published]');
   if (t.schedule) out.push('  schedule:', `    - cron: "${t.schedule}"`);
   if (t.reask) {
     out.push('  # The re-ask: a real run of a lane this one recovers asks for it too, since a schedule runs late',

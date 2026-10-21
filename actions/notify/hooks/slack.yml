@@ -2,8 +2,8 @@
 # `.github/actions/notify/action.yml`, the one thing a notifying lane's `notify` job calls (§6.1).
 #
 # Each kind's message reaches it with that kind's secret and no other (`KANON_CHAT_PROJECT_DIGEST`,
-# `KANON_CHAT_WEEKLY_DIGEST`, `KANON_CHAT_DEPLOY`): store one Slack incoming-webhook URL in each,
-# the same URL in all three if one channel takes everything. A kind whose secret is unset is not
+# `KANON_CHAT_WEEKLY_DIGEST`, `KANON_CHAT_DEPLOY`, `KANON_CHAT_RELEASE`): store one Slack
+# incoming-webhook URL in each, the same URL in all of them if one channel takes everything. A kind whose secret is unset is not
 # posted. See docs/notifications.md in Kanon.
 #
 # Its one step is Kanon's Slack action at the release `init` ran from (the candidate's tag on a

@@ -298,6 +298,20 @@ describe('who the actor is', () => {
     expect(triggeringActor('workflow_dispatch', {}, env)).toEqual({ actor: { login: 'the-rerunner', source: 'user who ran it' } });
     expect(triggeringActor('workflow_dispatch', {}, { GITHUB_ACTOR: 'the-actor' })).toEqual({ actor: { login: 'the-actor', source: 'user who ran it' } });
   });
+  // kanon#1190: the release announcement starts on a published release. Only someone with write
+  // access, or an App the repository installed, can publish one, so the gate asks who did: a
+  // person by the permission lookup, an App by the register, where a promotion's Releaser is.
+  it('a published release: whoever published it, and no other release action (kanon#1190)', () => {
+    expect(triggeringActor('release', { action: 'published', sender: { login: 'publisher' } }, env))
+      .toEqual({ actor: { login: 'publisher', source: 'user who published the release' } });
+    for (const action of ['created', 'released', 'prereleased', 'edited', 'deleted', 'unpublished', undefined]) {
+      expect(triggeringActor('release', { action, sender: { login: 'publisher' } }, env), String(action)).toHaveProperty('refuse');
+    }
+    expect(triggeringActor('release', { action: 'published' }, env)).toHaveProperty('refuse');
+    const releaser = triggeringActor('release', { action: 'published', sender: { login: 'example-releaser[bot]' } }, env);
+    expect('actor' in releaser && decide(releaser.actor, { registeredApps: () => new Map([['Releaser', 'example-releaser']]), permissionOf: () => ({}) }))
+      .toEqual({ member: true, reason: "it is the repository's Releaser App in the App register" });
+  });
   it('a schedule: the user GitHub runs it as, whoever last changed it', () => {
     expect(triggeringActor('schedule', { schedule: '50 5 * * *' }, env)).toEqual({ actor: { login: 'the-actor', source: 'user who last changed the schedule' } });
     expect(triggeringActor('schedule', {}, {})).toHaveProperty('refuse');

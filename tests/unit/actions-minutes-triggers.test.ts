@@ -26,10 +26,11 @@ type Trigger = {
   dispatch?: Record<string, boolean>;
   deployRun?: boolean;
   reask?: string[];
+  release?: boolean;
 };
 
 /** Every key a `TRIGGERS` entry may carry. A new kind of trigger needs a phrase below first. */
-const KNOWN = new Set(['name', 'job', 'issues', 'pr', 'prTarget', 'review', 'ci', 'merged', 'pinMoved', 'schedule', 'dispatch', 'deployRun', 'reask']);
+const KNOWN = new Set(['name', 'job', 'issues', 'pr', 'prTarget', 'review', 'ci', 'merged', 'pinMoved', 'schedule', 'dispatch', 'deployRun', 'reask', 'release']);
 
 const VERB: Record<string, string> = { labeled: 'labelled', opened: 'opened', closed: 'closed' };
 const verbs = (events: string[]) => events.map((e) => {
@@ -65,6 +66,8 @@ const phrases = (t: Trigger): string[] => {
     if (t.pr) out.push(`a pull request ${verbs(t.pr)}`);
     if (t.issues) out.push(`an issue ${verbs(t.issues)}`);
   }
+  // kanon#1190: a release published, a stable release or a pre-release.
+  if (t.release) out.push('a release published');
   if (t.prTarget) out.push(`a pull request ${verbs(t.prTarget)}`);
   if (t.review) out.push('a review submitted');
   if (t.merged) out.push('a pull request merged');

@@ -71,6 +71,8 @@ export const NOTIFYING_LANES: Record<string, string> = {
   'agent-project-digest.yml': 'project-digest',
   'agent-weekly-digest.yml': 'weekly-digest',
   'deploy.yml': 'deploy',
+  // kanon#1190: membership-gated, as the digests are.
+  'agent-release-announce.yml': 'release',
 };
 
 const JOB_KEYS = new Set(['name', 'needs', 'if', 'runs-on', 'timeout-minutes', 'permissions', 'outputs', 'steps']);

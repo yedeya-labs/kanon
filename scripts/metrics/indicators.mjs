@@ -47,10 +47,10 @@ export const ESCAPE_DAYS = /** @type {const} */ ([30, 90]);
  * The lanes whose spend is overhead, shown beside cost and never inside it, and left out of yield
  * (§2.2, §2.3): the Explorer's, the code audit, the telemetry Explorer, the Overseer, the
  * digests, the deploy diagnose lane, which comments on a failed deploy's issue and delivers no
- * pull request (kanon#966), and the deploy announcement, which writes only `notify` rows and no
- * run row to count (plan 0011 N9).
+ * pull request (kanon#966), and the deploy and release announcements, which write only `notify`
+ * rows and no run row to count (plan 0011 N9, kanon#1190).
  */
-export const OVERHEAD_LANES = Object.freeze(['explore', 'code-audit', 'explore-telemetry', 'overseer', 'weekly-digest', 'project-digest', 'deploy-diagnose', 'deploy-announce']);
+export const OVERHEAD_LANES = Object.freeze(['explore', 'code-audit', 'explore-telemetry', 'overseer', 'weekly-digest', 'project-digest', 'deploy-diagnose', 'deploy-announce', 'release-announce']);
 
 /**
  * The lanes whose spend is delivery, in cost and yield (§2.2, §2.3): the Reviewer's, the

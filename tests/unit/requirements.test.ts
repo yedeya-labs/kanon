@@ -79,6 +79,8 @@ describe('requirements.json', () => {
     expect(notify.hook).toEqual({ path: '.github/actions/notify/action.yml', inputs: ['kind', 'message-v1', 'secret', 'text'] });
     expect(notify.versions).toEqual([...VERSIONS]);
     expect(Object.fromEntries(Object.entries(notify.kinds).map(([k, v]) => [k, v.secret]))).toEqual(KIND_SECRETS);
+    // kanon#1190: the release announcement is the `release` kind's one lane.
+    expect(notify.kinds.release!.lanes).toEqual(['agent-release-announce']);
     expect(notify.legacySecret).toBe('DIGEST_WEBHOOK');
     expect(notify.prebuilt).toEqual({
       slack: { action: 'actions/notify/slack', hook: 'actions/notify/hooks/slack.yml' },
@@ -87,7 +89,7 @@ describe('requirements.json', () => {
     // A lane notifies from the release whose lane has a `notify` job, read from that job alone.
     const job = (kind: string) => ({ jobs: { digest: { steps: [{ run: 'x' }] }, notify: { steps: [{ uses: '$/actions/notify', with: { kind } }] } } });
     const kinds = notifyKinds({ 'agent-project-digest': [job('project-digest')], 'agent-weekly-digest': [{ jobs: {} }, job('weekly-digest')], 'agent-review': [{ jobs: { a: { steps: [{ uses: '$/actions/other', with: { kind: 'deploy' } }] } } }] });
-    expect(Object.fromEntries(Object.entries(kinds).map(([k, v]) => [k, v.lanes]))).toEqual({ 'project-digest': ['agent-project-digest'], 'weekly-digest': ['agent-weekly-digest'], deploy: [] });
+    expect(Object.fromEntries(Object.entries(kinds).map(([k, v]) => [k, v.lanes]))).toEqual({ 'project-digest': ['agent-project-digest'], 'weekly-digest': ['agent-weekly-digest'], deploy: [], release: [] });
     expect(() => notifyKinds({ 'agent-x': [job('health')] })).toThrow(/no kind of the notification contract/);
   });
 
@@ -123,7 +125,7 @@ describe('requirements.json', () => {
     const lanes = built.lanes as Record<string, { secrets: string[], claude?: string[], optionalSecrets?: string[] }>;
     const model = laneFiles(ROOT).filter(runsModel).map((f) => f.replace(/\.yml$/, ''));
     expect(model).toHaveLength(17);
-    expect(Object.keys(lanes).filter((l) => !model.includes(l))).toEqual(['agent-dispatch-sweep', 'agent-issue-backstop', 'agent-lead-reconcile', 'agent-merge']);
+    expect(Object.keys(lanes).filter((l) => !model.includes(l))).toEqual(['agent-dispatch-sweep', 'agent-issue-backstop', 'agent-lead-reconcile', 'agent-merge', 'agent-release-announce']);
     for (const [name, l] of Object.entries(lanes)) {
       expect(l.claude, name).toEqual(model.includes(name) ? ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'] : undefined);
       // `secrets` keeps the token, the default `kanon init` maps, and never the key, which a
@@ -136,7 +138,7 @@ describe('requirements.json', () => {
 
   it("lists every lane of docs/lanes.md's table, and no other workflow", () => {
     const table = [...readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8').split('## Which lanes are available')[1]!.split('\n## ')[0]!.matchAll(/^\| [^|]+\| `(agent-[a-z-]+\.yml)` \|/gm)].map((m) => m[1]);
-    expect(table.length).toBe(21);
+    expect(table.length).toBe(22);
     expect(laneFiles(ROOT)).toEqual([...table].sort());
   });
 
@@ -331,7 +333,7 @@ describe('requirements.json', () => {
       expect(full!.conditional['agent-weekly-digest']).toEqual(expect.objectContaining({ hook: '.github/actions/notify/action.yml' }));
       expect(full!.conditional['agent-weekly-digest']!.secret).toBeUndefined();
       expect(full!.steps.join('\n')).not.toContain('DIGEST_WEBHOOK');
-      expect(Object.keys(full!.leftOut ?? {})).toEqual(['agent-explore-telemetry', 'agent-deploy-diagnose']);
+      expect(Object.keys(full!.leftOut ?? {})).toEqual(['agent-explore-telemetry', 'agent-deploy-diagnose', 'agent-release-announce']);
       expect(features.map((f) => f.apps)).toEqual([['judge'], ['author', 'judge'], ['author', 'judge']]);
     });
 

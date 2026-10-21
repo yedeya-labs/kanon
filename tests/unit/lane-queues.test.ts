@@ -40,6 +40,7 @@ const QUEUE_MAX: Record<string, string> = {
   'agent-dispatch-sweep.yml': 'a re-ask from a run that skipped, or of its own caller (kanon#813)',
   'agent-verify-acs.yml': 'every label on the issue but `qa:verify`',
   'agent-deploy-diagnose.yml': 'a deploy run that succeeded, was cancelled or was skipped (plan 0010 D8)',
+  'agent-release-announce.yml': 'a dispatch or release the gate refuses, for a tag a real run waits on (kanon#1190)',
   // Its runtime-version trigger is a `pull_request_target: closed` on its caller's path (kanon#833).
   'agent-overseer.yml': 'an unmerged close of a pull request that changes the caller',
 };

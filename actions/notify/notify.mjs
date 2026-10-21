@@ -41,10 +41,11 @@ export const LINE = 'kanon-notify/v1';
 /**
  * The telemetry lane a kind's `notify` row is written under, where it isn't the kind's own name:
  * the deploy lane's is `deploy-announce`, since `deploy` is the deploy rows' partition, which no
- * lane may take (`schema.mjs`, `DEPLOY_PARTITION`; plan 0011 N9).
+ * lane may take (`schema.mjs`, `DEPLOY_PARTITION`; plan 0011 N9), and the `release` kind's is its
+ * lane's, `release-announce` (kanon#1190).
  * @type {Readonly<Record<string, string>>}
  */
-export const ROW_LANES = Object.freeze({ deploy: 'deploy-announce' });
+export const ROW_LANES = Object.freeze({ deploy: 'deploy-announce', release: 'release-announce' });
 /** The file a producer's artifact holds (§4): one message. */
 export const MESSAGE_FILE = 'message.json';
 /** The block's state between its steps, in its directory under `runner.temp`. */
@@ -269,8 +270,9 @@ export function finish(env, now = Date.now()) {
   const notices = [];
   /** @type {Record<string, string>} */
   const outputs = { outcome: result.outcome, reason: result.skip_reason ?? result.failure ?? '', row: '', 'row-artifact': '' };
-  // The row's lane is the kind's own lane (§3.2): the digests' by their kind's name, and the deploy
-  // lane's as `deploy-announce`, since `deploy` is the deploy rows' reserved partition (N9).
+  // The row's lane is the kind's own lane (§3.2): the digests' by their kind's name, the deploy
+  // lane's as `deploy-announce`, since `deploy` is the deploy rows' reserved partition (N9), and the
+  // release announcement's as `release-announce` (kanon#1190).
   const lane = ROW_LANES[state.kind] ?? state.kind;
   if (!LANES.includes(lane)) {
     notices.push(`no notify row: the ${lane} lane is not in the telemetry schema's lanes yet`);

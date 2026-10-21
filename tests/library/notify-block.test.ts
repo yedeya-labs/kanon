@@ -375,6 +375,20 @@ describe('the doctor line and the notify row, on every outcome (§5.1, steps 6 a
     expect(none.rows[0]).toMatchObject({ lane: 'deploy-announce', outcome: 'skipped', skip_reason: 'no-secret' });
     expect(none.uploads.map((u) => u.name)).toEqual([`kanon-delivery-deploy-announce-${RUN_ID}-1-1`]);
   });
+
+  it("a release message's row is the release-announce lane's, the lane its notify row lands under (kanon#1190)", () => {
+    const release = message({ kind: 'release', severity: 'info', source: { ...message().source, lane: 'release-announce' } });
+    const name = `kanon-notify-release-announce-announce-${RUN_ID}-1`;
+    const r = runBlock({ inputs: { kind: 'release', artifact: name, secret: SECRET }, artifacts: { [name]: JSON.stringify(release) } });
+    expect(r.outputs.outcome).toBe('posted');
+    expect(r.rows).toHaveLength(1);
+    expect(validateRow(r.rows[0])).toEqual({ ok: true });
+    expect(r.rows[0]).toMatchObject({ row_kind: 'notify', lane: 'release-announce', kind: 'release', outcome: 'posted', producer_attempt: 1 });
+    expect(r.uploads.map((u) => u.name)).toEqual([`kanon-delivery-release-announce-${RUN_ID}-1`]);
+    expect(DELIVERY_ARTIFACT.exec(r.uploads[0]!.name)?.slice(1, 4)).toEqual(['release-announce', RUN_ID, '1']);
+    const none = runBlock({ inputs: { kind: 'release', artifact: name, secret: '' }, artifacts: { [name]: JSON.stringify(release) } });
+    expect(none.rows[0]).toMatchObject({ lane: 'release-announce', outcome: 'skipped', skip_reason: 'no-secret' });
+  });
 });
 
 describe('the outcome is an output, so a later step acts on posted alone (kanon#972)', SPAWNS, () => {

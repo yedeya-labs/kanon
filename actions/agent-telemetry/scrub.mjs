@@ -82,7 +82,7 @@ export const KANON_WORDS = new Set([
   'explorer', 'implementer', 'reviewer', 'merger', 'lead', 'overseer', 'releaser', 'intake', 'author', 'judge',
   // The lanes' words.
   'review', 'merge', 'reconcile', 'implement', 'revise', 'triage', 'rebase', 'split', 'explore', 'code', 'audit',
-  'telemetry', 'verify', 'acs', 'weekly', 'digest', 'project', 'deploy', 'diagnose', 'announce',
+  'telemetry', 'verify', 'acs', 'weekly', 'digest', 'project', 'deploy', 'diagnose', 'announce', 'release',
   // The platform's.
   'app', 'bot', 'github', 'actions',
 ]);

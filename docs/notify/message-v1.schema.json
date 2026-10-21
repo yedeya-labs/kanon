@@ -16,7 +16,8 @@
       "enum": [
         "project-digest",
         "weekly-digest",
-        "deploy"
+        "deploy",
+        "release"
       ]
     },
     "severity": {
@@ -145,7 +146,8 @@
           "enum": [
             "project-digest",
             "weekly-digest",
-            "deploy"
+            "deploy",
+            "release-announce"
           ]
         },
         "run_url": {

@@ -2,16 +2,16 @@
 /**
  * Pure text helpers for turning release-please release bodies into chat text. Shared:
  * `parseSections`, `scopeOf`, `INTERNAL_SCOPES` and `bulletProse`. Kanon text, for
- * the deploy announcement's `deploy` message (plan 0011 step N9): `kanonBullet`, `kanonList`,
- * `kanonMaint`. Nothing here writes a chat system's markup: the weekly digest's `weekly-digest`
+ * the deploy announcement's `deploy` message (plan 0011 step N9) and the release announcement's
+ * `release` message (kanon#1190): `kanonBullet`, `kanonList`, `kanonMaint`. Nothing here writes a chat system's markup: the weekly digest's `weekly-digest`
  * message (step N8) is Kanon text too, and each hook renders it for its own system.
  *
  * Extracted from announce-deploy.mjs so the weekly digest (RA-502) can reuse them
  * instead of growing a second, drifting copy — the two posts parse the same release
  * bodies and must read each commit's scope identically, which is why `parseSections`,
- * `scopeOf` and `INTERNAL_SCOPES` live here. Only the deploy announcement categorises,
+ * `scopeOf` and `INTERNAL_SCOPES` live here. Only the two announcements categorise,
  * with `classify`; the digest groups by its own `INTERNAL_AREAS`, a superset kept apart
- * so widening it never changes what the announcement calls a Feature.
+ * so widening it never changes what an announcement calls a Feature.
  *
  * PURE ONLY, deliberately: no fetch, no env, no process. That is what makes this
  * unit-testable (tests/library/release-notes.test.ts, announce-deploy.test.ts).

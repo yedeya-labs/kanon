@@ -281,6 +281,7 @@ const PRODUCERS: Record<string, string | null> = {
   'scripts/project-digest.mjs': null,
   'scripts/weekly-digest.mjs': null,
   'scripts/announce-deploy.mjs': null,
+  'scripts/announce-release.mjs': null,
 };
 
 describe('K-OBS-19: every notify job is of its shape, in a notifying lane (plan 0011 §5)', () => {
@@ -526,6 +527,60 @@ describe('the deploy lane, wired (plan 0011 N9; the Owner\'s decisions of 2026-1
       expect(starts("!cancelled() && needs.announce.outputs.hook == 'present'", world('', 'present', { gate: 'failure' }))).toBe(true);
       expect(starts(DEPLOY_NOTIFY_IF.replace('!cancelled()', 'always()'), world('false', 'present', { cancelled: true }))).toBe(true);
     });
+  });
+});
+
+describe('the release announcement (kanon#1190)', () => {
+  const RELEASE = 'agent-release-announce.yml';
+  const lane = () => structuredClone(DOCS[RELEASE]!);
+  const with_ = (wf: ReturnType<typeof lane>) => ({ ...DOCS, [RELEASE]: wf });
+
+  it('has one notify job of its shape, gated by the membership gate, holding KANON_CHAT_RELEASE alone', () => {
+    expect(NOTIFYING_LANES[RELEASE]).toBe('release');
+    expect(notifyJobsOf(DOCS[RELEASE]!)).toEqual(['notify']);
+    expect(producersOf(DOCS[RELEASE]!)).toEqual(['announce']);
+    expect(gateJobOf(DOCS[RELEASE]!)).toBe('gate');
+    expect(notifyJobProblems(DOCS[RELEASE]!, 'notify', 'release')).toEqual([]);
+    expect(DOCS[RELEASE]!.jobs!.notify).toEqual(notifyJob('release', 'announce'));
+    expect(Object.keys(DOCS[RELEASE]!.on!.workflow_call!.secrets!)).toEqual(['KANON_CHAT_RELEASE']);
+    expect(notifyLaneProblems(with_(lane()))).toEqual([]);
+    expect(chatSecretProblems(with_(lane()))).toEqual([]);
+  });
+
+  it('fails the chat secret read by the announcing job, a second read in the gate, or a digest\'s secret in its notify job', () => {
+    const wf = lane();
+    wf.jobs!.announce!.steps!.find((s) => s.id === 'message')!.env!.URL = '${{ secrets.KANON_CHAT_RELEASE }}';
+    expect(chatSecretProblems(with_(wf))).toEqual([`${RELEASE}:announce: KANON_CHAT_RELEASE`]);
+    const gate = lane();
+    gate.jobs!.gate!.steps!.at(-1)!.env = { ...gate.jobs!.gate!.steps!.at(-1)!.env, URL: '${{ secrets.KANON_CHAT_RELEASE }}' };
+    expect(chatSecretProblems(with_(gate))).toEqual([`${RELEASE}:gate: KANON_CHAT_RELEASE`]);
+    const other = lane();
+    other.jobs!.notify!.steps![0]!.with!.secret = '${{ secrets.KANON_CHAT_DEPLOY }}';
+    expect(notifyLaneProblems(with_(other))).toEqual(expect.arrayContaining([`${RELEASE}:notify: its secret is not KANON_CHAT_RELEASE`]));
+    expect(chatSecretProblems(with_(other))).toEqual([`${RELEASE}:notify: KANON_CHAT_DEPLOY`]);
+  });
+
+  it('fails its secret mapped into another lane, and admits a caller mapping it into this one', () => {
+    const into = (lane: string) => ({ ...DOCS, 'x-caller.yml': { on: 'release', jobs: { announce: { uses: `yedeya-labs/kanon/.github/workflows/${lane}@v1.0.0`, secrets: { KANON_CHAT_RELEASE: '${{ secrets.KANON_CHAT_RELEASE }}' } } } } as ReturnType<typeof read> });
+    expect(chatSecretProblems(into(RELEASE))).toEqual([]);
+    expect(chatSecretProblems(into('agent-weekly-digest.yml'))).toEqual(['x-caller.yml:announce: KANON_CHAT_RELEASE']);
+  });
+
+  it('fails a pull_request or pull_request_target trigger on it', () => {
+    for (const event of ['pull_request', 'pull_request_target']) {
+      const wf = lane() as ReturnType<typeof lane> & { on: Record<string, unknown> };
+      wf.on[event] = null;
+      expect(notifyLaneProblems(with_(wf)), event).toEqual([`${RELEASE}: a notifying lane started by ${event}`]);
+    }
+  });
+
+  it('fails a notify job whose if: drops the gate, or a second producing job', () => {
+    const noGate = lane();
+    noGate.jobs!.notify!.if = "${{ !cancelled() && needs.gate.outputs.hook == 'present' && inputs.dry_run != 'true' }}";
+    expect(notifyLaneProblems(with_(noGate))).toEqual([`${RELEASE}:notify: its if: is not \`${NOTIFY_IF}\``]);
+    const two = lane();
+    two.jobs!.again = structuredClone(two.jobs!.announce!);
+    expect(notifyLaneProblems(with_(two))).toEqual(expect.arrayContaining([`${RELEASE}: a lane that takes a chat secret has 1 notify jobs and 2 producing jobs, not one of each`]));
   });
 });
 

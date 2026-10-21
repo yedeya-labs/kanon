@@ -71,6 +71,9 @@ export const LANE_ROLES = Object.freeze({
   // and writes no run row, so its role is never checked against one. The Overseer's, as the
   // digests', the other lanes that notify. Not `deploy`, the deploy rows' reserved partition.
   'deploy-announce': 'overseer',
+  // The release announcement (kanon#1190), for its `notify` rows alone, as the deploy lane's: it
+  // runs no model and writes no run row.
+  'release-announce': 'overseer',
 });
 export const LANES = Object.freeze(Object.keys(LANE_ROLES));
 /** The work-item partition's name, which no lane may take (plan 0002 §4). */
@@ -274,7 +277,7 @@ export const SMOKE_REFUSALS = Object.freeze([
  * `scripts/lib/notify-contract.mjs`. This module imports nothing outside its directory, so the
  * schema test holds this copy to that one.
  */
-export const NOTIFY_KINDS = Object.freeze(['project-digest', 'weekly-digest', 'deploy']);
+export const NOTIFY_KINDS = Object.freeze(['project-digest', 'weekly-digest', 'deploy', 'release']);
 /** The hook's kind (plan 0011 §5.1 step 4, §11): Kanon's two prebuilt hooks, or the adopter's own. */
 export const NOTIFY_HOOKS = Object.freeze(['slack', 'webhook', 'custom']);
 /** How one `notify` job ended (plan 0011 §11, decision 14). */

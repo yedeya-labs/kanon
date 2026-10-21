@@ -2,8 +2,8 @@
 # to `.github/actions/notify/action.yml`, the one thing a notifying lane's `notify` job calls (§6.1).
 #
 # Each kind's message reaches it with that kind's secret and no other (`KANON_CHAT_PROJECT_DIGEST`,
-# `KANON_CHAT_WEEKLY_DIGEST`, `KANON_CHAT_DEPLOY`): store one https URL in each, the same URL in all
-# three if one receiver takes everything. A kind whose secret is unset is not posted. The receiver
+# `KANON_CHAT_WEEKLY_DIGEST`, `KANON_CHAT_DEPLOY`, `KANON_CHAT_RELEASE`): store one https URL in
+# each, the same URL in all of them if one receiver takes everything. A kind whose secret is unset is not posted. The receiver
 # gets the message itself, as JSON, and may validate it against docs/notify/message-v1.schema.json
 # in Kanon. See docs/notifications.md in Kanon.
 #

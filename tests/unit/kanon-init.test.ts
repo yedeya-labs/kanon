@@ -11,7 +11,7 @@ import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs'
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
 import { TELEMETRY_QUESTION, telemetryQuestion, telemetryRegisters, UPSTREAM_EVIDENCE_QUESTION, upstreamFindingsQuestion } from '../../cli/init.mjs';
 import { HOSTED_INGEST_URL } from '../../scripts/lib/telemetry-token.mjs';
-import { CHAT_QUESTION, CHAT_QUESTION_BOTH, CHAT_QUESTION_DEPLOY, chatHookStub, legacyChatRewrite } from '../../cli/init.mjs';
+import { CHAT_QUESTION, CHAT_QUESTION_BOTH, CHAT_QUESTION_DEPLOY, CHAT_QUESTION_RELEASE, chatHookStub, legacyChatRewrite } from '../../cli/init.mjs';
 import { codeownersOf, DIAGNOSE_DROPPED, CONSENT_LEVELS, CONSENT_OPTIONS, CONSENT_QUESTION, consentOf, consentQuestion, DATA_QUESTION, FEATURE_QUESTION, featureOf, REVIEW_HOW, sharingUrl, testDatabaseSignal } from '../../cli/init.mjs';
 import { parseUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
 import { SPAWNS } from './helpers/spawns.js';
@@ -944,6 +944,7 @@ describe('the callers kanon init writes', () => {
     ...(t.prTarget ? [`pull_request_target:${[...t.prTarget].sort().join(',')}`] : []),
     ...(t.pinMoved || t.merged ? ['pull_request_target:closed'] : []),
     ...(t.issues ? [`issues:${[...t.issues].sort().join(',')}`] : []),
+    ...(t.release ? ['release:published'] : []),
     ...(t.deployRun ? ['workflow_run:completed'] : []),
     ...(t.reask ? ['workflow_run:completed'] : []),
     ...(t.schedule ? ['schedule'] : []),
@@ -3422,6 +3423,35 @@ describe('kanon init and the chat channel (plan 0011 N11)', () => {
     expect(await question(['--feature', 'review', '--deploy-environments', 'production'])).toEqual([CHAT_QUESTION_DEPLOY]);
     expect(await question(['--feature', 'full', '--deploy-environments', 'staging,production'])).toEqual([CHAT_QUESTION_BOTH]);
     for (const q of [CHAT_QUESTION, CHAT_QUESTION_DEPLOY, CHAT_QUESTION_BOTH]) expect(q.split('? ')[1]).toBe('Kanon ships a Slack hook and a generic webhook hook, or you can write your own.');
+  });
+
+  // kanon#1190: the release announcement posts too, so choosing it asks the question, named as
+  // what it posts, and the Slack answer leaves the step for its kind's secret.
+  it('counts the release announcement as a lane that posts, names it in the question, and leaves secret.chat-release (kanon#1190)', async () => {
+    const question = async (argv: string[]) => {
+      const asked: string[] = [];
+      const r = await run(checkout(), fakeGitHub(), [...argv, '--no-sensitive-data', '--consent', 'no', '--no-apps'], undefined, REQ, { ask: person({}, asked) });
+      expect(r.status, r.err).toBe(0);
+      return asked.filter((q) => /^Post .* to a chat channel\?/.test(q)).map((q) => q.split('\n')[0]);
+    };
+    const tail = ' to a chat channel? Kanon ships a Slack hook and a generic webhook hook, or you can write your own.';
+    expect(await question(['--lanes', 'review,release-announce'])).toEqual([CHAT_QUESTION_RELEASE]);
+    expect(await question(['--lanes', 'review,project-digest,release-announce'])).toEqual([`Post digests and release announcements${tail}`]);
+    expect(await question(['--lanes', 'review,project-digest,release-announce', '--deploy-environments', 'production'])).toEqual([`Post digests, release announcements and deploy announcements${tail}`]);
+    expect(await question(['--lanes', 'review,release-announce', '--deploy-environments', 'production'])).toEqual([`Post release announcements and deploy announcements${tail}`]);
+    // The question's three constants are what it builds for their cases.
+    expect(await question(['--lanes', 'review,project-digest'])).toEqual([CHAT_QUESTION]);
+    const { dir, d } = await initWith(['--lanes', 'review,release-announce', '--chat', 'slack']);
+    expect(d.answers.chat).toBe('slack');
+    expect(chatSteps(d).map((f) => [f.id, f.subject])).toEqual([['secret.chat-release', 'KANON_CHAT_RELEASE']]);
+    expect(chatSteps(d)[0]!.fix.url).toBe(SLACK_PAGE);
+    expect(chatSteps(d)[0]!.fix.text).toMatch(/^Create a Slack incoming webhook for the channel the release announcement posts to/);
+    // Its caller: a published release and a dispatch with the tag, and its one kind's secret.
+    const caller = parseYaml(read(dir, '.github/workflows/agent-release-announce.yml')) as { on: Record<string, unknown>; jobs: Record<string, { uses: string; with: Record<string, string>; secrets: Record<string, string> }> };
+    expect(caller.on.release).toEqual({ types: ['published'] });
+    expect(Object.keys(caller.on)).toEqual(['release', 'workflow_dispatch']);
+    expect(caller.jobs.announce!.with).toEqual({ tag: '${{ inputs.tag }}', dry_run: '${{ inputs.dry_run }}' });
+    expect(caller.jobs.announce!.secrets).toEqual({ KANON_CHAT_RELEASE: '${{ secrets.KANON_CHAT_RELEASE }}' });
   });
 
   it("accepts --chat beside a deploy lane the adoption record's ## Deploy section declares, with no --deploy-environments", async () => {

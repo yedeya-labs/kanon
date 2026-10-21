@@ -1,0 +1,209 @@
+# The release announcement (kanon#1190). A Kanon lane: each published release, posted to chat
+# through Kanon's notification contract, for a repository that releases without deploying (plan
+# 0011 §3.2's `release` kind). A repository whose deploy lane announces each deploy can still take
+# it: the two kinds have two secrets, so they reach whichever channels those name.
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:` this
+# file at an exact Kanon tag, passes `tag` and `dry_run` through, and maps its one secret by name
+# (never `secrets: inherit`).
+#
+# WHAT IT POSTS (the Owner's decisions of 2026-10-20). A stable release and a pre-release both
+# post, once each; a pre-release says so in its title and summary, and both are `info`. A draft
+# announces nothing. The message is the release's tag, its name, and its notes as Features, Fixes
+# and Maintenance, with a link to the release (`scripts/announce-release.mjs`).
+#
+# A RELEASE MADE WITH THE WORKFLOW TOKEN STARTS NO RUN, as for the deploy lane (plan 0010 §3): a
+# release published by a person, or by an App such as the Releaser, fires `release: published`.
+#
+# THE POST (plan 0011 §4, §5; `K-OBS-19`). The `announce` job builds one `release` message in
+# Kanon's notification contract and uploads it; it holds no chat secret and posts nothing. The
+# `notify` job hands the message to the adopter's hook at `.github/actions/notify/action.yml`,
+# with the caller's `KANON_CHAT_RELEASE` and no other secret. The gate decides first whether
+# anything will be posted: with no hook, or no `KANON_CHAT_RELEASE`, the `announce` job doesn't
+# run, and the run stays green.
+#
+# NO MODEL. No step runs an agent, so the lane takes no Claude credential, mints no App token and
+# writes no run row. Its `notify` row lands in the `release-announce` partition.
+#
+# INERT until: the caller is on the default branch + a notify hook + this secret (plan 0001 §8):
+#   KANON_CHAT_RELEASE
+name: Release announcement
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#   release:
+#     types: [published]       — a stable release and a pre-release alike (decision 1)
+#   workflow_dispatch          — inputs `tag` (required: an existing release's tag, to announce
+#                                it again) and `dry_run` (boolean, default false)
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` inputs, passed through. Empty on a release, which names its
+    # own tag, and `dry_run` is a STRING here: a caller passes `${{ inputs.dry_run }}`, which a
+    # boolean input refuses as `''` on the release.
+    inputs:
+      tag:
+        description: An existing release's tag, to announce it again. A published release names its own.
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "'true' to print the message instead of posting it"
+        required: false
+        type: string
+        default: ""
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      # Not required: without it nothing is posted (above). Only the `notify` job reads it, and the
+      # gate, as one presence boolean.
+      KANON_CHAT_RELEASE:
+        required: false
+
+concurrency:
+  # One group per release, so two releases published together never cancel each other's wait. A
+  # smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  group: kanon-release-announce-${{ github.event.release.tag_name || inputs.tag }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
+  cancel-in-progress: false
+  # A run the gate refuses only skips, and a dispatch for a tag can join a published release's
+  # group, so a skip-only run must never replace a pending real one (kanon#552).
+  queue: max
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
+# ceiling and must grant at least this, or the run fails to start; `lane-check` fails a caller
+# that grants less. It reads the release, and nothing else.
+permissions:
+  contents: read
+
+jobs:
+  # THE MEMBERSHIP GATE (K-AGENT-45), in a job of its own. On a published release the actor is
+  # whoever published it: a person with write access, or an App the register names, such as the
+  # Releaser a promotion publishes as (`scripts/lane-gate.mjs`). On a dispatch, whoever ran it.
+  #
+  # ONLY THE CALLER'S TWO TRIGGERS. As a called workflow it runs on whatever its caller is called
+  # on (Kanon's smoke calls it on pull requests), so every other event starts nothing.
+  gate:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      member: ${{ steps.gate.outputs.member }}
+      # `present` or `none`, and empty when the gate refused: the `notify` job starts only on
+      # `present` (plan 0011 §8).
+      hook: ${{ steps.post.outputs.hook }}
+      # `true` when the release will be posted, or on a dry run, which prints it.
+      announce: ${{ steps.post.outputs.announce }}
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+      # WHETHER ANYTHING WILL BE POSTED (plan 0011 §8). The hook's presence comes from a sparse
+      # checkout of its directory alone, at the run's commit, which runs nothing and keeps no
+      # credential.
+      - name: Check out the notify hook's directory, to see whether it exists
+        if: steps.gate.outputs.member == 'true'
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/notify
+          sparse-checkout-cone-mode: false
+
+      # The kind's secret is read here only as one presence boolean, which is all the guard
+      # (`tests/unit/notify-guard.test.ts`) admits outside the `notify` job. With a hook and the
+      # secret, the message is written and `notify` posts it; with a hook and no secret, nothing is
+      # written and `notify` records `skipped` (`no-secret`); with no hook, nothing runs but the
+      # gate, whatever secret is set (decision 2: no built-in fallback). A dry run writes and
+      # prints the message either way, and posts nothing.
+      - name: Will the release be posted?
+        id: post
+        if: steps.gate.outputs.member == 'true'
+        env:
+          HAS_SECRET: ${{ secrets.KANON_CHAT_RELEASE != '' }}
+          DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
+        run: |
+          set -euo pipefail
+          if [ -f .github/actions/notify/action.yml ]; then hook=present; else hook=none; fi
+          if [ -n "$DRY_RUN" ] || { [ "$hook" = present ] && [ "$HAS_SECRET" = true ]; }; then announce=true; else announce=false; fi
+          { echo "hook=$hook"; echo "announce=$announce"; } >> "$GITHUB_OUTPUT"
+          if [ "$hook" = none ]; then
+            echo "No notify hook: this release was not announced. docs/notifications.md says how to add one." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$HAS_SECRET" != true ]; then
+            # Named in words: the guard admits the secret's name once in this job, above.
+            echo "No chat secret for release announcements: this release was not announced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -n "$DRY_RUN" ]; then
+            echo "A dry run: the message is written and printed, and nothing is posted." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # THE MESSAGE: read from the release on GitHub, with the workflow token, which reads contents and
+  # nothing more. No checkout, no chat secret, no write.
+  announce:
+    needs: gate
+    if: needs.gate.outputs.member == 'true' && needs.gate.outputs.announce == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      # The message artifact's name, with this job's attempt, which the `notify` job takes as is
+      # (plan 0011 §4): after "Re-run failed jobs" its own attempt is one past this one's. Empty
+      # when nothing was uploaded.
+      message-artifact: ${{ steps.upload.outputs.artifact-id && format('kanon-notify-release-announce-announce-{0}-{1}', github.run_id, github.run_attempt) || '' }}
+    steps:
+      - uses: $/actions/kanon-path
+
+      # A draft announces nothing, and a tag with no published release fails the job by name. On a
+      # dry run it prints the message, its plain text and Kanon's Slack hook's payload to the step
+      # summary, and writes nothing to upload.
+      - name: Write the release's message
+        id: message
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          DRAFT: ${{ github.event.release.draft }}
+          DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
+          MESSAGE_PATH: ${{ runner.temp }}/kanon-notify-message/message.json
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$MESSAGE_PATH")"
+          node "$KANON/scripts/announce-release.mjs"
+
+      # The one message artifact, named for this lane, this job and this attempt (plan 0011 §4);
+      # the job's `message-artifact` output names it for the `notify` job.
+      - name: Upload the message
+        id: upload
+        if: steps.message.outputs.message != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-notify-release-announce-announce-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.message.outputs.message }}
+          if-no-files-found: error
+
+  # THE POST (plan 0011 §5, `K-OBS-19`): the adopter's hook, with this kind's secret and no other,
+  # a token that reads contents and nothing more, and no Claude credential. Of the shape
+  # `tests/unit/helpers/notify-jobs.ts` holds every `notify` job to. It starts only past an
+  # admitting gate with a hook, never on a dry run or a cancelled run, and after a skipped or
+  # failed `announce` job too, so a message not posted is recorded as `skipped`.
+  notify:
+    needs: [gate, announce]
+    if: ${{ !cancelled() && needs.gate.outputs.member == 'true' && needs.gate.outputs.hook == 'present' && inputs.dry_run != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.notify.outputs.outcome }}
+    steps:
+      - uses: $/actions/notify
+        id: notify
+        with:
+          kind: release
+          artifact: ${{ needs.announce.outputs.message-artifact }}
+          secret: ${{ secrets.KANON_CHAT_RELEASE }}
