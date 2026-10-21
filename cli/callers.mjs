@@ -327,15 +327,16 @@ const laneCheckJob = (release) => [
 ];
 
 /**
- * A new `ci.yml`, for a repository with none: the review lane and the reconciler read CI's runs by
- * that file name (`K-LAYOUT-18`), and `lane-check` is its first job. The project's own gates go
- * beside it.
+ * A new `ci.yml`, for a repository with none: the review lane, the reconciler and the dispatch sweep
+ * (every lane whose workflow carries `# READS WORKFLOW: ci.yml`) read CI's runs by that file name
+ * (`K-LAYOUT-18`), and `lane-check` is its first job. The project's own gates go beside it.
  * @param {string} release @param {string} defaultBranch
  */
 export const ciFile = (release, defaultBranch) =>
   [
-    '# The project\'s CI (K-LAYOUT-18): the review lane and the reconciler read its runs by this file',
-    '# name. `kanon init` started it with Kanon\'s lane check; add the project\'s own gates as jobs.',
+    '# The project\'s CI (K-LAYOUT-18): the review lane, the reconciler and the dispatch sweep read its',
+    '# runs by this file name. `kanon init` started it with Kanon\'s lane check; add the project\'s own',
+    '# gates as jobs.',
     'name: CI',
     '',
     'on:',
