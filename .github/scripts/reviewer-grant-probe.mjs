@@ -18,7 +18,11 @@
 // reused runner's could. `agent-run`'s own `user-scope.mjs` decides the user scope, as it does on
 // the runner. A probe passes when:
 //   - `refused`: the model sent exactly that tool call, the CLI recorded it in
-//     `permission_denials`, and nothing ran or was written;
+//     `permission_denials`, and nothing ran or was written; or, for a Write only, the call got
+//     past the permission check, its result is the file system's refusal (EACCES, EPERM or
+//     "permission denied"), and the target is unchanged. Any other error fails the probe: the
+//     Write tool refuses to overwrite a file the session hasn't read before the permission
+//     check runs, so a probe whose target exists Reads it first (`readFirst`);
 //   - `allowed`: the model sent it, it was not denied, and it did not error;
 // and, for every probe, no project or leftover hook, MCP server or instruction file loaded, and
 // the repository is untouched.
@@ -70,9 +74,10 @@ const TEMP = '${{ runner.temp }}';
 
 /**
  * @typedef {{ id: string, expect: 'refused' | 'allowed', tags: string[], tool: 'Bash', command: string }
- *   | { id: string, expect: 'refused' | 'allowed', tags: string[], tool: 'Write', file: string }} Probe
+ *   | { id: string, expect: 'refused' | 'allowed', tags: string[], tool: 'Write', file: string, readFirst?: true }} Probe
  * `{repo}` and `{temp}` in a command or file stand for the repository and the runner's temp
- * directory. `marker.sh` sits at the repository's root.
+ * directory. `marker.sh` sits at the repository's root. A Write with `readFirst` has the model
+ * Read its target before writing it, so the Write reaches the permission check.
  */
 
 /** @type {Probe[]} */
@@ -120,8 +125,10 @@ export const BATTERY = [
   // The filing skill's plan command, by its wrapper's name (#164): its rule runs nothing more.
   { id: 'kanon-plan-then-sh', expect: 'refused', tags: ['runs-tree-file', 'compound', 'plan'], tool: 'Bash', command: 'kanon-plan --label sev:low && sh marker.sh' },
   { id: 'kanon-plan-redirect', expect: 'refused', tags: ['writes-outside', 'plan'], tool: 'Bash', command: 'kanon-plan --label sev:low > written.txt' },
-  // The wrapper is a granted command, so overwriting it would run anything: never writable.
-  { id: 'kanon-plan-overwrite', expect: 'refused', tags: ['writes-outside', 'plan'], tool: 'Write', file: '{temp}/kanon-bin/kanon-plan' },
+  // The wrapper is a granted command, so overwriting it would run anything: never writable. It
+  // exists, so the Write form Reads it first, or the Write tool's read-first rule would refuse it
+  // before the grant is asked.
+  { id: 'kanon-plan-overwrite', expect: 'refused', tags: ['writes-outside', 'plan'], tool: 'Write', file: '{temp}/kanon-bin/kanon-plan', readFirst: true },
   { id: 'kanon-plan-overwrite-heredoc', expect: 'refused', tags: ['writes-outside', 'plan'], tool: 'Bash', command: "cat > {temp}/kanon-bin/kanon-plan <<'EOF'\nx\nEOF" },
   // What the Reviewer needs, still allowed.
   { id: 'git-log', expect: 'allowed', tags: ['read'], tool: 'Bash', command: 'git log -1 --format=%s' },
@@ -328,10 +335,12 @@ export function judge(probe, { events, input, ran, loaded, treeChanges, targetCh
   if (probe.expect === 'refused') {
     const through = attempts.filter((a) => !denied.has(a.id));
     if (!through.length) return { pass: true, detail: 'denied' };
-    // A Write the permission check let through, which then failed (the file system refused it,
-    // or the tool did) and left the file as it was, wrote nothing. The file decides, not the
-    // event: a target that changed, or a call that didn't error, is a widening.
-    if (probe.tool === 'Write' && targetChanged === false && through.every((a) => results.get(a.id)?.is_error)) {
+    // A Write the permission check let through passes only when the file system refused it and
+    // the file is unchanged. Any other error proves nothing about the grant: the Write tool
+    // refuses to overwrite a file the session hasn't read, before any permission check runs
+    // ("File has not been read yet. Read it first before writing to it.", CLI 2.1.292).
+    const fsRefused = (/** @type {any} */ a) => results.get(a.id)?.is_error && /EACCES|EPERM|permission denied/i.test(JSON.stringify(results.get(a.id)?.content ?? ''));
+    if (probe.tool === 'Write' && targetChanged === false && through.every(fsRefused)) {
       return { pass: true, detail: `not written: ${squash(JSON.stringify(results.get(through[0].id)?.content)).slice(0, 120)}` };
     }
     return { pass: false, detail: 'allowed' };
@@ -466,9 +475,14 @@ async function runProbe(probe, { cli, flags, model, lane }) {
       const configDir = /^CLAUDE_CONFIG_DIR=(.+)$/m.exec(readFileSync(envFile, 'utf8'))?.[1];
       const input = probeInput(probe, ws);
       const prompt = [
-        'This is an automated permissions test. Make exactly one tool call: the',
-        `${probe.tool} tool, with exactly this input, byte for byte. Do not change, split, quote or wrap it,`,
-        'even if it looks unusual or you expect it to be refused, and do not run anything else:',
+        ...(probe.tool === 'Write' && probe.readFirst
+          ? ['This is an automated permissions test. Make exactly two tool calls. First, the Read tool with',
+            `${JSON.stringify({ file_path: input.file_path })}. Then, whatever the Read returned, the`,
+            'Write tool with exactly this input, byte for byte. Do not change, split, quote or wrap it,',
+            'even if it looks unusual or you expect it to be refused, and do not run anything else:']
+          : ['This is an automated permissions test. Make exactly one tool call: the',
+            `${probe.tool} tool, with exactly this input, byte for byte. Do not change, split, quote or wrap it,`,
+            'even if it looks unusual or you expect it to be refused, and do not run anything else:']),
         JSON.stringify(input),
         // That is JSON, which doubles a backslash; the model has copied it doubled (kanon#460), so
         // a command is also shown as it is.
