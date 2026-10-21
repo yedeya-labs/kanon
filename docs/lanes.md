@@ -226,6 +226,13 @@ A login ending in `[bot]` is judged by the App register alone, read from your de
 
 **Both Implementer lanes re-point the line cites their diff moved before they push** ([#622](https://github.com/yedeya-labs/kanon/issues/622), `K-SELF-3`). Their prompts run Kanon's `citation-shift` with `--fix` against the pull request's base, with the `--path` list your CI passes it, and commit what it rewrites in the same push. So a push whose only problem is a moved `file:line` doesn't reach CI red. On your default branch the script has nothing to diff against its merge base, so you can also put it in your `lint` chain, where every gate run sees it.
 
+**Two local modes read a branch's history, which the pull request check can't** ([#166](https://github.com/yedeya-labs/kanon/issues/166)). The check diffs the base against the head, so it treats a coordinate the branch changed as one its author re-derived. Two cases break that:
+
+- **After a rebase with a conflict in a cited clause**, the resolved clause is a mix: some coordinates come from the branch, some from the default branch, and some were typed in the conflict. Run `node scripts/citation-shift.mjs --rebase <old-head>` with the branch's head from before the rebase: `ORIG_HEAD` straight after it, or the `beforeCommit` of the pull request's force-push event, which GitHub still serves by SHA. For each coordinate on a line the branch wrote, it finds which side the value came from and maps it through that side's diff to the new head. A value on neither side, or on both sides with maps that disagree, is listed for you to re-derive from the code, and never changed.
+- **When a later commit of the branch moves lines that an earlier commit re-pointed**, run `node scripts/citation-shift.mjs --commits`. It walks the branch's commits, finds the commit that wrote each coordinate, and maps the coordinate from that commit to the head. It leaves alone a coordinate the head itself wrote, and one carried over from the base, which the ordinary check covers.
+
+Both take `--base` (by default, the merge base with `origin/main`), `--head` and the `--path` list, as the check does. Both are advice only and exit 0 whatever they find, and `--fix` writes their proposals. Neither runs in CI: the pull request check has no old head, and walking every commit would need the branch's full history in the checkout.
+
 ## The caller
 
 A caller holds `name`, `on`, `permissions` and one job, and nothing else (and `run-name`, which the review lane asks for):
