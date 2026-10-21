@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { billedMinutes, isShort, measure, readTable, renderReport, sampleEvenly, TABLE_HEADER } from '../../scripts/actions-minutes.mjs';
+import { billedMinutes, isShort, looksLong, measure, readTable, renderReport, sampleByGroup, sampleEvenly, TABLE_HEADER } from '../../scripts/actions-minutes.mjs';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8');
@@ -45,6 +45,18 @@ describe('what a run bills (kanon#581)', () => {
     expect(sampleEvenly(ten, 20)).toEqual(ten);
     expect(sampleEvenly(ten, 1)).toEqual([0]);
     expect(sampleEvenly([], 5)).toEqual([]);
+  });
+
+  it('tells a run that lasted past a minute from the rest by the listing\'s own times, and samples each group on its own (kanon#1211)', () => {
+    const at = (seconds: number) => ({ run_started_at: '2026-10-01T10:00:00Z', updated_at: new Date(Date.parse('2026-10-01T10:00:00Z') + seconds * 1000).toISOString() });
+    expect(looksLong(at(61))).toBe(true);
+    expect(looksLong(at(60))).toBe(false);
+    expect(looksLong({})).toBe(false);
+    const runs = [...Array(10).keys()].map((i) => ({ i, ...at(i === 7 ? 900 : 5) }));
+    const { picked, longRuns, longSampled } = sampleByGroup(runs, 3);
+    expect({ longRuns, longSampled }).toEqual({ longRuns: 1, longSampled: 1 });
+    // The one long run is read and stands for itself; three of the nine others stand for three each.
+    expect(picked.map((p) => [p.run.i, p.weight, p.long])).toEqual([[7, 1, true], [0, 3, false], [4, 3, false], [9, 3, false]]);
   });
 });
 
@@ -131,6 +143,28 @@ describe('measuring a repository (kanon#581)', () => {
     const m = measure({ repo: 'o/r', gh, now: '2026-10-08T00:00:00Z', days: 7, sample: 10, lanes: ['agent-review'], log: () => {} });
     expect(calls.filter((a) => a.some((x) => x.includes('/jobs?'))).length).toBe(10);
     expect(m.rows[0]).toMatchObject({ runs: 50, sampled: 10, minutesPerDay: Math.round((50 * 3) / 7) });
+  });
+
+  it('reads every model run of a lane whose runs are nearly all skipped gate checks, and says how many of each it read (kanon#1211)', () => {
+    // Triage's week: 580 runs, 574 of them skipped in seconds, 6 model runs of 21 billed minutes.
+    // The 6 sit where neither the first 100 runs nor 100 spread evenly over all 580 would reach.
+    const ids = [...Array(580).keys()];
+    const evenly = new Set(sampleEvenly(ids, 100));
+    const modelAt = new Set(ids.filter((i) => i >= 100 && !evenly.has(i)).filter((_, k, a) => k % Math.floor(a.length / 6) === 0).slice(0, 6));
+    expect(modelAt.size).toBe(6);
+    const started = '2026-10-01T10:00:00Z';
+    const after = (seconds: number) => new Date(Date.parse(started) + seconds * 1000).toISOString();
+    const runs = ids.map((i) => ({ id: 3000 + i, run_started_at: started, updated_at: after(modelAt.has(i) ? 1260 : 4) }));
+    const jobs = Object.fromEntries(ids.map((i) => [3000 + i, modelAt.has(i) ? [job(5), job(1200)] : [job(2, 'skipped')]]));
+    const { gh, calls } = fakeGh({ runs: { 'review.yml': runs }, jobs });
+    const m = measure({ repo: 'o/r', gh, now: '2026-10-08T00:00:00Z', days: 7, sample: 100, lanes: ['agent-review'], log: () => {} });
+    // Each model run bills 1 + 20 minutes: 126 over the 7 days.
+    expect(m.rows[0]).toMatchObject({ runs: 580, sampled: 106, longRuns: 6, longSampled: 6, short: 574, otherMinutes: 21, minutesPerDay: 18 });
+    const read = calls.filter((a) => a.some((x) => x.includes('/jobs?'))).map((a) => Number(/runs\/(\d+)\/jobs/.exec(a.find((x) => x.includes('/jobs?'))!)![1]) - 3000);
+    for (const i of modelAt) expect(read).toContain(i);
+    const report = renderReport(m);
+    expect(readTable(report)[0]).toMatchObject({ short: '99%', otherMinutes: '21', minutesPerDay: '18' });
+    expect(report).toContain('`agent-review` 6 of 6 and 100 of 574');
   });
 
   it('splits a range GitHub would cut at 1,000 runs, so every run is counted', () => {
