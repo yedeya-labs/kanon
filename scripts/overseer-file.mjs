@@ -92,6 +92,7 @@ import { THRESHOLD, countInterlock } from './capability-interlock.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { buildRows, levelOf, notWritten, readUpstream, renderSent, sendFromEnv, sentSentence } from './lib/finding-rows.mjs';
 import { beforeApply } from './lib/labels.mjs';
+import { plan } from './issue-triage-defaults.mjs';
 import { appPersona } from './app-register.mjs';
 import { signed } from './lib/role-marker.mjs';
 
@@ -116,10 +117,16 @@ export const SUBJECTS = /** @type {const} */ ({
   library: 'kanon',
 });
 
-/** Every issue the Overseer files carries these (`K-WORK-4`'s backstop routes them to the platform bucket). */
+/** Every issue the Overseer files carries these. */
 export const LABELS = ['pipeline-improvement', 'agent:overseer'];
-/** The platform bucket (`K-WORK-4`). */
-export const BUCKET = 'Development Automation';
+/**
+ * The `--label` and `--milestone` arguments of an issue the Overseer files, from the planning
+ * module's `plan()`, the one home of the routing rule (`K-WORK-8`, kanon#1194): its work is the
+ * pipeline's, so it names that subject and lets `plan()` pick the bucket. A `PlanRefusal` throws,
+ * and each caller below reports it as that issue not filed.
+ * @param {string[]} labels
+ */
+export const routing = (labels) => plan(labels, { subject: 'pipeline' }).args;
 /** The audit issue's title, numbered. `workflow-health.mjs` finds it by `audit-summary` in the title. */
 export const auditTitle = (/** @type {number} */ n) => `[pipeline] audit-summary — Overseer audit #${n}`;
 /** An audit issue's title, as `auditTitle` writes it; `signal-outcomes.mjs` leaves these out of every signal. */
@@ -445,9 +452,9 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
   const filed = [];
   for (const f of file) {
     const kanon = classify(f).who === 'kanon' ? { kanon: true } : {};
-    const labels = [...LABELS, ...(f.capability ? ['capability'] : [])].flatMap((l) => ['--label', l]);
     try {
-      const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...labels, '--milestone', BUCKET], signed(f.body, 'Overseer', appPersona('Overseer'))));
+      const routed = routing([...LABELS, ...(f.capability ? ['capability'] : [])]);
+      const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...routed], signed(f.body, 'Overseer', appPersona('Overseer'))));
       filed.push({ title: f.title, number, ...kanon });
       log(`filed #${number}: ${f.title}`);
     } catch (e) {
@@ -466,7 +473,7 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
       '--search', 'in:title "audit-summary"', '--json', 'number,title,state']));
     const n = nextAuditNumber(prior.map((p) => p.title));
     const body = renderAudit({ audit: report.audit, filed, held, upstream, choice, ...(level ? { level, sent } : {}) });
-    audit = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', auditTitle(n), '--body-file', '-', ...LABELS.flatMap((l) => ['--label', l]), '--milestone', BUCKET], signed(body, 'Overseer', appPersona('Overseer'))));
+    audit = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', auditTitle(n), '--body-file', '-', ...routing(LABELS)], signed(body, 'Overseer', appPersona('Overseer'))));
   } catch (e) {
     log(`::error title=overseer audit not filed::${String(/** @type {Error} */ (e).message).split('\n')[0]}`);
     return 1;

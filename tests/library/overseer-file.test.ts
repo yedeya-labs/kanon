@@ -3,8 +3,8 @@ import { ROOT } from './helpers/adopter.js';
 import { validate } from '../../actions/agent-telemetry/schema.mjs';
 import { redact, verify } from '../../actions/agent-telemetry/scrub.mjs';
 import { kanonFileIn } from '../../scripts/lib/finding-rows.mjs';
+import { PIPELINE_MILESTONE } from '../../scripts/issue-triage-defaults.mjs';
 import {
-  BUCKET,
   LABELS,
   SUBJECTS,
   auditTitle,
@@ -104,7 +104,7 @@ describe('who can act decides where a finding goes', () => {
       // Opened with the Overseer's header and role marker (plan 0005 §3.3).
       expect(body).toBe(`**Overseer** <!-- kanon:role=overseer -->\n\nEvidence for a ${subject} finding.`);
       expect(args.filter((_, i) => args[i - 1] === '--label')).toEqual(LABELS);
-      expect(args[args.indexOf('--milestone') + 1]).toBe(BUCKET);
+      expect(args[args.indexOf('--milestone') + 1]).toBe(PIPELINE_MILESTONE);
       expect(r.audit!.body).toContain(`- #100 a ${subject} finding`);
     });
 
@@ -270,7 +270,7 @@ describe('a repository that declares `Upstream findings: filed here` (K-LAYOUT-1
     // In this repository, and no other: the same `--repo`, labels and bucket as the adopter's own.
     expect(filed.args.slice(0, 4)).toEqual(['issue', 'create', '--repo', 'o/r']);
     expect(r.calls.every((c) => !c.args.includes('--repo') || c.args[c.args.indexOf('--repo') + 1] === 'o/r')).toBe(true);
-    expect(filed.args).toEqual(expect.arrayContaining(['--label', 'pipeline-improvement', '--label', 'agent:overseer', '--milestone', BUCKET]));
+    expect(filed.args).toEqual(expect.arrayContaining(['--label', 'pipeline-improvement', '--label', 'agent:overseer', '--milestone', PIPELINE_MILESTONE]));
     expect(filed.body).toContain(kanonFinding.body);
     const body = r.audit!.body;
     expect(body).toContain(`- #101 ${kanonFinding.title} (only Kanon can act on it)`);
