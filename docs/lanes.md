@@ -333,7 +333,16 @@ gh workflow run agent-lead-revise.yml -f pr_number=123 -f max_turns=150 -f reaso
 
 Some strings are read by another program by their exact text: the Merger's comment marker (`<!-- merger:<rule>:<sha> -->`) and escalation header, the split lane's branch (`lead/split-<n>`), the Lead's adoption sentence, the four caller names above, and the retry steps' names. Kanon writes them with role names. Until [#53](https://github.com/yedeya-labs/kanon/issues/53) they carried the reference adopter's agent names, caller names and issue numbers, and a pull request, branch, issue or run from then still carries them, so the readers accept both spellings. [`scripts/lib/protocol-spellings.mjs`](../scripts/lib/protocol-spellings.mjs) holds both.
 
-The old spellings are read until a measurement says nothing live carries them. [`scripts/protocol-census.mjs`](../scripts/protocol-census.mjs), run in your checkout with `GITHUB_REPOSITORY` set, lists every caller, open pull request (its comments, its checks and the failed runs on its head), open issue and branch that still carries one, and exits 0 only when there are none. When it exits 0 in every adopter Kanon knows of, a release drops the old spellings.
+The old spellings are read until a measurement says nothing live carries them. [`scripts/protocol-census.mjs`](../scripts/protocol-census.mjs), run in your checkout with `GITHUB_REPOSITORY` set, asks every question a reader of an old spelling asks, and lists everything that still carries one:
+
+- your caller workflows, by their `name:`;
+- every open pull request: all its comments, its checks, the failed runs on its head, and the runs the rebase lane's markers on it name;
+- every pull request merged in the last day, the window in which the Merger still reads its comments back;
+- every issue, open or closed, for the Lead's adoption sentence;
+- for every open issue labelled `qa:needs-split`, the pull requests in any state on the old spelling of its split branch, closed ones whose branch is deleted included, as the Lead's split recovery reads them;
+- every branch.
+
+It exits 0 only when there are none, so an exit 0 means no reader would misread anything once the old spellings go. It exits 2 when a read failed, because an unread artifact is never counted as clean. When it exits 0 in every adopter Kanon knows of, a release drops the old spellings.
 
 ## Your first lane: the Reviewer
 

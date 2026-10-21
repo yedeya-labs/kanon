@@ -7,9 +7,11 @@ import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 import { writeStub } from '../unit/helpers/stub-bin.js';
 const P = await import('../../scripts/lib/protocol-spellings.mjs');
-const { MERGER_LOGIN, apply, checkPartition, readPr } = await import('../../scripts/merge-gate.mjs');
+const { FOLLOW_UP_MS, MERGER_LOGIN, apply, checkPartition, followQueueMerges, readPr } = await import('../../scripts/merge-gate.mjs');
 const { execute, splitEvidenceRead } = await import('../../scripts/lead-reconcile.mjs');
-const { censusOf } = await import('../../scripts/protocol-census.mjs');
+const census = await import('../../scripts/protocol-census.mjs');
+const { censusOf, readWorld } = census;
+const { attemptComment } = await import('../../scripts/rebase-lane.mjs');
 
 /**
  * #53 — the strings another program reads by their exact text. Writers use the role-based
@@ -215,6 +217,132 @@ describe('the census measures when the old spellings can go', () => {
       branches: ['lead/split-5'],
       failedJobs: { 1: [{ name: 'review', steps: [{ name: P.RETRY_STEPS.unreachable, conclusion: 'success' }] }] },
     })).toEqual([]);
+  });
+});
+
+describe('the census asks what every reader asks (#157)', () => {
+  const NOW = Date.parse('2026-10-21T12:00:00Z');
+  const REPO = 'o/r';
+  /** A fake `gh --json` over one world. Every call is recorded; an unknown one fails, so a
+   *  read the census forgot to stub is a red test, not an empty answer. */
+  type Row = Record<string, unknown>;
+  const fakeGh = (world: {
+    openPrs?: Row[], merged?: Row[], issues?: Row[], branches?: string[], comments?: Record<string, string[]>,
+    splitPrs?: Record<string, Row[]>, failedRuns?: Record<string, number[]>, jobs?: Record<string, Row[]>, gone?: string[],
+  }) => {
+    const calls: string[][] = [];
+    const json = (args: string[]) => {
+      calls.push(args);
+      const a = args.join(' ');
+      if (a.startsWith('pr list') && args.includes('open')) return world.openPrs ?? [];
+      if (a.startsWith('pr list') && args.includes('merged')) return world.merged ?? [];
+      if (a.startsWith('pr list') && args.includes('all')) return world.splitPrs?.[args[args.indexOf('--head') + 1]!] ?? [];
+      let m;
+      if ((m = /issues\/(\d+)\/comments/.exec(a))) return [(world.comments?.[m[1]!] ?? []).map((body) => ({ body }))];
+      if (/repos\/o\/r\/issues\?state=all/.test(a)) return [world.issues ?? []];
+      if (/branches/.test(a)) return [(world.branches ?? []).map((name) => ({ name }))];
+      if ((m = /runs\?head_sha=(\w+)&status=failure/.exec(a))) return { workflow_runs: (world.failedRuns?.[m[1]!] ?? []).map((id) => ({ id })) };
+      if ((m = /runs\/(\d+)\/jobs/.exec(a))) {
+        if (world.gone?.includes(m[1]!)) throw Object.assign(new Error('gh: Not Found (HTTP 404)'), { stderr: 'HTTP 404' });
+        return { jobs: world.jobs?.[m[1]!] ?? [] };
+      }
+      throw new Error(`unstubbed gh call: ${a}`);
+    };
+    return { json, calls };
+  };
+  const where = (found: { protocol: string, where: string }[]) => found.map((f) => `${f.protocol} @ ${f.where}`);
+  const read = (world: Parameters<typeof fakeGh>[0]) => {
+    const gh = fakeGh(world);
+    return { world: readWorld(REPO, { json: gh.json, now: NOW, callers: () => [] }), calls: gh.calls };
+  };
+  const retryJob = (name: string) => ({ name, steps: [{ name: `${P.RETRY_STEPS.api_error} (RA-2519)`, conclusion: 'success' }] });
+
+  it('finds a closed split pull request on the old branch, whose branch is gone, as splitEvidenceRead would read it', () => {
+    const { world, calls } = read({
+      issues: [
+        { number: 42, state: 'open', body: '', labels: [{ name: 'qa:needs-split' }] },
+        // Neither of these is read by `splitEvidenceRead`, so neither is asked about.
+        { number: 43, state: 'closed', body: '', labels: [{ name: 'qa:needs-split' }] },
+        { number: 44, state: 'open', body: '', labels: [{ name: 'bug' }] },
+      ],
+      splitPrs: { 'bezalel/split-42': [{ number: 9, state: 'CLOSED', headRefName: 'bezalel/split-42' }] },
+    });
+    expect(where(censusOf(world))).toEqual(['split branch @ PR #9 (closed, a split of issue #42)']);
+    // The same question the reader asks, on each old spelling of the branch.
+    const asked: string[][] = [];
+    splitEvidenceRead(42, { text: () => '', json: (args: string[]) => { asked.push(args); return []; } });
+    const legacy = asked.filter((a) => !a.includes(P.splitBranch(42)));
+    expect(legacy.length).toBeGreaterThan(0);
+    // Up to the fields, which differ: the census reports the branch, the reader its age.
+    const query = (c: string[]) => c.slice(0, c.indexOf('--json')).filter((_, i) => c[i - 1] !== '--repo');
+    expect(calls.filter((c) => c.includes('--head')).map(query)).toEqual(legacy.map(query));
+  });
+
+  it('counts a merged split pull request too, and leaves an open one to the open-PR read', () => {
+    const found = censusOf({ splitPrs: { 42: [
+      { number: 8, state: 'MERGED', headRefName: 'bezalel/split-42' },
+      { number: 9, state: 'OPEN', headRefName: 'bezalel/split-42' },
+      { number: 10, state: 'CLOSED', headRefName: 'lead/split-42' },
+    ] } });
+    expect(where(found)).toEqual(['split branch @ PR #8 (merged, a split of issue #42)']);
+  });
+
+  it('reads the adoption sentence on a closed issue, which the adopt arm edits too, and on no pull request', () => {
+    const { world } = read({ issues: [
+      { number: 2, state: 'closed', body: 'Adopted into project #9 by Bezalel, from x', labels: [] },
+      { number: 3, state: 'open', body: 'Adopted into project #9 by the Lead', labels: [] },
+      { number: 4, state: 'closed', body: 'Adopted into project #9 by Bezalel', labels: [], pull_request: {} },
+    ] });
+    expect(where(censusOf(world))).toEqual(['adoption note @ issue #2']);
+  });
+
+  it('reads the Merger\'s markers on a pull request merged in its follow-up window, by followQueueMerges\' own query', () => {
+    const recent = new Date(NOW - FOLLOW_UP_MS + 60_000).toISOString();
+    const old = new Date(NOW - FOLLOW_UP_MS - 60_000).toISOString();
+    const { world, calls } = read({
+      merged: [{ number: 5, mergedAt: recent }, { number: 6, mergedAt: old }],
+      comments: { 5: [`<!-- joshua:issues-unclosed:${H12} -->`], 6: [`<!-- joshua:issues-unclosed:${H12} -->`] },
+    });
+    expect(where(censusOf(world))).toEqual(['merger marker @ PR #5 (merged)']);
+    const theirs: string[][] = [];
+    followQueueMerges(REPO, { run: (args: string[]) => { theirs.push(args); return '[]'; }, now: NOW, say: () => {} });
+    const mine = calls.find((c) => c.includes('merged'))!;
+    const query = (c: string[]) => c.slice(0, c.indexOf('--json'));
+    expect(query(mine)).toEqual(query(theirs[0]!));
+    expect(census.FOLLOW_UP_MS).toBe(FOLLOW_UP_MS);
+  });
+
+  it('reads every page of an open pull request\'s comments, as the merge gate does', () => {
+    const { world, calls } = read({
+      openPrs: [{ number: 1, headRefName: 'x', headRefOid: HEAD, statusCheckRollup: [] }],
+      comments: { 1: [...Array.from({ length: 150 }, () => 'hi'), '🚦 **Joshua — not merging.**'] },
+    });
+    expect(calls.some((c) => c.includes('--paginate') && c.some((x) => x.includes('issues/1/comments')))).toBe(true);
+    expect(where(censusOf(world))).toEqual(['escalation header @ PR #1']);
+  });
+
+  it('reads the run a rebase-lane marker names, which is main\'s and not on the head', () => {
+    const { world } = read({
+      openPrs: [{ number: 1, headRefName: 'x', headRefOid: HEAD, statusCheckRollup: [] }],
+      comments: { 1: [attemptComment(HEAD, '777'), attemptComment('0'.repeat(40), '888')] },
+      jobs: { 777: [retryJob('rebase / resolve (1)')], 888: [retryJob('rebase / resolve (1)')] },
+    });
+    expect(where(censusOf(world))).toEqual(['retry breadcrumb @ PR #1 (job rebase / resolve (1))']);
+    expect(census.rebaseRunIds([attemptComment(HEAD, '777')], HEAD)).toEqual(['777']);
+  });
+
+  it('passes over a marked run that no longer exists, and fails on any other unread run', () => {
+    const world = {
+      openPrs: [{ number: 1, headRefName: 'x', headRefOid: HEAD, statusCheckRollup: [] }],
+      comments: { 1: [attemptComment(HEAD, '777')] }, gone: ['777'],
+    };
+    expect(where(censusOf(read(world).world))).toEqual([]);
+    const gh = fakeGh(world);
+    const broken = (args: string[]) => {
+      if (args.join(' ').includes('runs/777/jobs')) throw new Error('HTTP 502');
+      return gh.json(args);
+    };
+    expect(() => readWorld(REPO, { json: broken, now: NOW, callers: () => [] })).toThrow('HTTP 502');
   });
 });
 
