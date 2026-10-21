@@ -10,6 +10,11 @@
  * pre-release says so, "pre-release" and "candidate", in its title and summary. Its notes become
  * Features, Fixes and Maintenance, read from the release body with the helpers the deploy
  * announcement reads it with (`scripts/lib/release-notes.mjs`), each note's line through `literal`.
+ * Those helpers read release-please's format alone (`### Features` headings over `* **scope:**`
+ * bullets). A body in no such format, as `releasePleaseFormat` tells, is read here instead (kanon#1196):
+ * each bullet by its own conventional-commit prefix (`feat:`, `fix:`, `chore(deps):`, as GitHub's
+ * auto-generated notes list them, `* feat: add x by @u in …/pull/1`), a bullet with none under
+ * Changes; and a body with no bullet at all as a short plain-text excerpt under Notes.
  * A draft announces nothing: the event says so before anything is read (`DRAFT`), and a release
  * GitHub returns as a draft is skipped the same way. A tag with no published release fails by name.
  *
@@ -32,7 +37,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { payload } from '../actions/notify/slack/slack.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { describeErrors, fit, literal, renderText, validate } from './lib/notify-contract.mjs';
-import { classify, kanonList, kanonMaint, parseSections, scopeOf } from './lib/release-notes.mjs';
+import { INTERNAL_SCOPES, classify, kanonList, kanonMaint, parseSections, scopeOf } from './lib/release-notes.mjs';
 
 /** The one host it makes requests to. */
 export const API = 'https://api.github.com';
@@ -54,6 +59,101 @@ const TAG = /^(?!.*\.\.)[^\u0000- \u007f~^:?*[\\]{1,255}$/;
  * @typedef {{ tag_name: string, name?: string | null, body?: string | null, draft?: boolean, prerelease?: boolean }} Release
  */
 
+/** A conventional commit's subject, `type(scope)!: prose`, as a bullet of another format starts. */
+const CONVENTIONAL = /^([a-z]+)(?:\(([^)]+)\))?!?:\s+(\S.*)$/i;
+/** The tail GitHub's auto-generated notes put on a bullet: ` by @user in https://…/pull/N`. */
+const GITHUB_TAIL = /\s+by\s+@[A-Za-z0-9-]+(?:\[bot\])?\s+in\s+(https:\/\/\S+\/pull\/(\d+))\s*$/;
+/** A link to a pull request, as release-please appends one: ` ([#N](url))`. */
+const REF = /\s*\(\[#\d+\]\([^)]+\)\)\s*$/;
+
+/**
+ * GitHub's auto-generated tail, ` by @user in https://…/pull/N`, as release-please's link
+ * ` ([#N](url))`, on each bullet of a body; any other line is left as it is.
+ * @param {string} body
+ */
+export const githubRefs = (body) => body.replace(/\r\n/g, '\n').split('\n')
+  .map((line) => (/^\s*[-*+]\s/.test(line) ? line.replace(GITHUB_TAIL, (_, url, n) => ` ([#${n}](${url}))`) : line))
+  .join('\n');
+
+/** A bullet's text and its trailing pull-request link, apart. @param {string} raw */
+function splitRef(raw) {
+  const m = raw.match(REF);
+  return m ? { text: raw.slice(0, m.index).trim(), ref: ` ${m[0].trim()}` } : { text: raw, ref: '' };
+}
+
+/**
+ * Whether a body is in release-please's format, by what its sorting reads: a heading it sorts into
+ * Features or Fixes, or a bullet with its `**scope:**` prefix.
+ * @param {Record<string, string[]>} parsed `parseSections`' reading
+ */
+const releasePleaseFormat = (parsed) => Object.entries(parsed)
+  .some(([heading, bullets]) => classify(heading, null) !== 'maint' || bullets.some((raw) => scopeOf(raw) !== null));
+
+/** How much of a body with no bullet the Notes excerpt keeps, before `fit`'s own limits. */
+export const EXCERPT = Object.freeze({ lines: 10, chars: 700 });
+
+/**
+ * The message's sections from sorted raw bullets, each in release-please's shape, empty ones left out.
+ * @param {string[]} features @param {string[]} fixes @param {string[]} maint @param {string[]} other
+ */
+function sectionsOf(features, fixes, maint, other) {
+  return [
+    { heading: 'Features', body: kanonList(features) },
+    { heading: 'Fixes', body: kanonList(fixes) },
+    { heading: 'Maintenance', body: kanonMaint(maint) },
+    { heading: 'Changes', body: kanonList(other) },
+  ].filter((s) => s.body !== '');
+}
+
+/**
+ * The sections of a body not in release-please's format (kanon#1196). Each bullet is
+ * read by its own conventional-commit prefix: `feat` a Feature, `fix`, `perf` and `revert` a Fix,
+ * any other type (or an internal scope, `feat(ci):`) Maintenance under its scope or type; a bullet
+ * with no prefix is a Change, unless it is a dependency bump. A trailing `([#N](url))`, which
+ * `githubRefs` writes for GitHub's ` by @u in …/pull/N`, is kept as the link, and GitHub's New
+ * Contributors section is passed over. A body with no bullet at
+ * all is a plain-text excerpt under Notes, at most `EXCERPT.lines` lines and `EXCERPT.chars`
+ * characters, each line through `literal`. Empty for an empty body.
+ * @param {string} body
+ * @returns {{ heading: string, body: string }[]}
+ */
+export function otherFormat(body) {
+  /** @type {string[]} */ const features = [];
+  /** @type {string[]} */ const fixes = [];
+  /** @type {string[]} */ const maint = [];
+  /** @type {string[]} */ const other = [];
+  /** @type {string[]} */ const prose = [];
+  let heading = '';
+  for (const line of body.replace(/\r\n?/g, '\n').split('\n')) {
+    const h = line.match(/^#{1,6}\s+(.*)$/);
+    if (h) { heading = (h[1] ?? '').trim(); prose.push(heading); continue; }
+    const b = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (!b) { if (line.trim()) prose.push(line.trim()); continue; }
+    if (/contributor/i.test(heading)) continue;
+    const { text, ref } = splitRef((b[1] ?? '').trim());
+    if (!text) continue;
+    const cc = text.match(CONVENTIONAL);
+    if (!cc) { (/\bbump\b/i.test(text) ? maint : other).push(`${text}${ref}`); continue; }
+    const type = (cc[1] ?? '').toLowerCase();
+    const scope = cc[2]?.trim().toLowerCase() || null;
+    const internal = scope !== null && INTERNAL_SCOPES.has(scope);
+    if (!internal && (type === 'feat' || type === 'feature')) features.push(`${scope ? `**${scope}:** ` : ''}${cc[3]}${ref}`);
+    else if (!internal && (type === 'fix' || type === 'perf' || type === 'revert')) fixes.push(`${scope ? `**${scope}:** ` : ''}${cc[3]}${ref}`);
+    else maint.push(`**${scope ?? type}:** ${cc[3]}${ref}`);
+  }
+  const sections = sectionsOf(features, fixes, maint, other);
+  if (sections.length || !prose.length) return sections;
+  /** @type {string[]} */ const kept = [];
+  let room = EXCERPT.chars;
+  for (const line of prose.slice(0, EXCERPT.lines)) {
+    if (line.length > room) { if (!kept.length) kept.push(line.slice(0, room)); break; }
+    kept.push(line);
+    room -= line.length;
+  }
+  const cut = kept.length < prose.length || kept[kept.length - 1] !== prose[kept.length - 1];
+  return [{ heading: 'Notes', body: [...kept.map(literal), ...(cut ? ['…'] : [])].join('\n') }];
+}
+
 /**
  * One `release` message for a published release, fitted to the contract (§3.3).
  * @param {{ repo: string, release: Release, server?: string, runUrl: string }} args
@@ -63,7 +163,9 @@ export function buildReleaseMessage({ repo, release, server = 'https://github.co
   /** @type {string[]} */ const features = [];
   /** @type {string[]} */ const fixes = [];
   /** @type {string[]} */ const maint = [];
-  for (const [heading, bullets] of Object.entries(parseSections(release.body || ''))) {
+  const body = githubRefs(release.body || '');
+  const parsed = /** @type {Record<string, string[]>} */ (parseSections(body));
+  for (const [heading, bullets] of Object.entries(parsed)) {
     for (const raw of /** @type {string[]} */ (bullets)) {
       const bucket = classify(heading, scopeOf(raw));
       (bucket === 'feature' ? features : bucket === 'fix' ? fixes : maint).push(raw);
@@ -79,11 +181,7 @@ export function buildReleaseMessage({ repo, release, server = 'https://github.co
     ? `**${literal(repo)}** published the **pre-release** **${literal(tag)}**${named}, a candidate: not yet a stable release.`
     : `**${literal(repo)}** published the release **${literal(tag)}**${named}.`;
 
-  const sections = [
-    { heading: 'Features', body: kanonList(features) },
-    { heading: 'Fixes', body: kanonList(fixes) },
-    { heading: 'Maintenance', body: kanonMaint(maint) },
-  ].filter((s) => s.body !== '');
+  const sections = releasePleaseFormat(parsed) ? sectionsOf(features, fixes, maint, []) : otherFormat(body);
 
   return fit({
     kind: 'release',
