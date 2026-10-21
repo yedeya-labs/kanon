@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { TRIGGERS } from '../../cli/callers.mjs';
+import { TRIGGERS, callerFile } from '../../cli/callers.mjs';
 import { MAX_RUNS_READ, callerFileOf, ranJob, reaskDue } from '../../scripts/reask-due.mjs';
 import { evaluate } from './helpers/expression.js';
 import { SPAWNS } from './helpers/spawns.js';
@@ -295,6 +295,25 @@ describe('no loop: the documented re-asks and Kanon\'s callers form no `workflow
   it('has no cycle', () => {
     expect(cycle(edges())).toBeNull();
   });
+
+  // kanon#833: Kanon's own callers pin a release that admits a re-ask (#832), so they carry it,
+  // as `kanon init` would write it here: each covered caller named by the `name:` it has.
+  it.each([['agent-dispatch-sweep', 'dispatch-sweep.yml'], ['agent-lead-reconcile', 'lead-reconcile.yml']])(
+    "Kanon's caller of %s carries the re-ask byte for byte as `kanon init` writes it",
+    (lane, file) => {
+      const text = readFileSync(join(WF, file), 'utf8');
+      const files = readdirSync(WF).filter((x) => /\.ya?ml$/.test(x));
+      const names = new Map(Object.keys(TRIGGERS).flatMap((l) => {
+        const f = files.find((x) => readFileSync(join(WF, x), 'utf8').includes(`uses: yedeya-labs/kanon/.github/workflows/${l}.yml@`));
+        return f ? [[l, read(f).name!] as [string, string]] : [];
+      }));
+      const release = /uses: yedeya-labs\/kanon\/\.github\/workflows\/[a-z-]+\.yml@(\S+)/.exec(text)![1]!;
+      const spec = (JSON.parse(readFileSync('requirements.json', 'utf8')) as { lanes: Record<string, Parameters<typeof callerFile>[1]> }).lanes[lane]!;
+      const rendered = callerFile(lane, spec, { release, ciName: 'CI', defaultBranch: 'main', path: `${WF}/${file}`, names });
+      const block = /\n( {2}# The re-ask:[^\n]*\n(?: {2}#[^\n]*\n)* {2}workflow_run:\n(?: {4}[^\n]*\n)+)/.exec(rendered)![1]!;
+      expect(text).toContain(block);
+    },
+  );
 
   it('would be caught: a sweep caller listing itself, or a reviewer listening to the reconciler', () => {
     const g = edges();
