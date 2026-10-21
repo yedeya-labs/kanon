@@ -8,7 +8,7 @@ This page gives, per lane, what starts it, what its runs cost in runner-minutes 
 
 A caller's triggers are GitHub events, and GitHub can't filter most of them by label or by author. So a lane starts on far more events than it acts on: the implement lane on every label put on any issue, the review lane on every CI run of every pull request. Its first job, or a job's `if:`, then decides. That gives three kinds of run:
 
-- **A skipped run** bills nothing. Every job's `if:` was false, so no runner started. The implement, triage, split and verify lanes' runs for any other label are these, and so are merge reconcile's for a review on a pull request still open. They still count as runs in the Actions tab, which is most of the 11,000 a week Kanon saw.
+- **A skipped run** bills nothing. Every job's `if:` was false, so no runner started. The implement, triage, split and verify lanes' runs for any other label are these, and so are merge reconcile's for a review on a pull request still open. They still count as runs in the Actions tab, which is most of the about 7,800 runs a week Kanon saw in the window the report below measures.
 - **A short run** bills a minute or two. A gate or filter job ran, found nothing to do, and the lane's other jobs were skipped: the review lane on a head with no review label or one already reviewed, the revise lanes on a pull request that isn't their role's, merge reconcile on a merged pull request whose latest verdict declares nothing open ([#177](https://github.com/yedeya-labs/kanon/issues/177)). The lanes that run no model, the Merger, the reconciler, the dispatch sweep and the issue backstop, do their whole job in a short run.
 - **A model run** bills for as long as the agent works, plus a few minutes of setup: checking out, minting the token, running your project-setup hook.
 
@@ -47,38 +47,40 @@ The "Its short and skipped runs" column is held to the lanes' jobs by [`tests/un
 
 ## Kanon's own runs
 
-Kanon is a busy repository: about thirty pull requests a day, nearly all of them the agents'. The report says how busy it was over the days measured. Kanon turned on most of its lanes on 2026-10-12 ([#727](https://github.com/yedeya-labs/kanon/pull/727)), so a lane whose "Days measured" is under one rests on its first hours, which held a backlog; read those as rough until the figures are refreshed. A lane Kanon doesn't call is not measured, and one whose caller didn't run in the window shows no runs.
+Kanon is a busy repository: about twenty-five pull requests a day, nearly all of them the agents'. The report says how busy it was over the days measured. Every lane Kanon called through the window has its 7 days measured ([#807](https://github.com/yedeya-labs/kanon/issues/807)), except the issue backstop, whose caller Kanon added on 2026-10-20: its "Days measured" under one rests on its first hours, so read it as rough until the figures are refreshed. A lane Kanon doesn't call is not measured, and one whose caller didn't run in the window shows no runs.
+
+A sample can miss a lane's rare model runs among its many skipped ones. The triage lane's 100 sampled runs, of about 580, were all skipped ones, so it shows no minutes, though Kanon's run rows record 6 triage model runs in the window, of 1 to 7.4 minutes of model time each ([What a model run costs](lanes.md#what-a-model-run-costs) reads those rows).
 
 <!-- actions-minutes:report -->
 
-Measured on `yedeya-labs/kanon` over the 7 days from 2026-10-06 06:25 to 2026-10-13 06:25 UTC, in which 224 pull requests were opened (32 a day), 214 merged (31 a day) and 216 issues opened (31 a day). Each lane's minutes come from the jobs of up to 100 of its runs, spread evenly over the window; a lane whose caller is younger than the window is measured over the days it has existed.
+Measured on `yedeya-labs/kanon` over the 7 days from 2026-10-14 07:02 to 2026-10-21 07:02 UTC, in which 184 pull requests were opened (26 a day), 177 merged (25 a day) and 176 issues opened (25 a day). Each lane's minutes come from the jobs of up to 100 of its runs, spread evenly over the window; a lane whose caller is younger than the window is measured over the days it has existed.
 
 | Lane | Caller | Days measured | Runs a day | Short runs | Minutes a short run | Minutes another run (median) | Minutes a day |
 |---|---|---|---|---|---|---|---|
-| `agent-review` | `review.yml` | 7 | 265 | 73% | 0.4 | 5 | 445 |
-| `agent-merge-reconcile` | `merge-reconcile.yml` | 0.7 | 136 | 94% | 0.4 | 4 | 77 |
-| `agent-implement` | `implement.yml` | 7 | 74 | 85% | 0 | 10 | 143 |
-| `agent-implement-revise` | `implement-revise.yml` | 7 | 150 | 99% | 0.4 | 8 | 66 |
+| `agent-review` | `review.yml` | 7 | 235 | 79% | 0.5 | 5 | 327 |
+| `agent-merge-reconcile` | `merge-reconcile.yml` | 7 | 77 | 95% | 0.3 | 4 | 38 |
+| `agent-implement` | `implement.yml` | 7 | 83 | 85% | 0 | 13 | 183 |
+| `agent-implement-revise` | `implement-revise.yml` | 7 | 138 | 96% | 0.4 | 9.5 | 104 |
 | `agent-explore` | none | — | — | — | — | — | not measured |
-| `agent-code-audit` | `code-audit.yml` | 7 | 0.4 | 67% | 2 | 10 | 2 |
-| `agent-explore-telemetry` | `explore-telemetry.yml` | 5.8 | 0.2 | 0% | — | 6 | 1 |
+| `agent-code-audit` | `code-audit.yml` | 7 | 0.3 | 0% | — | 14 | 4 |
+| `agent-explore-telemetry` | `explore-telemetry.yml` | 7 | 0.1 | 0% | — | 6 | 0.9 |
 | `agent-deploy-diagnose` | none | — | — | — | — | — | not measured |
-| `agent-triage` | `triage.yml` | 0.6 | 120 | 100% | 0 | — | 0 |
-| `agent-issue-backstop` | none | — | — | — | — | — | not measured |
-| `agent-lead` | `lead.yml` | 0.6 | 0 | — | — | — | 0 |
-| `agent-lead-revise` | `lead-revise.yml` | 0.7 | 324 | 100% | 0.1 | — | 26 |
-| `agent-lead-split` | `lead-split.yml` | 0.6 | 120 | 100% | 0 | — | 0 |
-| `agent-lead-reconcile` | `lead-reconcile.yml` | 0.6 | 78 | 100% | 1 | — | 77 |
-| `agent-verify-acs` | `verify-acs.yml` | 0.6 | 120 | 100% | 0 | — | 1.6 |
-| `agent-overseer` | `overseer.yml` | 6.1 | 2.6 | 81% | 3.2 | 21 | 17 |
-| `agent-project-digest` | none | — | — | — | — | — | not measured |
+| `agent-triage` | `triage.yml` | 7 | 83 | 100% | 0 | — | 0 |
+| `agent-issue-backstop` | `issue-backstop.yml` | 0.5 | 16 | 100% | 1 | — | 16 |
+| `agent-lead` | `lead.yml` | 7 | 0.1 | 0% | — | 13 | 1.9 |
+| `agent-lead-revise` | `lead-revise.yml` | 7 | 138 | 100% | 0.2 | — | 26 |
+| `agent-lead-split` | `lead-split.yml` | 7 | 83 | 100% | 0 | — | 0 |
+| `agent-lead-reconcile` | `lead-reconcile.yml` | 7 | 55 | 100% | 1 | — | 53 |
+| `agent-verify-acs` | `verify-acs.yml` | 7 | 83 | 100% | 0 | — | 2.5 |
+| `agent-overseer` | `overseer.yml` | 7 | 0.7 | 80% | 3.8 | 42 | 8.1 |
+| `agent-project-digest` | `project-digest.yml` | 7 | 0.9 | 67% | 2 | 5 | 2.6 |
 | `agent-weekly-digest` | none | — | — | — | — | — | not measured |
 | `agent-release-announce` | none | — | — | — | — | — | not measured |
-| `agent-merge` | `merge.yml` | 0.7 | 129 | 100% | 0.9 | — | 110 |
-| `agent-rebase` | `rebase.yml` | 6 | 43 | 93% | 0.8 | 8 | 57 |
-| `agent-dispatch-sweep` | `dispatch-sweep.yml` | 0.6 | 0 | — | — | — | 0 |
+| `agent-merge` | `merge.yml` | 7 | 78 | 90% | 0.7 | 2 | 69 |
+| `agent-rebase` | `rebase.yml` | 7 | 47 | 93% | 0.8 | 9 | 57 |
+| `agent-dispatch-sweep` | `dispatch-sweep.yml` | 7 | 1 | 100% | 3 | — | 3 |
 
-Together, the 16 lanes measured used about 1023 runner-minutes a day.
+Together, the 18 lanes measured used about 896 runner-minutes a day.
 
 <!-- /actions-minutes:report -->
 
