@@ -191,6 +191,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-15.** The Owner decided that an App may hold, beyond its roles' rows, an extra permission its repository's adoption record declares, for that repository alone, and that `apps-check` and doctor hold each App to its grant plus that declaration. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
 
+## `K-ADOPT-9`
+
+- **2026-10-21.** The Owner decided that a mechanism the repository has nothing for, such as a deploy lane where nothing deploys, is marked **not applicable** rather than not yet installed, with the repository's reason under `## Choices`, so the list keeps the work still to do apart from what never applies; `kanon doctor` fails a not-applicable row without its reason. [#1236](https://github.com/yedeya-labs/kanon/issues/1236)
+
 ## `K-ADOPT-11`
 
 - **2026-10-06.** The Skill's pin, declared in the repository's `.claude/settings.json`, moves with the other pins, and `kanon doctor` reports one that differs from the release the callers pin. [#376](https://github.com/yedeya-labs/kanon/issues/376)
@@ -229,6 +233,8 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-15.** The gate never waits longer than 345 minutes for the release commit's CI, whatever the record declares, so a CI that never finishes ends in `ci-timeout`, which is filed, inside the gate job's 360-minute limit, not in a cancellation, which files nothing. [#912](https://github.com/yedeya-labs/kanon/issues/912), [#961](https://github.com/yedeya-labs/kanon/pull/961)
 - **2026-10-15.** The Owner decided the extra App permission choice: one bullet per App and permission under `## Choices`, with its reason, which widens that repository's App alone. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
 - **2026-10-20.** The `## Deploy` section gained an optional `Smoke schedule` bullet: one code span per environment, its name and then a five-field cron, no environment twice and no two environments sharing a cron string, since the cron is what tells one scheduled run from another. [Plan 0013](../docs/plans/0013-smoke-lifecycle.md) §4.3, [#1165](https://github.com/yedeya-labs/kanon/issues/1165)
+
+- **2026-10-21.** The mechanism list takes a third status, `not applicable`, and `## Choices` its reason, one `Mechanism not applicable` bullet per such mechanism, naming its row's rules. [#1236](https://github.com/yedeya-labs/kanon/issues/1236)
 
 ## `K-LAYOUT-16`
 

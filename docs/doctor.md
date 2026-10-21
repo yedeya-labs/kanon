@@ -183,6 +183,17 @@ A repository whose App needs a permission beyond Kanon's shared grant declares i
 - **`kanon apps` and `apps-check` read the same bullet,** so the App is created with it, its register rows show it, and the installation is checked against it ([`docs/apps.md`](apps.md)).
 - **A declaration in another shape is malformed, and blocks** (`declaration.malformed`): outside `## Choices`, with nothing in its parentheses, naming an App Kanon doesn't have, a level other than `read` or `write`, or one App and permission twice.
 
+### A mechanism that doesn't apply
+
+The adoption record's mechanism list marks each mechanism `installed YYYY-MM-DD`, `not yet installed` or `not applicable` (`K-ADOPT-9`). A repository that has nothing for a mechanism to act on, such as a deploy lane where nothing deploys, marks its row `not applicable` and says why under `## Choices`, beside its waivers, in one bullet naming the row's rules, in any order (`K-LAYOUT-10`):
+
+```markdown
+- **Mechanism not applicable:** `K-SHIP-8`, `K-SHIP-9` (the repository deploys nothing)
+```
+
+- **Either half without the other is malformed, and blocks** (`declaration.malformed`): a row marked `not applicable` with no bullet, and a bullet whose rules are no row's, or whose row isn't marked `not applicable`. So are a bullet outside `## Choices`, with nothing in its parentheses, or naming one row twice, and two such rows with the same rules.
+- **Doctor reads nothing else of the list.** Whether a row marked `installed` runs is the repository's to keep true; a record with no mechanism table asks nothing.
+
 ### What can't be waived
 
 Each of these is reported as before, whatever the record says, and a waiver of one is malformed:
@@ -333,7 +344,7 @@ It is the finding, whole, as it would have been listed, with the waiver's reason
 | `telemetry.register-tracked` | `secret` | yes | A tracked file has the shape of a telemetry register, or of `render.mjs`'s `parameters.json` or `template.json`, which hold its contents, whatever its name; a register whose owner ARN is still a `<…>` placeholder, such as Kanon's `register.example.json`, is not reported ([#1071](https://github.com/yedeya-labs/kanon/issues/1071)). The register never lives in a repository where Kanon's lanes run, public or private ([`docs/telemetry.md`](telemetry.md#where-the-register-lives)). The subject is the file's path, and nothing doctor prints holds a key or a repository from it. The fix moves it out of the checkout, then untracks it and adds it to `.gitignore` in a pull request with no review label. |
 | `declaration.missing` | `declaration` | yes | A project document a lane reads, with no default, is missing. |
 | `declaration.section-missing` | `declaration` | yes | A section with no default is missing, or written more than once. |
-| `declaration.malformed` | `declaration` | yes | An id-token holder's acceptance, a waiver, or the `Upstream findings:` or `Capability watch:` choice in the adoption record is malformed, or a waiver waives a finding that can't be waived. |
+| `declaration.malformed` | `declaration` | yes | An id-token holder's acceptance, a waiver, a mechanism's not-applicable reason, or the `Upstream findings:` or `Capability watch:` choice in the adoption record is malformed, a mechanism marked not applicable has no reason, or a waiver waives a finding that can't be waived. |
 | `upstream.unsent` | `declaration` | yes | The adoption record says `Upstream findings: sent` or `sent with evidence`, and no workflow calls Kanon's telemetry collector, which is the channel they travel over ([plan 0006](plans/0006-upstream-findings.md) §3.1), so nothing is sent and the lanes only draft them. The fix names both ways out: opt in to telemetry with `kanon init --telemetry`, or choose `drafted`. `lane-check` fails the same record on the pull request. |
 | `deploy.declaration-moved` | `declaration` | yes | The adoption record still declares the reference deploy's bullets (`Reference environment`, `Reference deploy workflow`, `Reference deploy job`) under `## Choices`. Since [plan 0010](plans/0010-deployment-lane.md)'s D2 they are read from a `## Deploy` section alone, with no period of reading both places, so the reconciler can't close a project and `lane-check` fails until they move. The message names their lines; the fix is the move, and its commands are the `## Deploy` section with the bullets as written, which the upgrade skill writes. Reported for every repository, with or without a deploy chain. |
 | `deploy.declaration` | `declaration` | yes | The adoption record's `## Deploy` section doesn't parse ([plan 0010](plans/0010-deployment-lane.md) §4): an environment named twice, an empty code span, a CI wait outside 1 to 360, a reference environment outside the list, some but not all of the reference bullets, a marker other than `no-environments` or `no-reviewers`, or a deploy bullet outside the section. The message is the parser's, naming the line. Reported for every repository; can't be waived. |
