@@ -83,8 +83,12 @@ describe('this suite is isolated from the real step summary (RA-1208)', () => {
 });
 
 const KEYS = 'ABCDEFGH';
-/** The shape a real brief uses (PR RA-964), not the one-liner it replaced. */
-const BRIEF = (titles: string[], milestone: string | null = 'Product Backlog', deps: Record<number, string> = {}) =>
+/**
+ * The shape a real brief uses (PR RA-964), not the one-liner it replaced. Its items are
+ * `pipeline-improvement`, so their bucket is the platform one (`K-WORK-4`): `plan()` refuses
+ * them on the product bucket (kanon#1161).
+ */
+const BRIEF = (titles: string[], milestone: string | null = 'Development Automation', deps: Record<number, string> = {}) =>
   ['# Brief', '', '## Decomposition', '',
     ...titles.flatMap((t, i) => [
       `### Issue ${KEYS[i]} — ${t}`,
@@ -498,6 +502,12 @@ describe('the Lead files through the planning module (K-WORK-8, kanon#164)', () 
     const noSeverity = nextActions(worldFrom(ITEM('**Milestone:** Product Backlog · **Labels:** `follow-up` · `agent:reviewer`')));
     expect(noSeverity.actions).toEqual([]);
     expect(noSeverity.stopped).toMatch(/K-WORK-9/);
+  });
+
+  it('stops before filing pipeline work the brief puts on the product bucket, and names the rule (kanon#1161)', () => {
+    const pipelineOnProduct = nextActions(worldFrom(BRIEF(['a', 'b'], 'Product Backlog')));
+    expect(pipelineOnProduct.actions).toEqual([]);
+    expect(pipelineOnProduct.stopped).toMatch(/planning module refuses.*pipeline work goes to "Development Automation" \(K-WORK-4\)/);
   });
 
   it('files the QA issue on the bucket plan() chooses for pipeline work', () => {

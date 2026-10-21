@@ -274,6 +274,13 @@ export function plan(labels = [], { explicitMilestone = '', subject = '' } = {})
   if (explicit && stream && !BUCKET_MILESTONES.includes(explicit)) {
     throw new PlanRefusal(`"${explicit}" is not a bucket, and ${stream} never goes on a roadmap milestone (K-WORK-11)`);
   }
+  // PIPELINE WORK HAS ONE BUCKET (`K-WORK-4`, kanon#1161), a brief's included. On the product
+  // bucket it would be a candidate to the backstop's `decide()`, which reads labels and never the
+  // subject, so the two copies of the rule would disagree (`K-WORK-8`) and the backstop would put
+  // pipeline work in the gate queue (`K-WORK-11`).
+  if (pipeline && explicit === DEFAULT_MILESTONE) {
+    throw new PlanRefusal(`"${explicit}" is the product bucket, and pipeline work goes to "${PIPELINE_MILESTONE}" (K-WORK-4)`);
+  }
 
   const milestone = explicit || (pipeline ? PIPELINE_MILESTONE : DEFAULT_MILESTONE);
   let reason = 'no unambiguous destination';
@@ -281,7 +288,8 @@ export function plan(labels = [], { explicitMilestone = '', subject = '' } = {})
   else if (set.has(PIPELINE_IMPROVEMENT)) reason = `labelled ${PIPELINE_IMPROVEMENT}`;
   else if (pipeline) reason = 'the filer named the subject pipeline';
 
-  // Pipeline work is never a candidate (`K-WORK-11`), on whichever bucket a brief put it.
+  // Pipeline work is never a candidate (`K-WORK-11`). It is on the platform bucket by now, where
+  // `isGateCandidate` already says no; the `!pipeline` keeps the rule's own words.
   const gateCandidate = !pipeline && isGateCandidate(labels, milestone);
   if (set.has(GATE_CANDIDATE_LABEL) && !gateCandidate) {
     throw new PlanRefusal(

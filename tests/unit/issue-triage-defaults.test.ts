@@ -59,7 +59,7 @@ describe('plan: the subject is the filer\'s judgment (K-WORK-4)', () => {
 
   it('makes no candidate of pipeline work the filer named, however severe (K-WORK-11)', () => {
     expect(plan(reviewer('sev:critical'), { subject: 'pipeline' }).gateCandidate).toBe(false);
-    expect(plan(reviewer('sev:critical'), { subject: 'pipeline', explicitMilestone: DEFAULT_MILESTONE }).gateCandidate).toBe(false);
+    expect(plan(reviewer('sev:critical'), { subject: 'pipeline', explicitMilestone: PIPELINE_MILESTONE }).gateCandidate).toBe(false);
     expect(() => plan(reviewer('sev:critical', GATE_CANDIDATE_LABEL), { subject: 'pipeline' })).toThrow(PlanRefusal);
   });
 
@@ -74,6 +74,56 @@ describe('plan: the subject is the filer\'s judgment (K-WORK-4)', () => {
   it('refuses a subject it does not know, and product beside the pipeline label', () => {
     expect(() => plan(['enhancement'], { subject: 'platform' })).toThrow(/neither product nor pipeline/);
     expect(() => plan(['pipeline-improvement'], { subject: 'product' })).toThrow(/K-WORK-4/);
+  });
+});
+
+/**
+ * kanon#1161. The backstop's `decide()` reads labels and never the filer's subject, so pipeline
+ * work a brief put on the product bucket was no candidate to `plan()` and a candidate to
+ * `decide()`, which then added `gate-candidate` to it. `plan()` now refuses that filing
+ * (`K-WORK-4`), so on every filing it plans the two copies of the rule agree (`K-WORK-8`).
+ */
+describe('plan: pipeline work goes only to the platform bucket, so the backstop agrees (K-WORK-4, kanon#1161)', () => {
+  it('refuses pipeline work a brief puts on the product bucket, by subject or by label, naming the rule', () => {
+    expect(() => plan(reviewer('sev:critical'), { subject: 'pipeline', explicitMilestone: DEFAULT_MILESTONE })).toThrow(PlanRefusal);
+    expect(() => plan(reviewer('sev:critical'), { subject: 'pipeline', explicitMilestone: DEFAULT_MILESTONE })).toThrow(
+      '"Product Backlog" is the product bucket, and pipeline work goes to "Development Automation" (K-WORK-4)',
+    );
+    expect(() => plan(['pipeline-improvement'], { explicitMilestone: DEFAULT_MILESTONE })).toThrow(/K-WORK-4/);
+  });
+
+  it('still plans product work on the product bucket, and pipeline work on the platform one', () => {
+    expect(plan(reviewer('sev:high'), { subject: 'product', explicitMilestone: DEFAULT_MILESTONE }).gateCandidate).toBe(true);
+    expect(plan(['enhancement'], { subject: 'pipeline', explicitMilestone: PIPELINE_MILESTONE }).milestone).toBe(PIPELINE_MILESTONE);
+  });
+
+  it('agrees with decide() on gate-candidate for every filing it plans', () => {
+    const labelSets = [
+      ...['sev:critical', 'sev:high', 'sev:medium', 'sev:low'].flatMap((sev) => [reviewer(sev), reviewer(sev, 'pipeline-improvement')]),
+      explorer('sev:critical'),
+      ['enhancement'],
+      ['pipeline-improvement'],
+    ];
+    let planned = 0;
+    for (const labels of labelSets) {
+      for (const subject of ['', 'product', 'pipeline']) {
+        for (const explicitMilestone of ['', ...BUCKET_MILESTONES]) {
+          let p;
+          try {
+            p = plan(labels, { subject, explicitMilestone });
+          } catch (err) {
+            if (!(err instanceof PlanRefusal)) throw err;
+            continue;
+          }
+          planned += 1;
+          const filed = { labels: p.labels, milestone: p.milestone };
+          // The backstop adds nothing to what plan() filed, and would have chosen the same candidacy.
+          expect(decide(filed).addGateCandidate, JSON.stringify({ labels, subject, explicitMilestone })).toBe(false);
+          expect(decide({ labels, milestone: p.milestone }).addGateCandidate, JSON.stringify({ labels, subject, explicitMilestone })).toBe(p.gateCandidate);
+        }
+      }
+    }
+    expect(planned).toBeGreaterThan(20);
   });
 });
 
@@ -207,6 +257,15 @@ describe('shadow: the backstop logs what plan() would have chosen, and writes no
     const s = shadow({ labels: ['pipeline-improvement'], milestone: DEFAULT_MILESTONE });
     expect(s?.agrees).toBe(false);
     expect(s?.planned?.milestone).toBe(PIPELINE_MILESTONE);
+  });
+
+  it('still plans pipeline work filed on the product bucket onto the platform one, not as a refusal (kanon#1161)', () => {
+    const s = shadow({ labels: ['pipeline-improvement'], milestone: DEFAULT_MILESTONE });
+    expect(s?.refused).toBeNull();
+    expect(shadow({ labels: reviewer('sev:critical', 'pipeline-improvement'), milestone: DEFAULT_MILESTONE })?.planned).toEqual({
+      milestone: PIPELINE_MILESTONE,
+      gateCandidate: false,
+    });
   });
 
   it('reports a missing gate-candidate as a disagreement', () => {

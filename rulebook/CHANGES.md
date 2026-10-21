@@ -15,6 +15,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-WORK-4`
 
 - **2026-10-20.** The filing skill's `plan` takes the filer's judgment of the subject, so pipeline work reaches the platform bucket without the `pipeline-improvement` label. Replaying the backstop's shadow over a week of filings found filers routing review follow-ups about the pipeline there, rightly, where a label-only `plan` sent them to the product bucket. [#164](https://github.com/yedeya-labs/kanon/issues/164)
+- **2026-10-21.** The planning module's `plan` refuses pipeline work on the product bucket, even when a brief names it, so the Lead's reconcile tick stops on such a brief item and the brief guard reports it on the brief's pull request. [#1161](https://github.com/yedeya-labs/kanon/issues/1161)
 
 ## `K-WORK-8`
 
@@ -32,6 +33,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-WORK-11`
 
 - **2026-10-20.** No longer prose only for pipeline work: `plan`, which the filing skill runs, refuses it on a roadmap milestone and never makes it a candidate, so the Lead's reconcile tick stops on such a brief item, and the brief guard reports it on the brief's pull request. [#164](https://github.com/yedeya-labs/kanon/issues/164), [#1163](https://github.com/yedeya-labs/kanon/issues/1163)
+- **2026-10-21.** `plan` refuses pipeline work on the product bucket too, where the backstop, which reads labels and not the filer's subject, would have added `gate-candidate` to a gate-severity reviewer follow-up that `plan` filed without it. [#1161](https://github.com/yedeya-labs/kanon/issues/1161)
 
 ## `K-WORK-12`
 
