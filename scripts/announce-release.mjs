@@ -11,10 +11,12 @@
  * Features, Fixes and Maintenance, read from the release body with the helpers the deploy
  * announcement reads it with (`scripts/lib/release-notes.mjs`), each note's line through `literal`.
  * Those helpers read release-please's format alone (`### Features` headings over `* **scope:**`
- * bullets). A body in no such format, as `releasePleaseFormat` tells, is read here instead (kanon#1196):
- * each bullet by its own conventional-commit prefix (`feat:`, `fix:`, `chore(deps):`, as GitHub's
- * auto-generated notes list them, `* feat: add x by @u in …/pull/1`), a bullet with none under
- * Changes; and a body with no bullet at all as a short plain-text excerpt under Notes.
+ * bullets). A body in no such format, as `releasePleaseFormat` tells by what only release-please
+ * writes (kanon#1208), is read here instead (kanon#1196): each bullet by its own conventional-commit
+ * prefix (`feat:`, `fix:`, `chore(deps):`, as GitHub's auto-generated notes list them,
+ * `* feat: add x by @u in …/pull/1`), a bullet with none by its heading (GitHub's categorized notes'
+ * "Exciting New Features", a hand-written "Bug fixes"), and any other under Changes; and a body with
+ * no bullet at all as a short plain-text excerpt under Notes.
  * A draft announces nothing: the event says so before anything is read (`DRAFT`), and a release
  * GitHub returns as a draft is skipped the same way. A tag with no published release fails by name.
  *
@@ -59,8 +61,12 @@ const TAG = /^(?!.*\.\.)[^\u0000- \u007f~^:?*[\\]{1,255}$/;
  * @typedef {{ tag_name: string, name?: string | null, body?: string | null, draft?: boolean, prerelease?: boolean }} Release
  */
 
-/** A conventional commit's subject, `type(scope)!: prose`, as a bullet of another format starts. */
-const CONVENTIONAL = /^([a-z]+)(?:\(([^)]+)\))?!?:\s+(\S.*)$/i;
+/**
+ * A conventional commit's subject, `type(scope)!: prose`, as a bullet of another format starts. Only
+ * the conventional-commit types count (kanon#1208): `Breaking: drop Node 16` or `Windows: fix a
+ * crash` is prose, kept whole under Changes, not a type whose text Maintenance would drop.
+ */
+const CONVENTIONAL = /^(feat|feature|fix|perf|revert|docs|style|refactor|test|build|ci|chore)(?:\(([^)]+)\))?!?:\s+(\S.*)$/i;
 /** The tail GitHub's auto-generated notes put on a bullet: ` by @user in https://…/pull/N`. */
 const GITHUB_TAIL = /\s+by\s+@[A-Za-z0-9-]+(?:\[bot\])?\s+in\s+(https:\/\/\S+\/pull\/(\d+))\s*$/;
 /** A link to a pull request, as release-please appends one: ` ([#N](url))`. */
@@ -81,13 +87,25 @@ function splitRef(raw) {
   return m ? { text: raw.slice(0, m.index).trim(), ref: ` ${m[0].trim()}` } : { text: raw, ref: '' };
 }
 
+/** release-please's version heading: `[1.4.0](https://…/compare/v1.3.0...v1.4.0) (2026-10-20)`. */
+const VERSION_HEADING = /^\[[^\]]*\d+\.\d+\.\d+[^\]]*\]\(https:\/\/\S+\/compare\/\S+\)\s+\(\d{4}-\d{2}-\d{2}\)$/;
+/** release-please's commit link, which ends each of its bullets: `([abc1234](https://…/commit/abc1234…))`. */
+const COMMIT_REF = /\(\[[0-9a-f]{7,40}\]\(https:\/\/\S+\/commit\/[0-9a-f]{7,40}\)\)\s*$/;
+
 /**
- * Whether a body is in release-please's format, by what its sorting reads: a heading it sorts into
- * Features or Fixes, or a bullet with its `**scope:**` prefix.
+ * Whether a body is in release-please's format, by what its sorting reads: a bullet with its
+ * `**scope:**` prefix, or a heading it sorts into Features or Fixes in a body release-please wrote,
+ * as its version heading or a bullet ending in its commit link tells (kanon#1208). A Features or
+ * Fixes heading alone is not enough: GitHub's categorized notes ("Exciting New Features") and a
+ * hand-written body have one too, beside headings whose bullets release-please's reading drops.
  * @param {Record<string, string[]>} parsed `parseSections`' reading
  */
-const releasePleaseFormat = (parsed) => Object.entries(parsed)
-  .some(([heading, bullets]) => classify(heading, null) !== 'maint' || bullets.some((raw) => scopeOf(raw) !== null));
+function releasePleaseFormat(parsed) {
+  const entries = Object.entries(parsed);
+  if (entries.some(([, bullets]) => bullets.some((raw) => scopeOf(raw) !== null))) return true;
+  const written = entries.some(([heading, bullets]) => VERSION_HEADING.test(heading) || bullets.some((raw) => COMMIT_REF.test(raw)));
+  return written && entries.some(([heading]) => classify(heading, null) !== 'maint');
+}
 
 /** How much of a body with no bullet the Notes excerpt keeps, before `fit`'s own limits. */
 export const EXCERPT = Object.freeze({ lines: 10, chars: 700 });
@@ -108,8 +126,10 @@ function sectionsOf(features, fixes, maint, other) {
 /**
  * The sections of a body not in release-please's format (kanon#1196). Each bullet is
  * read by its own conventional-commit prefix: `feat` a Feature, `fix`, `perf` and `revert` a Fix,
- * any other type (or an internal scope, `feat(ci):`) Maintenance under its scope or type; a bullet
- * with no prefix is a Change, unless it is a dependency bump. A trailing `([#N](url))`, which
+ * any other conventional type (or an internal scope, `feat(ci):`) Maintenance under its scope or
+ * type. A bullet with no prefix is Maintenance when it is a dependency bump, else a Feature or a Fix
+ * when its heading is one (`classify`'s reading, as GitHub's categorized notes and a hand-written
+ * `## Bug fixes` head theirs), else a Change, its text whole (kanon#1208). A trailing `([#N](url))`, which
  * `githubRefs` writes for GitHub's ` by @u in …/pull/N`, is kept as the link, and GitHub's New
  * Contributors section is passed over. A body with no bullet at
  * all is a plain-text excerpt under Notes, at most `EXCERPT.lines` lines and `EXCERPT.chars`
@@ -133,7 +153,11 @@ export function otherFormat(body) {
     const { text, ref } = splitRef((b[1] ?? '').trim());
     if (!text) continue;
     const cc = text.match(CONVENTIONAL);
-    if (!cc) { (/\bbump\b/i.test(text) ? maint : other).push(`${text}${ref}`); continue; }
+    if (!cc) {
+      const under = classify(heading, null);
+      (/\bbump\b/i.test(text) ? maint : under === 'feature' ? features : under === 'fix' ? fixes : other).push(`${text}${ref}`);
+      continue;
+    }
     const type = (cc[1] ?? '').toLowerCase();
     const scope = cc[2]?.trim().toLowerCase() || null;
     const internal = scope !== null && INTERNAL_SCOPES.has(scope);

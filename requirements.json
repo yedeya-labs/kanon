@@ -1390,7 +1390,7 @@
       "agent-release-announce": {
         "name": "Release announcement",
         "group": "oversight",
-        "does": "Posts each published GitHub release, a stable release or a pre-release, to a chat channel: its tag, its name and its notes as Features, Fixes and Maintenance, with a link to it. It reads release-please's notes by their headings, GitHub's auto-generated notes and other bullets by each one's conventional-commit prefix (`feat:`, `fix:`), and a body with no bullet as a short excerpt.",
+        "does": "Posts each published GitHub release, a stable release or a pre-release, to a chat channel: its tag, its name and its notes as Features, Fixes and Maintenance, with a link to it. It reads release-please's notes by their headings; GitHub's auto-generated notes, categorized or not, and other bullets by each one's conventional-commit prefix (`feat:`, `fix:`), else by its heading (\"Exciting New Features\", \"Bug fixes\"), else as a change with its text whole; and a body with no bullet as a short excerpt.",
         "needs": [
           "GitHub releases, published by a person or an App (a release the workflow token publishes starts no run)",
           "a notify hook"
