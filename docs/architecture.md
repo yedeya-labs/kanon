@@ -99,7 +99,7 @@ A rule whose "Enforced by" says *prose only* has no check yet. Those rules are K
 | [`actions/`](../actions/) | The checks and the building blocks of a lane, each a versioned composite action. |
 | [`scripts/`](../scripts/) | The library the lanes run. |
 | [`cli/`](../cli/) | The `kanon` command: `init`, `doctor`, `apps`, `milestones`, `metrics`. |
-| [`skills/`](../skills/) | The Claude Code skills: `/kanon:adopt`, `/kanon:doctor`, `/kanon:upgrade`, and the lanes' skills, `file-issue` and `upstream-finding`, which an agent reads by its path. |
+| [`skills/`](../skills/) | The Claude Code skills: `/kanon:adopt`, `/kanon:doctor`, `/kanon:upgrade`, `/kanon:mandate`, which starts a project for the Lead and carries its brief's pull request, and the lanes' skills, `file-issue` and `upstream-finding`, which an agent reads by its path. |
 | [`infra/`](../infra/) | The QA store's and the telemetry store's cloud templates. |
 | [`tests/`](../tests/) | Kanon's own tests, run on every pull request. |
 

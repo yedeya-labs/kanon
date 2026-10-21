@@ -5,6 +5,7 @@ import { parse } from 'yaml';
 import { SCHEMA as DOCTOR_SCHEMA } from '../../cli/doctor.mjs';
 import { CHAT_QUESTION, CHAT_QUESTION_BOTH, CHAT_QUESTION_DEPLOY, CHAT_QUESTION_RELEASE, CHAT_RECORD, SCHEMA as INIT_SCHEMA, UPSTREAM_EVIDENCE_QUESTION } from '../../cli/init.mjs';
 import { REVIEW_LABELS } from '../../scripts/lane-gate.mjs';
+import { FILE_ONLY } from '../../scripts/lead-reconcile.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL } from '../../scripts/lib/upstream-findings.mjs';
 
 /**
@@ -71,10 +72,20 @@ const LANE_SKILLS = ['upstream-finding', 'file-issue'];
  */
 const MODEL_INVOKED = ['doctor', 'file-issue'];
 
+/**
+ * The person's skills that drive no `kanon` command: the mandate skill (#853), which works
+ * through `gh` and the Lead's lanes, so the checks of a command's contract below don't apply
+ * to it. Its own checks are in "the mandate skill (#853)".
+ */
+const PROJECT_SKILLS = ['mandate'];
+
 const ALL_SKILLS: Skill[] = readdirSync(join(ROOT, 'skills'), { withFileTypes: true })
   .filter((d) => d.isDirectory())
   .map((d) => parseSkill(d.name, read(`skills/${d.name}/SKILL.md`)));
-const SKILLS: Skill[] = ALL_SKILLS.filter((s) => !LANE_SKILLS.includes(s.dir));
+/** The person's skills that drive a `kanon` command. */
+const SKILLS: Skill[] = ALL_SKILLS.filter((s) => !LANE_SKILLS.includes(s.dir) && !PROJECT_SKILLS.includes(s.dir));
+/** Every skill a person starts as `/kanon:<name>`. */
+const PERSONS_SKILLS: Skill[] = ALL_SKILLS.filter((s) => !LANE_SKILLS.includes(s.dir));
 const skill = (dir: string): Skill => {
   const s = ALL_SKILLS.find((x) => x.dir === dir);
   if (!s) throw new Error(`no skill ${dir}`);
@@ -243,8 +254,9 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
   it('has the skills docs/skills.md lists, and only those', () => {
     const listed = [...read('docs/skills.md').matchAll(/^\| \[([a-z-]+)\]\(\.\.\/skills\/([a-z-]+)\/SKILL\.md\) \| `\/kanon:([a-z-]+)`/gm)];
     for (const m of listed) expect(new Set([m[1], m[2], m[3]]).size, m[0]).toBe(1);
-    expect(listed.map((m) => m[1]).sort()).toEqual(SKILLS.map((s) => s.dir).sort());
+    expect(listed.map((m) => m[1]).sort()).toEqual(PERSONS_SKILLS.map((s) => s.dir).sort());
     expect(SKILLS.map((s) => s.dir).sort()).toEqual(['adopt', 'doctor', 'upgrade']);
+    expect(PERSONS_SKILLS.map((s) => s.dir).sort()).toEqual(['adopt', 'doctor', 'mandate', 'upgrade']);
     // The lanes' skills are listed apart, as files a lane reads, never as a `/kanon:` command.
     const lanes = section(read('docs/skills.md'), /^## The lanes' skills$/);
     expect(lanes).not.toBeNull();
@@ -274,7 +286,7 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
   // in docs/skills.md as one only the person starts, with why, and the README says to type it.
   it('says which skills only the person can start, why, and that asking the agent will not', () => {
     const typed = ALL_SKILLS.filter((s) => s.front['disable-model-invocation'] === true && s.front['user-invocable'] !== false).map((s) => s.dir);
-    expect(typed.sort()).toEqual(['adopt', 'upgrade']);
+    expect(typed.sort()).toEqual(['adopt', 'mandate', 'upgrade']);
     const doc = read('docs/skills.md');
     const para = doc.split('\n\n').find((p) => /\*\*Only you can start\*\*/.test(p));
     expect(para, 'docs/skills.md has no "**Only you can start**" paragraph').toBeDefined();
@@ -896,7 +908,7 @@ describe("the person's token (#630)", () => {
 
   it("keeps the person's steps off gh pr checks and statusCheckRollup, which a fine-grained token can't read", () => {
     const docs = readdirSync(join(ROOT, 'docs')).filter((f) => f.endsWith('.md')).map((f) => `docs/${f}`);
-    const files = [...SKILLS.map((s) => `skills/${s.dir}/SKILL.md`), ...docs];
+    const files = [...PERSONS_SKILLS.map((s) => `skills/${s.dir}/SKILL.md`), ...docs];
     const problems: string[] = [];
     for (const f of files) {
       for (const para of read(f).split(/\n\s*\n/)) {
@@ -965,5 +977,123 @@ describe("the person's token (#630)", () => {
     const reasons = [...src.matchAll(/reason: `the token can't read the jobs or annotations of its run \$\{id\}; ([^`]+)`/g)].map((m) => m[1]!);
     expect(reasons).toHaveLength(2);
     for (const r of reasons) expect(r).toMatch(/fine-grained personal access token has no Checks permission, so on a private repository/);
+  });
+});
+
+/**
+ * #853: the mandate skill turns a person's idea into a project's tracking issue and carries the
+ * brief's pull request to the merge. It drives no `kanon` command, so it is held to what it does
+ * drive: the rulebook it cites, the Lead's two lanes it dispatches, the labels it applies and
+ * the filing skill it files through. It holds method only, so every rule it applies is cited by
+ * an id that exists, read at the release the repository runs (`K-PRIN-2`).
+ */
+describe('the mandate skill (#853)', () => {
+  const s = skill('mandate');
+  const steps = (from: number, to: number): string => {
+    const at = s.body.indexOf(`\n${from}. **`);
+    const end = s.body.indexOf(`\n${to}. **`);
+    expect(at, `step ${from}`).toBeGreaterThan(-1);
+    expect(end, `step ${to}`).toBeGreaterThan(at);
+    return s.body.slice(at, end);
+  };
+  const RULE_IDS = new Set(readdirSync(join(ROOT, 'rulebook')).filter((f) => /^\d\d-.*\.md$/.test(f))
+    .flatMap((f) => [...read(`rulebook/${f}`).matchAll(/^### `(K-[A-Z]+-\d+)`/gm)].map((m) => m[1]!)));
+
+  it('is a person\'s skill that drives no kanon command, and only the person starts it', () => {
+    expect(PROJECT_SKILLS).toEqual(['mandate']);
+    expect(s.front['disable-model-invocation']).toBe(true);
+    expect(s.front['user-invocable']).toBeUndefined();
+    expect(invocations(s.body)).toEqual([]);
+  });
+
+  it('cites only rule ids the rulebook has, and reads them at the release the repository runs', () => {
+    const cited = [...new Set([...s.body.matchAll(/K-[A-Z]+-\d+/g)].map((m) => m[0]))];
+    expect(cited.length).toBeGreaterThan(10);
+    expect(cited.filter((id) => !RULE_IDS.has(id))).toEqual([]);
+    const where = section(s.body, /^## Where the rules are$/);
+    expect(where).not.toBeNull();
+    expect(where).toContain("rulebook/07-projects.md?ref=<release>");
+    expect(where).toMatch(/never at `main`/);
+    expect(where).toMatch(/never this skill's/);
+  });
+
+  it('states what it never does, and what only a person can do', () => {
+    const rules = section(s.body, /^## Ground rules$/);
+    expect(rules).not.toBeNull();
+    for (const lead of ['**Never merge.**', '**Never print a secret.**', '**Only a person can**', "**Never post a review from the person's token.**"]) {
+      expect(rules!.split('\n').some((l) => l.startsWith(`- ${lead}`)), lead).toBe(true);
+    }
+    expect(code(s.body).filter((c) => /gh pr (review|merge)\b/.test(c))).toEqual([]);
+  });
+
+  it('measures the input\'s claims before it asks, and asks before it files', () => {
+    const measure = s.body.indexOf('2. **Measure every claim before you ask anything** (`K-WORK-16`)');
+    const ask = s.body.indexOf('3. **Ask the questions.**');
+    const start = s.body.indexOf('6. **Ask whether the project starts as soon as its brief merges.**');
+    const file = s.body.indexOf('7. **File the tracking issue**');
+    expect(measure).toBeGreaterThan(-1);
+    expect(ask).toBeGreaterThan(measure);
+    expect(start).toBeGreaterThan(ask);
+    expect(file).toBeGreaterThan(start);
+    // The question set's categories, each a row.
+    const cats = rows(steps(3, 4)).map((r) => r[0]!).filter((c) => !/^-+$|^Category$/.test(c));
+    expect(cats).toEqual(['Money movement', 'Tenancy and data ownership', 'Identity and auth', 'Public or unauthenticated surfaces', 'Cost', 'Observability', 'Human-gated work', 'Who operates it', 'Phasing', 'Milestone placement']);
+  });
+
+  it('sorts every answer into one of three, and writes the mandate in a fixed shape', () => {
+    const sort = steps(4, 5);
+    for (const kind of ['**Decided**', '**Open, a business decision**', '**For the Lead to verify**']) expect(sort, kind).toContain(kind);
+    const shape = /```markdown\n([\s\S]*?)```/.exec(steps(5, 6))?.[1];
+    expect(shape).toBeDefined();
+    expect(shape!.trim().split('\n').map((l) => l.trim())).toEqual(['## Goal', '## Requirements', '## Decisions made', '## Decisions open', '## Constraints to verify', '## Plan and estimate', '## Not in scope']);
+  });
+
+  it('asks whether the project starts on merge, holds it with the file-only label, and never with the escalation label', () => {
+    const start = steps(6, 7);
+    expect(start).toContain('**Start on merge** (Recommended)');
+    expect(start).toContain(`**File on merge, start on the go-ahead**: the tracking issue carries \`${FILE_ONLY}\``);
+    expect(start).toMatch(/\*\*Never use `needs:human` as a deliberate hold\.\*\*/);
+    // Each label the skill names is in the taxonomy.
+    const taxonomy = new Set((JSON.parse(read('rulebook/labels.json')) as { labels: Array<{ name: string }> }).labels.map((l) => l.name));
+    for (const label of [FILE_ONLY, 'needs:human', 'enhancement', 'pipeline-improvement', 'agent:implement']) {
+      expect(s.body, label).toContain(`\`${label}\``);
+      expect(taxonomy.has(label), label).toBe(true);
+    }
+  });
+
+  it('files the tracking issue through the filing skill, on its bucket, and creates no milestone', () => {
+    const file = steps(7, 8);
+    expect(file).toContain('read and follow `skills/file-issue/SKILL.md` in this plugin');
+    expect(file).toMatch(/Pass no `--explicit-milestone`/);
+    expect(file).toMatch(/\*\*You create no milestone\.\*\*/);
+    expect(ALL_SKILLS.map((x) => x.dir)).toContain('file-issue');
+  });
+
+  it("dispatches the Lead's lanes only with inputs those lanes take", () => {
+    const inputsOf = (file: string): Set<string> => {
+      const wf = parse(read(`.github/workflows/${file}`)) as { on: { workflow_call: { inputs: Record<string, unknown> } } };
+      return new Set(Object.keys(wf.on.workflow_call.inputs));
+    };
+    // Its commands sit in fenced blocks inside its numbered steps, so read the lines themselves.
+    const runs = [...s.body.matchAll(/gh workflow run (agent-lead(?:-revise)?\.yml)((?: +-[Rf] +(?:[^\s']|'[^']*')+)+)/g)];
+    expect(runs.map((m) => m[1]).sort()).toEqual(['agent-lead-revise.yml', 'agent-lead.yml']);
+    for (const m of runs) {
+      const passed = [...m[2]!.matchAll(/-f\s+([a-z_]+)=/g)].map((f) => f[1]!);
+      expect(passed.length, m[0]).toBeGreaterThan(0);
+      for (const input of passed) expect(inputsOf(m[1]!).has(input), `${m[1]} -f ${input}`).toBe(true);
+    }
+    expect(s.body).toContain('gh workflow run agent-lead-revise.yml -R <owner>/<repo> -f pr_number=<number> -f reset=true\n');
+    expect(s.body).toContain("gh workflow run agent-lead.yml -R <owner>/<repo> -f mandate='<one paragraph>' -f context=<n>\n");
+  });
+
+  it('audits the brief\'s decisions, posts the rulings as one comment, and checks the new head', () => {
+    expect(steps(10, 11)).toContain('**Audit the decisions section against `K-PROJ-18`.**');
+    const record = steps(13, 14);
+    expect(record).toContain('`gh pr comment <number> -R <owner>/<repo> --body-file <file>`');
+    expect(record).toContain('`✅ ANSWERED (<role>)`');
+    expect(steps(14, 15)).toMatch(/a reset authorises exactly one more revision \(`K-AGENT-18`\)/);
+    const check = steps(15, 16);
+    expect(check).toMatch(/every section it touches carries it/);
+    expect(check).toMatch(/brief guard passed on the head/);
   });
 });

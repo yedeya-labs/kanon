@@ -1,14 +1,15 @@
 # The agent skills
 
-Kanon ships three skills for Claude Code that install Kanon and keep it healthy, from the agent you already work with ([ADR 0014](decisions/0014-adopter-audiences.md), audience 1; plan 0005 step L11). The agent does the reading and the explaining; the `kanon` command stays the source of truth, and you decide every choice.
+Kanon ships three skills for Claude Code that install Kanon and keep it healthy, from the agent you already work with ([ADR 0014](decisions/0014-adopter-audiences.md), audience 1; plan 0005 step L11), and a fourth that starts a project for the Lead to plan ([#853](https://github.com/yedeya-labs/kanon/issues/853)). The agent does the reading and the explaining; the `kanon` command and the rulebook stay the source of truth, and you decide every choice.
 
 | Skill | Run it as | What it does |
 |---|---|---|
 | [adopt](../skills/adopt/SKILL.md) | `/kanon:adopt` | Installs Kanon in the repository you are in, new or already in use: a dry run of `kanon init` first, each choice explained and asked, the files written on a branch, the Apps created with you clicking **Create** and **Install**, every step only you can take walked through, and the pull request opened. Then it hands over to doctor. |
 | [doctor](../skills/doctor/SKILL.md) | `/kanon:doctor`, or ask the agent whether Kanon is set up right | Runs `kanon doctor`, explains each finding, fixes what can be fixed from the checkout, and walks you through the rest, until the installation is healthy. |
+| [mandate](../skills/mandate/SKILL.md) | `/kanon:mandate` | Starts a project from your idea or product document: it measures the document's claims against the code, asks the product questions the Lead may not answer itself (`K-PROJ-18`), writes the mandate, asks whether the project starts as soon as its brief merges, files the tracking issue (`K-PROJ-15`) and dispatches the Lead's brief lane. On the brief's pull request, it finds the decisions the Lead marked answered that are yours, helps you rule on them, posts the rulings as one comment, dispatches the Lead's revise lane with a reset, and checks that each ruling landed before you merge. Start it with the brief's pull request to do only that half. |
 | [upgrade](../skills/upgrade/SKILL.md) | `/kanon:upgrade` | Moves the repository's pins to the plugin's release: `kanon doctor --to` that release first, so you see what it needs before anything changes, then the pin bump on a branch, any question a newer release added to `kanon init`, the fixes through doctor, and the pull request, whose body lists what waits for the merge: a check to require once its job is on the default branch, the admin's bypass to remove, the `apps-check` run and the live checks, and, after a week of green runs, the Apps and secrets to delete. A repository pinned on a candidate is offered the move to Kanon's latest stable release, which doctor reports. |
 
-**Only you can start** `/kanon:adopt` and `/kanon:upgrade`: type the command in Claude Code. Each one writes your repository and walks you through steps only you can take, such as creating the Apps, typing a secret and merging, so the agent can't start it on its own (each sets `disable-model-invocation`), and asking the agent to install or upgrade Kanon won't start it. The agent may start doctor on its own, and doctor changes nothing without asking.
+**Only you can start** `/kanon:adopt`, `/kanon:upgrade` and `/kanon:mandate`: type the command in Claude Code. Each one writes your repository and walks you through steps only you can take, such as creating the Apps, typing a secret, answering a product decision and merging, so the agent can't start it on its own (each sets `disable-model-invocation`), and asking the agent to install or upgrade Kanon, or to start a project, won't start it. The agent may start doctor on its own, and doctor changes nothing without asking.
 
 ## Why a plugin
 
@@ -64,15 +65,16 @@ Or, inside a Claude Code session, the same two as `/plugin marketplace add …` 
 
 Each skill states these rules in its own instructions:
 
-- **They drive only the `kanon` command's JSON output** ([`docs/cli-json.md`](cli-json.md)): `kanon init --json` ([`docs/init.md`](init.md)) and `kanon doctor --json` ([`docs/doctor.md`](doctor.md)), whose shapes are versioned contracts. They never read the command's prose to decide anything, so a skill and an integrator see the same interface.
+- **Adopt, doctor and upgrade drive only the `kanon` command's JSON output** ([`docs/cli-json.md`](cli-json.md)): `kanon init --json` ([`docs/init.md`](init.md)) and `kanon doctor --json` ([`docs/doctor.md`](doctor.md)), whose shapes are versioned contracts. They never read the command's prose to decide anything, so a skill and an integrator see the same interface.
 - **They never merge,** approve, push to the default branch or bypass a ruleset. They open the pull request; you merge it.
 - **They never print a secret.** They never read a token or a private key. A secret's value is something you type into your own terminal.
 - **Some steps only a person can take, and the skills say which:** clicking **Create** and **Install** for each App, generating an App's private key, widening an App's permissions, typing a secret's value, naming the project's people, and deciding whatever the rulebook gives a person to decide. The skill gives you the exact step and waits.
 - **You sign off the commits** (`git commit -s`, under your own name). Kanon's DCO check rejects an AI sign-off.
+- **The mandate skill drives `gh` and the Lead's lanes, and carries method, not rules.** It reads Kanon's rulebook at the release your callers pin and cites each rule by its id, and it takes cost, paging, milestone and stack facts from your repository's own files, never from itself: a fact it needs that nothing states is a gap it reports. It never answers a decision the rulebook gives a person, never posts a review from your token, which would read as your verdict, and never uses `needs:human` to hold a project: to wait for a go-ahead it files the tracking issue with `lead:file-only`, so the issues are filed and none is dispatched until you remove the label (`K-PROJ-11`). It creates no milestone (`K-PROJ-11`, `K-WORK-3`).
 
 ## How they are kept honest
 
-`tests/unit/skills.test.ts` holds each skill to the command it drives, so a change to the command that would break a skill fails Kanon's own build instead:
+`tests/unit/skills.test.ts` holds each skill to the command or the lanes it drives, so a change to them that would break a skill fails Kanon's own build instead:
 
 - every `kanon` command a skill names is one the CLI has, and every flag it passes is one that command's parser takes;
 - every `kanon init` a skill runs carries `--json`, which an agent's shell needs (it has no terminal for `init`'s questions), and `--no-apps` when it writes, so the Apps' browser flow never starts unannounced;
@@ -80,6 +82,7 @@ Each skill states these rules in its own instructions:
 - every field a skill reads, such as `.findings[].fix.commands`, is a field those pages document, and each skill's table of statuses and exit codes is theirs;
 - the plugin ships `skills/` and nothing else: the repository's root is the plugin's root, so a `hooks/`, `.mcp.json` or other plugin component added there would reach every adopter's agent, and fails the test instead;
 - each skill names the contract (`kanon-init/v1`, `kanon-doctor/v1`) its command prints, and runs `kanon` from the release it ships in;
+- the mandate skill, which runs no `kanon` command, cites only rule ids the rulebook has, dispatches the Lead's brief and revise lanes only with inputs those lanes take, files through the filing skill, applies only labels in the taxonomy, and keeps its steps in order: the input's claims measured before any question, and the start-on-merge question asked before the tracking issue is filed;
 - the upgrade skill carries each answer a newer release added whose only effect is a bullet in the adoption record that `init` keeps as it is, writing the bullet after a yes, or tells you plainly, and in the pull request's `## Left to do`, that your answer isn't in the repository ([#601](https://github.com/yedeya-labs/kanon/issues/601)): its table names every bullet `init` writes from an answer, so a new one can't be dropped silently.
 
 A skill step that a person still had to do by hand, when the skills ran Kanon's own migration (plan 0005 L5) or an adopter's (L6), is a gap in the skills, filed against L11 and fixed there.
