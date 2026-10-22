@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { count, findingRules, isReviewers, parseArgs, renderTable, tally, weekOf } from '../../scripts/finding-counts.mjs';
+import { count, findingRules, isReviewers, parseArgs, parsePage, renderTable, tally, weekOf } from '../../scripts/finding-counts.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { writeStub } from './helpers/stub-bin.js';
 
@@ -172,34 +172,54 @@ const FIXTURE = {
   ],
 };
 
-/** A fake `gh api` over FIXTURE, one page of each listing, recording what it was asked. */
-const fakeGh = () => {
+/** What `gh api --include` prints: the status line, the headers, a blank line and the page. */
+const http = (items: unknown, next?: string) =>
+  `HTTP/2.0 200 OK\n${next ? `Link: <${next}>; rel="next"\r\n` : ''}Content-Type: application/json; charset=utf-8\r\n\r\n${JSON.stringify(items)}`;
+
+const ISSUES = 'repos/o/r/issues?labels=follow-up,agent:reviewer&state=all&since=2026-10-14T00:00:00Z&per_page=100&page=1';
+/** A next page's URL as GitHub's Link header gives it for the issues listing: absolute, with a cursor. */
+const ISSUES_2 = 'https://api.github.com/repositories/1/issues?labels=follow-up%2Cagent%3Areviewer&state=all&per_page=100&page=2&after=Y3Vyc29y';
+
+/**
+ * A fake `gh api --include` over FIXTURE, one page of each listing and no next page, recording
+ * what it was asked. `answer` may answer a path first, with the page `gh` prints.
+ */
+const fakeGh = (answer: (path: string, read: number) => string | undefined = () => undefined) => {
   const calls: string[] = [];
-  const gh = (args: string[]): unknown => {
-    const path = args[1] ?? '';
+  const sleeps: number[] = [];
+  const gh = (args: string[]): string => {
+    if (args[0] !== 'api' || args[1] !== '--include') throw new Error(`unexpected gh ${args.join(' ')}`);
+    const path = args[2] ?? '';
     calls.push(path);
-    const page = Number(new URL(`https://x/${path}`).searchParams.get('page'));
-    if (page > 1) return [];
-    if (/^repos\/o\/r\/pulls\?/.test(path)) return FIXTURE.pulls;
+    const own = answer(path, calls.filter((c) => c === path).length);
+    if (own !== undefined) return own;
+    if (/^repos\/o\/r\/pulls\?/.test(path)) return http(FIXTURE.pulls);
     const rv = /^repos\/o\/r\/pulls\/(\d+)\/reviews\?/.exec(path);
-    if (rv) return FIXTURE.reviews[Number(rv[1])] ?? [];
-    if (/^repos\/o\/r\/issues\?/.test(path)) return FIXTURE.issues;
+    if (rv) return http(FIXTURE.reviews[Number(rv[1])] ?? []);
+    if (path === ISSUES) return http(FIXTURE.issues);
     throw new Error(`unexpected gh ${args.join(' ')}`);
   };
-  return { gh, calls };
+  const sleep = (ms: number) => { sleeps.push(ms); };
+  return { gh, sleep, calls, sleeps };
 };
+
+/** A second follow-up in the window, which only a next page of the issues listing holds. */
+const LATER = { number: 30, created_at: '2026-10-17T00:00:00Z', labels: [{ name: 'follow-up' }, { name: 'agent:reviewer' }], body: '`K-WORK-5`' };
 
 describe('counting a repository\'s window (K-SELF-14)', () => {
   it('counts the Reviewer\'s request-changes reviews and follow-ups in [since, until), and reads no pull request older than the window', () => {
-    const { gh, calls } = fakeGh();
-    const r = count({ repo: 'o/r', gh, since: '2026-10-14', until: '2026-10-21' });
+    const { gh, sleep, calls, sleeps } = fakeGh();
+    const r = count({ repo: 'o/r', gh, sleep, since: '2026-10-14', until: '2026-10-21' });
     expect(r).toMatchObject({ since: '2026-10-14', until: '2026-10-21', reviews: 2, followUpIssues: 1 });
     expect(r.rows).toEqual([
       { rule: 'K-PRIN-4', findings: 2, pullRequests: 2, followUps: 1 },
       { rule: 'K-WORK-5', findings: 1, pullRequests: 1, followUps: 0 },
     ]);
     expect(calls).not.toContain('repos/o/r/pulls/3/reviews?per_page=100&page=1');
-    expect(calls).toContain('repos/o/r/issues?labels=follow-up,agent:reviewer&state=all&since=2026-10-14T00:00:00Z&per_page=100&page=1');
+    expect(calls).toContain(ISSUES);
+    // No page named a next one, so none was read, and no page came back empty.
+    expect(calls.filter((c) => c.includes('page=2'))).toEqual([]);
+    expect(sleeps).toEqual([]);
     expect(r.weeks).toEqual([
       { week: '2026-10-12', rows: [{ rule: 'K-PRIN-4', findings: 1, pullRequests: 1, followUps: 1 }, { rule: 'K-WORK-5', findings: 1, pullRequests: 1, followUps: 0 }] },
       { week: '2026-10-19', rows: [{ rule: 'K-PRIN-4', findings: 1, pullRequests: 1, followUps: 0 }] },
@@ -207,11 +227,80 @@ describe('counting a repository\'s window (K-SELF-14)', () => {
   });
 
   it('prints a table a person or an audit issue can read', () => {
-    const { gh } = fakeGh();
-    const table = renderTable(count({ repo: 'o/r', gh, since: '2026-10-14', until: '2026-10-21', rules: ['K-PRIN-4', 'K-SPEC-2'] }));
+    const { gh, sleep } = fakeGh();
+    const table = renderTable(count({ repo: 'o/r', gh, sleep, since: '2026-10-14', until: '2026-10-21', rules: ['K-PRIN-4', 'K-SPEC-2'] }));
     expect(table).toContain('| Rule | Findings | Pull requests | Follow-ups |');
     expect(table).toContain('| `K-PRIN-4` | 2 | 2 | 1 |');
     expect(table).toContain('| `K-SPEC-2` | 0 | 0 | 0 |');
+  });
+});
+
+describe('where a listing ends, and an empty page (K-SELF-14)', () => {
+  const window = { repo: 'o/r', since: '2026-10-14', until: '2026-10-21' };
+
+  it('reads what `gh api --include` prints: the page, and the next page the Link header names', () => {
+    const head = [
+      'HTTP/2.0 200 OK',
+      'Content-Type: application/json; charset=utf-8',
+      `Link: <https://api.github.com/x?page=1&before=a>; rel="prev", <${ISSUES_2}>; rel="next"`,
+      'X-Github-Request-Id: 203C',
+    ].join('\r\n');
+    expect(parsePage(`${head}\r\n\r\n[{"number":1}]`)).toEqual({ items: [{ number: 1 }], next: ISSUES_2 });
+    expect(parsePage('HTTP/2.0 200 OK\nlink: <https://api.github.com/x?page=1>; rel="prev"\r\n\r\n[]')).toEqual({ items: [], next: null });
+    expect(() => parsePage('[]')).toThrow(/HTTP/);
+    expect(() => parsePage('HTTP/2.0 200 OK\r\n\r\n{"message":"x"}')).toThrow(/not a list/);
+  });
+
+  it('follows the next page the Link header names, however short the page before it', () => {
+    const { gh, sleep, calls } = fakeGh((path) => {
+      if (path === ISSUES) return http(FIXTURE.issues, ISSUES_2);
+      if (path === ISSUES_2) return http([LATER]);
+      return undefined;
+    });
+    const r = count({ ...window, gh, sleep });
+    expect(calls).toContain(ISSUES_2);
+    expect(r.followUpIssues).toBe(2);
+    expect(r.rows).toContainEqual({ rule: 'K-WORK-5', findings: 1, pullRequests: 1, followUps: 1 });
+  });
+
+  it('retries an empty first page, and counts the listing a later read returns, rather than end the listing on it', () => {
+    // GitHub answered the follow-ups listing `[]` on about one read in three (#1288).
+    const { gh, sleep, calls, sleeps } = fakeGh((path, read) => (path === ISSUES && read === 1 ? http([]) : undefined));
+    const r = count({ ...window, gh, sleep });
+    expect(calls.filter((c) => c === ISSUES)).toHaveLength(2);
+    expect(sleeps).toEqual([200]);
+    expect(r.followUpIssues).toBe(1);
+    expect(r.rows).toContainEqual({ rule: 'K-PRIN-4', findings: 2, pullRequests: 2, followUps: 1 });
+  });
+
+  it('retries a named next page that comes back empty, and counts it when a later read returns it', () => {
+    const { gh, sleep, sleeps } = fakeGh((path, read) => {
+      if (path === ISSUES) return http(FIXTURE.issues, ISSUES_2);
+      if (path === ISSUES_2) return read <= 2 ? http([]) : http([LATER]);
+      return undefined;
+    });
+    expect(count({ ...window, gh, sleep }).followUpIssues).toBe(2);
+    expect(sleeps).toEqual([200, 400]);
+  });
+
+  it('fails, naming the page, when a named next page stays empty on every read, rather than print a low count', () => {
+    const { gh, sleep, calls, sleeps } = fakeGh((path) => {
+      if (path === ISSUES) return http(FIXTURE.issues, ISSUES_2);
+      if (path === ISSUES_2) return http([]);
+      return undefined;
+    });
+    expect(() => count({ ...window, gh, sleep })).toThrow(`${ISSUES_2} came back empty on each of 5 reads, though the page before it named it as the next one`);
+    expect(calls.filter((c) => c === ISSUES_2)).toHaveLength(5);
+    expect(sleeps).toEqual([200, 400, 800, 1600]);
+  });
+
+  it('takes a first page that is empty on every read as an empty listing, such as a pull request with no reviews', () => {
+    const NONE = 'repos/o/r/pulls/4/reviews?per_page=100&page=1';
+    const { gh, sleep, calls, sleeps } = fakeGh((path) => (path === NONE ? http([]) : undefined));
+    const r = count({ ...window, gh, sleep });
+    expect(calls.filter((c) => c === NONE)).toHaveLength(5);
+    expect(sleeps).toEqual([200, 400, 800, 1600]);
+    expect(r.reviews).toBe(1);
   });
 });
 
@@ -228,38 +317,51 @@ describe('the arguments (K-SELF-14)', () => {
 });
 
 describe('the command, against fixtures through a stub `gh` (K-SELF-14)', SPAWNS, () => {
-  // Each `gh api <path>` answers from the fixture file named for its path, and `[]` past the first page.
+  // Each `gh api --include <path>` answers from the fixture file named for its path, and an empty
+  // page where there is none. A path with an `.empty-once` file beside its own answers `[]` once.
   const dir = mkdtempSync(join(tmpdir(), 'finding-counts-'));
   dirs.push(dir);
   const name = (path: string) => path.replace(/[^A-Za-z0-9]/g, '_');
-  const put = (path: string, value: unknown) => writeFileSync(join(dir, `${name(path)}.json`), JSON.stringify(value));
+  const put = (path: string, value: unknown, next?: string) => writeFileSync(join(dir, `${name(path)}.http`), http(value, next));
   put('repos/o/r/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1', FIXTURE.pulls);
   for (const n of [5, 4, 3]) put(`repos/o/r/pulls/${n}/reviews?per_page=100&page=1`, FIXTURE.reviews[n]);
-  put('repos/o/r/issues?labels=follow-up,agent:reviewer&state=all&since=2026-10-14T00:00:00Z&per_page=100&page=1', FIXTURE.issues);
+  put(ISSUES, FIXTURE.issues);
+  writeFileSync(join(dir, `${name(ISSUES)}.empty-once`), '');
+  // A repository whose pull request listing names a next page that stays empty.
+  put('repos/o/x/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1', FIXTURE.pulls.slice(0, 1), 'https://api.github.com/repositories/2/pulls?state=all&page=2');
   const bin = join(dir, 'bin');
   spawnSync('mkdir', [bin]);
   writeStub(join(bin, 'gh'), `#!/usr/bin/env bash
-f="${dir}/$(printf %s "$2" | tr -c 'A-Za-z0-9' '_').json"
-if [ -f "$f" ]; then cat "$f"; else echo '[]'; fi
+f="${dir}/$(printf %s "$3" | tr -c 'A-Za-z0-9' '_')"
+if [ -f "$f.empty-once" ]; then rm "$f.empty-once"; printf 'HTTP/2.0 200 OK\\r\\n\\r\\n[]'
+elif [ -f "$f.http" ]; then cat "$f.http"; else printf 'HTTP/2.0 200 OK\\r\\n\\r\\n[]'; fi
 `);
-  const run = (...args: string[]) => spawnSync('node', [join(ROOT, 'scripts', 'finding-counts.mjs'), ...args], {
+  const run = (repo: string, ...args: string[]) => spawnSync('node', [join(ROOT, 'scripts', 'finding-counts.mjs'), ...args], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: 'o/r' },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: repo },
   });
 
-  it('prints the counts as JSON and as a table, and exits 2 on a usage error', () => {
-    const json = run('--since', '2026-10-14', '--until', '2026-10-21', '--json');
+  it('prints the counts as JSON and as a table, the follow-up an empty first read hid included, and exits 2 on a usage error', () => {
+    const json = run('o/r', '--since', '2026-10-14', '--until', '2026-10-21', '--json');
     expect(json.stderr).toBe('');
     expect(json.status).toBe(0);
+    expect(JSON.parse(json.stdout).followUpIssues).toBe(1);
     expect(JSON.parse(json.stdout).rows).toEqual([
       { rule: 'K-PRIN-4', findings: 2, pullRequests: 2, followUps: 1 },
       { rule: 'K-WORK-5', findings: 1, pullRequests: 1, followUps: 0 },
     ]);
-    const table = run('--since', '2026-10-14', '--until', '2026-10-21');
+    const table = run('o/r', '--since', '2026-10-14', '--until', '2026-10-21');
     expect(table.status).toBe(0);
     expect(table.stdout).toContain('| `K-WORK-5` | 1 | 1 | 0 |');
-    const bad = run('--since', 'yesterday');
+    const bad = run('o/r', '--since', 'yesterday');
     expect(bad.status).toBe(2);
     expect(bad.stderr).toContain('--since takes a date');
+  });
+
+  it('exits 1, naming the page, and prints no count when a named next page stays empty', () => {
+    const r = run('o/x', '--since', '2026-10-14', '--until', '2026-10-21');
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toContain('finding-counts: https://api.github.com/repositories/2/pulls?state=all&page=2 came back empty on each of 5 reads');
   });
 });
