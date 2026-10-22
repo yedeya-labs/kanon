@@ -430,6 +430,22 @@ describe('the review lane on CI completion judges the review label’s applier (
     }
   });
 
+  // kanon#368: on an adopter's fork PR, `commits/<sha>/pulls` lists no PR for the fork's head, so
+  // the refusal read "no open pull request has <sha> as its head" for a PR that was open.
+  it('refuses a fork\'s head by name, before reading its pull request, and only a fork\'s', () => {
+    const run = (headRepo: string) => runGate('agent-review.yml', 'ci-finished', MEMBER,
+      { STUB_PULLS: '[]', STUB_EVENTS: eventsOf(['a-member', 'review:please']) },
+      { workflow_run: { head_sha: 'b'.repeat(40), head_repository: { full_name: headRepo }, triggering_actor: { login: MEMBER.login } } });
+    const fork = run('outsider/fork');
+    expect(fork.status, fork.output).toBe(0);
+    expect(fork.outputs.member).toBe('false');
+    expect(fork.summary).toContain('is on a fork, outsider/fork');
+    expect(fork.summary).not.toContain('no open pull request');
+    const own = run(REPO);
+    expect(own.outputs.member).toBe('false');
+    expect(own.summary).toContain('no open pull request');
+  });
+
   it('fails the job by name when the read fails, rather than falling back to the pusher', () => {
     const r = gate({ STUB_PULLS_FAILS: '1' }, MEMBER);
     expect(r.status).toBe(1);
