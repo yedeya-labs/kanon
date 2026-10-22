@@ -216,6 +216,10 @@ flake() {
     *) echo "unknown flake: \${kinds[$((n - 1))]}" >&2; exit 3 ;;
   esac
 }
+# kanon#1206: the register's flakes, here and not in GH_REGISTER_ARM, which stubs without flake() share.
+if [ "\${1:-}" = "api" ] && [[ "\${2:-}" == */contents/docs/qa/agent-identities.md ]]; then
+  flake register "\${STUB_REGISTER_FLAKES:-}"
+fi
 ${GH_REGISTER_ARM}
 if [ "\${1:-}" = "api" ] && [[ "\${2:-}" =~ /collaborators/([^/]+)/permission$ ]]; then
   flake permission "\${STUB_PERMISSION_FLAKES:-}"
@@ -241,6 +245,7 @@ fi
 if [ "\${1:-}" = "api" ] && [[ "\${2:-}" == */contents/.github/workflows/*"?ref="* ]]; then
   printf '%s\n' "$2" >> "\${STUB_CALLS:-/dev/null}"
   flake caller "\${STUB_CALLER_FLAKES:-}"
+  [[ "\${2##*/workflows/}" != lanes.yml\\?* ]] || flake wrapper "\${STUB_WRAPPER_FLAKES:-}"
   [ -z "\${STUB_CALLER_FAILS:-}" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
   # kanon#118: a local wrapper the caller calls, at the branch's commit and at main.
   case "\${2##*/workflows/}" in

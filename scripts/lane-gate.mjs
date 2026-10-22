@@ -108,12 +108,16 @@
 // A TRANSIENT READ IS RETRIED (kanon#1160). On #1156 `commits/<sha>/pulls` answered an empty
 // body once, and the review CI's completion should have started was dropped for good, since
 // nothing re-asks a failed filter. So every read the gate makes, with its parse, goes through
-// `readWithRetry`: 4 attempts, waiting 1, 2 and 4 s between them. Transient is an empty or
-// truncated JSON body (the parse's `SyntaxError`), a 5xx, a 429, or a 403 for a secondary rate
-// limit. A 404, a 401, a plain 403 refusal and anything else fail at once, as before, so a
-// register's or a caller's 404 still reads as none. When every attempt fails, the step still
-// fails closed, by name, saying `after 4 attempts`. Telling the pull request that its review was
-// dropped is a follow-up, a sweep that re-asks (Owner decision on #1160).
+// `readWithRetry`: 4 attempts, waiting 1, 2 and 4 s between them. Transient is an empty body on
+// any read, a truncated one on a JSON read (the parse's `SyntaxError`), a 5xx, a 429, or a 403
+// for a secondary rate limit. The register and the caller are read raw, with no parse, so
+// `nonEmpty` throws that `SyntaxError` for them (kanon#1206): neither file is ever really empty,
+// and an empty caller read as no pin was a member's run dropped green. A truncated raw body has
+// nothing to notice it, and is not retried. A 404, a 401, a plain 403 refusal and anything else
+// fail at once, as before, so a register's or a caller's 404 still reads as none. When every
+// attempt fails, the step still fails closed, by name, saying `after 4 attempts`. Telling the
+// pull request that its review was dropped is a follow-up, a sweep that re-asks (Owner decision
+// on #1160).
 //
 // THE CALLER'S KANON PIN IS CHECKED TOO, for a member (kanon#69): a lane run from a branch
 // other than the default whose caller pins a different Kanon version than the default branch's
@@ -344,6 +348,18 @@ export function readWithRetry(read, { attempts = READ_ATTEMPTS, sleep = sleepSyn
   }
 }
 
+/**
+ * A raw read's body, or the `SyntaxError` `isTransient` retries when it is empty (kanon#1206).
+ *
+ * @param {string} text
+ * @param {string} what the file, for the message
+ * @returns {string}
+ */
+const nonEmpty = (text, what) => {
+  if (text.trim() === '') throw new SyntaxError(`empty body for ${what}`);
+  return text;
+};
+
 /** ` after N attempts` for a read `readWithRetry` gave up on, else nothing. @param {unknown} e @returns {string} */
 const afterAttempts = (e) => {
   const n = /** @type {{ attempts?: number }} */ (e).attempts;
@@ -413,7 +429,7 @@ export function main(env = process.env, { sleep = sleepSync } = {}) {
       registeredApps: () => {
         let text;
         try {
-          text = retried(() => ghApi([`repos/${repo}/contents/docs/qa/agent-identities.md`, '-H', 'Accept: application/vnd.github.raw']));
+          text = retried(() => nonEmpty(ghApi([`repos/${repo}/contents/docs/qa/agent-identities.md`, '-H', 'Accept: application/vnd.github.raw']), 'the App register'));
         } catch (e) {
           if (/\b404\b/.test(stderrOf(e))) return new Map();
           throw new Error(`could not read the App register from the default branch of ${repo}${afterAttempts(e)}: ${stderrOf(e)}`);
@@ -436,7 +452,7 @@ export function main(env = process.env, { sleep = sleepSync } = {}) {
         { workflowRef: env.GITHUB_WORKFLOW_REF, workflowSha: env.GITHUB_WORKFLOW_SHA, repo, defaultBranch: event.repository?.default_branch },
         (path, ref) => {
           try {
-            return retried(() => ghApi([`repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`, '-H', 'Accept: application/vnd.github.raw']));
+            return retried(() => nonEmpty(ghApi([`repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`, '-H', 'Accept: application/vnd.github.raw']), `${path} at ${ref}`));
           } catch (e) {
             if (/\b404\b/.test(stderrOf(e))) return null;
             throw new Error(`could not read the caller ${path} at ${ref} on ${repo}${afterAttempts(e)}: ${stderrOf(e)}`);
