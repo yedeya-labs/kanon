@@ -207,6 +207,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** The Owner decided (plan 0009 decision 10) that a run row may name the kind of Claude credential it ran on, `subscription` or `api-key`, chosen by which secret the caller mapped and never from anything the secret holds. [Plan 0009 §12](../docs/plans/0009-release-channels-and-api-key.md#12-cost-what-was-paid), [#579](https://github.com/yedeya-labs/kanon/issues/579)
 - **2026-10-20.** The Owner decided (plan 0013 decisions 7 and 12) a sixth row kind, the smoke-check row, which records one smoke run outside a deploy by the environment's role and position, never its name, a release, a commit, a URL or anything the hooks print; and that the deploy row records the reset hook's stage and duration. [ADR 0007](../docs/decisions/0007-data-boundary.md) was amended to match. [Plan 0013 §8](../docs/plans/0013-smoke-lifecycle.md#8-telemetry), [#1147](https://github.com/yedeya-labs/kanon/issues/1147)
 
+## `K-SELF-14`
+
+- **2026-10-21.** The Owner decided that a review finding's class is the rule id it cites, in place of the six named classes, which almost no review recorded and nothing read; findings and follow-ups are counted per rule id by `scripts/finding-counts.mjs`, and a gate's baseline is recorded in its mechanism row. The count was backfilled for the four gates switched on that day. [#1253](https://github.com/yedeya-labs/kanon/issues/1253)
+
 ## `K-ADOPT-1`
 
 - **2026-10-14.** Step 10 names the adoption record's `- **Chat channel:**` bullet under `## Choices`, and the answers it records: Kanon's Slack hook, Kanon's generic JSON webhook hook, the project's own hook, or none yet. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)

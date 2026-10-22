@@ -89,6 +89,8 @@ The [rulebook](../rulebook/) states each rule once, as `K-<AREA>-<n>`, with its 
 
 A rule whose "Enforced by" says *prose only* has no check yet. Those rules are Kanon's own backlog.
 
+Whether a gate moved anything is read from the rule its findings cite. [`scripts/finding-counts.mjs`](../scripts/finding-counts.mjs) counts the Reviewer's request-changes findings and follow-ups per rule id over a window, and a gate's baseline is that count before the gate was switched on, recorded in the adoption record (`K-SELF-14`).
+
 ## Where things are
 
 | Path | What |

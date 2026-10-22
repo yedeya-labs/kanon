@@ -138,13 +138,13 @@ This chapter governs how a Kanon pipeline keeps itself honest: the guards that c
 
 **Class.** framework
 
-### `K-SELF-14` Record a class for every review finding, and baseline before gating
+### `K-SELF-14` Class every review finding by the rule id it cites, and baseline before gating
 
-**Rule.** Record a class for every review finding (silent absence, reality mismatch, stale assertion, logic, cross-artifact, self-referential). Establish a baseline before switching on any gate predicted to move a class.
+**Rule.** A review finding's class is the rule id it cites. Count the Reviewer's request-changes findings and follow-ups per rule id, week by week. Before switching on a gate, record that count for each rule the gate serves, over the weeks before it, as the gate's baseline in its mechanism row of the adoption record (`K-ADOPT-9`). Afterwards the same count, over the same length of window, shows whether the gate moved it.
 
-**Why.** A gate switched on before its baseline exists has an effect nobody can measure.
+**Why.** A gate switched on before its baseline exists has an effect nobody can measure. A list of finding classes kept beside the rules is a second taxonomy: reviewers leave it blank, nothing reads it, and a class says nothing about which gate would remove it. The rule a finding cites is already on most findings, and it names the rule a gate serves.
 
-**Enforced by.** Prose only; a guard is planned.
+**Enforced by.** The count is `scripts/finding-counts.mjs`, which reads the Reviewer's reviews and follow-ups through the GitHub API and prints the findings, pull requests and follow-ups per rule id for a window (`tests/unit/finding-counts.test.ts`). Running it before a gate and recording the baseline is prose only.
 
 **Class.** framework
 
