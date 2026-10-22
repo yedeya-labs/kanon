@@ -16,8 +16,9 @@
 # request that touches none of what these guards read starts no runner at all:
 #   - the spec guard reads `docs/qa/specs/` only (`K-SPEC-2`, `K-SPEC-3`);
 #   - the brief guard reads the briefs under `docs/projects/`, and `docs/qa/exemptions.md` when
-#     Kanon has one (`K-PROJ-4`, `K-LAYOUT-12`, `K-LAYOUT-13`), and reads the repository's
-#     milestones only when a brief names one;
+#     Kanon has one (`K-PROJ-4`, `K-LAYOUT-12`, `K-LAYOUT-13`), reads each brief's tracking
+#     issue's labels and milestone (`K-WORK-23`, from the release that has the check), and reads
+#     the repository's milestones only when a brief names one;
 #   - the label guard reads every label the pipeline applies, in `.github/workflows/`,
 #     `.github/ISSUE_TEMPLATE/` and `docs/qa/` (Kanon declares no pipeline code of its own in
 #     `docs/qa/escalation-paths.md`), and checks them against the repository's live labels,

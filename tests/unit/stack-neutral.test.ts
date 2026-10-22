@@ -19,6 +19,8 @@ import { SPAWNS } from './helpers/spawns.js';
  */
 const ROOT = process.cwd();
 const FIXTURE = join(ROOT, 'tests/fixtures/python-adopter');
+/** The fixture brief's tracking issue as `gh` reads it: its kind label, on the matching bucket. */
+const GOOD_TRACKING = '{"labels":["enhancement"],"milestone":"Product Backlog","pull":false}';
 
 /** A copy of the fixture as a git repository, the shape a checkout has. */
 const checkout = (): string => {
@@ -45,15 +47,20 @@ const bareBin = (() => {
   return dir;
 })();
 
-/** Run one of Kanon's guards the way a step after `kanon-path` does: `node "$KANON/scripts/<guard>.mjs"`. */
-const guard = (name: string, change?: (dir: string) => void) => {
+/**
+ * Run one of Kanon's guards the way a step after `kanon-path` does: `node "$KANON/scripts/<guard>.mjs"`.
+ * The fixture isn't a GitHub repository, so the brief guard reads no tracking issue here, as
+ * Kanon's python-fixture smoke runs it (`BRIEF_GUARD_SKIP_TRACKING_ISSUES`); the tracking-issue
+ * cases below give it a `gh` to read one with.
+ */
+const guard = (name: string, change?: (dir: string) => void, env: Record<string, string> = { BRIEF_GUARD_SKIP_TRACKING_ISSUES: '1' }) => {
   const dir = checkout();
   try {
     change?.(dir);
     const r = spawnSync('node', [join(ROOT, 'scripts', `${name}.mjs`)], {
       cwd: dir,
       encoding: 'utf8',
-      env: { PATH: bareBin, HOME: dir, KANON: ROOT },
+      env: { PATH: bareBin, HOME: dir, KANON: ROOT, ...env },
     });
     return { status: r.status, out: `${r.stdout}${r.stderr}` };
   } finally {
@@ -150,6 +157,52 @@ describe("Kanon's guards on a project with no package.json, run with only node a
     expect(r.out).toMatch(/what I did not examine/i);
   });
 
+  describe("brief-guard reads the brief's tracking issue from the repository (K-WORK-23, kanon#1245)", () => {
+    /** brief-guard with a `gh` on PATH that answers the tracking issue's read with `issue`, and logs each call. */
+    const withIssue = (issue: string) => {
+      const dir = checkout();
+      const bin = mkdtempSync(join(tmpdir(), 'gh-stub-'));
+      try {
+        writeFileSync(join(bin, 'gh'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${join(bin, 'calls')}"\ncase "$*" in *issues/1\\ *) printf '%s\\n' '${issue}' ;; *) exit 9 ;; esac\n`, { mode: 0o755 });
+        const r = spawnSync('node', [join(ROOT, 'scripts', 'brief-guard.mjs')], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: { PATH: `${bin}:${bareBin}`, HOME: dir, KANON: ROOT },
+        });
+        return { status: r.status, out: `${r.stdout}${r.stderr}`, calls: existsSync(join(bin, 'calls')) ? readFileSync(join(bin, 'calls'), 'utf8') : '' };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(bin, { recursive: true, force: true });
+      }
+    };
+
+    it('passes a tracking issue with its kind label on the matching bucket, and reads nothing of its text', () => {
+      const r = withIssue(GOOD_TRACKING);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('each tracking issue carries its kind label on its bucket');
+      expect(r.calls.trim()).toBe('api repos/{owner}/{repo}/issues/1 --jq {labels: [.labels[].name], milestone: (.milestone.title // ""), pull: (.pull_request != null)}');
+    });
+
+    it('is red when the tracking issue has no kind label, is on no bucket, or carries project:<n>', () => {
+      const r = withIssue('{"labels":["project:1"],"milestone":"","pull":false}');
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toMatch(/docs\/projects\/1\.md\n\s+tracking issue #1 carries no kind label/);
+      expect(r.out).toContain('tracking issue #1 is on no milestone');
+      expect(r.out).toContain('tracking issue #1 carries `project:1`');
+    });
+
+    it("is red, by name, when the tracking issue can't be read, and says so when the run turns the read off", () => {
+      // The bare PATH has no `gh`.
+      const unread = guard('brief-guard', undefined, {});
+      expect(unread.status, unread.out).toBe(1);
+      expect(unread.out).toContain("tracking issue #1 couldn't be read, so its kind label, bucket and labels weren't checked");
+      const off = guard('brief-guard');
+      expect(off.status, off.out).toBe(0);
+      expect(off.out).toContain('BRIEF_GUARD_SKIP_TRACKING_ISSUES is set, so no tracking issue was read');
+      expect(off.out).not.toContain('each tracking issue carries its kind label');
+    });
+  });
+
   describe('brief-guard reads a roadmap milestone from the repository, not from the library (kanon#54)', () => {
     const onLaunch = (dir: string) => edit(dir, 'docs/projects/1.md', (t) => t.replace('**Milestone:** Product Backlog', '**Milestone:** Launch'));
     /** brief-guard with a `gh` on PATH that answers the milestone listing with `milestones`. */
@@ -158,7 +211,7 @@ describe("Kanon's guards on a project with no package.json, run with only node a
       const bin = mkdtempSync(join(tmpdir(), 'gh-stub-'));
       try {
         onLaunch(dir);
-        writeFileSync(join(bin, 'gh'), `#!/bin/sh\ncase "$*" in *milestones*) printf '%s\\n' '${milestones}' ;; *) exit 9 ;; esac\n`, { mode: 0o755 });
+        writeFileSync(join(bin, 'gh'), `#!/bin/sh\ncase "$*" in *milestones*) printf '%s\\n' '${milestones}' ;; *issues/1*) printf '%s\\n' '${GOOD_TRACKING}' ;; *) exit 9 ;; esac\n`, { mode: 0o755 });
         const r = spawnSync('node', [join(ROOT, 'scripts', 'brief-guard.mjs')], {
           cwd: dir,
           encoding: 'utf8',

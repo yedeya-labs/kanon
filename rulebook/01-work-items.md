@@ -313,7 +313,7 @@ Every label the pipeline applies must be in this table. The table is the authori
 
 **Why.** An issue with no kind label is invisible to every query that counts work by kind, and a tracking issue has no other kind of its own. A dedicated "tracking" label would be a second way to find a project, next to the brief file the reconciler already reads, and the two could disagree.
 
-**Enforced by.** Prose only. The brief guard checks that each decomposition item names its labels (`K-PROJ-9`).
+**Enforced by.** The brief guard reads each brief's tracking issue, issue `<n>` for `docs/projects/<n>.md`, and fails when it has no kind label or both, isn't on the bucket its kind goes in, or carries `project:<n>`. A read that fails is a finding, not a pass ([`tests/library/brief-guard.test.ts`](../tests/library/brief-guard.test.ts)). It checks too that each decomposition item names its labels (`K-PROJ-9`). Which kind a project's work is stays prose only.
 
 **Class.** framework
 

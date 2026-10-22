@@ -26,6 +26,9 @@ import {
   isPreStandard,
   PRE_STANDARD_SKIPS,
   exemptSummary,
+  KIND_BUCKETS,
+  checkTrackingIssue,
+  trackingIssueProblems,
 } from '../../scripts/brief-guard.mjs';
 import { parseProposed } from '../../scripts/lead-reconcile.mjs';
 import { ROOT } from './helpers/adopter.js';
@@ -1060,5 +1063,56 @@ describe("Kanon's own brief template passes the brief guard (#55)", () => {
   it('has no findings', () => {
     const template = readFileSync(join(ROOT, 'rulebook/templates/brief.md'), 'utf8');
     expect(checkBrief('docs/projects/_template.md', template)).toEqual([]);
+  });
+});
+
+describe("the brief's tracking issue (K-WORK-23, kanon#1245)", () => {
+  const tracking = (labels: string[], milestone: string, pull = false) => ({ labels, milestone, pull });
+
+  it('takes each kind label to its bucket (K-WORK-4)', () => {
+    expect(KIND_BUCKETS).toEqual({ enhancement: 'Product Backlog', 'pipeline-improvement': 'Development Automation' });
+  });
+
+  it('passes a tracking issue with one kind label, on the bucket that matches it', () => {
+    expect(trackingIssueProblems(9, tracking(['enhancement'], 'Product Backlog'))).toEqual([]);
+    expect(trackingIssueProblems(9, tracking(['pipeline-improvement', 'lead:file-only'], 'Development Automation'))).toEqual([]);
+  });
+
+  it('fails one with no kind label', () => {
+    expect(trackingIssueProblems(9, tracking(['bug'], 'Product Backlog'))).toEqual([
+      'tracking issue #9 carries no kind label: give it the kind of the work the project does, `enhancement` on Product Backlog, or `pipeline-improvement` on Development Automation (K-WORK-23)',
+    ]);
+  });
+
+  it('fails one with both kind labels', () => {
+    expect(trackingIssueProblems(9, tracking(['enhancement', 'pipeline-improvement'], 'Product Backlog')).join('\n')).toMatch(/carries both kind labels, `enhancement` and `pipeline-improvement`/);
+  });
+
+  it('fails one on no milestone, or on one that is not a bucket', () => {
+    expect(trackingIssueProblems(9, tracking(['enhancement'], ''))).toEqual([expect.stringMatching(/^tracking issue #9 is on no milestone: it goes in the bucket that matches its kind/)]);
+    expect(trackingIssueProblems(9, tracking(['enhancement'], 'Launch'))).toEqual([expect.stringMatching(/^tracking issue #9 is on “Launch”, which isn't a bucket/)]);
+  });
+
+  it("fails one on the other kind's bucket", () => {
+    expect(trackingIssueProblems(9, tracking(['pipeline-improvement'], 'Product Backlog'))).toEqual([
+      'tracking issue #9 is `pipeline-improvement` on Product Backlog: that kind goes on Development Automation (K-WORK-4, K-WORK-23)',
+    ]);
+  });
+
+  it('fails one that carries its own project label, and no other project label', () => {
+    expect(trackingIssueProblems(9, tracking(['enhancement', 'project:9'], 'Product Backlog'))).toEqual([expect.stringMatching(/carries `project:9`, which marks the project's items, never the project/)]);
+    expect(trackingIssueProblems(9, tracking(['enhancement', 'project:90'], 'Product Backlog'))).toEqual([]);
+  });
+
+  it('fails a number that is a pull request, and says nothing else of it', () => {
+    expect(trackingIssueProblems(9, tracking([], '', true))).toEqual([expect.stringMatching(/^#9 is a pull request, so it can't be this brief's tracking issue/)]);
+  });
+
+  it("reads the brief's own number, and reports a failed read by name rather than passing", () => {
+    const asked: number[] = [];
+    expect(checkTrackingIssue('docs/projects/902.md', (n) => { asked.push(n); return tracking(['pipeline-improvement'], 'Development Automation'); })).toEqual([]);
+    expect(asked).toEqual([902]);
+    const unread = checkTrackingIssue('docs/projects/902.md', () => { throw Object.assign(new Error('x'), { stderr: 'HTTP 404: Not Found\nmore' }); });
+    expect(unread).toEqual([{ at: 'docs/projects/902.md', problem: expect.stringMatching(/^tracking issue #902 couldn't be read, so its kind label, bucket and labels weren't checked \(HTTP 404: Not Found\)/) }]);
   });
 });
