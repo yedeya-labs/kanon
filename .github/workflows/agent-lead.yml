@@ -397,7 +397,9 @@ jobs:
         finds the project's issues by a `<!-- qa:project <n> -->` marker on the LAST line of the body, RA-1066), so a slug-named brief can
         never be reconciled and would sit in the directory while every tick
         reported "no project to reconcile". If you were given no tracking issue,
-        STOP and say so rather than inventing a name. Open ONE PR labelled
+        STOP and say so rather than inventing a name. Push it on a branch named
+        `docs/<n>-<slug>` (`K-WS-8`), the same <n>: the PR-title check fails a pull
+        request from a branch named any other way. Open ONE PR labelled
         `review:please` so the Reviewer reviews it. Do NOT milestone the PR (K-WORK-7:
         issues only). Do NOT create the issues you propose — the brief proposes
         them; a human approves before anything is filed. NEVER merge.

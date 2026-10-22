@@ -29,10 +29,11 @@ describe('K-SHIP-4 the pr-title composite action', () => {
     expect(existsSync(new URL('pr-title.mjs', dir))).toBe(true);
   });
 
-  it('passes the title to the script only through the environment', () => {
-    expect(runSteps[0]?.env).toEqual({ PR_TITLE: '${{ inputs.title }}' });
+  it('passes the title and the branch to the script only through the environment', () => {
+    expect(runSteps[0]?.env).toEqual({ PR_TITLE: '${{ inputs.title }}', PR_BRANCH: '${{ inputs.branch }}' });
     const script = readFileSync(new URL('pr-title.mjs', dir), 'utf8');
     expect(script).toContain('process.env.PR_TITLE');
+    expect(script).toContain('process.env.PR_BRANCH');
   });
 
   it('interpolates no expression into any run line, and never names github.event there', () => {
@@ -51,16 +52,40 @@ describe('K-SHIP-4 the pr-title composite action', () => {
   });
 });
 
+describe('K-WS-8 the pr-title composite action reads the head branch', () => {
+  it('has a branch input that defaults to the pull request head branch', () => {
+    expect(action.inputs.branch?.default).toBe('${{ github.head_ref }}');
+    expect(action.inputs.branch?.required).not.toBe(true);
+  });
+});
+
 describe('K-SHIP-4 the script, run as the action runs it', () => {
   const script = fileURLToPath(new URL('pr-title.mjs', dir));
-  const envName = Object.keys(runSteps[0]?.env ?? {})[0] ?? 'missing';
-  const run = (title: string) =>
-    spawnSync(process.execPath, [script], { env: { ...process.env, [envName]: title }, encoding: 'utf8' });
+  // Each input reaches the script under the variable the action's step maps it to.
+  const envOf = (input: string) =>
+    Object.entries(runSteps[0]?.env ?? {}).find(([, v]) => v === `\${{ inputs.${input} }}`)?.[0] ?? 'missing';
+  const run = (title: string, branch = '') =>
+    spawnSync(process.execPath, [script], {
+      env: { ...process.env, [envOf('title')]: title, [envOf('branch')]: branch },
+      encoding: 'utf8',
+    });
 
   it('passes a valid title read from the environment', () => {
     const result = run('feat(actions): ship the PR-title check as a composite action');
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('PR title OK');
+  });
+
+  it('passes a valid branch read from the environment, for K-WS-8', () => {
+    const result = run('fix: a thing', 'fix/42-a-thing');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Branch name OK: fix/42-a-thing');
+  });
+
+  it('fails a misnamed branch read from the environment, though the title is valid, for K-WS-8', () => {
+    const result = run('fix: a thing', 'fix/a-thing');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Branch "fix/a-thing" is not named');
   });
 
   it('fails an invalid title read from the environment, and lists the recognised types', () => {

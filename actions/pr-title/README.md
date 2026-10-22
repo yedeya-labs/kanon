@@ -1,12 +1,23 @@
 # `pr-title`: Kanon's PR-title check
 
-Fails a pull request whose title isn't a conventional commit with one of Kanon's fixed types, or that ends in an issue reference such as `(#12)`. This enforces [`K-SHIP-4`](../../rulebook/06-shipping.md). The type table is Kanon's and isn't configurable:
+Fails a pull request whose title isn't a conventional commit with one of Kanon's fixed types, or that ends in an issue reference such as `(#12)`, or whose branch isn't named for its issue. This enforces [`K-SHIP-4`](../../rulebook/06-shipping.md), and [`K-WS-8`](../../rulebook/05-workspace.md) for the branch. The type table is Kanon's and isn't configurable:
 
 | Type | Version bump | Deploys |
 |---|---|---|
 | `feat` | minor | yes |
 | `fix`, `perf`, `refactor`, `build`, `revert` | patch | yes |
 | `docs`, `style`, `test`, `ci`, `chore` | patch | no |
+
+It also fails a pull request whose head branch isn't named `<type>/<number>-<slug>`, such as `fix/42-empty-cart-total`: `<type>` is one of the types above, `<number>` the issue the branch works, and `<slug>` lowercase words joined by single hyphens. To fix a pull request from a misnamed branch, push its commits to a branch so named and open the pull request from there. A branch a tool names itself is exempt, by a fixed list:
+
+| Branch | Made by |
+|---|---|
+| `dependabot/…` | Dependabot |
+| `release-please--branches--…` | release-please |
+| `lead/split-<number>` | the Lead's split lane |
+| `kanon/upgrade-…` | Kanon's upgrade skill |
+| `kanon/pins-…` | Kanon's release workflow, for a candidate's pin pull request |
+| `kanon/metrics-page` | Kanon's metrics page |
 
 On failure it prints the reason and the recognised types.
 
@@ -41,12 +52,12 @@ jobs:
 - **`edited` matters.** Without it, fixing a bad title doesn't re-run the check.
 - **With a merge queue** (`K-MERGE-7`), a required check must also run on `merge_group`, or queued PRs wait until they time out. A merge group carries no pull request, so add `merge_group:` under `on:`, gate this step with `if: github.event_name == 'pull_request'`, and add a step before it that passes with `if: github.event_name == 'merge_group'`. Keep the job's `name:` literal and the job itself unconditional, so the check reports under the same name on both events. Skipping the title check on the queue is safe because a PR can only be queued once this check has passed on it. Kanon's own [`pr-title.yml`](../../.github/workflows/pr-title.yml) is the worked example.
 - **Node 18 or later** must be on the runner. GitHub's hosted runners have it. On a self-hosted runner, add `actions/setup-node` before this step.
-- **Input `title`** (optional) defaults to the pull request's title. The title reaches the check only through an environment variable, never through the shell, because a PR title is untrusted input.
+- **Input `title`** (optional) defaults to the pull request's title. **Input `branch`** (optional) defaults to the pull request's head branch; when it is empty, only the title is checked. Each reaches the check only through an environment variable, never through the shell, because a PR title and a branch name are untrusted input.
 - **The release tool must agree.** Your `release-please-config.json` needs a changelog section, not hidden, for each of the eleven types above (`K-SHIP-7`). A type the release tool doesn't know is dropped silently.
 
 A moving major tag (`@v0`) also exists, but pin the exact version: Dependabot then proposes each upgrade as a PR that your own CI tests.
 
-To validate a title locally before opening a PR, run the same script: `node actions/pr-title/pr-title.mjs "feat(scope): your title"` from a checkout of Kanon at your pinned version.
+To validate a title and a branch name locally before opening a PR, run the same script: `node actions/pr-title/pr-title.mjs "feat(scope): your title" feat/12-your-branch` from a checkout of Kanon at your pinned version.
 
 ## Upgrades: Dependabot
 

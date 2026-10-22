@@ -35,7 +35,7 @@ jobs:
       - name: This PR's DCO action passes this PR's commits
         uses: $/actions/dco
 
-      - name: This PR's PR-title action passes this PR's title
+      - name: This PR's PR-title action passes this PR's title and branch name
         uses: $/actions/pr-title
 
       - name: This PR's PR-title action fails a title that isn't conventional
@@ -45,9 +45,19 @@ jobs:
         with:
           title: Not a conventional title
 
-      - name: Check it failed
+      - name: This PR's PR-title action fails a branch not named <type>/<number>-<slug>
+        id: bad-branch
+        uses: $/actions/pr-title
+        continue-on-error: true
+        with:
+          title: "fix: a conventional title"
+          branch: not-a-working-branch
+
+      - name: Check both failed
         env:
-          OUTCOME: ${{ steps.bad-title.outcome }}
+          TITLE_OUTCOME: ${{ steps.bad-title.outcome }}
+          BRANCH_OUTCOME: ${{ steps.bad-branch.outcome }}
         run: |
-          echo "outcome=$OUTCOME"
-          test "$OUTCOME" = failure
+          echo "title=$TITLE_OUTCOME branch=$BRANCH_OUTCOME"
+          test "$TITLE_OUTCOME" = failure
+          test "$BRANCH_OUTCOME" = failure

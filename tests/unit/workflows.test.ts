@@ -984,9 +984,20 @@ describe('#47 the PR\'s own copy of each judging action still runs, as a test', 
     expect(bad?.with?.title).toBe('Not a conventional title');
     expect(bad?.['continue-on-error']).toBe(true);
     const check = steps.at(-1);
-    expect(check?.env).toEqual({ OUTCOME: '${{ steps.bad-title.outcome }}' });
-    expect(check?.run).toContain('test "$OUTCOME" = failure');
+    expect(check?.env).toMatchObject({ TITLE_OUTCOME: '${{ steps.bad-title.outcome }}' });
+    expect(check?.run).toContain('test "$TITLE_OUTCOME" = failure');
     expect(check?.['continue-on-error']).toBeUndefined();
+  });
+
+  it('K-WS-8 checks that the PR-title action fails a misnamed branch under a good title', () => {
+    const bad = steps.find((s) => s.id === 'bad-branch');
+    expect(bad?.uses).toBe('$/actions/pr-title');
+    expect(bad?.with?.title).toBe('fix: a conventional title');
+    expect(bad?.with?.branch).toBe('not-a-working-branch');
+    expect(bad?.['continue-on-error']).toBe(true);
+    const check = steps.at(-1);
+    expect(check?.env).toMatchObject({ BRANCH_OUTCOME: '${{ steps.bad-branch.outcome }}' });
+    expect(check?.run).toContain('test "$BRANCH_OUTCOME" = failure');
   });
 
   it('reads contents and pull requests only', () => {

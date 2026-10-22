@@ -124,6 +124,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-02.** Kanon's own DCO and PR-title checks run the last release, and the pull request's copy runs beside them as a test that isn't required. [#47](https://github.com/yedeya-labs/kanon/issues/47)
 - **2026-10-20.** The red-test check, which both judges a pull request and runs it, reads the stack document's code areas from the default branch. [#761](https://github.com/yedeya-labs/kanon/issues/761)
 
+## `K-WS-8`
+
+- **2026-10-22.** No longer prose only for a branch made by hand: the Owner decided that a check beside the PR-title check holds every pull request's branch to the name, the Author App's and a person's included, and the `pr-title` action now fails a pull request whose head branch isn't so named. A branch a tool names itself is exempt, by the action's fixed list. The implement lane and the Lead's brief lane are told the name. [#1236](https://github.com/yedeya-labs/kanon/issues/1236), [#1243](https://github.com/yedeya-labs/kanon/issues/1243)
+
 ## `K-SHIP-7`
 
 - **2026-10-12.** The Owner decided that a project whose releases other repositories pin may declare a release cadence, and that a project which declares none releases on every merge. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)

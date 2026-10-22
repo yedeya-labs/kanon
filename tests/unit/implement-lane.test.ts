@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { checkBranch } from '../../actions/pr-title/pr-title.mjs';
 import { MAP_PATH } from '../../scripts/starting-map.mjs';
 import { jobPrompt } from './helpers/spine.js';
 import { SPAWNS } from './helpers/spawns.js';
@@ -132,5 +133,30 @@ describe('the prompts\' command, run on a branch that merged its base in (kanon#
     expect(r.fix.status).toBe(0);
     expect(r.fix.stdout).not.toMatch(/re-pointed/);
     expect(r.doc).toContain('`src/calc.ts:5`');
+  });
+});
+
+/**
+ * kanon#1243 — the lanes that make their own branch name it `<type>/<number>-<slug>`
+ * (`K-WS-8`), because the PR-title check fails a pull request from any other. The
+ * Implementer's earlier branches carried an `agent/` or `implement/` type, or the issue
+ * number at the end, which the check now refuses.
+ */
+const leadLane = parse(readFileSync('.github/workflows/agent-lead.yml', 'utf8')) as {
+  jobs: { brief: { with: { prompt: string } } };
+};
+
+describe('K-WS-8 the lanes that make their own branch name it as the check reads it', () => {
+  it('the implement lane names the shape, and its example passes the check', () => {
+    const flat = lane.jobs.implement.with.prompt.replace(/\s+/g, ' ');
+    expect(flat).toContain('NAME YOUR BRANCH `<type>/<issue>-<slug>` (`K-WS-8`), such as `fix/42-empty-cart-total`');
+    expect(checkBranch('fix/42-empty-cart-total')).toEqual({ ok: true });
+  });
+
+  it("the Lead's brief lane names its branch for the tracking issue, of a type the check accepts", () => {
+    const flat = leadLane.jobs.brief.with.prompt.replace(/\s+/g, ' ');
+    expect(flat).toContain('Push it on a branch named `docs/<n>-<slug>` (`K-WS-8`), the same <n>');
+    expect(flat.indexOf('`docs/<n>-<slug>`')).toBeGreaterThan(flat.indexOf('docs/projects/<n>.md where <n> is the TRACKING ISSUE NUMBER'));
+    expect(checkBranch('docs/902-project-brief')).toEqual({ ok: true });
   });
 });

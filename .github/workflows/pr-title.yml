@@ -1,6 +1,6 @@
-# Kanon's PR-title check (K-SHIP-4), run the way an adopter runs it: pinned to an exact
-# Kanon release (K-ADOPT-11), which Dependabot bumps (.github/dependabot.yml, ADR 0011). No
-# checkout is needed.
+# Kanon's PR-title check (K-SHIP-4) and its branch-name check (K-WS-8), run the way an
+# adopter runs it: pinned to an exact Kanon release (K-ADOPT-11), which Dependabot bumps
+# (.github/dependabot.yml, ADR 0011). No checkout is needed.
 #
 # The check that judges a PR runs Kanon's LAST release, never this PR's copy through `$/`
 # (#47). Through `$/` a PR that weakened the check would be judged by the weakened check
@@ -11,7 +11,7 @@
 #
 # On merge_group (K-MERGE-7) the check passes without checking anything, under the same
 # job name, because a required check must report on the queue's branch or the queue
-# waits for it. A merge group carries no pull request, so there is no title to read, and
+# waits for it. A merge group carries no pull request, so there is no title or branch to read, and
 # none is needed: a PR can only be queued once its required checks pass, this one
 # included. What the queue adds is a test of the combined code, and CI runs that. The job
 # runs and passes rather than being skipped by a job-level `if`, so the queue's check

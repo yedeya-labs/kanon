@@ -63,6 +63,7 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | The repository's merge settings, and the release workflow's merge-settings guard | `K-SHIP-3` | installed 2026-09-30 |
 | The reusable release workflow (merge-settings guard, then release-please) | `K-SHIP-7` | installed 2026-09-30 |
 | The `pr-title` action, and the test of its type table | `K-SHIP-4` | installed 2026-09-30 |
+| The `pr-title` action's branch-name check. It judges this repository's pull requests from the first release with it that `pr-title.yml` pins | `K-WS-8` | not yet installed |
 | The `dco` action, reading the App register from the default branch, and its parser's tests | `K-AGENT-44`, `K-LAYOUT-14`, `K-MERGE-17` | installed 2026-09-30 |
 | `tests/unit/workflows.test.ts`, which pins the `permissions:` block of Kanon's own checks | `K-AGENT-46` | installed 2026-09-30 |
 | `tests/unit/workflow-security.test.ts`, on Kanon's own workflows and actions. Since [#1128](https://github.com/yedeya-labs/kanon/issues/1128) it follows each `pull_request_target` workflow's calls into Kanon's workflows and actions, with the review lane's checkout and fetch of the head it reviews and the rebase lane's full-history checkout as its named same-repository exceptions; the rebase lane refuses a fork's head | `K-PRIN-19`, `K-ADOPT-12`, `K-AGENT-47`, `K-AGENT-48` | installed 2026-10-02 |

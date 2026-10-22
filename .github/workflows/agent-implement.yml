@@ -299,6 +299,9 @@ jobs:
         BLAST RADIUS honestly, and — for any schema change — the deploy steps the
         stack document's `## Schema changes` section names and the result of the
         data-isolation checks. NEVER merge (a human merges).
+        NAME YOUR BRANCH `<type>/<issue>-<slug>` (`K-WS-8`), such as
+        `fix/42-empty-cart-total`: the PR-title check fails a pull request from a
+        branch named any other way.
         If this issue is a FOLLOW-UP whose parent PR is still OPEN (its body says
         "Surfaced by PR #N" and #N isn't merged), branch off that PR's head and open
         yours with `--base <its branch>` so it STACKS — don't diverge off main. See

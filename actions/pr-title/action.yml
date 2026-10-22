@@ -1,15 +1,16 @@
-# Kanon's PR-title check (K-SHIP-4), as a composite action.
+# Kanon's PR-title check (K-SHIP-4), as a composite action. It checks the pull request's
+# head branch too: a working branch is named `<type>/<number>-<slug>` (K-WS-8).
 #
 # The script is read from this action's own directory ($GITHUB_ACTION_PATH), at the ref
 # the adopter pinned, so the action and its script can never drift apart.
 #
-# The title is untrusted input: it reaches the script only through the environment,
-# never interpolated into a shell line.
+# The title and the branch name are untrusted input: they reach the script only through
+# the environment, never interpolated into a shell line.
 #
 # Requires Node 18 or later on the runner. GitHub's hosted runners have it; a
 # self-hosted runner must provide it. The action does not install Node itself.
 name: Kanon PR title
-description: Fails unless the pull request title is a conventional commit with one of Kanon's fixed types, and no trailing "(#n)".
+description: Fails unless the pull request title is a conventional commit with one of Kanon's fixed types, and no trailing "(#n)", and its branch is named "<type>/<number>-<slug>".
 author: yedeya-labs
 
 inputs:
@@ -17,12 +18,17 @@ inputs:
     description: The title to check. Defaults to the pull request's title.
     required: false
     default: ${{ github.event.pull_request.title }}
+  branch:
+    description: The branch name to check. Defaults to the pull request's head branch. When it is empty, only the title is checked.
+    required: false
+    default: ${{ github.head_ref }}
 
 runs:
   using: composite
   steps:
-    - name: Check the PR title
+    - name: Check the PR title and branch name
       shell: bash
       env:
         PR_TITLE: ${{ inputs.title }}
+        PR_BRANCH: ${{ inputs.branch }}
       run: node "$GITHUB_ACTION_PATH/pr-title.mjs"
