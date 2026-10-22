@@ -81,7 +81,6 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-15.** The Owner decided that the sign-off delegation covers only the repository's agent Apps: a commit by an App on an `Other App` row, or by the Intake App, is checked like any other bot's commit and needs a person's sign-off. The `dco` check leaves those rows' slugs out. [#998](https://github.com/yedeya-labs/kanon/issues/998)
 - **2026-10-16.** The Why says what passes such an App's commit: a person re-authoring it and signing it off, since a sign-off counts only when it is the author's, so a person's sign-off added to a bot's commit never passes it. The check is unchanged. [#1036](https://github.com/yedeya-labs/kanon/issues/1036)
-- **2026-10-22.** `lane-check` fails a permission broader than its App's grant with no numbered footnote, and a footnote marker in the table that no footnote defines, so the footnotes this rule asks for are checked, not prose only. The rule is unchanged. [#1250](https://github.com/yedeya-labs/kanon/issues/1250)
 
 ## `K-AGENT-45`
 
