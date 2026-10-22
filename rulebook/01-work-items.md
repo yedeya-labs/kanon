@@ -70,7 +70,7 @@ This chapter governs the issue: how it is labelled, which milestone it belongs t
 
 **Why.** GitHub counts pull requests in a milestone's open and closed totals and in unqualified searches, so milestoned PRs silently inflate the burndown. In the reference adopter one milestone read 44 through the API when it held 38 real issues.
 
-**Enforced by.** Prose only.
+**Enforced by.** The issue backstop takes the milestone off a pull request as soon as one is set, a fork's pull request included, on `pull_request_target: milestoned` ([`scripts/issue-backstop.mjs`](../scripts/issue-backstop.mjs)). It reads only that number's milestone and whether it is a pull request. [`tests/unit/search-scope.test.ts`](../tests/unit/search-scope.test.ts) fails when a search Kanon's scripts, workflows, lane prompts, skills or playbooks send can count pull requests with issues: a `search/issues` or GraphQL issue search whose query says neither `is:issue` nor `is:pr`, or `gh search issues --include-prs`. A repository that doesn't run the backstop keeps the first half as prose, and an adopter's own searches are prose only.
 
 **Class.** framework
 

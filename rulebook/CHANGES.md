@@ -21,6 +21,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** The filing skill's `plan` takes the filer's judgment of the subject, so pipeline work reaches the platform bucket without the `pipeline-improvement` label. Replaying the backstop's shadow over a week of filings found filers routing review follow-ups about the pipeline there, rightly, where a label-only `plan` sent them to the product bucket. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 - **2026-10-21.** The planning module's `plan` refuses pipeline work on the product bucket, even when a brief names it, so the Lead's reconcile tick stops on such a brief item and the brief guard reports it on the brief's pull request. [#1161](https://github.com/yedeya-labs/kanon/issues/1161)
 
+## `K-WORK-7`
+
+- **2026-10-21.** No longer prose only: the issue backstop takes the milestone off a pull request when one is set, on `pull_request_target`, so a fork's pull request is covered too, and a test fails when a search Kanon sends can count pull requests with issues. Sixty-seven of Kanon's pull requests had been put on a bucket, and nothing caught it. [#1242](https://github.com/yedeya-labs/kanon/issues/1242)
+
 ## `K-WORK-8`
 
 - **2026-10-20.** No longer prose only: the filing skill runs the planning module's `plan`, and a test fails when the skill stops running it or when a lane that files through it restates the routing in its prompt. The Explorer's sweep is the first lane moved. [#164](https://github.com/yedeya-labs/kanon/issues/164)

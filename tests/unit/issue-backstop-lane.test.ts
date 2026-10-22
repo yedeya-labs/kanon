@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { BUCKET_MILESTONES, DEFAULT_MILESTONE, GATE_CANDIDATE_LABEL, NEEDS_SEVERITY_LABEL, PIPELINE_MILESTONE } from '../../scripts/issue-triage-defaults.mjs';
-import { liveOf, plannedWrites, run } from '../../scripts/issue-backstop.mjs';
+import { liveOf, plannedWrites, pullReadArgs, run, runPull, unmilestoneArgs } from '../../scripts/issue-backstop.mjs';
 import { realGroup } from './helpers/smoke-group.js';
 import { writeStub } from './helpers/stub-bin.js';
 
@@ -111,6 +111,57 @@ describe('run: read live, then write', () => {
   });
 });
 
+/** A fake `gh` for the pull-request path: what the read answers, and every call. */
+const fakePullGh = (state: { milestone: string; pull: boolean }) => {
+  const calls: string[][] = [];
+  const gh = (args: string[]) => {
+    calls.push(args);
+    if (args[0] === 'api' && !args.includes('PATCH')) return JSON.stringify(state);
+    return '';
+  };
+  return { gh, calls };
+};
+
+describe('runPull: a pull request never carries a milestone (K-WORK-7, kanon#1242)', () => {
+  it('reads the milestone and whether it is a pull request, and nothing of its text', () => {
+    expect(pullReadArgs(REPO, 9)).toEqual(['api', `repos/${REPO}/issues/9`, '--jq', '{milestone: (.milestone.title // ""), pull: (.pull_request != null)}']);
+    expect(pullReadArgs(REPO, 9).join(' ')).not.toMatch(/title,|body|\.head|\.diff/);
+  });
+
+  it('takes the milestone off a milestoned pull request, through the issues endpoint, and says so', () => {
+    const { gh, calls } = fakePullGh({ milestone: 'Product Backlog', pull: true });
+    let summary = '';
+    const r = runPull({ repo: REPO, number: 9, apply: true, gh, summary: (t) => { summary = t; } });
+    expect(calls).toEqual([pullReadArgs(REPO, 9), unmilestoneArgs(REPO, 9)]);
+    expect(unmilestoneArgs(REPO, 9)).toEqual(['api', '-X', 'PATCH', `repos/${REPO}/issues/9`, '-F', 'milestone=null', '--silent']);
+    expect(r).toEqual({ milestone: 'Product Backlog', removed: true });
+    expect(summary).toContain('took the milestone `Product Backlog` off');
+    expect(summary).toContain('(K-WORK-7)');
+  });
+
+  it('writes nothing on a dry run, and says what it would take off', () => {
+    const { gh, calls } = fakePullGh({ milestone: 'Launch', pull: true });
+    let summary = '';
+    expect(runPull({ repo: REPO, number: 9, apply: false, gh, summary: (t) => { summary = t; } }).removed).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(summary).toContain('would take the milestone `Launch` off (dry run)');
+  });
+
+  it('writes nothing on a pull request with no milestone: a re-run is idempotent', () => {
+    const { gh, calls } = fakePullGh({ milestone: '', pull: true });
+    let summary = '';
+    runPull({ repo: REPO, number: 9, apply: true, gh, summary: (t) => { summary = t; } });
+    expect(calls).toHaveLength(1);
+    expect(summary).toContain('No milestone: nothing to write.');
+  });
+
+  it('refuses an issue, whose milestone it never clears', () => {
+    const { gh, calls } = fakePullGh({ milestone: 'Product Backlog', pull: false });
+    expect(() => runPull({ repo: REPO, number: 9, apply: true, gh })).toThrow(/#9 is not a pull request/);
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe('the script, run as the lane runs it', () => {
   const runScript = (env: Record<string, string>, state = issue(['pipeline-improvement'])) => {
     const dir = mkdtempSync(join(tmpdir(), 'issue-backstop-'));
@@ -120,6 +171,7 @@ describe('the script, run as the lane runs it', () => {
 printf '%s\\n' "$*" >> "${log}"
 if [ "$1 $2" = "issue view" ]; then cat "${join(dir, 'issue.json')}"; fi
 if [ "$1 $2" = "label list" ]; then echo '[]'; fi
+if [ "$1" = "api" ] && [ "$2" != "-X" ]; then echo '{"milestone":"Product Backlog","pull":true}'; fi
 exit 0
 `);
     const r = spawnSync(process.execPath, ['scripts/issue-backstop.mjs'], {
@@ -146,6 +198,22 @@ exit 0
     const add = lines.findIndex((l) => l.includes(`--add-label ${GATE_CANDIDATE_LABEL}`));
     expect(create).toBeGreaterThan(-1);
     expect(add).toBeGreaterThan(create);
+  });
+
+  it('takes a pull request\'s milestone off on PR_NUMBER and APPLY=1, and never reads it as an issue', () => {
+    const r = runScript({ PR_NUMBER: '9', ISSUE_NUMBER: '', APPLY: '1' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.calls).toContain(`api repos/${REPO}/issues/9 --jq`);
+    expect(r.calls).toContain(`api -X PATCH repos/${REPO}/issues/9 -F milestone=null --silent`);
+    expect(r.calls).not.toContain('issue view');
+    expect(r.stdout).toContain('took the milestone `Product Backlog` off');
+  });
+
+  it('fails by name on a PR_NUMBER that is not a number', () => {
+    const r = runScript({ PR_NUMBER: 'x', APPLY: '1' });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('needs a pull request number in PR_NUMBER');
+    expect(r.calls).toBe('');
   });
 
   it('is a dry run without APPLY', () => {
@@ -178,9 +246,16 @@ const steps = lane.jobs.backstop!.steps!;
 const apply = steps.find((s) => s.run === 'node "$KANON/scripts/issue-backstop.mjs"')!;
 
 describe('agent-issue-backstop.yml', () => {
-  it('runs one job, on an opened issue or a dispatch only', () => {
+  it('runs one job, on an opened issue, a milestoned pull request or a dispatch only', () => {
     expect(Object.keys(lane.jobs)).toEqual(['backstop']);
-    expect(lane.jobs.backstop!.if).toBe("(github.event_name == 'issues' && github.event.action == 'opened') || github.event_name == 'workflow_dispatch'");
+    expect(lane.jobs.backstop!.if).toBe("(github.event_name == 'issues' && github.event.action == 'opened') || (github.event_name == 'pull_request_target' && github.event.action == 'milestoned') || github.event_name == 'workflow_dispatch'");
+  });
+
+  it('checks nothing out on a milestoned pull request (kanon#1242)', () => {
+    const checkout = steps.find((s) => s.uses === 'actions/checkout@v7')!;
+    expect(checkout.if).toBe("steps.gate.outputs.member == 'true' && github.event_name != 'pull_request_target'");
+    // No step names the pull request's head, its ref or its repository.
+    expect(LANE_TEXT).not.toMatch(/pull_request\.head|head_ref|head\.repo/);
   });
 
   it('is the Lead\'s, runs no model, and checks out the App register alone, with no credential left behind', () => {
@@ -198,17 +273,18 @@ describe('agent-issue-backstop.yml', () => {
     expect(mint.with!['permission-issues']).toBe('write');
   });
 
-  it('writes with the App token, on the opened issue or the dispatched one, and applies on the opened event alone unless ticked', () => {
+  it('writes with the App token, on the opened issue, the milestoned pull request or the dispatched issue, and applies on the events alone unless ticked', () => {
     expect(apply.env).toEqual({
       GH_TOKEN: '${{ steps.app-token.outputs.token }}',
       GITHUB_REPOSITORY: '${{ github.repository }}',
       ISSUE_NUMBER: '${{ github.event.issue.number || inputs.issue_number }}',
-      APPLY: "${{ (github.event_name == 'issues' || inputs.apply == 'true') && '1' || '' }}",
+      PR_NUMBER: "${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || '' }}",
+      APPLY: "${{ (github.event_name == 'issues' || github.event_name == 'pull_request_target' || inputs.apply == 'true') && '1' || '' }}",
     });
   });
 
   it('keeps one run per issue at a time, and never cancels one', () => {
-    expect(realGroup(lane.concurrency.group)).toBe('agent-issue-backstop-${{ github.event.issue.number || inputs.issue_number }}');
+    expect(realGroup(lane.concurrency.group)).toBe('agent-issue-backstop-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}');
     expect(lane.concurrency['cancel-in-progress']).toBe(false);
   });
 

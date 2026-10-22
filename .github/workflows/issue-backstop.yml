@@ -5,11 +5,15 @@
 # and it calls Kanon's last release, never `$/`, as every other caller here does (ADR 0011). It runs
 # as the Author App, minted for the Lead (docs/qa/agent-identities.md), runs no model, and on an
 # opened issue admits whoever opened it, an outsider included (docs/lanes.md, "The issue backstop").
+# On a milestoned pull request it takes the milestone off (K-WORK-7): `pull_request_target`, so a
+# fork's pull request gets it too, and the lane checks nothing of the pull request out.
 name: Issue backstop (Lead)
 
 on:
   issues:
     types: [opened]
+  pull_request_target:
+    types: [milestoned]
   workflow_dispatch:
     inputs:
       issue_number:

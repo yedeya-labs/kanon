@@ -271,6 +271,9 @@ describe("K-AGENT-48 pull_request_target checks out no fork's head, and runs a p
   it("holds for every one of Kanon's workflows, but the named same-repository heads, and reads each chain's steps", () => {
     const callers = docs.filter(({ doc }) => eventsOf(doc).includes('pull_request_target'));
     expect(callers.map(({ file }) => file).sort()).toEqual([
+      // kanon#1242: the backstop takes a milestone off a pull request, a fork's included, and
+      // checks nothing out on that event.
+      '.github/workflows/issue-backstop.yml',
       '.github/workflows/overseer.yml',
       '.github/workflows/rebase.yml',
       '.github/workflows/review.yml',

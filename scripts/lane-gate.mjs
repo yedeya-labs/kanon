@@ -19,6 +19,11 @@
 //                            ticks on it (plan 0004 step 8): an issue a merge closes is closed
 //                            by whoever merged, and one closed by hand by whoever closed it.
 //   pull_request `opened`    whoever opened it, `sender`, checked the same way.
+//   pull_request_target      whoever set the milestone, `sender`, checked the same way. Only
+//     `milestoned`           the issue backstop acts on it, and only to take the milestone off
+//                            (`K-WORK-7`, kanon#1242). Setting a milestone needs triage access,
+//                            so a member who did it always passes; an App outside the register
+//                            is refused. The `issues` event's `milestoned` is refused.
 //   issues `opened`          REFUSED, EXCEPT on a lane whose gate step sets
 //                            `LANE_GATE_ISSUE_OPENED=anyone`: there it is admitted whoever
 //                            opened it, with no lookup. Only the issue backstop sets it
@@ -193,6 +198,8 @@ export function triggeringActor(eventName, event, env) {
         };
       }
       if (eventName !== 'issues' && event.action === 'opened') return found(event.sender?.login, 'user who opened it');
+      // The issue backstop takes a milestone off a pull request (`K-WORK-7`, kanon#1242).
+      if (eventName === 'pull_request_target' && event.action === 'milestoned') return found(event.sender?.login, 'user who set the milestone');
       if (event.action === 'closed') {
         // A `pull_request_target` close is acted on only as a merge, and judged by who merged it.
         if (eventName === 'pull_request_target') {

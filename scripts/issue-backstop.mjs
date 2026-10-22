@@ -21,12 +21,21 @@
 // is there, and each label is only added when missing. It never removes a label, never changes
 // a milestone an issue has, and never reads the issue's title or body.
 //
+// ── AND A PULL REQUEST'S MILESTONE, TAKEN OFF (`K-WORK-7`, kanon#1242) ─────────
+// A pull request never carries a milestone: GitHub counts it in the milestone's open and closed
+// totals, so it inflates the burndown. With PR_NUMBER set (the lane's `pull_request_target:
+// milestoned` trigger), `runPull` reads that number's milestone and whether it is a pull
+// request, LIVE, and nothing else: never its title, body, diff or branch. If it is a pull request
+// that still carries a milestone, it takes the milestone off, and writes one step-summary line
+// saying which. A re-run finds no milestone and writes nothing.
+//
 // SAFE BY DEFAULT: without APPLY=1 it prints what it would write. The lane sets APPLY on the
 // `issues: opened` event, and on a dispatch only when `apply` is ticked.
 //
 // DEPENDENCY-FREE: `node:` and `gh` only, like every script under scripts/ (`K-SELF-8`).
 //
-// Env: GH_TOKEN (the Lead's App token in the lane), GITHUB_REPOSITORY, ISSUE_NUMBER, APPLY.
+// Env: GH_TOKEN (the Lead's App token in the lane), GITHUB_REPOSITORY, ISSUE_NUMBER or
+// PR_NUMBER, APPLY.
 // Usage: node "$KANON/scripts/issue-backstop.mjs"
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
@@ -108,6 +117,45 @@ export function run({ repo, number, apply, gh, log = () => {}, summary = () => {
   return { live, writes, written };
 }
 
+/**
+ * The `gh` call that takes a pull request's milestone off, through the issues endpoint, which
+ * holds a pull request's milestone and takes the App's Issues write. Pure.
+ * @param {string} repo @param {number} number @returns {string[]}
+ */
+export const unmilestoneArgs = (repo, number) => ['api', '-X', 'PATCH', `repos/${repo}/issues/${number}`, '-F', 'milestone=null', '--silent'];
+
+/**
+ * What the pull-request path reads: the milestone's title and whether the number is a pull
+ * request, and nothing of the pull request's text (`K-AGENT-45`). Pure.
+ * @param {string} repo @param {number} number @returns {string[]}
+ */
+export const pullReadArgs = (repo, number) => ['api', `repos/${repo}/issues/${number}`, '--jq', '{milestone: (.milestone.title // ""), pull: (.pull_request != null)}'];
+
+/**
+ * A pull request's milestone, taken off (`K-WORK-7`). Reads the number live; refuses an issue
+ * (this path is the pull request's alone, and an issue's milestone is the backstop's to set,
+ * never to clear); writes nothing on a pull request with no milestone. Throws on a failed read or
+ * write, so the run goes red.
+ * @param {{ repo: string, number: number, apply: boolean, gh: (args: string[]) => string, summary?: (text: string) => void }} io
+ * @returns {{ milestone: string, removed: boolean }}
+ */
+export function runPull({ repo, number, apply, gh, summary = () => {} }) {
+  const live = /** @type {{ milestone?: string, pull?: boolean }} */ (JSON.parse(gh(pullReadArgs(repo, number))));
+  if (live.pull !== true) throw new Error(`#${number} is not a pull request, and this path takes a milestone off a pull request only`);
+  const milestone = live.milestone ?? '';
+  const lines = [`### Pull request backstop: #${number} (K-WORK-7)`, ''];
+  let removed = false;
+  if (!milestone) lines.push('No milestone: nothing to write.');
+  else if (!apply) lines.push(`- would take the milestone \`${milestone}\` off (dry run): a pull request never carries a milestone (K-WORK-7)`);
+  else {
+    gh(unmilestoneArgs(repo, number));
+    removed = true;
+    lines.push(`- took the milestone \`${milestone}\` off: a pull request never carries a milestone, since GitHub counts it in the milestone's totals (K-WORK-7)`);
+  }
+  summary(`${lines.join('\n')}\n`);
+  return { milestone, removed };
+}
+
 function main() {
   const repo = process.env.GITHUB_REPOSITORY;
   if (!repo) {
@@ -115,9 +163,12 @@ function main() {
     process.exitCode = 2;
     return;
   }
-  const number = Number(process.env.ISSUE_NUMBER);
+  const pull = Boolean(process.env.PR_NUMBER);
+  const number = Number(pull ? process.env.PR_NUMBER : process.env.ISSUE_NUMBER);
   if (!Number.isInteger(number) || number < 1) {
-    console.log(`::error title=issue-backstop::needs an issue number in ISSUE_NUMBER (got "${process.env.ISSUE_NUMBER ?? ''}")`);
+    console.log(pull
+      ? `::error title=issue-backstop::needs a pull request number in PR_NUMBER (got "${process.env.PR_NUMBER}")`
+      : `::error title=issue-backstop::needs an issue number in ISSUE_NUMBER (got "${process.env.ISSUE_NUMBER ?? ''}")`);
     process.exitCode = 1;
     return;
   }
@@ -130,7 +181,9 @@ function main() {
     if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, text);
   };
   try {
-    run({ repo, number, apply: process.env.APPLY === '1', gh, log: (line) => console.error(line), summary });
+    const apply = process.env.APPLY === '1';
+    if (pull) runPull({ repo, number, apply, gh, summary });
+    else run({ repo, number, apply, gh, log: (line) => console.error(line), summary });
   } catch (e) {
     const err = /** @type {{ message?: string, stderr?: string }} */ (e);
     console.log(`::error title=issue-backstop::#${number}: ${String(err?.stderr || err?.message || e).split('\n')[0]}`);

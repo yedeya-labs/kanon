@@ -113,7 +113,7 @@ export const TRIGGERS = {
   'agent-weekly-digest': { name: 'Weekly digest', job: 'digest', schedule: '0 8 * * 1', dispatch: { week_end: false, dry_run: false } },
   'agent-explore': { name: 'Explore (Explorer)', job: 'explore', schedule: '0 3 * * *', dispatch: { tier: false } },
   'agent-dispatch-sweep': { name: 'Dispatch sweep (Lead)', job: 'sweep', schedule: '30 4 * * *', dispatch: { apply: false }, reask: ['agent-implement', 'agent-triage'] },
-  'agent-issue-backstop': { name: 'Issue backstop (Lead)', job: 'backstop', issues: ['opened'], dispatch: { issue_number: true, apply: false } },
+  'agent-issue-backstop': { name: 'Issue backstop (Lead)', job: 'backstop', issues: ['opened'], prTarget: ['milestoned'], dispatch: { issue_number: true, apply: false } },
   'agent-code-audit': { name: 'Code audit (Explorer)', job: 'audit', schedule: '30 7 */3 * *', dispatch: {} },
   'agent-explore-telemetry': { name: 'Explore the telemetry (Explorer)', job: 'explore', schedule: '30 6 * * 2', dispatch: {} },
   'agent-overseer': { name: 'Overseer (Overseer)', job: 'oversee', schedule: '0 6 * * 1', dispatch: {}, pinMoved: true },
