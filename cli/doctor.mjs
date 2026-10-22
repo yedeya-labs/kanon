@@ -57,7 +57,7 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
+import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, GITHUB_DEFAULT_LABELS, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -313,6 +313,7 @@ export const ITEMIZED = {
   'apps-check.secret-missing': 'a secret',
   'apps-check.secret-stale': 'a secret',
   'label.missing': 'a label',
+  'label.github-default': 'a label',
   'qa-store.unmapped': 'a secret',
   'qa-store.variables': 'a variable',
 };
@@ -405,6 +406,7 @@ export const FINDINGS = {
   'deploy.releaser-missing': { category: 'caller', blocking: true },
   'deploy.ci-push-missing': { category: 'caller', blocking: true },
   'label.missing': { category: 'label', blocking: false },
+  'label.github-default': { category: 'label', blocking: false },
   'ruleset.missing': { category: 'ruleset', blocking: true },
   'ruleset.rule-missing': { category: 'ruleset', blocking: true },
   'ruleset.check-unreported': { category: 'ruleset', blocking: true },
@@ -2236,6 +2238,17 @@ export const diagnose = async (deps, opts) => {
         const l = taxonomy.get(n);
         return l ? `gh label create ${JSON.stringify(n)} --color ${l.color} --description ${JSON.stringify(l.description)} -R ${repo}` : `gh label create ${JSON.stringify(n)} -R ${repo}`;
       }),
+    }]);
+  }
+  // GitHub's default labels outside the taxonomy (`K-WORK-12`): `kanon init` deletes them with the
+  // person's consent, and keeps them by default on a repository with commits, so doctor names each
+  // one still there. Deleting a label takes it off every issue that carries it, so this is the
+  // person's to do, and it blocks nothing.
+  const defaultLabels = GITHUB_DEFAULT_LABELS.filter((n) => s.labels.has(n) && !taxonomy.has(n));
+  if (defaultLabels.length) {
+    findItems('label.github-default', repo, defaultLabels, (xs) => [`still has ${xs.length} of GitHub's default labels outside Kanon's taxonomy: ${xs.join(', ')}. Installation deletes them (K-WORK-12): no lane reads them, so each is noise a filer has to decide to ignore. This blocks nothing.`, {
+      text: 'Delete them with `kanon init --delete-default-labels`, or yourself. Deleting a label takes it off every issue that carries it:',
+      commands: xs.map((n) => `gh label delete ${JSON.stringify(n)} --yes -R ${repo}`),
     }]);
   }
 
