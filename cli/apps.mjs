@@ -519,12 +519,19 @@ const awaitInstallation = async ({ owner, pages, repos, appId, slug, pem, deps, 
       });
       if (t.status !== 201 || !t.json?.token) throw new Error(`GitHub answered ${t.status} when asked for a token to read the installation's repositories`);
       const token = String(t.json.token);
-      const list = await api(deps, '/installation/repositories?per_page=100', { token }).finally(() =>
-        api(deps, '/installation/token', { method: 'DELETE', token }),
-      );
-      if (list.status !== 200) throw new Error(`GitHub answered ${list.status} when listing the installation's repositories`);
+      // Read page by page until total_count, as apps-check does: a repository past the first
+      // 100 is covered too (#1265).
       /** @type {string[]} */
-      const names = (list.json?.repositories ?? []).map((/** @type {any} */ x) => String(x.full_name).toLowerCase());
+      const names = [];
+      await (async () => {
+        for (let page = 1; ; page++) {
+          const list = await api(deps, `/installation/repositories?per_page=100&page=${page}`, { token });
+          if (list.status !== 200) throw new Error(`GitHub answered ${list.status} when listing the installation's repositories`);
+          const batch = (list.json?.repositories ?? []).map((/** @type {any} */ x) => String(x.full_name).toLowerCase());
+          names.push(...batch);
+          if (!batch.length || names.length >= Number(list.json?.total_count ?? 0)) return;
+        }
+      })().finally(() => api(deps, '/installation/token', { method: 'DELETE', token }));
       const missing = repos.filter((r) => !names.includes(`${owner}/${r}`.toLowerCase()));
       if (missing.length) {
         throw new Error(`the App is installed on ${owner}, but not on ${missing.join(', ')} (it covers: ${names.join(', ') || 'nothing'}). Add ${missing.length > 1 ? 'them' : 'it'} at ${settings}, then run the command again.`);
