@@ -31,7 +31,7 @@ The "Its short and skipped runs" column is held to the lanes' jobs by [`tests/un
 | `agent-explore-telemetry` | A weekly schedule; a dispatch | An aggregate with no cell and no signal; no aggregate function configured, or a dispatch from a branch other than the default (a short job that says so) | Weeks |
 | `agent-deploy-diagnose` | A run of the deploy caller completing | A deploy run that didn't fail (skipped, nothing billed); a failed run that filed no issue (a short gate job) | Failed deploys |
 | `agent-triage` | An issue labelled; a dispatch | Every label other than `qa:needs-triage` (skipped, nothing billed) | Bugs filed for triage |
-| `agent-issue-backstop` | An issue opened; a dispatch | None: it runs no model, so every run is short | Issues opened |
+| `agent-issue-backstop` | An issue opened; a pull request put on a milestone; a dispatch | None: it runs no model, so every run is short | Issues opened, and pull requests put on a milestone, which it takes off (`K-WORK-7`) |
 | `agent-lead` | A dispatch | None: it runs only when you dispatch it | Mandates you dispatch |
 | `agent-lead-revise` | A review submitted; a pull request labelled; a dispatch | A label other than `agent:lead-revise`, or a review that doesn't request changes (skipped, nothing billed); a review or label on a pull request that isn't the Lead's brief, or a round past its cap | Change requests on briefs |
 | `agent-lead-split` | An issue labelled; a dispatch | Every label other than `qa:needs-split` (skipped, nothing billed) | Issues labelled for a split |

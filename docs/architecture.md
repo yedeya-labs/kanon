@@ -50,7 +50,7 @@ A **lane** is a reusable workflow that runs one agent for one job. An adopter ca
 | Planning | lead, lead-revise, lead-split, lead-reconcile, verify-acs | a person's dispatch with a mandate; labels; hourly |
 | Merging | merge | an approval; CI on main; hourly |
 | Exploring | explore, code audit, explore the telemetry | a schedule |
-| Upkeep and reporting | dispatch sweep, issue backstop, Overseer, daily and weekly digests, release announcement | a schedule; an issue opened; a published release |
+| Upkeep and reporting | dispatch sweep, issue backstop, Overseer, daily and weekly digests, release announcement | a schedule; an issue opened; a pull request put on a milestone, which the backstop takes off; a published release |
 
 You don't install them all. `kanon init` offers three features: **Review** (the review lane alone), **Review + build** (adds the Implementer's lanes, the dispatch sweep, the issue backstop and merge reconcile) and the **full pipeline** (adds the Lead, the Merger, the audits and the daily project digest). Five lanes run no model at all: the Merger, the reconciler, the dispatch sweep, the issue backstop and the release announcement.
 

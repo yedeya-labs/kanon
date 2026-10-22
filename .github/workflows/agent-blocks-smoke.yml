@@ -76,6 +76,9 @@ jobs:
         working-directory: tests/fixtures/python-adopter
         env:
           KANON: ${{ steps.kanon.outputs.path }}
+          # The fixture is not a GitHub repository, so its brief's tracking issue isn't one of this
+          # repository's issues: the brief guard says it read none (K-WORK-23).
+          BRIEF_GUARD_SKIP_TRACKING_ISSUES: "1"
         run: |
           set -euo pipefail
           if [ -e package.json ]; then echo "::error::the python fixture has a package.json"; exit 1; fi

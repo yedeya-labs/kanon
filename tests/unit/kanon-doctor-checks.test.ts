@@ -61,6 +61,24 @@ describe('kanon doctor on what an installation lacks', () => {
     expect(r.json.findings[1].fix.commands).toEqual([expect.stringMatching(/^gh label create "qa:needs-split" --color [0-9a-f]{6} --description /)]);
   });
 
+  it("names each of GitHub's default labels outside the taxonomy, without blocking, and leaves bug and enhancement alone (K-WORK-12, kanon#1246)", async () => {
+    const dir = checkout(healthyFiles());
+    const github = fakeGitHub();
+    for (const n of ['bug', 'enhancement', 'documentation', 'good first issue', 'wontfix', 'not-a-default']) github.st.labels.add(n);
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual([`label.github-default ${REPO}`]);
+    expect(r.status).toBe(EXIT.healthy);
+    expect(r.json.findings[0]).toMatchObject({ category: 'label', blocking: false });
+    expect(r.json.findings[0].message).toMatch(/still has 3 of GitHub's default labels outside Kanon's taxonomy: documentation, good first issue, wontfix\. .*\(K-WORK-12\)/);
+    expect(r.json.findings[0].fix.text).toContain('kanon init --delete-default-labels');
+    expect(r.json.findings[0].fix.commands).toEqual([`gh label delete "documentation" --yes -R ${REPO}`, `gh label delete "good first issue" --yes -R ${REPO}`, `gh label delete "wontfix" --yes -R ${REPO}`]);
+  });
+
+  it('reports no default label on a repository that kept only the taxonomy', async () => {
+    const r = await run(checkout(healthyFiles()), fakeGitHub(), ['--json']);
+    expect(ids(r).filter((id: string) => id.startsWith('label.'))).toEqual([]);
+  });
+
   it('names a caller that inherits secrets, and an apps-check caller that maps a secret its release does not take', async () => {
     const files = healthyFiles();
     files['.github/workflows/agent-review.yml'] = files['.github/workflows/agent-review.yml']!.replace(/ {4}secrets:\n( {6}.*\n)+/, '    secrets: inherit\n');

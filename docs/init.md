@@ -26,7 +26,7 @@ Each question has a flag, and so does each value the summary shows. A flag answe
 | Record a sign-off delegation? | `--delegation`, `--no-delegation` | yes when a chosen lane runs as the Author and a workflow runs Kanon's DCO check (`yedeya-labs/kanon/actions/dco`), and `git config` names the delegate; else no |
 | The delegate's name | `--delegate-name <name>` (implies `--delegation`) | `git config user.name` |
 | The delegate's email | `--delegate-email <email>` (implies `--delegation`) | `git config user.email` |
-| Delete GitHub's default labels outside the taxonomy? | `--delete-default-labels`, `--keep-default-labels` | delete on a repository with no commit yet, else keep |
+| Delete GitHub's default labels outside the taxonomy (`K-WORK-12`)? Deleting a label takes it off every issue that carries it. `kanon doctor` reports each one kept (`label.github-default`), without blocking | `--delete-default-labels`, `--keep-default-labels` | delete on a repository with no commit yet, else keep |
 | Create the optional Releaser App? | `--releases`, `--no-releases`, or the same answer as `--releaser`, `--no-releaser` | yes for a repository that calls Kanon's release workflow (`inspection.callsRelease`), else no |
 | Reuse an App the owner already has, rather than create a second? (only when the owner's installations, or another of its repositories' registers, hold one the chosen lanes need and the register lacks, `inspection.ownerApps`) | `--reuse-apps`, `--no-reuse-apps` | yes |
 | Declare the kanon plugin in `.claude/settings.json`? | `--plugin`, `--no-plugin` | yes |

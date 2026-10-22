@@ -340,6 +340,8 @@ export function pickCrossCheckMilestone(allMilestones) {
 export async function crossCheckFallback(allMilestones, search) {
   const anchor = pickCrossCheckMilestone(allMilestones);
   if (!anchor) return false;
+  // K-WORK-7: both kinds, deliberately. Note 3 above says why: it is compared with a REST total
+  // that counts pull requests too. tests/unit/search-scope.test.ts reads this line.
   const found = await search(`milestone:"${anchor.title}"`);
   return assertMilestoneSearchSane(anchor, found, 0, 'PR-inclusive fallback');
 }

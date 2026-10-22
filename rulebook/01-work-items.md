@@ -70,7 +70,7 @@ This chapter governs the issue: how it is labelled, which milestone it belongs t
 
 **Why.** GitHub counts pull requests in a milestone's open and closed totals and in unqualified searches, so milestoned PRs silently inflate the burndown. In the reference adopter one milestone read 44 through the API when it held 38 real issues.
 
-**Enforced by.** Prose only.
+**Enforced by.** The issue backstop takes the milestone off a pull request as soon as one is set, a fork's pull request included, on `pull_request_target: milestoned` ([`scripts/issue-backstop.mjs`](../scripts/issue-backstop.mjs)). It reads only that number's milestone and whether it is a pull request. [`tests/unit/search-scope.test.ts`](../tests/unit/search-scope.test.ts) fails when a search Kanon's scripts, workflows, lane prompts, skills or playbooks send can count pull requests with issues: a `search/issues` or GraphQL issue search whose query says neither `is:issue` nor `is:pr`, or `gh search issues --include-prs`. A repository that doesn't run the backstop keeps the first half as prose, and an adopter's own searches are prose only.
 
 **Class.** framework
 
@@ -197,7 +197,7 @@ Every label the pipeline applies must be in this table. The table is the authori
 
 **Why.** A lane that applies a label that doesn't exist fails at the moment of filing, after the work is done, so the lane creates it first rather than leave the adopter to create every label by hand and miss one. Only a name from the table is created, so a typo fails instead of becoming a new label. A second list of labels drifts silently and becomes a third opinion about what a label is, unless a test holds it to the table. A fixed taxonomy, with its meanings, is what lets guards check labels at all (ADR 0002). Colours and descriptions are fixed too, so that the same label reads the same on every adopter's board, and a label left over from GitHub's defaults is noise every filer has to decide to ignore.
 
-**Enforced by.** A guard that scans every place the pipeline applies a label (workflows, scripts, issue forms and agent prompts) and fails when one doesn't exist in the live repository. Kanon's own lanes create a missing label before applying it, from [`labels.json`](labels.json), and a test fails when that file and this table disagree, when Kanon's scripts, lanes or prompts apply a label outside it, or when a lane that labels has no create-before-apply step. Deleting GitHub's defaults is prose only; the installer will do it.
+**Enforced by.** A guard that scans every place the pipeline applies a label (workflows, scripts, issue forms and agent prompts) and fails when one doesn't exist in the live repository. Kanon's own lanes create a missing label before applying it, from [`labels.json`](labels.json), and a test fails when that file and this table disagree, when Kanon's scripts, lanes or prompts apply a label outside it, or when a lane that labels has no create-before-apply step. `kanon init` deletes GitHub's defaults outside the taxonomy, with the person's consent, and [`kanon doctor`](../docs/doctor.md) reports each one a repository still has, when it is run (`tests/unit/kanon-doctor-checks.test.ts`).
 
 **Class.** framework
 
@@ -313,7 +313,7 @@ Every label the pipeline applies must be in this table. The table is the authori
 
 **Why.** An issue with no kind label is invisible to every query that counts work by kind, and a tracking issue has no other kind of its own. A dedicated "tracking" label would be a second way to find a project, next to the brief file the reconciler already reads, and the two could disagree.
 
-**Enforced by.** Prose only. The brief guard checks that each decomposition item names its labels (`K-PROJ-9`).
+**Enforced by.** The brief guard reads each brief's tracking issue, issue `<n>` for `docs/projects/<n>.md`, and fails when it has no kind label or both, isn't on the bucket its kind goes in, or carries `project:<n>`. A read that fails is a finding, not a pass ([`tests/library/brief-guard.test.ts`](../tests/library/brief-guard.test.ts)). It checks too that each decomposition item names its labels (`K-PROJ-9`). Which kind a project's work is stays prose only.
 
 **Class.** framework
 

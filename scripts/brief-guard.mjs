@@ -93,7 +93,7 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { BUCKET_MILESTONES, DEFAULT_MILESTONE, PlanRefusal } from './issue-triage-defaults.mjs';
+import { BUCKET_MILESTONES, DEFAULT_MILESTONE, PIPELINE_MILESTONE, PlanRefusal } from './issue-triage-defaults.mjs';
 import { isDatedMilestone } from './lib/milestones.mjs';
 import { coordinatesIn } from './citation-guard.mjs';
 import { readExemptions } from './lib/exemptions.mjs';
@@ -152,6 +152,78 @@ export function milestoneProblem(milestone, milestones) {
     return `has no due date, so it isn't a roadmap milestone, and it isn't a bucket (${buckets}) either (K-WORK-3, K-WORK-4)`;
   }
   return null;
+}
+
+/**
+ * THE TRACKING ISSUE (`K-WORK-23`, kanon#1245). A brief is named for its tracking issue, and that
+ * issue carries the kind label of the work the project does, sits on the bucket that matches it,
+ * and never carries `project:<n>`, which marks the project's items, not the project. This is the
+ * one check here that reads the repository on every run: the brief's number is the issue's, and
+ * the issue's labels and milestone change without a pull request. Nothing of its title or body is
+ * read. Pre-standard briefs are checked too: a tracking issue's labels can be fixed today, by
+ * hand, with no edit to the brief.
+ *
+ * Each kind label, and the bucket it goes in (`K-WORK-4`).
+ * @type {Record<string, string>}
+ */
+export const KIND_BUCKETS = { enhancement: DEFAULT_MILESTONE, 'pipeline-improvement': PIPELINE_MILESTONE };
+
+/** The environment variable that turns the read off, for a tree that is not a GitHub repository. */
+export const SKIP_TRACKING_ISSUES = 'BRIEF_GUARD_SKIP_TRACKING_ISSUES';
+
+/**
+ * @typedef {{ labels: string[], milestone: string, pull: boolean }} TrackingIssue
+ */
+
+/**
+ * What is wrong with tracking issue `n`, as it is now. Pure.
+ * @param {number} n @param {TrackingIssue} issue @returns {string[]}
+ */
+export function trackingIssueProblems(n, issue) {
+  if (issue.pull) return [`#${n} is a pull request, so it can't be this brief's tracking issue: a brief is named for its tracking issue's number (K-LAYOUT-12)`];
+  const problems = [];
+  const kinds = Object.keys(KIND_BUCKETS).filter((k) => issue.labels.includes(k));
+  const kindWords = Object.entries(KIND_BUCKETS).map(([k, b]) => `\`${k}\` on ${b}`).join(', or ');
+  if (!kinds.length) problems.push(`tracking issue #${n} carries no kind label: give it the kind of the work the project does, ${kindWords} (K-WORK-23)`);
+  if (kinds.length > 1) problems.push(`tracking issue #${n} carries both kind labels, ${kinds.map((k) => `\`${k}\``).join(' and ')}: a project does one kind of work, so keep one (K-WORK-23)`);
+  if (!ROUTING_BUCKETS.includes(issue.milestone)) {
+    problems.push(`tracking issue #${n} is ${issue.milestone ? `on “${issue.milestone}”, which isn't a bucket` : 'on no milestone'}: it goes in the bucket that matches its kind, ${kindWords} (K-WORK-23)`);
+  } else if (kinds.length === 1 && KIND_BUCKETS[kinds[0]] !== issue.milestone) {
+    problems.push(`tracking issue #${n} is \`${kinds[0]}\` on ${issue.milestone}: that kind goes on ${KIND_BUCKETS[kinds[0]]} (K-WORK-4, K-WORK-23)`);
+  }
+  if (issue.labels.includes(`project:${n}`)) problems.push(`tracking issue #${n} carries \`project:${n}\`, which marks the project's items, never the project: take it off (K-WORK-23, K-LAYOUT-12)`);
+  return problems;
+}
+
+/**
+ * Tracking issue `n`'s labels, milestone and kind, through `gh` (`{owner}/{repo}` is the current
+ * checkout's, or `GH_REPO`'s). Nothing of its text. Throws when it can't be read.
+ * @param {number} n @returns {TrackingIssue}
+ */
+export const liveTrackingIssue = (n) =>
+  JSON.parse(
+    execFileSync('gh', ['api', `repos/{owner}/{repo}/issues/${n}`, '--jq', '{labels: [.labels[].name], milestone: (.milestone.title // ""), pull: (.pull_request != null)}'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }),
+  );
+
+/**
+ * The tracking issue's findings for the brief at `path`, read through `read`. A read that fails
+ * is a finding, by name, never a pass: a guard that can't see the issue hasn't checked it.
+ * @param {string} path `docs/projects/<n>.md` @param {(n: number) => TrackingIssue} read
+ * @returns {{at: string, problem: string}[]}
+ */
+export function checkTrackingIssue(path, read) {
+  const n = Number(/(\d+)\.md$/.exec(path)?.[1]);
+  let issue;
+  try {
+    issue = read(n);
+  } catch (e) {
+    const why = String(e?.stderr || e?.message || e).trim().split('\n')[0];
+    return [{ at: path, problem: `tracking issue #${n} couldn't be read, so its kind label, bucket and labels weren't checked (${why}). Run with a token that can read issues, or set ${SKIP_TRACKING_ISSUES}=1 where the tree isn't a GitHub repository (K-WORK-23)` }];
+  }
+  return trackingIssueProblems(n, issue).map((problem) => ({ at: path, problem }));
 }
 
 /**
@@ -1233,6 +1305,10 @@ const main = () => {
     process.exitCode = 1;
     return;
   }
+  // THE TRACKING ISSUES ARE READ unless the run turns that off, and says so: a tree that isn't a
+  // GitHub repository (a fixture) has no issue to read, and that is not the same as a clean one.
+  const skipTracking = Boolean(process.env[SKIP_TRACKING_ISSUES]);
+  if (skipTracking) console.log(`brief-guard: ${SKIP_TRACKING_ISSUES} is set, so no tracking issue was read: their kind labels and buckets are unchecked (K-WORK-23).`);
   // A STALE ENTRY FAILS. An exemption for a brief that isn't there exempts nothing today and
   // would exempt whatever is written at that path tomorrow.
   const stale = exemptions.briefs.filter((b) => !briefs.includes(b.brief));
@@ -1242,13 +1318,15 @@ const main = () => {
       problem: `\`${b.brief}\` is listed as a pre-standard brief, but there is no such brief. Remove the entry`,
     })),
     ...briefs.flatMap((f) => checkBrief(f, readFileSync(f, 'utf8'), { milestones })),
+    // Each brief's tracking issue (`K-WORK-23`), unless the run says it can't be read here.
+    ...(skipTracking ? [] : briefs.flatMap((f) => checkTrackingIssue(f, liveTrackingIssue))),
   ];
   if (findings.length) {
     console.error(`brief-guard: ${findings.length} problem(s) in ${briefs.length} project brief(s):\n`);
     for (const f of findings) console.error(`  ${f.at}\n    ${f.problem}`);
     console.error(
       "\nThe required shape and the reason for each section are in Kanon's rulebook " +
-        '(`K-PROJ-4`, `K-LAYOUT-12`, `K-LAYOUT-13`), and `docs/projects/_template.md` is a brief ' +
+        '(`K-PROJ-4`, `K-LAYOUT-12`, `K-LAYOUT-13`, and `K-WORK-23` for the tracking issue), and `docs/projects/_template.md` is a brief ' +
         'that satisfies all of it. A pre-standard brief is listed in `docs/qa/exemptions.md` (`K-LAYOUT-15`).',
     );
     process.exitCode = 1;
@@ -1262,7 +1340,8 @@ const main = () => {
   console.log(
     `brief-guard: ${briefs.length} brief(s) carry all ${REQUIRED_SECTIONS.length} required ` +
       'sections, price their cost delta, state an observability decision, and decompose into ' +
-      'issues the reconciler can file.' +
+      'issues the reconciler can file' +
+      (skipTracking ? '.' : ', and each tracking issue carries its kind label on its bucket.') +
       (exempt.length ? `\n  ${exemptSummary(exempt)}` : ''),
   );
 };
