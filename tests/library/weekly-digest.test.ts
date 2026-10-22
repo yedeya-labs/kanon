@@ -21,7 +21,8 @@ import {
   renderStats,
   weekWindow,
   completedInWindow,
-  assertCountsSane,
+  countMergedPrs,
+  releasedWithoutMerges,
   assertMilestoneSearchSane,
   assertGuardRan,
   pickCrossCheckMilestone,
@@ -128,31 +129,100 @@ describe('completedInWindow', () => {
   });
 });
 
-describe('assertCountsSane', () => {
-  // The guard exists because the first live run posted "0 PRs merged · 25
-  // releases" — the workflow was missing `pull-requests: read`, and the search
-  // API returns an EMPTY SET rather than a 403, so nothing errored anywhere.
-  it('throws when there are releases but no merged PRs — every release packages a merge', () => {
-    expect(() => assertCountsSane({ prsMerged: 0, releases: 25 })).toThrow(/pull-requests: read/);
+describe('countMergedPrs (kanon#1318)', () => {
+  // The week the search count read 0: release v1.2.2 on the 16th, PR #9 merged
+  // that evening and PR #10 five minutes before the run.
+  const weekStart = new Date('2026-10-15T16:30:08Z');
+  const weekEnd = new Date('2026-10-22T16:30:08Z');
+  const repo = 'o/r';
+  const pr = (number: number, merged_at: string | null, updated_at = merged_at ?? '2026-10-01T00:00:00Z') => ({ number, merged_at, updated_at });
+  /** A stub of the pulls list: `pages[n - 1]` answers page n, and every path is recorded. */
+  const stubApi = (pages: unknown[]) => {
+    const calls: string[] = [];
+    const api = async (path: string) => {
+      calls.push(path);
+      const page = Number(new URL(`https://x${path}`).searchParams.get('page'));
+      return pages[page - 1] ?? [];
+    };
+    return { api, calls };
+  };
+  /** A full page of PRs merged on `at`, so the read goes on to the next page. */
+  const fullPage = (at: string, from = 1000) => Array.from({ length: 100 }, (_, i) => pr(from + i, at));
+
+  it('counts a week with merged PRs from the pulls list, sending no search', async () => {
+    const { api, calls } = stubApi([[
+      pr(10, '2026-10-22T16:25:17Z'),
+      pr(9, '2026-10-16T18:15:00Z'),
+      pr(5, null, '2026-10-20T00:00:00Z'), // closed without merging, inside the window
+      pr(6, '2026-10-15T13:37:50Z'), // merged before the window
+    ]]);
+    await expect(countMergedPrs({ api, repo, weekStart, weekEnd })).resolves.toBe(2);
+    expect(calls).toEqual(['/repos/o/r/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=1']);
   });
 
-  it('names the count in the error so the cause is readable from the run log', () => {
-    expect(() => assertCountsSane({ prsMerged: 0, releases: 25 })).toThrow(/25 releases but 0 merged PRs/);
+  it('holds the window half-open: a merge at weekStart counts, one at weekEnd does not', async () => {
+    const { api } = stubApi([[pr(2, '2026-10-22T16:30:08Z'), pr(1, '2026-10-15T16:30:08Z')]]);
+    await expect(countMergedPrs({ api, repo, weekStart, weekEnd })).resolves.toBe(1);
   });
 
-  it('permits a genuinely quiet week — all zeroes is possible, and must not fail', () => {
-    expect(() => assertCountsSane({ prsMerged: 0, releases: 0 })).not.toThrow();
+  it('counts a merge that was updated after the week ended, as a back-dated run reads it', async () => {
+    const { api } = stubApi([[pr(9, '2026-10-16T18:15:00Z', '2026-10-30T00:00:00Z')]]);
+    await expect(countMergedPrs({ api, repo, weekStart, weekEnd })).resolves.toBe(1);
   });
 
-  it('permits merges whose release lands the other side of the window edge', () => {
-    // Previously a second rule threw on `PRs > 0 && releases === 0 && issues === 0`,
-    // which hard-failed a week whose only activity was a late dependabot chore.
-    expect(() => assertCountsSane({ prsMerged: 3, releases: 0 })).not.toThrow();
-    expect(() => assertCountsSane({ prsMerged: 1, releases: 0 })).not.toThrow();
+  it('reads every page while the window is still in reach — a merge on page 2 is not missed', async () => {
+    const { api, calls } = stubApi([fullPage('2026-10-17T00:00:00Z'), [pr(9, '2026-10-16T18:15:00Z')]]);
+    await expect(countMergedPrs({ api, repo, weekStart, weekEnd })).resolves.toBe(101);
+    expect(calls).toHaveLength(2);
   });
 
-  it('permits a normal week', () => {
-    expect(() => assertCountsSane({ prsMerged: 42, releases: 20 })).not.toThrow();
+  it('stops paging once a full page ends before the week began', async () => {
+    const { api, calls } = stubApi([fullPage('2026-10-01T00:00:00Z'), [pr(9, '2026-10-16T18:15:00Z')]]);
+    await expect(countMergedPrs({ api, repo, weekStart, weekEnd })).resolves.toBe(0);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('refuses rather than undercount when the pages run out before the window does', async () => {
+    const { api } = stubApi([fullPage('2026-10-17T00:00:00Z'), fullPage('2026-10-17T00:00:00Z', 2000)]);
+    await expect(countMergedPrs({ api, repo, weekStart, weekEnd, maxPages: 2 })).rejects.toThrow(/more than 200 closed PRs/);
+  });
+
+  it('refuses a page that is not a list', async () => {
+    const { api } = stubApi([{ message: 'Not Found' }]);
+    await expect(countMergedPrs({ api, repo, weekStart, weekEnd })).rejects.toThrow(/did not return a list/);
+  });
+
+  it('lets a failed read fail the run — a token that cannot read pull requests is not an empty week', async () => {
+    const api = async () => { throw new Error('GitHub GET /repos/o/r/pulls → 403'); };
+    await expect(countMergedPrs({ api, repo, weekStart, weekEnd })).rejects.toThrow(/403/);
+  });
+});
+
+describe('a release with no merged PR (kanon#1318)', () => {
+  // The guard this replaces threw "1 releases but 0 merged PRs" and refused the
+  // whole digest, for a release made from commits pushed straight to main.
+  it('is recognised only when there are releases and no merged PR', () => {
+    expect(releasedWithoutMerges({ prsMerged: 0, releases: 1 })).toBe(true);
+    expect(releasedWithoutMerges({ prsMerged: 0, releases: 0 })).toBe(false);
+    expect(releasedWithoutMerges({ prsMerged: 2, releases: 1 })).toBe(false);
+    expect(releasedWithoutMerges({ prsMerged: 3, releases: 0 })).toBe(false);
+  });
+
+  it('posts, and the stats line says no PR was merged rather than a bare zero', () => {
+    expect(renderStats({ prsMerged: 0, issuesClosed: 2, releases: 1 })).toBe('no PR merged this week · 2 issues closed · 1 release');
+  });
+
+  it('builds a valid message for that week', () => {
+    const m = buildMessage({
+      ...SOURCE,
+      weekStart: new Date('2026-10-15T16:30:08Z'),
+      milestones: [],
+      grouped: { areas: [], internalScopes: [] },
+      stats: { prsMerged: 0, issuesClosed: 0, releases: 1 },
+      gateCandidates: { ok: true, candidates: [] },
+    });
+    expect(validate(m)).toEqual({ ok: true });
+    expect(renderText(m)).toContain('no PR merged this week · 0 issues closed · 1 release');
   });
 });
 

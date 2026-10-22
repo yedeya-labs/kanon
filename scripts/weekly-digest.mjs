@@ -202,33 +202,68 @@ export function renderCompletions(milestones) {
 }
 
 /**
- * Sanity-check the counts against an invariant of this repo, and THROW rather
- * than post a wrong number.
+ * The week's merged pull requests, counted through CORE REST rather than search
+ * (kanon#1318), with `api` INJECTED so the paging is tested without a network.
  *
- * Every release packages at least one merged PR (release-please cuts nothing
- * when nothing releasable merged; since RA-2594 it runs on a schedule, in
- * batches), so releases without merged PRs means a query came back empty rather
- * than the week being quiet. That is exactly how the missing
- * `pull-requests: read` grant presented: the search API scopes results to what
- * the token can see, so `is:pr` returned an empty set with no 403 and no
- * warning, and the first live run reported "0 PRs merged · 25 releases".
+ * WHY NOT SEARCH. `is:pr is:merged merged:<window>` returned 0 for a week that
+ * held two merged PRs (kanon-sandbox run 39814439289), and the same query, sent
+ * repeatedly with a person's token, came back 2 on some calls and 0 on others,
+ * with no error and `incomplete_results` sometimes false. A search total is
+ * therefore no evidence that a week had no merges, and nothing in the response
+ * says when it is wrong. The pulls list reads the repository's own records: a
+ * token that can't read them gets a 403 or 404, which `api` throws, so the
+ * missing-`pull-requests: read` case the old guard caught now fails by name
+ * rather than reading as an empty week.
  *
- * The one legitimate exception is a week whose ONLY release is a batch cut
- * after the week began from merges made before it, with nothing else merged all
- * week. At ~50 merged PRs a week that has not happened, and a red run for it is
- * the cheap direction to be wrong in.
+ * HOW IT PAGES. `state=closed&sort=updated&direction=desc` lists closed PRs
+ * newest-updated first. A PR merged in the window was updated at or after its
+ * merge, so once a page's last PR was updated before `weekStart`, no later page
+ * holds a merge in the window, and the read stops. A short page is the end of
+ * the list. `merged_at` decides membership, half-open [weekStart, weekEnd), the
+ * same boundary as the release filter and the search window; a PR closed
+ * without merging has a null `merged_at` and is never counted.
  *
- * A digest that posts a confidently wrong number is worse than one that fails,
- * because the number is the product and nobody can tell it is wrong by reading
- * it. Failing here turns a silent misreport into a red run.
+ * It THROWS rather than undercount: a page that is not a list, or a window that
+ * still has PRs to read after `maxPages` pages, fails the run by name, because
+ * a short count posts as a confidently wrong number.
  */
-export function assertCountsSane({ prsMerged, releases }) {
-  if (releases > 0 && prsMerged === 0) {
-    throw new Error(
-      `Refusing to post: ${releases} releases but 0 merged PRs. Every release packages at least one merge, ` +
-      'so this means the PR search returned nothing — most likely the workflow is missing `pull-requests: read`.',
-    );
+export async function countMergedPrs({ api, repo, weekStart, weekEnd, maxPages = 50 }) {
+  const start = new Date(weekStart).getTime();
+  const end = new Date(weekEnd).getTime();
+  let merged = 0;
+  for (let page = 1; page <= maxPages; page++) {
+    const r = await api(`/repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=${page}`);
+    if (!Array.isArray(r)) throw new Error(`the pulls list for ${repo} did not return a list (page ${page})`);
+    for (const pr of r) {
+      const at = pr.merged_at ? new Date(pr.merged_at).getTime() : NaN;
+      if (at >= start && at < end) merged += 1;
+    }
+    if (r.length < 100) return merged;
+    const last = r[r.length - 1];
+    if (new Date(last.updated_at).getTime() < start) return merged;
   }
+  throw new Error(
+    `Refusing to post: more than ${maxPages * 100} closed PRs were updated since the week began, so the merged count ` +
+    'would be cut short. Run the digest closer to its week, or raise the page cap.',
+  );
+}
+
+/**
+ * Releases in a week with no merged PR are a real week's shape, not a fault
+ * (kanon#1318). A release can come from commits pushed straight to the default
+ * branch, or be a batch cut this week from merges made before it. The digest
+ * used to THROW here ("N releases but 0 merged PRs"), on the reasoning that
+ * every release packages a merge, so a zero meant the PR search had failed open,
+ * as it did when the workflow lacked `pull-requests: read`. That protection now
+ * lives in `countMergedPrs`, which reads REST and fails loudly when it can't
+ * read; the throw itself refused real weeks, so it is gone.
+ *
+ * What it says instead: the stats line names the case ("no PR merged this
+ * week"), so the reader isn't left to reconcile "0 PRs merged" with a release,
+ * and the run prints a warning so the shape is findable in its log.
+ */
+export function releasedWithoutMerges({ prsMerged, releases }) {
+  return releases > 0 && prsMerged === 0;
 }
 
 /**
@@ -237,8 +272,8 @@ export function assertCountsSane({ prsMerged, releases }) {
  * If the issue search fails open, `issuesClosed` is 0, every milestone drops out
  * as empty, and the post ships with **no Progress section at all** — the
  * burndown this digest exists to deliver, gone, presenting as a missing section
- * rather than a wrong number. `assertCountsSane` cannot see that: it keys on the
- * PR count, which is fine in that scenario.
+ * rather than a wrong number. The merged-PR count cannot see that: it reads the
+ * pulls list through REST (`countMergedPrs`), which is fine in that scenario.
  *
  * Guarding it needs something a quiet week can't imitate, because "0 issues
  * closed" is a perfectly legitimate week. The tell is a DISAGREEMENT BETWEEN TWO
@@ -332,7 +367,8 @@ export function pickCrossCheckMilestone(allMilestones) {
  *     cannot arise — at the cost of one blind spot worth naming: if the token also
  *     lost `pull-requests: read` AND the anchor is all-PRs, this throws blaming
  *     the search. That is still a real fault, just misattributed, and
- *     `assertCountsSane` names the true cause on the same run.
+ *     `countMergedPrs` names the true cause on the same run wherever the token
+ *     can't read the pulls list, since that read fails with a 403 or 404.
  *
  * `search(q)` returns the total for a raw search qualifier; injected so the whole
  * fallback is testable without the network.
@@ -632,7 +668,9 @@ export async function readGateCandidates({ api, repo, now, maxPages = 10 }) {
  */
 export function renderStats({ prsMerged, issuesClosed, releases }) {
   const n = (v, s, p = `${s}s`) => `${v} ${v === 1 ? s : p}`;
-  return `${n(prsMerged, 'PR')} merged · ${n(issuesClosed, 'issue')} closed · ${n(releases, 'release')}`;
+  // A release with no merged PR is stated, not left for the reader to puzzle over (kanon#1318).
+  const prs = releasedWithoutMerges({ prsMerged, releases }) ? 'no PR merged this week' : `${n(prsMerged, 'PR')} merged`;
+  return `${prs} · ${n(issuesClosed, 'issue')} closed · ${n(releases, 'release')}`;
 }
 
 /** "week of 1 Aug" — the window's start, in the reader's terms rather than ISO. */
@@ -1093,7 +1131,7 @@ if (isCliEntry(import.meta.url)) {
     if (!res.ok) throw new Error(`GitHub GET ${path} → ${res.status}: ${await res.text()}`);
     return res.json();
   };
-  /** Issue/PR counts come from search so `is:issue` can exclude PRs (AGENTS.md). */
+  /** Issue counts come from search so `is:issue` can exclude PRs (AGENTS.md); merged PRs come from REST. */
   const count = async (q) => (await api(`/search/issues?q=${encodeURIComponent(`repo:${repo} ${q}`)}&per_page=1`)).total_count;
 
   const { weekStart, weekEnd, qualifier: window } = weekWindow(WEEK_END ? new Date(WEEK_END) : new Date());
@@ -1115,7 +1153,8 @@ if (isCliEntry(import.meta.url)) {
   };
 
   const [prsMerged, closedThisWeekItems, allReleases, allMilestones, gateCandidates] = await Promise.all([
-    count(`is:pr is:merged merged:${window}`),
+    // Core REST, not search: search's total for merged PRs comes back 0 for a week with merges (kanon#1318).
+    countMergedPrs({ api, repo, weekStart, weekEnd }),
     // Fetching the ITEMS rather than a count gives every milestone's
     // closed-this-week figure from a single request, since each item carries its
     // own milestone. That is the whole reason this is one search and not five.
@@ -1159,7 +1198,12 @@ if (isCliEntry(import.meta.url)) {
 
   // Before rendering anything: refuse to post a number we can tell is wrong.
   assertGuardRan(crossChecked, allMilestones.filter(restPopulated).length);
-  assertCountsSane({ prsMerged, releases: releases.length });
+  if (releasedWithoutMerges({ prsMerged, releases: releases.length })) {
+    console.warn(
+      `::warning title=release without a merged PR::${releases.length} release(s) this week and no PR merged in it. ` +
+      'The digest posts and says so: the release came from commits pushed straight to the branch, or from merges before the week.',
+    );
+  }
 
   /**
    * `buildMessage` screens the narrative itself (fail-closed), so this call is
