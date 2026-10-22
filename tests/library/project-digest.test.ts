@@ -17,6 +17,7 @@ const {
   classifyDispatch,
   classifyProject,
   readBrief,
+  readBriefs,
   renderMember,
   renderProject,
   holdReason,
@@ -1128,6 +1129,41 @@ console.log(JSON.stringify([read(${JSON.stringify(comments)}), read(${JSON.strin
         expect(r.stderr, script).toContain('lists no Reviewer App');
         expect(r.stderr, `${script}: before its own first check`).not.toContain('GITHUB_REPOSITORY must be set');
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('kanon#1317 — no `docs/projects/` folder is no briefs', SPAWNS, () => {
+  it('reads an absent folder as none, and still reads a present one by number', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kanon-1317-'));
+    try {
+      expect(readBriefs(join(dir, 'docs/projects'))).toEqual([]);
+      mkdirSync(join(dir, 'docs/projects'), { recursive: true });
+      writeFileSync(join(dir, 'docs/projects/12.md'), '# Twelve\n');
+      writeFileSync(join(dir, 'docs/projects/3.md'), '# Three\n');
+      writeFileSync(join(dir, 'docs/projects/_template.md'), '# Template\n');
+      expect(readBriefs(join(dir, 'docs/projects')).map((b) => b.number)).toEqual([3, 12]);
+      // Not every read error is "no briefs": a file where the folder should be still throws.
+      writeFileSync(join(dir, 'docs/notafolder'), '');
+      expect(() => readBriefs(join(dir, 'docs/notafolder'))).toThrow(/ENOTDIR/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('posts "No open projects" from a checkout with no folder, reading nothing from GitHub', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kanon-1317-'));
+    try {
+      mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+      writeFileSync(join(dir, 'docs/qa/agent-identities.md'), readFileSync(join(ADOPTER, 'docs/qa/agent-identities.md'), 'utf8'));
+      const env: NodeJS.ProcessEnv = { ...process.env, GITHUB_TOKEN: 'unused', GITHUB_REPOSITORY: 'o/r', DRY_RUN: '1', TODAY: '2026-10-22' };
+      delete env.GITHUB_STEP_SUMMARY;
+      const r = spawnSync('node', [join(ROOT, 'scripts/project-digest.mjs')], { cwd: dir, env, encoding: 'utf8', timeout: 20_000 });
+      expect(r.stderr).not.toContain('ENOENT');
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('No open projects');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -808,6 +808,28 @@ export const dryRunReport = (message) => [
   "### Kanon's Slack hook's payload", '', '```json', JSON.stringify(slackPayload(message), null, 2), '```', '',
 ].join('\n');
 
+/**
+ * The briefs in `dir`, `docs/projects/<n>.md`, by number. A repository with no such folder
+ * has no briefs (kanon#1317): an adopter that has planned no project need not create one, and
+ * its digest posts "No open projects". Any other read error still throws.
+ *
+ * @param {string} [dir]
+ * @returns {{number: number, markdown: string}[]}
+ */
+export function readBriefs(dir = BRIEF_DIR) {
+  let files;
+  try {
+    files = readdirSync(dir);
+  } catch (e) {
+    if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT') return [];
+    throw e;
+  }
+  return files
+    .filter((f) => /^\d+\.md$/.test(f))
+    .map((f) => ({ number: Number(f.replace('.md', '')), markdown: readFileSync(`${dir}/${f}`, 'utf8') }))
+    .sort((a, b) => a.number - b.number);
+}
+
 // ---------------------------------------------------------------------------
 // I/O below this line. Everything above is pure and unit-tested, with one named
 // exception: `holdReasonOf` takes its `api` as an argument (RA-1673), the same
@@ -854,10 +876,7 @@ if (isCliEntry(import.meta.url)) {
 
   // Briefs come off the CHECKOUT, not the API — the workflow checks out `main`,
   // and reading the file is both cheaper and exactly what the reconciler does.
-  const briefs = readdirSync(BRIEF_DIR)
-    .filter((f) => /^\d+\.md$/.test(f))
-    .map((f) => ({ number: Number(f.replace('.md', '')), markdown: readFileSync(`${BRIEF_DIR}/${f}`, 'utf8') }))
-    .sort((a, b) => a.number - b.number);
+  const briefs = readBriefs();
 
   const projects = [];
   for (const b of briefs) {
