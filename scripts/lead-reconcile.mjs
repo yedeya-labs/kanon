@@ -47,7 +47,7 @@ import { CONFLICT_JSON, CONFLICT_WHY, ConflictFieldsUnread, blocksChurn, conflic
 // bail decides; a bail never clears a bail; `updatedAt` is not the wait); those are
 // for a human reading the thread. Writing a second detector here that DID read prose
 // would be free to disagree with the one that decides re-dispatches.
-import { STALE_HOURS, classify as classifyLane, makeCommentsReader } from './dispatch-sweep.mjs';
+import { STALE_HOURS, botLogins, classify as classifyLane, makeCommentsReader } from './dispatch-sweep.mjs';
 // `qa:needs-split` (RA-1781): an item whose implementer run hit its cap, awaiting the Lead's
 // split PR. Never dispatched; does not park the project — see `split-lineage.mjs`.
 import { SPLIT_LABEL, SPLIT_WORKFLOW, splitBranches } from './split-lineage.mjs';
@@ -4160,6 +4160,9 @@ export function reconcileAll(projects, {
 }
 
 function main() {
+  // The sweep's classifier compares every App's login. Read them first, so a missing row
+  // stops the tick by name before any project is read (kanon#1316).
+  botLogins();
   if (!REPO) {
     console.error('lead-reconcile: GITHUB_REPOSITORY must be set');
     process.exit(2);

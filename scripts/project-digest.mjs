@@ -99,10 +99,19 @@ import { CONFLICT_SHORT, ConflictFieldsUnread, conflictState } from './conflict-
 // THE SWEEP'S OWN CLASSIFIER (kanon#179), so the digest and the sweep read one state per
 // issue. Node built-ins only, like everything else this job runs; it reads the App
 // register for the Implementer's login, as the reconciler does.
-import { AGENT_LOGIN, MARKER as SWEEP_MARKER, classify as classifyLane, isBot, norm } from './dispatch-sweep.mjs';
+import { AGENT_LOGIN, MARKER as SWEEP_MARKER, classify as classifyLane, listedBotLogins, norm } from './dispatch-sweep.mjs';
 import { carriedOut as reconcilerCarriedOut, declaresMembership, itemSatisfied, openGatingWork, parseProposed } from './project-closure.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { asRole, markedRole } from './lib/role-marker.mjs';
+
+/**
+ * An App's login, by the rows the register HAS (kanon#1316). This lane declares no Apps, so
+ * an adopter running only the digests may list some roles and not others; the sweep's own
+ * `isBot` would stop the digest on the first missing row. A digest only reports, so a role
+ * with no row is left out rather than required: see `listedBotLogins`.
+ */
+let listed;
+const isBot = (/** @type {string|null|undefined} */ login) => (listed ??= listedBotLogins()).has(norm(login));
 
 /** The Implementer's own comment: its login and, from L4, its role marker (plan 0005 §3.3). */
 export const byImplementer = (/** @type {{login?: string|null, body?: string|null}} */ c) =>
@@ -255,7 +264,7 @@ export function classifyDispatch({ comments = [], labels = [], hasPr = false, pr
   if (hasPr) return { disposition: 'building', waitedDays: ageDays };
 
   const conversation = comments.map((c) => ({ login: norm(c.login), body: c.body ?? '', createdAt: c.createdAt }));
-  const v = classifyLane({ labels: labels.map((name) => ({ name })) }, conversation, false, { now: now.getTime() });
+  const v = classifyLane({ labels: labels.map((name) => ({ name })) }, conversation, false, { now: now.getTime(), isBot });
   const lastAgent = conversation.filter(byImplementer).at(-1);
   const at = Date.parse(lastAgent?.createdAt ?? '');
   const waitedDays = Number.isFinite(at) ? Math.max(0, Math.floor((now.getTime() - at) / 86400000)) : ageDays;
