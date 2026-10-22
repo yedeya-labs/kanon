@@ -12,4 +12,4 @@ per role, with example slugs.
 | Lead | **`example-author`** | Read & write | Read & write | Read & write | No access |
 | Merger | **`example-judge`** | Read & write | Read & write | Read & write | No access |
 | Intake | `example-intake` | No access | Read & write | No access | No access |
-| Releaser | `example-releaser` | Read & write | Read & write | Read & write | No access |
+| Releaser | `example-releaser` | Read & write | No access | Read & write | No access |

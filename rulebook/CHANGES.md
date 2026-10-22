@@ -62,6 +62,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-AGENT-3`
 
 - **2026-10-15.** The Owner decided that a repository widens one of its Apps beyond Kanon's shared grant only by declaring it, as an `Extra App permission` bullet under the adoption record's `## Choices`, which `kanon apps`, `apps-check` and doctor honour for that repository alone; the shared grant stays. Kanon declares Workflows write for its Releaser, for a candidate's pin pull request. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
+- **2026-10-22.** The Owner decided to guard the record of a broadened permission: `lane-check` fails a register row whose permission is broader than its App's grant, with what the adoption record declares, and that has no numbered footnote, and a test fails a pointer to a register footnote that Kanon's register doesn't define. The rule is unchanged; its Enforced by line names the two checks. [#1236](https://github.com/yedeya-labs/kanon/issues/1236), [#1250](https://github.com/yedeya-labs/kanon/issues/1250)
 
 ## `K-AGENT-24`
 
@@ -80,6 +81,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-15.** The Owner decided that the sign-off delegation covers only the repository's agent Apps: a commit by an App on an `Other App` row, or by the Intake App, is checked like any other bot's commit and needs a person's sign-off. The `dco` check leaves those rows' slugs out. [#998](https://github.com/yedeya-labs/kanon/issues/998)
 - **2026-10-16.** The Why says what passes such an App's commit: a person re-authoring it and signing it off, since a sign-off counts only when it is the author's, so a person's sign-off added to a bot's commit never passes it. The check is unchanged. [#1036](https://github.com/yedeya-labs/kanon/issues/1036)
+- **2026-10-22.** `lane-check` fails a permission broader than its App's grant with no numbered footnote, and a footnote marker in the table that no footnote defines, so the footnotes this rule asks for are checked, not prose only. The rule is unchanged. [#1250](https://github.com/yedeya-labs/kanon/issues/1250)
 
 ## `K-AGENT-45`
 
@@ -230,6 +232,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-15.** The Maintainer decided that the register holds every App installed on the repository that isn't an agent, under one generic role, so an adopter can register any such App. The role is `Other App`, with one row per App, each naming an App no other row names; the readers that map a role to a login, the membership gate among them, never read those rows. [#990](https://github.com/yedeya-labs/kanon/issues/990)
 - **2026-10-15.** The Owner decided that the sign-off check reads no `Other App` row, nor the Intake row, so the sign-off delegation never covers an App that isn't an agent. [#998](https://github.com/yedeya-labs/kanon/issues/998)
 - **2026-10-16.** The Why says the sign-off check takes no delegated slug from those rows, rather than that it doesn't read them: it still parses them, so a malformed slug on one still refuses the register, and their slugs still count as another role's for the Releaser. The check is unchanged. [#1036](https://github.com/yedeya-labs/kanon/issues/1036)
+- **2026-10-22.** `lane-check` fails a permission broader than its App's grant with no numbered footnote, and a footnote marker in the table that no footnote defines, so the footnotes this rule asks for are checked, not prose only. The rule is unchanged. [#1250](https://github.com/yedeya-labs/kanon/issues/1250)
 
 ## `K-LAYOUT-8`
 

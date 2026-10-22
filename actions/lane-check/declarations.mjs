@@ -17,8 +17,9 @@
 //
 //   node declarations.mjs <overseer> <register> [<telemetry>]
 //     overseer  `true` when a workflow calls the Overseer's lane, else `false`
-//     register  `true` to read the App register's `Persona` column (plan 0005 §3.3) and its
-//               shape (§3.4: one slug per App, none shared between Apps): when a caller's lane
+//     register  `true` to read the App register's `Persona` column (plan 0005 §3.3), its
+//               shape (§3.4: one slug per App, none shared between Apps) and its footnotes
+//               (`K-AGENT-3`, `K-LAYOUT-6`): when a caller's lane
 //               runs as a role and the register exists, else `false`
 //     telemetry `true` when a workflow calls Kanon's telemetry collector, else `false` (the
 //               default): `Upstream findings: sent` needs it (plan 0006 §3.1)
@@ -40,8 +41,9 @@ import { codeAreasDefaults, readCodeAreas } from '../../scripts/lib/code-areas.m
 import { checkOverseerInstall } from '../../scripts/lib/overseer-install.mjs';
 import { checkUpstreamSent, readUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
 import { readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
-import { APP_REGISTER, appShape, parseAppRegister, parsePersonas } from '../../scripts/app-register.mjs';
-import { readFileSync, realpathSync } from 'node:fs';
+import { APP_GRANTS, APP_REGISTER, appShape, parseAppRegister, parsePersonas, registerFootnotes } from '../../scripts/app-register.mjs';
+import { ADOPTION_RECORD, readAppExtras } from '../../scripts/lib/app-extras.mjs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -91,6 +93,13 @@ export const declarationFindings = (overseer, register, root, telemetry = false)
           // the Judge and the Releaser (the parser refuses it), and one slug per App.
           const shape = appShape(parseAppRegister(text));
           if (shape.length) throw new Error(shape.join(' Also, '));
+          // Every permission a row records beyond its App's grant, with what the adoption record
+          // declares for it, carries a numbered footnote, and every marker resolves (K-AGENT-3,
+          // K-LAYOUT-6). A malformed declaration counts as none here; doctor names it.
+          const record = join(root, ADOPTION_RECORD);
+          const { extras } = readAppExtras(existsSync(record) ? readFileSync(record, 'utf8') : null, Object.keys(APP_GRANTS));
+          const footnotes = registerFootnotes(text, extras);
+          if (footnotes.length) throw new Error(footnotes.join(' Also, '));
           return [];
         }])]
       : []),
