@@ -176,7 +176,7 @@ The project briefs, the escalating labels and a spec promotion (`K-SPEC-9`) esca
 
 **Why.** Merging is the authority `K-MERGE-1` gives to someone else. In the reference adopter, prefix rules in an allowlist silently pre-approved `git push --force` and `gh pr merge`. A force-push detaches a review from the commits it cites.
 
-**Enforced by.** A unit test that fails when the ship command's allowlist would permit a merge or a force-push. Not force-pushing over a read branch is prose only.
+**Enforced by.** A unit test that fails when the ship command's allowlist would permit a merge or a force-push. A force-push over a read branch is caught by a check with no model, `scripts/force-push-notice.mjs`, on every push to a pull request: when the new head doesn't build on the old one, it names each review that read a commit the push dropped, in a warning that never fails the run, because a force-push that was asked for can't be told apart.
 
 **Class.** framework
 
