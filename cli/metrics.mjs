@@ -35,7 +35,7 @@
 // Node built-ins only, like the other commands.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fchmodSync, openSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { ACTOR_CLASSES } from '../actions/agent-telemetry/schema.mjs';
@@ -129,7 +129,17 @@ export const realDeps = {
   out: (line) => process.stdout.write(`${line}\n`),
   err: (line) => process.stderr.write(`${line}\n`),
   readFile: (path) => (existsSync(path) && statSync(path).isFile() ? readFileSync(path, 'utf8') : null),
-  writeFile: (path, text) => writeFileSync(path, text, { mode: 0o600 }),
+  // Node applies `mode` only when it creates the file, so a file already at the path is narrowed
+  // to its owner before the rows are written into it (kanon#1264).
+  writeFile: (path, text) => {
+    const fd = openSync(path, 'w', 0o600);
+    try {
+      fchmodSync(fd, 0o600);
+      writeFileSync(fd, text);
+    } finally {
+      closeSync(fd);
+    }
+  },
   release: kanonRelease,
   now: () => new Date(),
   sleep: (ms) => wait(ms).then(() => undefined),

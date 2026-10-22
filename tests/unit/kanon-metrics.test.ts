@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { DETAILS_SCHEMA, EXIT, SCHEMA, diffRanges, metrics, parseArgs } from '../../cli/metrics.mjs';
+import { DETAILS_SCHEMA, EXIT, SCHEMA, diffRanges, metrics, parseArgs, realDeps } from '../../cli/metrics.mjs';
 import { RATE_FLOOR, pageQuery } from '../../cli/metrics-read.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -348,6 +348,20 @@ describe('kanon metrics dry-run: privacy', () => {
     expect(details.fixes.map((f: Node) => f.pr)).toEqual([2, 3, 4]);
     for (const p of ['app/calc.js', 'README.md', 'docs/zebra-path.md', HUMAN.login]) expect(text).not.toContain(p);
     expect(r.err).toContain('keep it private');
+  });
+
+  // Node applies a `mode` only when it creates the file, so a details file already at the path
+  // kept its mode, 0644 say, and the new rows were written world-readable (kanon#1264).
+  it('writes the details file readable by its owner only, even over a file that was readable by all', () => {
+    const fresh = join(base, 'fresh-details.json');
+    realDeps.writeFile(fresh, 'new\n');
+    expect(statSync(fresh).mode & 0o777).toBe(0o600);
+    const existing = join(base, 'existing-details.json');
+    writeFileSync(existing, 'old\n');
+    chmodSync(existing, 0o644);
+    realDeps.writeFile(existing, 'new\n');
+    expect(statSync(existing).mode & 0o777).toBe(0o600);
+    expect(readFileSync(existing, 'utf8')).toBe('new\n');
   });
 
   // `..details.json` and `..ops/` begin with `..` but are inside the checkout (#541).
