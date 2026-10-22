@@ -453,10 +453,10 @@ describe('the gate retries a transient read, and only a transient one (kanon#116
     vi.restoreAllMocks();
   });
 
-  const gate = (extra: Record<string, string>, { trigger = 'ci-finished' as Trigger, env: more = {} as Record<string, string> } = {}) => {
+  const gate = (extra: Record<string, string>, { trigger = 'ci-finished' as Trigger, env: more = {} as Record<string, string>, actor = MEMBER } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'lane-gate-retry-'));
     writeStub(join(dir, 'gh'), GH_STUB);
-    const ev = eventFor(trigger, MEMBER);
+    const ev = eventFor(trigger, actor);
     const eventPath = join(dir, 'event.json');
     writeFileSync(eventPath, JSON.stringify({ ...ev.payload, repository: { default_branch: 'main' } }));
     const outputPath = join(dir, 'output');
@@ -578,6 +578,76 @@ describe('the gate retries a transient read, and only a transient one (kanon#116
     expect(none.outputs.member).toBe('false');
     expect(none.calls('caller')).toBe(2);
     expect(none.sleeps).toEqual([]);
+  });
+
+  // kanon#1206: the register and the caller are read raw, with no parse to throw on an empty body.
+  describe('an empty body on a raw read is retried too (kanon#1206)', () => {
+    const bot = { trigger: 'pr-label' as Trigger, actor: { login: `${IMPLEMENTER_LOGIN}[bot]` } };
+    const stacked = { trigger: 'pr-label' as Trigger, env: { ...STACKED, STUB_CALLER_BRANCH: caller('v0.10.0'), STUB_CALLER_MAIN: caller('v0.10.0') } };
+
+    it('decides for a registered bot when the register answers empty once, then answers', () => {
+      const r = gate({ STUB_REGISTER_FLAKES: 'empty' }, bot);
+      expect(r.status, r.output).toBe(0);
+      expect(r.outputs.member, r.output).toBe('true');
+      expect(r.calls('register')).toBe(2);
+      expect(r.sleeps).toEqual([1000]);
+    });
+
+    it('fails by name, closed, when the register answers empty every time', () => {
+      const r = gate({ STUB_REGISTER_FLAKES: 'empty,empty,empty,empty' }, bot);
+      expect(r.status).toBe(1);
+      expect(r.output).toContain('::error title=Membership gate::could not read the App register from the default branch of example-org/example-repo after 4 attempts: empty body');
+      expect(r.outputs.member).toBeUndefined();
+      expect(r.calls('register')).toBe(4);
+      expect(r.sleeps).toEqual([1000, 2000, 4000]);
+    });
+
+    it('admits a member when the caller-pin read answers empty once, then answers', () => {
+      const r = gate({ STUB_CALLER_FLAKES: 'empty' }, stacked);
+      expect(r.status, r.output).toBe(0);
+      expect(r.outputs.member, r.output).toBe('true');
+      expect(r.calls('caller')).toBe(3);
+      expect(r.sleeps).toEqual([1000]);
+    });
+
+    it('fails by name, closed, when the caller-pin read answers empty every time, rather than refusing green', () => {
+      const r = gate({ STUB_CALLER_FLAKES: 'empty,empty,empty,empty' }, stacked);
+      expect(r.status, r.output).toBe(1);
+      expect(r.output).toContain(`::error title=Membership gate::could not read the caller .github/workflows/review.yml at ${'f'.repeat(40)} on example-org/example-repo after 4 attempts: empty body`);
+      expect(r.outputs.member).toBeUndefined();
+      expect(r.calls('caller')).toBe(4);
+    });
+
+    it('retries an empty wrapper, so a branch pinning another version through it never compares equal', () => {
+      // The caller pins v0.10.0 on both sides; only the branch's wrapper pins v0.9.0.
+      const both = 'name: Review\non: [workflow_dispatch]\njobs:\n  review:\n    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.10.0\n  lanes:\n    uses: ./.github/workflows/lanes.yml\n';
+      const wrapped = { trigger: 'pr-label' as Trigger, env: { ...STACKED, STUB_CALLER_BRANCH: both, STUB_CALLER_MAIN: both,
+        STUB_WRAPPER_BRANCH: caller('v0.9.0'), STUB_WRAPPER_MAIN: caller('v0.10.0') } };
+      // The branch's wrapper is read first, so its empty answer is the first wrapper call.
+      const r = gate({ STUB_WRAPPER_FLAKES: 'empty' }, wrapped);
+      expect(r.status, r.output).toBe(0);
+      expect(r.outputs.member, r.output).toBe('false');
+      expect(r.output).toContain('@v0.9.0');
+      expect(r.calls('wrapper')).toBe(3);
+      const failed = gate({ STUB_WRAPPER_FLAKES: 'empty,empty,empty,empty' }, wrapped);
+      expect(failed.status, failed.output).toBe(1);
+      expect(failed.output).toContain('could not read the caller .github/workflows/lanes.yml');
+      expect(failed.output).toContain('after 4 attempts: empty body');
+      expect(failed.outputs.member).toBeUndefined();
+    });
+
+    it('still reads a 404 on either read as none, after one call', () => {
+      const none = gate({ STUB_REGISTER: '' }, bot);
+      expect(none.status, none.output).toBe(0);
+      expect(none.outputs.member).toBe('false');
+      expect(none.output).toContain('not in the App register');
+      expect(none.sleeps).toEqual([]);
+      const noCaller = gate({}, { ...stacked, env: { ...STACKED, STUB_CALLER_BRANCH: caller('v0.10.0') } });
+      expect(noCaller.status, noCaller.output).toBe(0);
+      expect(noCaller.outputs.member).toBe('false');
+      expect(noCaller.calls('caller')).toBe(2);
+      expect(noCaller.sleeps).toEqual([]);
+    });
   });
 
   describe('readWithRetry', () => {
