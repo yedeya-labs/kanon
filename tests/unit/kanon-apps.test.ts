@@ -252,7 +252,12 @@ const run = async (s: Scenario = {}): Promise<Run> => {
       }
       if (u.pathname === '/installation/repositories') {
         if (auth !== 'token ghs_installation') throw new Error('expected the installation token');
-        return json(200, { repositories: (s.repos ?? [`${ORG}/${REPO}`]).map((full_name) => ({ full_name })) });
+        // GitHub answers one page at a time, at most 100 repositories a page (#1265).
+        const all = s.repos ?? [`${ORG}/${REPO}`];
+        const per = Math.min(Number(u.searchParams.get('per_page') ?? 30), 100);
+        const page = Number(u.searchParams.get('page') ?? 1);
+        r.api[r.api.length - 1] += `?page=${page}`;
+        return json(200, { total_count: all.length, repositories: all.slice((page - 1) * per, page * per).map((full_name) => ({ full_name })) });
       }
       if (method === 'DELETE' && u.pathname === '/installation/token') return json(204, null);
       throw new Error(`unexpected GitHub call ${method} ${url}`);
@@ -449,6 +454,18 @@ describe('kanon apps, end to end with GitHub mocked', () => {
   it('does not warn when the installation covers the repository alone', async () => {
     const r = await run();
     expect(r.output).not.toMatch(/warning/);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('reads every page of the installation\'s repositories, so a repository past the first 100 is covered (#1265)', async () => {
+    const others = Array.from({ length: 150 }, (_, i) => `${ORG}/repo-${String(i).padStart(3, '0')}`);
+    const r = await run({ repos: [...others, `${ORG}/${REPO}`] });
+    expect(r.status, r.output).toBe(0);
+    expect(r.api.filter((c) => c.startsWith('GET /installation/repositories'))).toEqual([
+      'GET /installation/repositories?page=1',
+      'GET /installation/repositories?page=2',
+    ]);
+    expect(r.writes).not.toEqual([]);
     rmSync(r.dir, { recursive: true, force: true });
   });
 
