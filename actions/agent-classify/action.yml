@@ -19,8 +19,10 @@
 #
 # THE CALLER GATES IT. The block has no `if:` of its own, because the right gate differs:
 # `failure()` on a lane whose agent failure reds the job, the agent step's outcome on the two
-# digests (whose job stays green), `job-status` inside `agent-finish` (where `failure()`
-# reads the block's status, not the job's), and "no verdict was posted" on the reviewer.
+# digests (whose job stays green), either on the Overseer and the telemetry Explorer (whose
+# agent failure leaves the job green, but whose earlier steps can red it: kanon#1260),
+# `job-status` inside `agent-finish` (where `failure()` reads the block's status, not the
+# job's), and "no verdict was posted" on the reviewer.
 #
 # IT NEVER REDS A RUN BY ITSELF. The script always exits 0: it explains a red run, and must
 # not be the thing that makes one.

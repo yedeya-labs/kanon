@@ -487,7 +487,8 @@ jobs:
 
       # Record what this run cost (RA-1485). `always()` because a run that FAILED is the one you
       # most want measured. `classify: "false"`: a red here comes from a step before the agent,
-      # and the job's last step explains it; a lost audit reds the `file` job instead.
+      # and the classify step below explains it, as it does a failed agent on a green job; a lost
+      # audit reds the `file` job instead.
       - uses: $/actions/agent-finish
         id: finish
         if: always()
@@ -537,9 +538,11 @@ jobs:
           if-no-files-found: ignore
 
       # WHY A RED RUN WENT RED (RA-1408): a quota cap and a real failure want opposite responses
-      # (wait or re-run). `if: failure()` so it speaks only when there is something to explain.
+      # (wait or re-run). It speaks only when there is something to explain: a failed agent, or a
+      # red job. GATED ON THE AGENT STEP TOO (kanon#1260): that step is `continue-on-error`, so
+      # its failure leaves the job green and `failure()` false, exactly when this is needed.
       - name: Say whether the model was unreachable or the run genuinely failed
-        if: failure()
+        if: always() && (steps.agent.outcome == 'failure' || failure())
         uses: $/actions/agent-classify
         with:
           arm: Overseer agent

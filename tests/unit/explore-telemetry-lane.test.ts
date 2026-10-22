@@ -169,6 +169,19 @@ describe('the agent\'s job: no cloud credentials, a token that reads, and someth
     expect(report.with).toMatchObject({ name: 'qa-telemetry-findings-${{ github.run_id }}-${{ github.run_attempt }}', path: 'qa-telemetry-findings.json', 'retention-days': 1 });
     expect(steps.findIndex((s) => s.id === 'finish')).toBeLessThan(steps.findIndex((s) => s.id === 'report'));
   });
+
+  // GATED ON THE AGENT STEP TOO (kanon#1260). The agent step is `continue-on-error`, so its
+  // failure leaves the job green and `failure()` false: gated on `failure()` alone, the notice
+  // RA-1408 added for a capped agent never printed for this lane's own agent.
+  it('explains a failed agent, though its job stays green, and a red job', () => {
+    expect(steps.at(-1)!.name).toBe('Revoke the App token');
+    const classify = steps[steps.length - 2]!;
+    expect(classify.uses).toBe('$/actions/agent-classify');
+    expect(byId('agent')['continue-on-error']).toBe(true);
+    expect(classify.if).toBe("always() && (steps.agent.outcome == 'failure' || failure())");
+    expect(classify.with?.['agent-outcome']).toBe('${{ steps.agent.outcome }}');
+    expect(byId('finish').with?.classify).toBe('false');
+  });
 });
 
 describe('the file job: no agent, and the only token that writes', () => {
