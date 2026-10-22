@@ -99,10 +99,19 @@ import { CONFLICT_SHORT, ConflictFieldsUnread, conflictState } from './conflict-
 // THE SWEEP'S OWN CLASSIFIER (kanon#179), so the digest and the sweep read one state per
 // issue. Node built-ins only, like everything else this job runs; it reads the App
 // register for the Implementer's login, as the reconciler does.
-import { AGENT_LOGIN, MARKER as SWEEP_MARKER, classify as classifyLane, isBot, norm } from './dispatch-sweep.mjs';
+import { AGENT_LOGIN, MARKER as SWEEP_MARKER, classify as classifyLane, listedBotLogins, norm } from './dispatch-sweep.mjs';
 import { carriedOut as reconcilerCarriedOut, declaresMembership, itemSatisfied, openGatingWork, parseProposed } from './project-closure.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { asRole, markedRole } from './lib/role-marker.mjs';
+
+/**
+ * An App's login, by the rows the register HAS (kanon#1316). This lane declares no Apps, so
+ * an adopter running only the digests may list some roles and not others; the sweep's own
+ * `isBot` would stop the digest on the first missing row. A digest only reports, so a role
+ * with no row is left out rather than required: see `listedBotLogins`.
+ */
+let listed;
+const isBot = (/** @type {string|null|undefined} */ login) => (listed ??= listedBotLogins()).has(norm(login));
 
 /** The Implementer's own comment: its login and, from L4, its role marker (plan 0005 §3.3). */
 export const byImplementer = (/** @type {{login?: string|null, body?: string|null}} */ c) =>
@@ -255,7 +264,7 @@ export function classifyDispatch({ comments = [], labels = [], hasPr = false, pr
   if (hasPr) return { disposition: 'building', waitedDays: ageDays };
 
   const conversation = comments.map((c) => ({ login: norm(c.login), body: c.body ?? '', createdAt: c.createdAt }));
-  const v = classifyLane({ labels: labels.map((name) => ({ name })) }, conversation, false, { now: now.getTime() });
+  const v = classifyLane({ labels: labels.map((name) => ({ name })) }, conversation, false, { now: now.getTime(), isBot });
   const lastAgent = conversation.filter(byImplementer).at(-1);
   const at = Date.parse(lastAgent?.createdAt ?? '');
   const waitedDays = Number.isFinite(at) ? Math.max(0, Math.floor((now.getTime() - at) / 86400000)) : ageDays;
@@ -799,6 +808,28 @@ export const dryRunReport = (message) => [
   "### Kanon's Slack hook's payload", '', '```json', JSON.stringify(slackPayload(message), null, 2), '```', '',
 ].join('\n');
 
+/**
+ * The briefs in `dir`, `docs/projects/<n>.md`, by number. A repository with no such folder
+ * has no briefs (kanon#1317): an adopter that has planned no project need not create one, and
+ * its digest posts "No open projects". Any other read error still throws.
+ *
+ * @param {string} [dir]
+ * @returns {{number: number, markdown: string}[]}
+ */
+export function readBriefs(dir = BRIEF_DIR) {
+  let files;
+  try {
+    files = readdirSync(dir);
+  } catch (e) {
+    if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT') return [];
+    throw e;
+  }
+  return files
+    .filter((f) => /^\d+\.md$/.test(f))
+    .map((f) => ({ number: Number(f.replace('.md', '')), markdown: readFileSync(`${dir}/${f}`, 'utf8') }))
+    .sort((a, b) => a.number - b.number);
+}
+
 // ---------------------------------------------------------------------------
 // I/O below this line. Everything above is pure and unit-tested, with one named
 // exception: `holdReasonOf` takes its `api` as an argument (RA-1673), the same
@@ -845,10 +876,7 @@ if (isCliEntry(import.meta.url)) {
 
   // Briefs come off the CHECKOUT, not the API — the workflow checks out `main`,
   // and reading the file is both cheaper and exactly what the reconciler does.
-  const briefs = readdirSync(BRIEF_DIR)
-    .filter((f) => /^\d+\.md$/.test(f))
-    .map((f) => ({ number: Number(f.replace('.md', '')), markdown: readFileSync(`${BRIEF_DIR}/${f}`, 'utf8') }))
-    .sort((a, b) => a.number - b.number);
+  const briefs = readBriefs();
 
   const projects = [];
   for (const b of briefs) {

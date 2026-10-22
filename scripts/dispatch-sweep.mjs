@@ -41,7 +41,7 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { exhaustedRoute, projectOf } from './split-lineage.mjs';
-import { appLogin, appPersona } from './app-register.mjs';
+import { APP_REGISTER, appLogin, appPersona, loadAppRegister } from './app-register.mjs';
 import { asRole, markedRole, signed, slugOf } from './lib/role-marker.mjs';
 import { queryCostRows } from '../infra/qa-store/aws/cost-rows.mjs';
 import { costRowsProblem } from '../actions/qa-store/qa-store.mjs';
@@ -93,11 +93,34 @@ export const SWEEP_LOGIN = appLogin('Lead');
 // App's, never a human's reply. The Intake App belongs to the running application, not
 // to Kanon (docs/apps.md), and is not added.
 // `github-actions` and `dependabot` are GitHub's own, the same in every repository.
-const BOT_LOGINS = new Set([
-  ...['Implementer', 'Lead', 'Reviewer', 'Explorer', 'Overseer', 'Releaser'].map((role) => appLogin(role)),
-  'github-actions',
-  'dependabot',
-]);
+//
+// READ ON FIRST USE, NOT WHEN THE MODULE LOADS (kanon#1316). Several scripts import this
+// module for one function, and the project digest's lane declares no Apps, so its
+// register may list only some roles. Building the set at load made every importer need
+// all six rows. A script that compares logins still fails by name on a missing row, at
+// its first comparison; the sweep and the reconciler call `botLogins()` first thing in
+// `main()`, so they still fail before they read or change anything.
+const BOT_ROLES = ['Implementer', 'Lead', 'Reviewer', 'Explorer', 'Overseer', 'Releaser'];
+const GITHUB_BOTS = ['github-actions', 'dependabot'];
+/** @type {Set<string> | undefined} */
+let botSet;
+/** Every Kanon App's login and GitHub's own bots. Throws, naming the role, when the register lacks one. */
+export const botLogins = () => (botSet ??= new Set([...BOT_ROLES.map((role) => appLogin(role)), ...GITHUB_BOTS]));
+
+/**
+ * The logins of the roles the register lists, leaving out a role with no row, and GitHub's
+ * own bots. For a caller that only REPORTS, the project digest: a register without a role's
+ * row has no lane of that role running, and an App read as a human there changes a line
+ * of the digest, not what any lane does. The sweep never uses this — reading an unknown
+ * App as a human is its re-dispatch path, so it keeps `botLogins()`.
+ *
+ * @param {string} [path] the App register
+ * @returns {Set<string>}
+ */
+export function listedBotLogins(path = APP_REGISTER) {
+  const register = loadAppRegister(path);
+  return new Set([...BOT_ROLES.flatMap((role) => (register.get(role) ? [register.get(role)] : [])), ...GITHUB_BOTS]);
+}
 
 // The marker is how the sweep recognises its own past comments. Changing it resets
 // every issue's re-dispatch count to zero, which is exactly the runaway this bounds.
@@ -387,7 +410,7 @@ export const STALE_HOURS = Number(process.env.QA_SWEEP_STALE_HOURS || 48);
 
 const HOUR = 3600_000;
 const hoursSince = (iso, now = Date.now()) => (now - Date.parse(iso)) / HOUR;
-export const isBot = (login) => BOT_LOGINS.has(norm(login));
+export const isBot = (login) => botLogins().has(norm(login));
 
 /**
  * The sweep's own comment: the Lead's login and, from L4, its role marker (plan 0005 §3.3), or
@@ -670,6 +693,10 @@ export function classify(issue, comments, hasPr, opts = {}) {
     // Defaults to the implement lane so every existing caller — and every existing
     // test — keeps its exact meaning (RA-1336).
     lane = LANES[0],
+    // WHICH LOGINS ARE APPS (kanon#1316). Defaults to `isBot`, every role's row required.
+    // Only the project digest, which reports and never acts, passes a predicate over the
+    // rows its register has (`listedBotLogins`).
+    isBot: bot = isBot,
   } = opts;
 
   // Normalise HERE, not only at fetch time: the comparison is the thing that must
@@ -739,7 +766,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
   // changing that test and this paragraph together.
   const humanRepliedToSweep = Boolean(
     lastSweep &&
-    conversation.some((c) => !isBot(c.login) && after(c, lastSweep)) &&
+    conversation.some((c) => !bot(c.login) && after(c, lastSweep)) &&
     !after(lastAgent, lastSweep));
 
   // UNMARKED IS NAMED, NOT ONLY SILENT (kanon#380). Since L4 `byAgent` needs the role marker
@@ -804,7 +831,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
     // Comments from OTHER bots (a Reviewer scope note) are not evidence it ran. This
     // holds for both lanes because both prompts carry that sentence verbatim.
     state = 'never-ran';
-  } else if (last && !isBot(last.login)) {
+  } else if (last && !bot(last.login)) {
     // A human answered the agent's question and nothing re-fired. This is the case
     // that costs the most silently: the information needed to proceed already exists.
     state = 'answered';
@@ -850,7 +877,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
   const OWNED = ['has-pr', 'human-held', 'triage-settled', 'parked'];
   if (lane.decomposes && Number.isFinite(exhaustedAt) && !OWNED.includes(state)
     && !(Number.isFinite(labeledAt) && labeledAt > exhaustedAt)
-    && !conversation.some((c) => Date.parse(c.createdAt) > exhaustedAt && (byAgent(c) || !isBot(c.login)))) {
+    && !conversation.some((c) => Date.parse(c.createdAt) > exhaustedAt && (byAgent(c) || !bot(c.login)))) {
     const route = exhaustedRoute({ project: projectOf(issue?.body), body: issue?.body });
     return { ...base, state: 'too-big', act: 'stop', stopLabel: route.label, why: route.why };
   }
@@ -1576,6 +1603,9 @@ export function costSourceLine(source, reads) {
 const costLines = (source, reads) => [costSourceLine(source, reads), costReadLine(reads)].filter(Boolean).join('\n\n');
 
 function main() {
+  // Every App row, read before anything else, so a missing one stops the sweep by name
+  // before it reads or changes an issue — as it did when the set was built at load.
+  botLogins();
   if (!REPO) {
     console.error('dispatch-sweep: GITHUB_REPOSITORY must be set');
     process.exit(2);

@@ -1,7 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ROOT } from './helpers/adopter.js';
+import { ADOPTER, ROOT } from './helpers/adopter.js';
+import { SPAWNS } from '../unit/helpers/spawns.js';
 const {
   BAIL_RE,
   BRIEF_DIR,
@@ -13,6 +17,7 @@ const {
   classifyDispatch,
   classifyProject,
   readBrief,
+  readBriefs,
   renderMember,
   renderProject,
   holdReason,
@@ -1055,5 +1060,112 @@ describe('kanon#380 — an unmarked Implementer comment is named on the member l
     expect(quiet, 'a member the digest is otherwise silent on').toContain('2 Implementer comment(s) carry no role marker');
     expect(quiet, 'a bullet of its own').toMatch(/^- \[#1305\]\([^)]+\) .* — 2 Implementer comment/);
     expect(renderMember(member({ disposition: 'stall' }))).not.toContain('role marker');
+  });
+});
+
+describe('kanon#1316 — the digest runs on a register that lists only some roles', SPAWNS, () => {
+  // The digest's lane declares no Apps, so a register may lack a role's row. The sweep's
+  // module once read all six rows when it loaded, and the digest imports it. In a process of
+  // its own, because the register is read from the working directory and cached per process.
+  // By default only the Implementer's and the Lead's rows: no Reviewer, Explorer, Overseer or Releaser.
+  const partial = (dropped = /^\| (Explorer|Reviewer|Overseer|Merger|Intake|Releaser) \|/) => {
+    const dir = mkdtempSync(join(tmpdir(), 'kanon-1316-'));
+    const full = readFileSync(join(ADOPTER, 'docs/qa/agent-identities.md'), 'utf8');
+    const kept = full.split('\n').filter((l) => !dropped.test(l)).join('\n');
+    mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+    writeFileSync(join(dir, 'docs/qa/agent-identities.md'), kept);
+    return dir;
+  };
+  const run = (dir: string, code: string) => spawnSync('node', ['--input-type=module', '-e', code], { cwd: dir, encoding: 'utf8', timeout: 20_000 });
+  // The Implementer stops, a human answers: the sweep's classifier asks whether the last
+  // word is an App's, which is where the register's every row was needed.
+  const comments = [
+    { login: `${AGENT_LOGIN}[bot]`, body: signed('SCOPE-FIRST BAIL: which gateway?', 'Implementer'), createdAt: '2026-08-29T00:00:00Z' },
+    { login: 'a-maintainer', body: 'The new one. Go ahead.', createdAt: '2026-08-30T00:00:00Z' },
+  ];
+  const at = '2026-09-04T00:00:00Z';
+  // And an App's comment after the stop is still an App's, not a human's answer.
+  const botAfter = [comments[0], { login: 'github-actions[bot]', body: 'Checks ran.', createdAt: '2026-08-30T00:00:00Z' }];
+
+  it('classifies a member, reading the same disposition as with every row', () => {
+    const dir = partial();
+    try {
+      const digest = pathToFileURL(join(ROOT, 'scripts/project-digest.mjs')).href;
+      const r = run(dir, `const { classifyDispatch } = await import(${JSON.stringify(digest)});
+const read = (comments) => classifyDispatch({ comments, ageDays: 5, now: new Date(${JSON.stringify(at)}) });
+console.log(JSON.stringify([read(${JSON.stringify(comments)}), read(${JSON.stringify(botAfter)})]));`);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const [answered, stopped] = JSON.parse(r.stdout);
+      expect(answered.disposition).toBe('authorised');
+      expect(answered).toEqual(classifyDispatch({ comments, ageDays: 5, now: new Date(at) }));
+      expect(stopped.disposition).toBe('bail');
+      expect(stopped).toEqual(classifyDispatch({ comments: botAfter, ageDays: 5, now: new Date(at) }));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves the sweep strict: its own comparison still fails, naming the missing role', () => {
+    const dir = partial();
+    try {
+      const sweep = pathToFileURL(join(ROOT, 'scripts/dispatch-sweep.mjs')).href;
+      const r = run(dir, `const { isBot } = await import(${JSON.stringify(sweep)}); isBot('a-maintainer');`);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain('lists no Reviewer App');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('stops the sweep and the reconciler on a missing row before anything else, as when the set was built at load', () => {
+    const dir = partial(/^\| Reviewer \|/);
+    try {
+      const env = { ...process.env };
+      delete env.GITHUB_REPOSITORY;
+      for (const script of ['dispatch-sweep.mjs', 'lead-reconcile.mjs']) {
+        const r = spawnSync('node', [join(ROOT, 'scripts', script)], { cwd: dir, env, encoding: 'utf8', timeout: 20_000 });
+        expect(r.status, script).not.toBe(0);
+        expect(r.stderr, script).toContain('lists no Reviewer App');
+        expect(r.stderr, `${script}: before its own first check`).not.toContain('GITHUB_REPOSITORY must be set');
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('kanon#1317 — no `docs/projects/` folder is no briefs', SPAWNS, () => {
+  it('reads an absent folder as none, and still reads a present one by number', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kanon-1317-'));
+    try {
+      expect(readBriefs(join(dir, 'docs/projects'))).toEqual([]);
+      mkdirSync(join(dir, 'docs/projects'), { recursive: true });
+      writeFileSync(join(dir, 'docs/projects/12.md'), '# Twelve\n');
+      writeFileSync(join(dir, 'docs/projects/3.md'), '# Three\n');
+      writeFileSync(join(dir, 'docs/projects/_template.md'), '# Template\n');
+      expect(readBriefs(join(dir, 'docs/projects')).map((b) => b.number)).toEqual([3, 12]);
+      // Not every read error is "no briefs": a file where the folder should be still throws.
+      writeFileSync(join(dir, 'docs/notafolder'), '');
+      expect(() => readBriefs(join(dir, 'docs/notafolder'))).toThrow(/ENOTDIR/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('posts "No open projects" from a checkout with no folder, reading nothing from GitHub', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kanon-1317-'));
+    try {
+      mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+      writeFileSync(join(dir, 'docs/qa/agent-identities.md'), readFileSync(join(ADOPTER, 'docs/qa/agent-identities.md'), 'utf8'));
+      const env: NodeJS.ProcessEnv = { ...process.env, GITHUB_TOKEN: 'unused', GITHUB_REPOSITORY: 'o/r', DRY_RUN: '1', TODAY: '2026-10-22' };
+      delete env.GITHUB_STEP_SUMMARY;
+      const r = spawnSync('node', [join(ROOT, 'scripts/project-digest.mjs')], { cwd: dir, env, encoding: 'utf8', timeout: 20_000 });
+      expect(r.stderr).not.toContain('ENOENT');
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('No open projects');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
