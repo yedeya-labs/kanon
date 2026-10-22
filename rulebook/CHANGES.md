@@ -19,6 +19,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-WORK-3`
 
 - **2026-10-21.** The Owner decided that a roadmap milestone may be created for a single project's work, its title and due date the Stakeholder's decision whoever creates it. [#853](https://github.com/yedeya-labs/kanon/issues/853)
+- **2026-10-21.** The Why no longer says that nothing mechanical can tell an undated roadmap milestone from a bucket: since the two buckets' names are fixed, an open undated milestone with any other title is one. No check reads for it yet. [#1252](https://github.com/yedeya-labs/kanon/issues/1252)
 
 ## `K-WORK-4`
 
@@ -73,6 +74,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-12.** The Reviewer's token mint asks for Checks, Commit statuses and Actions read again, after a narrowing of its permissions dropped the reads this rule depends on; a test now fails a mint that drops any of the three. [#691](https://github.com/yedeya-labs/kanon/issues/691)
 - **2026-10-20.** The Reviewer's flags also grant the filing skill's plan command, as `kanon-plan`, a wrapper the job puts on the agent's PATH that runs Kanon's planning script and nothing else; the test runs the wrapper, and the probe battery gains a probe that it is allowed and two that a command chained or redirected after it is refused. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 
+## `K-AGENT-36`
+
+- **2026-10-21.** No longer prose only: the line names what already enforces it for every lane, `actions/agent-run`'s settings that keep a headless run's commands in the foreground and the test that pins them. Polling in the foreground stays prose only. [#1252](https://github.com/yedeya-labs/kanon/issues/1252)
+
 ## `K-AGENT-37`
 
 - **2026-10-15.** The Owner decided that a person may raise one lane's turn cap for one dispatched run, with a reason, up to a ceiling Kanon fixes per lane at twice the cap; nothing in an adopter's repository sets it. `agent-run`'s turn-limit step and `lane-check` enforce it, held by `tests/unit/agent-run-turn-budget.test.ts`. [ADR 0005](../docs/decisions/0005-roles-and-standard-lane-settings.md) §2, amended 2026-10-15; [#891](https://github.com/yedeya-labs/kanon/issues/891)
@@ -123,6 +128,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-MERGE-8`
 
 - **2026-10-06.** `kanon apps` adds the optional Releaser App to the default branch's ruleset's bypass list, and `kanon doctor` reports a ruleset that lacks it or lets another actor bypass. [#49](https://github.com/yedeya-labs/kanon/issues/49)
+- **2026-10-21.** The file-set bound is no longer prose only: the line names the release workflow's release-PR guard, which already ran and fails a release PR that changes anything but version strings. Restricting the bypass to release PRs and every commit on main having a pull request stay prose only; the second has held, since only the first commit on main has none. [#1252](https://github.com/yedeya-labs/kanon/issues/1252)
 
 ## `K-MERGE-9`
 

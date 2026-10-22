@@ -62,6 +62,7 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | The merge queue, with every required check reporting on `merge_group` | `K-MERGE-7` | installed 2026-09-30 |
 | The repository's merge settings, and the release workflow's merge-settings guard | `K-SHIP-3` | installed 2026-09-30 |
 | The reusable release workflow (merge-settings guard, then release-please) | `K-SHIP-7` | installed 2026-09-30 |
+| The release workflow's release-PR guard, which fails a release PR that changes anything but version strings, and `tests/unit/release-pr-guard.test.ts`. Kanon's `release-please.yml` calls the workflow through `$/` | `K-MERGE-8` | installed 2026-10-02 |
 | The `pr-title` action, and the test of its type table | `K-SHIP-4` | installed 2026-09-30 |
 | The `dco` action, reading the App register from the default branch, and its parser's tests | `K-AGENT-44`, `K-LAYOUT-14`, `K-MERGE-17` | installed 2026-09-30 |
 | `tests/unit/workflows.test.ts`, which pins the `permissions:` block of Kanon's own checks | `K-AGENT-46` | installed 2026-09-30 |
@@ -74,6 +75,7 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | The review lane, called by `review.yml` at a released version: the membership gate, the per-role token and slug assertion, the scope probe, the judging-input restore, the filter job and incremental scope, the trigger label, the verdict check, the outcome step, the shared classifier, and the telemetry row | `K-AGENT-1`, `K-AGENT-2`, `K-AGENT-5`, `K-AGENT-22`, `K-AGENT-25`, `K-AGENT-28`, `K-AGENT-42`, `K-AGENT-43`, `K-AGENT-45`, `K-LAYOUT-9`, `K-MERGE-14`, `K-MERGE-17`, `K-PRIN-9` | installed 2026-10-02 |
 | The Reviewer, through its playbook and instructions, including its review of briefs and specs and the follow-ups it files | `K-PRIN-3`, `K-WORK-15`, `K-SPEC-11`, `K-AGENT-20`, `K-SPEC-5`, `K-SPEC-9`, `K-SPEC-10`, `K-PROJ-6`, `K-PROJ-7`, `K-PROJ-18` | installed 2026-10-02 |
 | Unit tests on Kanon's own lanes: every arm's flags, the implement lanes' turn cap and ceiling, blocks that use Node built-ins only, and the branch names the implement, triage and brief lanes are told to give | `K-AGENT-37`, `K-OBS-12`, `K-SELF-8`, `K-WS-8` | installed 2026-10-02 |
+| `actions/agent-run`'s settings that keep a headless run's commands in the foreground, and `tests/unit/headless-run.test.ts`. Kanon's lanes run them since their callers moved to v0.40.2 | `K-AGENT-36` | installed 2026-10-16 |
 | The brief guard's test against the shipped template, and its exemption of the pre-standard briefs an adopter declares | `K-PRIN-11`, `K-PROJ-4`, `K-PROJ-10`, `K-LAYOUT-11` | installed 2026-10-02 |
 | `tests/unit/rule-one-home.test.ts`, which fails on a rule sentence copied word for word outside the rulebook, its plans and its ADRs ([#1249](https://github.com/yedeya-labs/kanon/issues/1249)) | `K-PRIN-2` | installed 2026-10-22 |
 | `tests/unit/adoption-record.test.ts`, on this record | `K-LAYOUT-10`, `K-ADOPT-9` | installed 2026-10-02 |
@@ -130,7 +132,7 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | The calibration record and the run-record writer | `K-SELF-13`, `K-SELF-15` | not yet installed |
 | `lane-check`'s exact-pin and Dependabot-entry checks, in CI's `Lane check` job at the release Kanon pins (the Dependabot entry's cooldown exemption since 2026-10-04), and `kanon doctor`'s read of the pinned release since 2026-10-12. Both accept only `vX.Y.Z` until plan 0009's step S2 | `K-ADOPT-11` | installed 2026-10-02 |
 | The installer, `kanon init` with `kanon doctor` (Owner decision 2026-10-12, #709): Kanon's lanes from the full suite on were written by `kanon init --feature full` run against this repository; its setup before 2026-10-12 was by hand, or by `kanon apps`, before Kanon ran `kanon init` on itself | `K-ADOPT-1`, `K-ADOPT-2`, `K-ADOPT-3`, `K-ADOPT-7`, `K-OBS-18` | installed 2026-10-12 |
-| Planned guards the rules name but Kanon hasn't built | `K-PRIN-18`, `K-WORK-22`, `K-SPEC-9`, `K-SPEC-10`, `K-MERGE-8`, `K-PROJ-14`, `K-PROJ-18`, `K-OBS-16`, `K-OBS-17`, `K-SELF-14`, `K-ADOPT-10` | not yet installed |
+| Planned guards the rules name but Kanon hasn't built | `K-PRIN-18`, `K-WORK-22`, `K-SPEC-9`, `K-SPEC-10`, `K-PROJ-14`, `K-PROJ-18`, `K-OBS-16`, `K-OBS-17`, `K-SELF-14`, `K-ADOPT-10` | not yet installed |
 | The sign-off delegation record (`docs/qa/sign-off-delegation.md`), naming the Owner, and Kanon's project-setup hook adding its sign-off to the Implementer's commits | `K-AGENT-44`, `K-LAYOUT-14` | installed 2026-10-04 |
 | The exemptions file (`docs/qa/exemptions.md`), read by the brief guard and the doc-path guard. Kanon has no such file: the brief guard runs here since 2026-10-21 with the default, under which nothing is exempt, and the doc-path guard doesn't run here yet | `K-LAYOUT-15` | not yet installed |
 

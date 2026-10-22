@@ -19,7 +19,7 @@ Never inflate a severity to reach a gate (`K-WORK-10`).
 
 ## Code-reading mode
 
-What the code audit looks for on Kanon. The lane's prompt sets the bar (an objective contradiction, cited `file:line`, deduped against open issues) and the report protocol; this section says what those mean here. Kanon's product is its rules and the machinery that holds a project to them, so most of its contradictions are between two of the areas its stack document lists under `## Code areas`: a rule, a doc, a guard, or a script.
+What the code audit looks for on Kanon. The lane's prompt sets the bar (an objective contradiction, cited `file:line`, deduped against open issues, `K-AGENT-9`) and the report protocol; this section says what those mean here. Kanon's product is its rules and the machinery that holds a project to them, so most of its contradictions are between two of the areas its stack document lists under `## Code areas`: a rule, a doc, a guard, or a script.
 
 **Kanon has a QA store, since 2026-10-06** (the [adoption record](adoption.md)'s `## Choices`). Choose areas from the export's code-reading ledger, as the lane's prompt says. Until the store holds a few audits, its ledger covers little, so fill the rest from `git log`: prefer what changed since the last audit issue you can find, then what no audit issue has cited. When the export says the store is absent or degraded, say so in your final message, and choose from `git log` alone.
 
@@ -30,7 +30,7 @@ What the code audit looks for on Kanon. The lane's prompt sets the bar (an objec
 | Consumer contradiction | A rule's "Enforced by" line names a mechanism, file or test that doesn't exist, or that doesn't check what the rule says. A doc or a rule names a script, flag, input, output, secret or path that the code doesn't have. A lane input or block output that nothing reads. A rule id cited that no rule has. |
 | Security anti-pattern | Untrusted text (an issue, a PR body, a branch name) interpolated into a `run:` line. `secrets: inherit`. A token broader than its step's use (`K-AGENT-46`). A pull request's own code running with a write token or a secret. A Kanon file reaching another through `./` or a second version instead of `$/`, outside the self-pinning test's exemptions. |
 | Structural-contract violation | A guard that passes whatever it is given, or that reads less than the rule it holds (a fail-open guard). Two copies of one fact that disagree: a table and the file a test says is its twin, a caller and the lane contract in `docs/lanes.md`, the roles table and `agent-permissions.json`. |
-| Promoted-spec contradiction | Kanon has no `docs/qa/specs/`. Its rulebook stands in: code, a test or a doc that contradicts a rule's text, rather than one that merely doesn't enforce it yet. |
+| Promoted-spec contradiction | Kanon's `docs/qa/specs/` holds only `[seed]` and `[retired]` clauses, none promoted. Its rulebook stands in: code, a test or a doc that contradicts a rule's text, rather than one that merely doesn't enforce it yet. |
 
 **What doesn't count:**
 

@@ -102,7 +102,7 @@ The project briefs, the escalating labels and a spec promotion (`K-SPEC-9`) esca
 
 **Why.** Once merging is unattended, the release bot is the one path to the main branch that nobody reads. Bounding it keeps that path from carrying anything but a release.
 
-**Enforced by.** The ruleset's bypass list names only the release bot. Where an adopter runs the optional Releaser App, `kanon apps` adds it to the default branch's ruleset's bypass list, for pull requests only, and `kanon doctor` reports a ruleset that lacks it or lets another actor bypass (`ruleset.releaser-bypass-missing`, `ruleset.bypass-extra`). Restricting it to release PRs, the file-set bound and the every-commit-has-a-PR assertion are prose only; a guard is planned.
+**Enforced by.** The ruleset's bypass list names only the release bot. Where an adopter runs the optional Releaser App, `kanon apps` adds it to the default branch's ruleset's bypass list, for pull requests only, and `kanon doctor` reports a ruleset that lacks it or lets another actor bypass (`ruleset.releaser-bypass-missing`, `ruleset.bypass-extra`). The release workflow's release-PR guard fails a release PR that changes anything but version strings, the file-set bound (`tests/unit/release-pr-guard.test.ts`). Restricting the bypass to release PRs, and the every-commit-has-a-PR assertion, are prose only.
 
 **Class.** framework
 
