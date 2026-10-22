@@ -1,6 +1,6 @@
 # Kanon status
 
-What Kanon's status core computes about a repository that runs Kanon, and what `kanon status` prints from it, where a project has needed a clause to cite. The core is one library that reads GitHub and stores nothing; `kanon status --json` and the hosted MCP server (the `MCP` area, [`mcp.md`](mcp.md)) are two surfaces over it. Seeded by project [#1327](https://github.com/yedeya-labs/kanon/issues/1327)'s brief. Every clause is `[seed]` until a human promotes it (`K-SPEC-8`).
+What Kanon's status core computes about a repository that runs Kanon, and what `kanon status` prints from it, where a project has needed a clause to cite. The core is one library that reads GitHub and stores nothing; `kanon status --json` and the hosted MCP server (the `MCP` area, [`mcp.md`](mcp.md)) are two surfaces over it. Seeded by project [#1327](https://github.com/yedeya-labs/kanon/issues/1327)'s brief, whose decision 13 chooses which pull requests count as ready for a person's merge: `[STAT-10]` and `[STAT-14]` are written to that brief's recommended answer, and are rewritten on its branch before it merges if the answer differs. Every clause is `[seed]` until a human promotes it (`K-SPEC-8`).
 
 **Id prefix:** `STAT`
 
@@ -18,7 +18,8 @@ What Kanon's status core computes about a repository that runs Kanon, and what `
 ## The pull-request readiness view
 
 - `[STAT-6]` `[seed]` The readiness view of a pull request gives its checks, partitioned as the merge gate partitions them; the Reviewer's latest verdict and whether it is current, which it is only when the commit that verdict read is the pull request's head; the acceptance-criterion ids of the issues it closes, with their spec status; and the merge gate's verdict for it (merge, wait, escalate or skip) with that verdict's rule and reason.
-- `[STAT-7]` `[seed]` The readiness view reports a pull request ready only when the merge gate's verdict function, given the same reads, answers merge (ready for the Merger), or answers escalate for an escalation path alone with a current approving verdict and green checks (ready for a person's merge); it computes no readiness of its own beside that function.
+- `[STAT-7]` `[seed]` For a pull request the merge gate's verdict function takes as the Implementer's, the readiness view reports it ready only when that function, given the same reads, answers merge (ready for the Merger), or answers escalate for an escalation path alone with a current approving verdict and green checks (ready for a person's merge); it computes no readiness of its own beside that function.
+- `[STAT-14]` `[seed]` A pull request the merge gate's verdict function skips as not the Implementer's (its `not-the-implementer` and `not-implementer-label` rules: a person's, a Lead's brief, a dependency bump, the release pull request) is reported as a person's to merge, never the Merger's, and ready for that merge only when the merge gate's check partition finds at least one relevant check and none pending, cancelled or failed, the Reviewer's verdict on its head as the review-recovery lane's verdict function reads it is an approval, and, for a brief pull request, the brief guard reports no open decision; the view applies no other test, and names which of the three a pull request that isn't ready lacks.
 
 ## The lane-health view
 
@@ -30,7 +31,7 @@ What Kanon's status core computes about a repository that runs Kanon, and what `
 
 ## The needs-the-Owner view
 
-- `[STAT-10]` `[seed]` The needs-the-Owner view lists, each with its link and its reason: the pull requests the readiness view reports ready for a person's merge; the Implementer's stops that wait on a person (`qa:needs-info`, `qa:needs-split`, a scope-first bail comment, or the dispatch sweep's awaiting-human state); the Lead's holds; each open decision in an open brief pull request, read as the brief guard reads it; and the lanes the lane-health view reports red. It lists nothing else.
+- `[STAT-10]` `[seed]` The needs-the-Owner view lists, each with its link and its reason: the pull requests the readiness view reports ready for a person's merge, both the Implementer's that the merge gate escalates and those it skips as not the Implementer's; the Implementer's stops that wait on a person (`qa:needs-info`, `qa:needs-split`, a scope-first bail comment, or the dispatch sweep's awaiting-human state); the Lead's holds; each open decision in an open brief pull request, read as the brief guard reads it; and the lanes the lane-health view reports red. It lists nothing else.
 
 ## `kanon status`
 
