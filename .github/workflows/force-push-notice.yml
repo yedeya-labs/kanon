@@ -1,0 +1,56 @@
+# A notice when a push to a pull request rewrites commits a reviewer read (`K-MERGE-15`, #1244).
+#
+# `scripts/force-push-notice.mjs` says what it checks. On a push whose new head doesn't build on
+# the old one, it names every review that read a commit the push dropped, as a warning annotation
+# and in the step summary. It never fails on what it finds, since the rule allows a force-push that
+# was asked for, and the events can't tell one apart.
+#
+# KANON'S NOTICE, AT THE RELEASE KANON PINS. Like the jobs of `shipped-guards.yml`, it runs
+# `kanon-path` at the pinned release and then Kanon's script from the action cache, so a pull
+# request can't change the check that reports on it. A pin from before the notice existed checks
+# nothing, and says so, rather than failing every push. Dependabot's `kanon` group moves the pin
+# with the others, and `lane-check` holds every Kanon reference to one version.
+#
+# NOT A REQUIRED CHECK, and it never fails on a force-push, so the Merger, which waits on every
+# check, is not held by one. It reads the code and the reviews and writes nothing.
+#
+# THE HISTORY, WITH NO CREDENTIAL KEPT. Ancestry needs the full history. The old head of a
+# force-push is in no branch, so the script fetches it from `origin` by its SHA, which GitHub serves
+# until it is collected. Kanon's repository is public, so the fetch needs no token.
+name: Force-push notice
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  notice:
+    name: Force-push notice
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.42.0
+        id: kanon
+      - name: force-push-notice (Kanon's, at the pinned release)
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          if [ ! -f "$KANON/scripts/force-push-notice.mjs" ]; then
+            echo "::notice title=Force-push notice::the Kanon release this workflow pins predates the force-push notice, so nothing was checked"
+            exit 0
+          fi
+          node "$KANON/scripts/force-push-notice.mjs"

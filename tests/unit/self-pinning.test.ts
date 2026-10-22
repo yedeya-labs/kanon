@@ -124,6 +124,9 @@ const EXEMPT = new Set([
   // the checkout, a pull request would bring the check or the guard that judges it.
   '.github/workflows/red-test-check.yml: yedeya-labs/kanon/.github/workflows/red-test.yml@vX.Y.Z',
   '.github/workflows/shipped-guards.yml: yedeya-labs/kanon/actions/kanon-path@vX.Y.Z',
+  // The force-push notice (#1244) is a shipped guard too, in a workflow of its own because it runs
+  // on every push to a pull request, where the guards' path filter would skip most of them.
+  '.github/workflows/force-push-notice.yml: yedeya-labs/kanon/actions/kanon-path@vX.Y.Z',
   '.github/workflows/test-database-smoke.yml: ./.github/actions/project-setup',
   // The deploy lane calls the ADOPTER's deploy and smoke hooks (plan 0010 §7, step D4), the first
   // exception's reason again: the adopter's code at the release's commit, in the checkout the
