@@ -234,6 +234,11 @@ export const DETECTORS: Array<[string, Detector]> = [
   ['The locked-set ratchet', runs('locked-set.mjs')],
   ['The coverage and acceptance-criteria tools', runs('spec-coverage.mjs')],
   ["The brief guard on this repository's briefs", runs('brief-guard.mjs')],
+  // #1259's three guards reach Kanon only at a release that carries it.
+  ['The pull-request milestone backstop', all(calls('agent-issue-backstop.yml'), shipped(1259))],
+  ['`tests/unit/search-scope.test.ts`', test('tests/unit/search-scope.test.ts')],
+  ["`kanon doctor`'s `label.github-default` finding", shipped(1259)],
+  ["The brief guard's tracking-issue check", all(runs('brief-guard.mjs'), shipped(1259))],
   ['The worktree script', unbuilt('Kanon ships no worktree script')],
   ['The ship command', runs('ship-review-scope.mjs')],
   ['The guard on tracked environment files', unbuilt('Kanon ships no such guard')],
