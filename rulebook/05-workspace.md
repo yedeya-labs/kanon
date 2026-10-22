@@ -46,13 +46,13 @@ This chapter governs where work happens: the checkout, the database and the port
 
 ### `K-WS-8` Name a branch `<type>/<number>-<slug>`
 
-**Rule.** Name every working branch `<type>/<number>-<slug>`: `<type>` is one of the PR-title types (`K-SHIP-4`), `<number>` is the issue the branch works, and `<slug>` is a short lowercase, hyphenated form of its title. For example, `fix/42-empty-cart-total`. The worktree script derives the name from the issue.
+**Rule.** A lane that opens a pull request for an issue's work, the implement and triage lanes and the Lead's brief lane, names its branch `<type>/<number>-<slug>`: `<type>` is one of the PR-title types (`K-SHIP-4`), `<number>` is the issue the branch works, and `<slug>` is a short lowercase, hyphenated form of its title. For example, `fix/42-empty-cart-total`. The same shape is the recommended convention for a branch a person makes, not a requirement.
 
-**Why.** Tools find a branch's issue by its name: the worktree script resolves `--issue <n>` to its branch, and a branch whose issue can't be read from its name can't be matched to its merged PRs, which is how the script tells a leftover branch from a live one (`K-WS-6`). A branch named without a convention is also one a later session can't find.
+**Why.** A branch named for its issue reads at a glance: a branch list says what each branch is for, and a later session can find an issue's branch by eye. Two of Kanon's tools read the name: crash recovery tells an implement run that pushed a branch from one that left nothing by a branch of this shape, and the dispatch sweep falls back to it for a pull request GitHub gives no closing reference, as it gives none to a pull request stacked on another branch. Everything else finds a pull request's issue by the closing references its body declares (`K-SHIP-5`).
 
-**Enforced by.** The worktree script, which creates the name. Branches made by hand are prose only.
+**Enforced by.** Prose only. The implement, triage and Lead lanes' prompts name their branches this way, and a unit test holds the prompts to it; nothing checks a branch's name, a lane's or a person's.
 
-**Class.** framework
+**Class.** split. The lanes' branch names are framework. **The project supplies:** how its people name their own branches, for which this shape is recommended.
 
 ## Repair and removal
 

@@ -4,6 +4,10 @@ A rule says what holds now, and why. How it came to say that is recorded here, n
 
 Rules are listed in chapter order, and each rule's changes oldest first. A rule with no entry has not changed since it was written, or changed only in ways its own ADR or plan records.
 
+## `K-PRIN-2`
+
+- **2026-10-22.** No longer prose only: a unit test fails when a sentence of twelve words or more from a rule's **Rule** paragraph is copied word for word outside the rulebook, its plans and its ADRs. On its first run it found no such copy. [#1249](https://github.com/yedeya-labs/kanon/issues/1249)
+
 ## `K-PRIN-13`
 
 - **2026-10-12.** The Owner decided that a run which exits silently, with no verdict, is retried once like a run that died of its cause, and that the retry counts as an attempt, so a second silent exit is reported. [#759](https://github.com/yedeya-labs/kanon/pull/759)
@@ -132,6 +136,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-02.** Kanon's own DCO and PR-title checks run the last release, and the pull request's copy runs beside them as a test that isn't required. [#47](https://github.com/yedeya-labs/kanon/issues/47)
 - **2026-10-20.** The red-test check, which both judges a pull request and runs it, reads the stack document's code areas from the default branch. [#761](https://github.com/yedeya-labs/kanon/issues/761)
+
+## `K-WS-8`
+
+- **2026-10-22.** The Owner decided that the branch name is a recommended convention for a person's branch, not a framework rule, and that no check holds a branch's name. The Why no longer rests on the worktree script, which Kanon doesn't ship; it rests on readability, and on the lanes' own branches, which crash recovery and the dispatch sweep read. The implement, triage and Lead lanes' prompts now name their branches this way. Re-classed split. [#1243](https://github.com/yedeya-labs/kanon/issues/1243)
 
 ## `K-SHIP-7`
 

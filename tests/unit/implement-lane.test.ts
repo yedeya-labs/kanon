@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { branchPattern } from '../../scripts/implement-crash.mjs';
 import { MAP_PATH } from '../../scripts/starting-map.mjs';
 import { jobPrompt } from './helpers/spine.js';
 import { SPAWNS } from './helpers/spawns.js';
@@ -132,5 +133,38 @@ describe('the prompts\' command, run on a branch that merged its base in (kanon#
     expect(r.fix.status).toBe(0);
     expect(r.fix.stdout).not.toMatch(/re-pointed/);
     expect(r.doc).toContain('`src/calc.ts:5`');
+  });
+});
+
+/**
+ * kanon#1243 — the lanes that make their own branch name it `<type>/<issue>-<slug>` (`K-WS-8`).
+ * Crash recovery and the dispatch sweep find an issue's branch by that shape, so each
+ * example the prompts give is held to `branchPattern`, the shape both read.
+ */
+const leadLane = parse(readFileSync('.github/workflows/agent-lead.yml', 'utf8')) as {
+  jobs: { brief: { with: { prompt: string } } };
+};
+const triageLane = parse(readFileSync('.github/workflows/agent-triage.yml', 'utf8')) as {
+  jobs: { 'triage-fix': { with: { prompt: string } } };
+};
+
+describe('K-WS-8 the lanes that make their own branch name it for its issue', () => {
+  it('the implement lane names the shape, and its example is one crash recovery reads', () => {
+    const flat = lane.jobs.implement.with.prompt.replace(/\s+/g, ' ');
+    expect(flat).toContain('NAME YOUR BRANCH `<type>/<issue>-<slug>` (`K-WS-8`), such as `fix/42-empty-cart-total`');
+    expect(branchPattern(42).test('fix/42-empty-cart-total')).toBe(true);
+  });
+
+  it('the triage lane, which opens a pull request for the bug it reproduces, names the shape', () => {
+    const flat = triageLane.jobs['triage-fix'].with.prompt.replace(/\s+/g, ' ');
+    expect(flat).toContain('NAME YOUR BRANCH `<type>/<issue>-<slug>` (`K-WS-8`), such as `fix/42-empty-cart-total`');
+    expect(flat.indexOf('NAME YOUR BRANCH')).toBeGreaterThan(flat.indexOf('then open a PR (fix + test)'));
+  });
+
+  it("the Lead's brief lane names its branch for the tracking issue", () => {
+    const flat = leadLane.jobs.brief.with.prompt.replace(/\s+/g, ' ');
+    expect(flat).toContain('Push it on a branch named `docs/<n>-<slug>` (`K-WS-8`), the same <n>');
+    expect(flat.indexOf('`docs/<n>-<slug>`')).toBeGreaterThan(flat.indexOf('docs/projects/<n>.md where <n> is the TRACKING ISSUE NUMBER'));
+    expect(branchPattern(902).test('docs/902-project-brief')).toBe(true);
   });
 });

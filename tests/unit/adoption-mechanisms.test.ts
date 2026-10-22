@@ -206,6 +206,7 @@ export const DETECTORS: Array<[string, Detector]> = [
   ['The Reviewer, through its playbook', all(calls('agent-review.yml'), file('docs/qa/reviewer-playbook.md'))],
   ["Unit tests on Kanon's own lanes", test('tests/unit/lane-workflows.test.ts')],
   ["The brief guard's test against the shipped template", test('tests/library/brief-guard.test.ts')],
+  ['`tests/unit/rule-one-home.test.ts`', test('tests/unit/rule-one-home.test.ts')],
   ['`tests/unit/adoption-record.test.ts`', test('tests/unit/adoption-record.test.ts')],
   ['`tests/unit/adoption-mechanisms.test.ts`', test('tests/unit/adoption-mechanisms.test.ts')],
   ['The other agent lanes and their App tokens', all(...['agent-implement.yml', 'agent-implement-revise.yml', 'agent-triage.yml', 'agent-lead.yml', 'agent-lead-revise.yml', 'agent-lead-split.yml', 'agent-lead-reconcile.yml', 'agent-merge.yml', 'agent-code-audit.yml', 'agent-explore-telemetry.yml'].map(calls))],
