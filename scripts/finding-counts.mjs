@@ -41,11 +41,23 @@
 // heading the list doesn't know adds the rules it checked to the findings, which a week-on-week
 // comparison absorbs as long as the Reviewer writes the same way.
 //
+// WHERE A LISTING ENDS. GitHub answers a listing page with `[]` now and then: on 2026-10-22 the
+// follow-ups listing did so on about one read in three, and a count that took that page for the
+// end of the list printed 0 follow-ups where there were 310 (#1288). So a listing ends where its
+// page's `Link` header names no next page, never where a page is short or empty, and an empty
+// page is read again, up to five reads with a growing wait between them, before it counts:
+//   - a page the page before it named as next, which stays empty on every read, fails the count
+//     by name: the listing said there was more, and a count without it would be low;
+//   - a first page that stays empty on every read is an empty listing, since a pull request with
+//     no reviews or a window with no follow-ups answers just that, and nothing in the answer tells
+//     it from the spurious one. Five spurious reads in a row, at that rate, is about one in 243.
+//
 // Usage: GITHUB_REPOSITORY=owner/repo node scripts/finding-counts.mjs [--since YYYY-MM-DD]
 //   [--until YYYY-MM-DD] [--rules K-A-1,K-B-2] [--reviewer <login>]... [--json]
 // The window defaults to the seven days before today (UTC). `--rules` limits the table to those
 // ids and lists each of them, a zero included. `--json` prints the counts and each week's.
-// Exit 0 with the counts, 1 when `gh` fails, 2 on a usage error. Node built-ins only.
+// Exit 0 with the counts, 1 when `gh` fails or a listing can't be read to its end, 2 on a usage
+// error. Node built-ins only.
 
 import { execFileSync } from 'node:child_process';
 import { isCliEntry } from './lib/cli-entry.mjs';
@@ -55,6 +67,12 @@ const DAY = 86_400_000;
 const PAGE = 100;
 const RULE_ID = /\bK-[A-Z]+-\d+\b/g;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** How many times an empty page is read before it counts, and the wait before the first re-read, doubled each time. */
+const READS = 5;
+const WAIT_MS = 200;
+
+/** Block for `ms`: `gh` is called synchronously, so the wait between reads is too. @param {number} ms */
+const sleepSync = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
 /** A heading that starts as one reporting what holds, or restating or filing, so the ids under it are no finding (the header above). */
 export const NOT_A_FINDING = /^[*_`\s]*(?:what (?:i )?(?:checked|verified)|what holds|verified|checked|sound|ci|checks?|rollup|no findings?|not findings?|notes? \(no action|prior|previous|earlier|filed|follow-ups?)(?=$|[\s:;,()*_`\u2013\u2014-])/i;
@@ -153,12 +171,50 @@ export const tally = ({ reviews, followUps, rules = null }) => {
 const labelNames = (issue) => (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name ?? ''));
 
 /**
+ * A page as `gh api --include` prints it: the status line and headers, a blank line, the body.
+ * @param {string} text
+ * @returns {{ items: unknown[], next: string | null }} the page's items, and the URL of the next page its `Link` header names
+ */
+export const parsePage = (text) => {
+  const s = String(text);
+  const gap = /\r?\n\r?\n/.exec(s);
+  if (!s.startsWith('HTTP/') || !gap) throw new Error('gh api --include printed no HTTP head before the page');
+  const link = s.slice(0, gap.index).split(/\r?\n/).find((l) => /^link:/i.test(l)) ?? '';
+  const items = JSON.parse(s.slice(gap.index + gap[0].length));
+  if (!Array.isArray(items)) throw new Error(`a listing page is not a list: ${JSON.stringify(items).slice(0, 200)}`);
+  return { items, next: /<([^>]+)>;\s*rel="next"/.exec(link)?.[1] ?? null };
+};
+
+/**
+ * A listing's pages, first to last, following the next page each one names (the header above).
+ * @param {string} path the first page
+ * @param {(args: string[]) => string} gh
+ * @param {(ms: number) => void} sleep
+ * @returns {Generator<unknown[]>}
+ */
+function* pages(path, gh, sleep) {
+  /** @type {string | null} */
+  let url = path;
+  for (let named = false; url; named = true) {
+    let page = parsePage(gh(['api', '--include', url]));
+    for (let read = 1; page.items.length === 0 && read < READS; read++) {
+      sleep(WAIT_MS * 2 ** (read - 1));
+      page = parsePage(gh(['api', '--include', url]));
+    }
+    if (page.items.length === 0 && named) throw new Error(`${url} came back empty on each of ${READS} reads, though the page before it named it as the next one, so the count can't be completed`);
+    yield page.items;
+    url = page.next;
+  }
+}
+
+/**
  * Read the window's reviews and follow-ups through `gh`, and count them.
- * @param {{ repo: string, since: string, until: string, gh: (args: string[]) => unknown, logins?: string[], rules?: string[] | null }} opts
- *   `since` and `until` are YYYY-MM-DD, UTC; the window is [since, until).
+ * @param {{ repo: string, since: string, until: string, gh: (args: string[]) => string, sleep?: (ms: number) => void, logins?: string[], rules?: string[] | null }} opts
+ *   `since` and `until` are YYYY-MM-DD, UTC; the window is [since, until). `gh` returns what
+ *   `gh` prints; `sleep` waits between the reads of an empty page.
  * @returns {Report}
  */
-export const count = ({ repo, since, until, gh, logins = [], rules = null }) => {
+export const count = ({ repo, since, until, gh, sleep = sleepSync, logins = [], rules = null }) => {
   const from = Date.parse(`${since}T00:00:00Z`);
   const to = Date.parse(`${until}T00:00:00Z`);
   const inWindow = (/** @type {string | null | undefined} */ t) => {
@@ -170,21 +226,19 @@ export const count = ({ repo, since, until, gh, logins = [], rules = null }) => 
   // since the window opened, newest first, hold every one of them.
   /** @type {number[]} */
   const prs = [];
-  for (let page = 1; ; page++) {
-    const list = /** @type {Pull[]} */ (gh(['api', `repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=${PAGE}&page=${page}`]));
+  for (const page of pages(`repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=${PAGE}&page=1`, gh, sleep)) {
+    const list = /** @type {Pull[]} */ (page);
     for (const p of list) if (Date.parse(p.updated_at) >= from) prs.push(p.number);
-    if (list.length < PAGE || Date.parse(list[list.length - 1]?.updated_at ?? '') < from) break;
+    if (Date.parse(list[list.length - 1]?.updated_at ?? '') < from) break;
   }
 
   /** @type {Array<{ pr: number, review: Review }>} */
   const reviews = [];
   for (const pr of prs) {
-    for (let page = 1; ; page++) {
-      const list = /** @type {Review[]} */ (gh(['api', `repos/${repo}/pulls/${pr}/reviews?per_page=${PAGE}&page=${page}`]));
-      for (const review of list) {
+    for (const page of pages(`repos/${repo}/pulls/${pr}/reviews?per_page=${PAGE}&page=1`, gh, sleep)) {
+      for (const review of /** @type {Review[]} */ (page)) {
         if (review.state === 'CHANGES_REQUESTED' && inWindow(review.submitted_at) && isReviewers(review, logins)) reviews.push({ pr, review });
       }
-      if (list.length < PAGE) break;
     }
   }
 
@@ -192,13 +246,11 @@ export const count = ({ repo, since, until, gh, logins = [], rules = null }) => 
   // in it, so the listing holds every follow-up created there; the creation date picks them.
   /** @type {Issue[]} */
   const followUps = [];
-  for (let page = 1; ; page++) {
-    const list = /** @type {Issue[]} */ (gh(['api', `repos/${repo}/issues?labels=follow-up,agent:reviewer&state=all&since=${since}T00:00:00Z&per_page=${PAGE}&page=${page}`]));
-    for (const issue of list) {
+  for (const page of pages(`repos/${repo}/issues?labels=follow-up,agent:reviewer&state=all&since=${since}T00:00:00Z&per_page=${PAGE}&page=1`, gh, sleep)) {
+    for (const issue of /** @type {Issue[]} */ (page)) {
       const names = labelNames(issue);
       if (!issue.pull_request && names.includes('follow-up') && names.includes('agent:reviewer') && inWindow(issue.created_at)) followUps.push(issue);
     }
-    if (list.length < PAGE) break;
   }
 
   const weeks = [...new Set([...reviews.map((r) => weekOf(r.review.submitted_at ?? '')), ...followUps.map((i) => weekOf(i.created_at))])].sort();
@@ -281,7 +333,7 @@ if (isCliEntry(import.meta.url)) {
     process.exit(2);
   }
   /** @param {string[]} a */
-  const gh = (a) => JSON.parse(execFileSync('gh', a, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }));
+  const gh = (a) => execFileSync('gh', a, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
   try {
     const r = count({ repo, gh, since: args.since, until: args.until, logins: args.logins, rules: args.rules });
     console.log(args.json ? JSON.stringify(r, null, 2) : renderTable(r));
