@@ -334,7 +334,9 @@ export function readResult(path, { read = readFileSync } = {}) {
  * reds they CAN produce (checkout, or the post script), where the agent is by
  * construction not the cause. Both directions wrong, and both fixed by gating on
  * `steps.<id>.outcome` instead. See RA-1476, which owns "a missing narrative leaves no
- * trace on the daily digest" — this is the cap-shaped instance of it.
+ * trace on the daily digest" — this is the cap-shaped instance of it. The Overseer and the
+ * telemetry Explorer had the same trap and gate on the outcome too (kanon#1260), but not
+ * `nonFatal`: the softened body speaks of a digest's narrative, which they have none of.
  *
  * The level drops to `warning` because an `::error` on a job that finishes GREEN reads
  * as the thing that failed, and nothing here did.

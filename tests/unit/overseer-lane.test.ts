@@ -347,7 +347,12 @@ describe('what the agent is told', () => {
     expect(steps.at(-1)!.name).toBe('Revoke the App token');
     const last = steps[steps.length - 2]!;
     expect(last.uses).toBe('$/actions/agent-classify');
-    expect(last.if).toBe('failure()');
+    // GATED ON THE AGENT STEP TOO (kanon#1260). The agent step is `continue-on-error`, so its
+    // failure leaves the job green and `failure()` false: gated on `failure()` alone, the notice
+    // RA-1408 added for a capped agent never printed for this lane's own agent.
+    expect(byId('agent')['continue-on-error']).toBe(true);
+    expect(last.if).toBe("always() && (steps.agent.outcome == 'failure' || failure())");
+    expect(last.with?.['agent-outcome']).toBe('${{ steps.agent.outcome }}');
     expect(byId('finish').with?.classify).toBe('false');
   });
 });
