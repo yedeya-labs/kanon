@@ -232,6 +232,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-15.** The Owner decided that the sign-off check reads no `Other App` row, nor the Intake row, so the sign-off delegation never covers an App that isn't an agent. [#998](https://github.com/yedeya-labs/kanon/issues/998)
 - **2026-10-16.** The Why says the sign-off check takes no delegated slug from those rows, rather than that it doesn't read them: it still parses them, so a malformed slug on one still refuses the register, and their slugs still count as another role's for the Releaser. The check is unchanged. [#1036](https://github.com/yedeya-labs/kanon/issues/1036)
 - **2026-10-22.** `lane-check` fails a permission broader than its App's grant with no numbered footnote, and a footnote marker in the table that no footnote defines, so the footnotes this rule asks for are checked, not prose only. The rule is unchanged. [#1250](https://github.com/yedeya-labs/kanon/issues/1250)
+- **2026-10-22.** The Owner narrowed the footnote sentence to what `lane-check` checks: a permission broader than its App's grant needs a footnote, a permission the adoption record declares as an extra App permission is recorded there, and a row may show its App's whole grant. Read literally, the old sentence failed every register `kanon apps` writes, since it writes each App's whole grant on every one of its roles' rows. [#1275](https://github.com/yedeya-labs/kanon/issues/1275)
 
 ## `K-LAYOUT-8`
 
