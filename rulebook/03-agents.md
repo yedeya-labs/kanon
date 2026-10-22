@@ -404,7 +404,7 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Why.** A backgrounded command yields the turn, and the run ends before the result arrives: a review that backgrounded a build never posted its verdict.
 
-**Enforced by.** Prose only.
+**Enforced by.** `actions/agent-run`, for every lane: it sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, which takes backgrounding off the shell tool, adds `--disallowedTools Monitor` after the lane's flags, which takes away the tool that watches a background command, and raises the foreground cap with `BASH_MAX_TIMEOUT_MS`, so a long gate runs to its end in the turn. `tests/unit/headless-run.test.ts` fails when any of the three is dropped. A command that polls in the foreground is prose only.
 
 **Class.** framework
 
