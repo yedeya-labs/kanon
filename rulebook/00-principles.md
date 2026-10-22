@@ -20,7 +20,7 @@ This chapter holds the opinions every other chapter is built on: why Kanon has n
 
 **Why.** Restatements drift. In the reference adopter one routing rule was restated in at least thirteen places; two copies each claimed to be canonical, and the instruction for changing it named four prompts where seven carried it. Two lanes that each computed the same state once sized one project two different ways. The workarounds ("check every copy before renumbering", "change every copy in the same edit") are only needed because copies exist. See [ADR 0004 §3](../docs/decisions/0004-disputed-rules.md).
 
-**Enforced by.** Prose only; a guard is planned. Where a restatement cannot be avoided (a doc and the config it describes), a parity test fails when the two disagree (see `K-OBS-2`).
+**Enforced by.** [`tests/unit/rule-one-home.test.ts`](../tests/unit/rule-one-home.test.ts) fails when a sentence of twelve words or more from a rule's **Rule** paragraph appears word for word in a workflow, a playbook, a skill, an agent instruction file or a doc; a plan and an ADR, the records a rule comes from, are not read. A paraphrase isn't caught, so that part is prose only and stays with the Reviewer. Where a restatement cannot be avoided (a doc and the config it describes), a parity test fails when the two disagree (see `K-OBS-2`).
 
 **Class.** framework
 

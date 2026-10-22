@@ -4,6 +4,10 @@ A rule says what holds now, and why. How it came to say that is recorded here, n
 
 Rules are listed in chapter order, and each rule's changes oldest first. A rule with no entry has not changed since it was written, or changed only in ways its own ADR or plan records.
 
+## `K-PRIN-2`
+
+- **2026-10-22.** No longer prose only: a unit test fails when a sentence of twelve words or more from a rule's **Rule** paragraph is copied word for word outside the rulebook, its plans and its ADRs. On its first run it found no such copy. [#1249](https://github.com/yedeya-labs/kanon/issues/1249)
+
 ## `K-PRIN-13`
 
 - **2026-10-12.** The Owner decided that a run which exits silently, with no verdict, is retried once like a run that died of its cause, and that the retry counts as an attempt, so a second silent exit is reported. [#759](https://github.com/yedeya-labs/kanon/pull/759)
