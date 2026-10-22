@@ -4,19 +4,20 @@ import { describe, expect, it } from 'vitest';
 import { fencedLines } from '../../scripts/spec-lib.mjs';
 import { linesOf } from '../../scripts/lib/declarations.mjs';
 import { parseYaml } from '../../cli/workflow-yaml.mjs';
+import { STATUS, readMechanisms } from '../../scripts/lib/mechanisms.mjs';
 
 /**
  * `docs/qa/adoption.md` is Kanon's own adoption record (`K-LAYOUT-10`). This test checks the
  * parts of its format a machine can read one way: the five headings in order, the bootstrap
  * line, and a mechanism list (`K-ADOPT-9`) that names every rule whose "Enforced by" line
- * names something, with each mechanism marked `installed YYYY-MM-DD` or `not yet installed`.
+ * names something, with each mechanism marked `installed YYYY-MM-DD`, `not yet installed` or
+ * `not applicable`, and each not-applicable mechanism given its reason under `## Choices`.
  * The required rules come from the rulebook, never from a list kept here, so a new rule with
  * a mechanism fails this test until the record says whether it is installed.
  */
 const ROOT = process.cwd();
 const RECORD = join(ROOT, 'docs/qa/adoption.md');
 const HEADINGS = ['People', 'Plan', 'Bootstrap', 'Mechanisms', 'Choices'];
-const STATUS = /^(installed \d{4}-\d{2}-\d{2}|not yet installed)$/;
 const RULE_ID = /K-[A-Z]+-\d+/g;
 const TABLE_HEADER = '| Mechanism | Rules | Status |';
 const PROSE_ANCHOR = "These rules' lines are prose only with a note, and name nothing to install:";
@@ -106,6 +107,7 @@ const recordProblems = (text: string, rules: Map<string, string | undefined>): s
     if (!listed.has(id) && !prose.has(id)) problems.push(`Mechanisms leaves out ${id}`);
   }
   for (const id of [...listed, ...prose]) if (!rules.has(id)) problems.push(`Mechanisms cites ${id}, which the rulebook has no rule for`);
+  problems.push(...readMechanisms(text).errors);
   return problems;
 };
 
@@ -187,6 +189,7 @@ describe('the record check fails on each broken shape', () => {
     ['K-A-3', 'Prose only; a guard is planned.'],
     ['K-A-4', undefined],
     ['K-A-5', 'Prose only, in the agent instructions.'],
+    ['K-A-6', 'The sweep.'],
   ]);
   const good = [
     '# Adoption record',
@@ -205,10 +208,11 @@ describe('the record check fails on each broken shape', () => {
     '|---|---|---|',
     '| The guard | `K-A-1` | installed 2026-10-02 |',
     '| A planned guard | `K-A-3` | not yet installed |',
+    '| A sweep with nothing here to sweep | `K-A-6` | not applicable |',
     '',
     "These rules' lines are prose only with a note, and name nothing to install: `K-A-5`.",
     '## Choices',
-    'None yet.',
+    '- **Mechanism not applicable:** `K-A-6` (nothing here for it to sweep)',
     '',
   ].join('\n');
 
@@ -226,7 +230,10 @@ describe('the record check fails on each broken shape', () => {
     ['a rule is cited only outside the table and the list', good.replace('| The guard | `K-A-1` | installed 2026-10-02 |\n', '').replace('# Adoption record', '# Adoption record\n\nSee `K-A-1`.').replace('## Mechanisms\n', '## Mechanisms\nThe guard is `K-A-1`.\n'), /leaves out K-A-1/],
     ['a mechanism is moved to the prose-only list', good.replace('| The guard | `K-A-1` | installed 2026-10-02 |\n', '').replace('`K-A-5`.', '`K-A-5`, `K-A-1`.'), /K-A-1 is listed as prose only/],
     ['a row has the wrong number of cells', good.replace('| `K-A-3` | not yet installed |', '| `K-A-3` |'), /has 2 cells/],
-    ['a cited rule does not exist', good.replace('`K-A-3`', '`K-A-3`, `K-A-9`'), /K-A-9, which the rulebook/],
+    ['a cited rule does not exist', good.replace('| `K-A-3` | not yet', '| `K-A-3`, `K-A-9` | not yet'), /K-A-9, which the rulebook/],
+    ['a not-applicable mechanism has no reason', good.replace(/^- \*\*Mechanism not applicable:.*$/m, ''), /marks a mechanism `not applicable` with no reason/],
+    ['a reason names a row that is not marked not applicable', good.replace('| not applicable |', '| not yet installed |'), /mark the row `not applicable`, or remove the bullet/],
+    ['a reason names rules no row lists', good.replace('`K-A-6` (', '`K-A-6`, `K-A-1` ('), /no row of `## Mechanisms` lists as exactly its rules/],
   ];
   it('throws when the table header moves, rather than going blind', () => {
     expect(() => recordProblems(good.replace('| Mechanism | Rules | Status |', '| What | Rules | Status |'), rules)).toThrow(/anchor moved/);

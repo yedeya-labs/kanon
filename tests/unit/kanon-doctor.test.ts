@@ -263,6 +263,19 @@ ${jobPerms}    steps:
     expect(r.status).toBe(EXIT.findings);
   });
 
+  it('blocks on a mechanism marked not applicable without its reason, and passes one with it (K-ADOPT-9, K-LAYOUT-10, #1236)', async () => {
+    const table = '## Mechanisms\n| Mechanism | Rules | Status |\n|---|---|---|\n| The sweep | `K-OBS-7` | not applicable |\n';
+    const good = healthyFiles();
+    good['docs/qa/adoption.md'] = good['docs/qa/adoption.md']!.replace('## Choices\n', `${table}## Choices\n`) + '- **Mechanism not applicable:** `K-OBS-7` (there is no app to sweep)\n';
+    expect(ids(await run(checkout(good), fakeGitHub(), ['--json']))).toEqual([]);
+    const bad = healthyFiles();
+    bad['docs/qa/adoption.md'] = bad['docs/qa/adoption.md']!.replace('## Choices\n', `${table}## Choices\n`);
+    const r = await run(checkout(bad), fakeGitHub(), ['--json']);
+    expect(ids(r)).toEqual(['declaration.malformed docs/qa/adoption.md']);
+    expect(r.json.findings[0].message).toMatch(/marks a mechanism `not applicable` with no reason/);
+    expect(r.status).toBe(EXIT.findings);
+  });
+
   // kanon#477: the capability ledger is needed only where the record turns the watch on.
   it('needs the capability ledger only where the record turns the capability watch on', async () => {
     const { next } = nextRelease();

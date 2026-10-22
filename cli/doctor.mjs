@@ -64,6 +64,7 @@ import { parseYaml } from './workflow-yaml.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '../scripts/lib/upstream-findings.mjs';
 import { LEDGER as CAPABILITY_LEDGER, parseCapabilityWatch } from '../scripts/lib/capability-watch.mjs';
+import { EXAMPLE as NOT_APPLICABLE_EXAMPLE, readMechanisms } from '../scripts/lib/mechanisms.mjs';
 import { DeclarationError, DEPLOY_HEADING, movedReferenceBullets, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
 import { PROBE_LINE } from '../scripts/deploy-gate.mjs';
 import { EXTRA_LABEL, readAppExtras, withExtras } from '../scripts/lib/app-extras.mjs';
@@ -3269,6 +3270,12 @@ export const diagnose = async (deps, opts) => {
       parseCapabilityWatch(recordText);
     } catch (e) {
       find('declaration.malformed', ADOPTION_RECORD, /** @type {Error} */ (e).message, { text: 'Write it under ## Choices as `- **Capability watch:** `on`` or `off`, or remove it for Kanon\'s default, `off` (K-LAYOUT-10).' });
+    }
+    // ── The mechanisms that don't apply here, each with its reason (`K-ADOPT-9`, `K-LAYOUT-10`) ──
+    // A row of `## Mechanisms` marked `not applicable` and the `## Choices` bullet that says why
+    // go together, matched by the row's rules: either without the other is malformed.
+    for (const e of readMechanisms(recordText).errors) {
+      find('declaration.malformed', ADOPTION_RECORD, e, { text: `Give each mechanism marked \`not applicable\` one bullet under ## Choices naming its row's rules, as \`${NOT_APPLICABLE_EXAMPLE}\`, and no other mechanism one (K-ADOPT-9, K-LAYOUT-10).` });
     }
   }
   // ── The waivers ─────────────────────────────────────────────────────────────────────────────
