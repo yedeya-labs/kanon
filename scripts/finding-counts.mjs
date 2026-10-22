@@ -21,12 +21,20 @@
 //
 // WHAT IN A REVIEW IS A FINDING. A review cites rules for what holds as well as for what is
 // wrong, and an incremental review restates the findings of the round before. So the ids are
-// read from the review's body outside two kinds of section, told apart by their markdown
-// heading (`#` to `####`, matched case-insensitively):
-//   - a section that reports what holds ("What I checked", "Verified", "Checked, no finding",
-//     "What holds", "Sound", "CI"), which cites the rules it checked, not a finding;
-//   - a section that restates or files ("Prior findings", "Filed", "Follow-ups"): a prior
-//     finding is counted in the review that first raised it, and a filed one as a follow-up.
+// read from the review's body outside two kinds of section, told apart by the first word or
+// words of their markdown heading (`#` to `####`, case-insensitive, leading `*`, `_` or a
+// backtick ignored), never by a word further in:
+//   - a section that reports what holds, whose heading starts "What I checked" or "What I
+//     verified" (the "I" optional), "What holds", "Verified", "Checked", "Sound", "CI", "Check"
+//     or "Checks", "Rollup", "No finding(s)", "Not finding(s)" or "Note(s) (no action", which
+//     cites the rules it checked, not a finding;
+//   - a section that restates or files, whose heading starts "Prior", "Previous", "Earlier",
+//     "Filed" or "Follow-up(s)": a prior finding is counted in the review that first raised it,
+//     and a filed one as a follow-up.
+// A skip form ends at the end of the heading, a space, one of `:;,()*_`, a backtick, a hyphen
+// or a dash, so "`ci.yml`" or "Checklist" is no skip form. No skip form starts "Blocking",
+// "Finding" or a number, so a heading that starts with one ("1." or "1)") is never skipped,
+// whatever follows.
 // Everything else counts, the text before the first heading included, where the verdict and an
 // "Owner decision needed" line sit. The headings are the Reviewer's own words, so this is a
 // convention the count reads, not one it enforces: a review that reports what holds under a
@@ -48,8 +56,8 @@ const PAGE = 100;
 const RULE_ID = /\bK-[A-Z]+-\d+\b/g;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** A heading that reports what holds, or restates or files, so the ids under it are no finding. */
-export const NOT_A_FINDING = /\b(prior|previous|earlier|checked|verified|verify|holds?|sound|fine|no findings?|not findings?|no action|ci|checks|rollup|filed|follow-ups?)\b/i;
+/** A heading that starts as one reporting what holds, or restating or filing, so the ids under it are no finding (the header above). */
+export const NOT_A_FINDING = /^[*_`\s]*(?:what (?:i )?(?:checked|verified)|what holds|verified|checked|sound|ci|checks?|rollup|no findings?|not findings?|notes? \(no action|prior|previous|earlier|filed|follow-ups?)(?=$|[\s:;,()*_`\u2013\u2014-])/i;
 
 /**
  * @typedef {{ user?: { login?: string, type?: string } | null, state?: string, submitted_at?: string | null, body?: string | null }} Review

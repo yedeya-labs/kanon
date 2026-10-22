@@ -62,6 +62,33 @@ describe('what in a review is a finding (K-SELF-14)', () => {
     ].join('\n');
     expect(findingRules(body)).toEqual(['K-WORK-18']);
   });
+
+  it('skips a section only by the words its heading starts with, so a finding whose title contains a skip word still counts', () => {
+    const body = [
+      REVIEWER,
+      '**Verdict: request changes.**',
+      '## Blocking: the red checks',
+      '- The suite is red (`K-AGENT-20`).',
+      '## Findings',
+      '### 1. `ci.yml`\'s guard is fail-open (`K-MERGE-8`)',
+      '- It passes on a skipped job.',
+      '### 2. The guard holds nothing on a fork (`K-PRIN-8`)',
+      '- A fork has no secrets.',
+      '### 3) Verified only by hand (`K-PRIN-11`)',
+      '## Finding: a checklist nobody reads (`K-WORK-3`)',
+      '## Checklist drift (`K-WORK-4`)',
+      '## `ci.yml` runs on a fork (`K-AGENT-46`)',
+      '## **What I checked**',
+      '- The sign-off (`K-AGENT-44`).',
+      '## CI',
+      '- Green (`K-AGENT-24`).',
+      '## `CI`: green',
+      '- Still green (`K-AGENT-25`).',
+      '## Notes (no action needed)',
+      '- A spawn could be a call (`K-WORK-17`).',
+    ].join('\n');
+    expect(findingRules(body)).toEqual(['K-AGENT-20', 'K-MERGE-8', 'K-PRIN-8', 'K-PRIN-11', 'K-WORK-3', 'K-WORK-4', 'K-AGENT-46']);
+  });
 });
 
 describe('whose review counts (K-SELF-14)', () => {
