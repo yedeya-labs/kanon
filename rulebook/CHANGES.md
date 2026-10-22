@@ -133,6 +133,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-02.** Kanon's own DCO and PR-title checks run the last release, and the pull request's copy runs beside them as a test that isn't required. [#47](https://github.com/yedeya-labs/kanon/issues/47)
 - **2026-10-20.** The red-test check, which both judges a pull request and runs it, reads the stack document's code areas from the default branch. [#761](https://github.com/yedeya-labs/kanon/issues/761)
 
+## `K-WS-8`
+
+- **2026-10-22.** The Owner decided that the branch name is a recommended convention for a person's branch, not a framework rule, and that no check holds a branch's name. The Why no longer rests on the worktree script, which Kanon doesn't ship; it rests on readability, and on the lanes' own branches, which crash recovery and the dispatch sweep read. The implement, triage and Lead lanes' prompts now name their branches this way. Re-classed split. [#1243](https://github.com/yedeya-labs/kanon/issues/1243)
+
 ## `K-SHIP-7`
 
 - **2026-10-12.** The Owner decided that a project whose releases other repositories pin may declare a release cadence, and that a project which declares none releases on every merge. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)

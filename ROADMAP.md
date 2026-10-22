@@ -44,7 +44,7 @@ The installation test's `installer-needed` entries are the extraction's requirem
 **Tools that write the fixed formats.**
 - The spec-id allocator, the spec guard and the coverage tool, reading and writing exactly the formats of `K-LAYOUT-2` to `K-LAYOUT-4`.
 - The brief guard, run against Kanon's template (`K-LAYOUT-11` to `K-LAYOUT-13`), including measurement items (`K-PROJ-16`).
-- The worktree script, including branch naming (`K-WS-8`).
+- The worktree script.
 - The release configuration and the PR-title validator, with the fixed types of `K-SHIP-4`. The validator ships as the [`pr-title`](actions/pr-title/README.md) action, and the release mechanism as the reusable [release workflow](docs/release.md).
 
 **Delivery and data.**
