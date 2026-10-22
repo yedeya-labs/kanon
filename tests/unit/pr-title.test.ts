@@ -106,6 +106,8 @@ describe('K-WS-8 the branch-name check', () => {
     ['release-please--branches--main--components--kanon', 'release-please'],
     ['release-please--branches--main', 'release-please'],
     ['lead/split-42', "the Lead's split lane"],
+    ['kanon/adopt', "Kanon's adopt skill"],
+    ['kanon/doctor', "Kanon's doctor skill"],
     ['kanon/upgrade-v0.42.0', "Kanon's upgrade skill"],
     ['kanon/pins-candidate-v0.42.0', "Kanon's candidate pin pull request"],
     ['kanon/metrics-page', "Kanon's metrics page"],
@@ -119,6 +121,9 @@ describe('K-WS-8 the branch-name check', () => {
     'release-please-branches--main',
     'lead/split-x',
     'lead/split-42-more',
+    'kanon/adopt-2',
+    'kanon/adopter',
+    'kanon/doctor-fix',
     'kanon/upgrade',
     'kanon/pins',
     'kanon/metrics-page-2',
@@ -132,6 +137,8 @@ describe('K-WS-8 the branch-name check', () => {
       'Dependabot',
       'release-please',
       "the Lead's split lane",
+      "Kanon's adopt skill",
+      "Kanon's doctor skill",
       "Kanon's upgrade skill",
       "Kanon's candidate pin pull request",
       "Kanon's metrics page",
@@ -144,6 +151,16 @@ describe('K-WS-8 the exempt tool branches are the ones the tools make', () => {
 
   it("exempts the branch the Lead's split lane pushes to", () => {
     expect(checkBranch(splitBranch(42))).toEqual({ ok: true, tool: "the Lead's split lane" });
+  });
+
+  it('exempts the branch the adopt skill creates', () => {
+    expect(read('skills/adopt/SKILL.md')).toContain('create `kanon/adopt` from the default branch');
+    expect(checkBranch('kanon/adopt').ok).toBe(true);
+  });
+
+  it('exempts the branch the doctor skill creates', () => {
+    expect(read('skills/doctor/SKILL.md')).toContain('create `kanon/doctor` first');
+    expect(checkBranch('kanon/doctor').ok).toBe(true);
   });
 
   it("exempts the branch the upgrade skill tells the person to create", () => {

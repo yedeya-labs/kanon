@@ -15,6 +15,8 @@ It also fails a pull request whose head branch isn't named `<type>/<number>-<slu
 | `dependabot/…` | Dependabot |
 | `release-please--branches--…` | release-please |
 | `lead/split-<number>` | the Lead's split lane |
+| `kanon/adopt` | Kanon's adopt skill |
+| `kanon/doctor` | Kanon's doctor skill |
 | `kanon/upgrade-…` | Kanon's upgrade skill |
 | `kanon/pins-…` | Kanon's release workflow, for a candidate's pin pull request |
 | `kanon/metrics-page` | Kanon's metrics page |

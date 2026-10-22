@@ -45,6 +45,8 @@ export const TOOL_BRANCHES = /** @type {const} */ ([
   { pattern: /^dependabot\//, tool: 'Dependabot' },
   { pattern: /^release-please--branches--/, tool: 'release-please' },
   { pattern: /^lead\/split-[1-9][0-9]*$/, tool: "the Lead's split lane" },
+  { pattern: /^kanon\/adopt$/, tool: "Kanon's adopt skill" },
+  { pattern: /^kanon\/doctor$/, tool: "Kanon's doctor skill" },
   { pattern: /^kanon\/upgrade-./, tool: "Kanon's upgrade skill" },
   { pattern: /^kanon\/pins-./, tool: "Kanon's candidate pin pull request" },
   { pattern: /^kanon\/metrics-page$/, tool: "Kanon's metrics page" },

@@ -126,7 +126,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 ## `K-WS-8`
 
-- **2026-10-22.** No longer prose only for a branch made by hand: the Owner decided that a check beside the PR-title check holds every pull request's branch to the name, the Author App's and a person's included, and the `pr-title` action now fails a pull request whose head branch isn't so named. A branch a tool names itself is exempt, by the action's fixed list. The implement lane and the Lead's brief lane are told the name. [#1236](https://github.com/yedeya-labs/kanon/issues/1236), [#1243](https://github.com/yedeya-labs/kanon/issues/1243)
+- **2026-10-22.** No longer prose only for a branch made by hand: the Owner decided that a check beside the PR-title check holds every pull request's branch to the name, the Author App's and a person's included, and the `pr-title` action now fails a pull request whose head branch isn't so named. A branch a tool names itself is exempt, by the action's fixed list: Dependabot's, the release tool's, the Lead's split lane's, and Kanon's own adopt, doctor, upgrade, pin and metrics-page branches. The implement lane, the triage lane and the Lead's brief lane are told the name. [#1236](https://github.com/yedeya-labs/kanon/issues/1236), [#1243](https://github.com/yedeya-labs/kanon/issues/1243)
 
 ## `K-SHIP-7`
 

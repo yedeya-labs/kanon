@@ -145,12 +145,21 @@ describe('the prompts\' command, run on a branch that merged its base in (kanon#
 const leadLane = parse(readFileSync('.github/workflows/agent-lead.yml', 'utf8')) as {
   jobs: { brief: { with: { prompt: string } } };
 };
+const triageLane = parse(readFileSync('.github/workflows/agent-triage.yml', 'utf8')) as {
+  jobs: { 'triage-fix': { with: { prompt: string } } };
+};
 
 describe('K-WS-8 the lanes that make their own branch name it as the check reads it', () => {
   it('the implement lane names the shape, and its example passes the check', () => {
     const flat = lane.jobs.implement.with.prompt.replace(/\s+/g, ' ');
     expect(flat).toContain('NAME YOUR BRANCH `<type>/<issue>-<slug>` (`K-WS-8`), such as `fix/42-empty-cart-total`');
     expect(checkBranch('fix/42-empty-cart-total')).toEqual({ ok: true });
+  });
+
+  it('the triage lane, which opens a pull request for the bug it reproduces, names the shape', () => {
+    const flat = triageLane.jobs['triage-fix'].with.prompt.replace(/\s+/g, ' ');
+    expect(flat).toContain('NAME YOUR BRANCH `<type>/<issue>-<slug>` (`K-WS-8`), such as `fix/42-empty-cart-total`');
+    expect(flat.indexOf('NAME YOUR BRANCH')).toBeGreaterThan(flat.indexOf('then open a PR (fix + test)'));
   });
 
   it("the Lead's brief lane names its branch for the tracking issue, of a type the check accepts", () => {

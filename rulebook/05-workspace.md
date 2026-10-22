@@ -50,7 +50,7 @@ This chapter governs where work happens: the checkout, the database and the port
 
 **Why.** Tools find a branch's issue by its name: the worktree script resolves `--issue <n>` to its branch, and a branch whose issue can't be read from its name can't be matched to its merged PRs, which is how the script tells a leftover branch from a live one (`K-WS-6`). A branch named without a convention is also one a later session can't find.
 
-**Enforced by.** The worktree script, which creates the name, and Kanon's `pr-title` action ([`actions/pr-title`](../actions/pr-title/README.md)), which fails a pull request whose head branch isn't so named, whoever made it. A branch a tool names itself (Dependabot's, the release tool's, the Lead's split lane's, and Kanon's own upgrade, pin and metrics-page branches) is exempt, by the action's fixed list.
+**Enforced by.** The worktree script, which creates the name, and Kanon's `pr-title` action ([`actions/pr-title`](../actions/pr-title/README.md)), which fails a pull request whose head branch isn't so named, whoever made it. A branch a tool names itself (Dependabot's, the release tool's, the Lead's split lane's, and Kanon's own adopt, doctor, upgrade, pin and metrics-page branches) is exempt, by the action's fixed list.
 
 **Class.** framework
 
