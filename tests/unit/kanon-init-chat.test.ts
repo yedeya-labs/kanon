@@ -169,6 +169,10 @@ describe('kanon init and the chat channel (plan 0011 N11)', () => {
       expect(jobs['deploy-1']!.secrets, chat).toEqual({ KANON_CHAT_DEPLOY: LINE, ...HOOK_SECRET });
       expect(jobs['deploy-2']!.secrets, chat).toEqual({ KANON_CHAT_DEPLOY: LINE, ...HOOK_SECRET });
     }
+    // The topic doc says so, and nowhere that the mapping is the adopter's to add (kanon#1266).
+    const doc = read(ROOT, 'docs/notifications.md');
+    expect(doc).toContain('`kanon init` writes that mapping into every `deploy-<position>` job whatever its chat answer');
+    expect(doc).not.toMatch(/doesn't map `KANON_CHAT_DEPLOY`|add the mapping by hand/);
   });
 
   it('leaves secret.chat-deploy only with a declared deploy environment and an answer that writes a hook', async () => {

@@ -168,7 +168,7 @@ GITHUB_TOKEN=$(gh auth token) GITHUB_REPOSITORY=<owner>/<repo> \
   STAGE=<your environment> VERSION=v0.1.6 OUTCOME=ok DRY_RUN=1 node scripts/announce-deploy.mjs
 ```
 
-**`--advance` and `ANNOUNCED_<STAGE>_VERSION` are gone.** Step N9 first kept the announced version in that repository variable and moved it with `--advance` after a post; the workflow token can't write a repository variable, so the Owner chose the deployments as the record instead (2026-10-15). Delete the variable if you created one. **`SLACK_RELEASE_WEBHOOK` is gone too.** Store the webhook in `KANON_CHAT_DEPLOY` instead, for the `notify` job. `kanon init` doesn't map `KANON_CHAT_DEPLOY` into the deploy caller yet: add the mapping by hand until it does.
+**`--advance` and `ANNOUNCED_<STAGE>_VERSION` are gone.** Step N9 first kept the announced version in that repository variable and moved it with `--advance` after a post; the workflow token can't write a repository variable, so the Owner chose the deployments as the record instead (2026-10-15). Delete the variable if you created one. **`SLACK_RELEASE_WEBHOOK` is gone too.** Store the webhook in `KANON_CHAT_DEPLOY` instead, for the `notify` job, which your deploy caller maps as above.
 
 ## The release announcement
 
