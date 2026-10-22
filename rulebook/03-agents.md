@@ -68,7 +68,7 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Why.** An App or a permission nobody can explain is indistinguishable from drift or compromise. A register without reasons tempts the next reader to "tidy" a grant that was load-bearing, or to widen one that was deliberately withheld.
 
-**Enforced by.** Prose only. App scopes live in the installation, not in any file, so the register is a claim; `K-AGENT-5` turns the parts of it the code depends on into run-time checks, holding each App to Kanon's shared grant plus the extra permissions its adoption record declares.
+**Enforced by.** `lane-check` fails a register row that records a permission broader than its App's grant (`K-ADOPT-8`), with what the adoption record declares for that App, and that carries no numbered footnote, and a footnote marker in the table that no footnote defines (`registerFootnotes` in [`scripts/app-register.mjs`](../scripts/app-register.mjs)); a row of an App that is none of Kanon's three has no shared grant to compare, so only its markers are read. [`tests/unit/register-footnote-pointers.test.ts`](../tests/unit/register-footnote-pointers.test.ts) fails a pointer to a register footnote, anywhere in Kanon's tree, that Kanon's register doesn't define. Whether a footnote gives a true reason is prose only. App scopes live in the installation, not in any file, so the register is a claim; `K-AGENT-5` turns the parts of it the code depends on into run-time checks, holding each App to Kanon's shared grant plus the extra permissions its adoption record declares.
 
 **Class.** framework
 

@@ -48,6 +48,33 @@ laneCheck(() => {
     it('refuses a persona that is another role\'s name', () =>
       red((t) => withPersonas(t, 'Reviewer'), "the Implementer row's persona `Reviewer` is another role's name"));
 
+    // Issue #1250: a permission a row records beyond its App's grant (K-ADOPT-8) carries a numbered
+    // footnote, unless the adoption record declares it; every marker resolves (K-AGENT-3, K-LAYOUT-6).
+    // The fixture's Lead row, an Author role, holds the Author's grant; Actions write is beyond it.
+    const widenLead = (t: Tree, cell: string, notes = '') => t.write(REG, `${t.read(REG)
+      .replace('| Role | App slug | Contents | Issues | Pull requests | Workflows |', '| Role | App slug | Contents | Issues | Pull requests | Workflows | Actions |')
+      .replace(/^\|---\|---\|---\|---\|---\|---\|$/m, '|---|---|---|---|---|---|---|')
+      .replace(/^(\| Implementer \|.*\|)$/m, '$1 Read |')
+      .replace(/^(\| Lead \|.*\|)$/m, `$1 ${cell} |`).trimEnd()}\n${notes}`);
+    it('passes a widened permission that carries a footnote', () => {
+      const t = adopter();
+      widenLead(t, 'Read & write [^1]', '\n[^1]: **Actions write, for the Lead.** Why, and what bounds it.\n');
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
+    it('passes a widened permission the adoption record declares', () => {
+      const t = adopter();
+      widenLead(t, 'Read & write');
+      t.write('docs/qa/adoption.md', '# Adoption record\n\n## Choices\n\n- **Extra App permission:** `author` `actions: write` (the Lead re-runs a lane)\n');
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).not.toMatch(/broader than the Author App's grant/);
+    });
+    it('refuses a widened permission with no footnote, by row and permission', () =>
+      red((t) => widenLead(t, 'Read & write'), /agent-identities\.md:\d+: the Lead row's Actions: Read & write is broader than the Author App's grant \(Actions: Read; K-ADOPT-8\) and carries no numbered footnote/));
+    it('refuses a footnote marker that no footnote defines', () =>
+      red((t) => widenLead(t, 'Read & write [^3]'), /the Lead row cites the footnote \[\^3\], which no `\[\^3\]:` below the table defines/));
+
     // Issue #990: an App that isn't an agent has a row under the `Other App` role (K-AGENT-3).
     const withOthers = (t: Tree, ...slugs: string[]) =>
       t.write(REG, `${t.read(REG).trimEnd()}\n${slugs.map((s) => `| Other App | \`${s}\` | Read | Read & write | No access | No access |`).join('\n')}\n`);

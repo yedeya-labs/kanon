@@ -59,6 +59,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { PERMISSION_COLUMNS } from '../cli/app-register.mjs';
+import { withExtras } from './lib/app-extras.mjs';
 import { fencedLines } from './spec-lib.mjs';
 
 /** The App register's path (`K-LAYOUT-6`). */
@@ -83,15 +85,23 @@ export const OTHER_APP = 'Other App';
  * A role in no App (Intake) is absent.
  * @type {Record<string, string>}
  */
+const PERMISSIONS = JSON.parse(readFileSync(new URL('../rulebook/agent-permissions.json', import.meta.url), 'utf8'));
+
 export const APP_OF = (() => {
-  const json = JSON.parse(readFileSync(new URL('../rulebook/agent-permissions.json', import.meta.url), 'utf8'));
   /** @type {Record<string, string>} */
   const out = {};
-  for (const app of Object.values(json.apps)) {
-    for (const key of app.roles) out[json.roles[key]?.role ?? key[0].toUpperCase() + key.slice(1)] = app.app;
+  for (const app of Object.values(PERMISSIONS.apps)) {
+    for (const key of app.roles) out[PERMISSIONS.roles[key]?.role ?? key[0].toUpperCase() + key.slice(1)] = app.app;
   }
   return out;
 })();
+
+/**
+ * Each of Kanon's Apps' shared grant (`K-ADOPT-8`), from the same `apps` block: App key (`author`,
+ * `judge`, `releaser`) → permission → `read` | `write`.
+ * @type {Record<string, Record<string, string>>}
+ */
+export const APP_GRANTS = Object.fromEntries(Object.entries(PERMISSIONS.apps).map(([key, app]) => [key, { ...app.permissions }]));
 
 /** A slug as GitHub derives it from an App's name. */
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -211,6 +221,94 @@ export function appShape(register) {
     if (slugs.length < 2) return [];
     return [`the ${app}'s roles name ${slugs.length} App slugs (${rows.map(([r, s]) => `${r} \`${s}\``).join(', ')}): one App, one slug, on every one of its roles' rows (plan 0005 §3.4). Since L4 the ${app} is one GitHub App; run \`kanon apps --apps ${app.toLowerCase()}\` and write its slug on each row.`];
   });
+}
+
+// ── FOOTNOTES (`K-AGENT-3`, `K-LAYOUT-6`; kanon#1250) ─────────────────────────────────────
+//
+// A permission a row records beyond its App's grant needs its reason beside it: a numbered
+// footnote below the table, marked `[^N]` in the cell (or on the `Other` cell's entry). The grant
+// is Kanon's shared one (`K-ADOPT-8`, which records its own broadening), plus the extra App
+// permissions this repository's adoption record declares (`K-LAYOUT-10`), whose bullets are the
+// record `K-AGENT-3` asks for. `kanon apps` writes exactly that grant, so a register it wrote
+// passes; only a hand-written widening needs a footnote. Rows outside Kanon's three Apps (Intake,
+// `Other App`) have no shared grant to be broader than, so only their markers are read. A marker
+// that no `[^N]:` below the table defines is refused on any row: it points at nothing.
+//
+// Read only by lane-check, never by a lane: a missing reason is a fault of the record, not of
+// who is who, so it must not stop a lane that maps a role to a login.
+
+/** `[^N]` in a cell, never the `[^N]:` that defines one. */
+const MARKER = /\[\^([^\]\s]+)\](?!:)/g;
+
+/** A register cell's level, after its markers and bold: 0, 1 or 2, or undefined when it says none of them. */
+const levelOf = (/** @type {string} */ cell) => {
+  const bare = cell.replace(MARKER, '').replace(/\*\*|__/g, '').trim().toLowerCase();
+  return /** @type {Record<string, number>} */ ({ 'no access': 0, none: 0, read: 1, 'read & write': 2, 'read and write': 2, write: 2 })[bare];
+};
+const LEVEL_OF_GRANT = /** @type {Record<string, number>} */ ({ read: 1, write: 2 });
+const LABEL = ['No access', 'Read', 'Read & write'];
+
+/**
+ * What a register says about footnotes that it must not: a permission beyond its App's grant with
+ * no footnote, and a marker no footnote defines. One message per finding, each naming its line.
+ * Throws on every malformation `parseAppRegister` throws on.
+ *
+ * @param {string} text the register's markdown
+ * @param {Record<string, Record<string, string>>} [extras] what the adoption record declares, App key → permission → level (`readAppExtras`)
+ * @param {string} [source] its path, for messages
+ * @returns {string[]}
+ */
+export function registerFootnotes(text, extras = {}, source = APP_REGISTER) {
+  readRegister(text, source);
+  const lines = text.split('\n');
+  const fenced = fencedLines(lines);
+  const where = (/** @type {number} */ i) => `${source}:${i + 1}`;
+  const start = lines.findIndex((l, i) => {
+    if (fenced.has(i) || !/^\s*\|/.test(l)) return false;
+    const c = cells(l);
+    return c.length >= 2 && unbold(c[0]) === 'Role' && unbold(c[1]) === 'App slug';
+  });
+  const defined = new Set(lines.flatMap((l, i) => {
+    const m = fenced.has(i) ? null : /^\[\^([^\]\s]+)\]:/.exec(l);
+    return m ? [m[1]] : [];
+  }));
+  const byName = new Map(PERMISSION_COLUMNS.map(([key, name]) => [name.toLowerCase(), key]));
+  const keyOf = (/** @type {string} */ name) => byName.get(name.trim().toLowerCase()) ?? name.trim().toLowerCase().replace(/\s+/g, '_');
+  const header = cells(lines[start]).map(unbold);
+  /** @type {string[]} */
+  const out = [];
+  for (let i = start + 2; i < lines.length && /^\s*\|/.test(lines[i]); i += 1) {
+    const row = cells(lines[i]);
+    const role = unbold(row[0] ?? '');
+    for (const cell of row) {
+      for (const [, n] of cell.matchAll(MARKER)) {
+        if (!defined.has(n)) out.push(`${where(i)}: the ${role} row cites the footnote [^${n}], which no \`[^${n}]:\` below the table defines (K-LAYOUT-6).`);
+      }
+    }
+    const app = APP_OF[role]?.toLowerCase();
+    const grant = app && APP_GRANTS[app] ? withExtras(APP_GRANTS[app], extras[app]) : null;
+    if (!grant) continue;
+    /** @type {Array<[string, string, string]>} name, permission key, the cell or entry */
+    const claims = [];
+    header.forEach((h, c) => {
+      if (c < 2 || c >= row.length) return;
+      if (h === 'Other') {
+        for (const entry of (row[c] ?? '').split(/,\s*(?=[^,:]+:)/)) {
+          const m = /^([^:]+):\s*(.+)$/.exec(entry.trim());
+          if (m) claims.push([m[1].trim(), keyOf(m[1]), m[2]]);
+        }
+      } else if (byName.has(h.toLowerCase())) claims.push([h, keyOf(h), row[c] ?? '']);
+    });
+    for (const [name, key, cell] of claims) {
+      const level = levelOf(cell);
+      const allowed = LEVEL_OF_GRANT[grant[key] ?? ''] ?? 0;
+      if (level === undefined || level <= allowed) continue;
+      if ([...cell.matchAll(MARKER)].length) continue;
+      const declared = extras[app]?.[key] ? ', with what the adoption record declares for it' : '';
+      out.push(`${where(i)}: the ${role} row's ${name}: ${LABEL[level]} is broader than the ${APP_OF[role]} App's grant (${name}: ${LABEL[allowed]}; K-ADOPT-8${declared}) and carries no numbered footnote. Mark it [^N] and say below the table why it was granted and what bounds its use (K-AGENT-3, K-LAYOUT-6), or declare it as an extra App permission in docs/qa/adoption.md for this repository's App (K-LAYOUT-10).`);
+    }
+  }
+  return out;
 }
 
 const cache = new Map();
