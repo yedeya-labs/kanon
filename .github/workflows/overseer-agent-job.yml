@@ -267,9 +267,11 @@ jobs:
             A finding that fits no subject goes upstream, unfiled. When in doubt about who
             can act, say so in the body and choose the subject you can defend.
             Each finding's body leads with the evidence and the CONSTRAINT the change must
-            satisfy (K-SELF-10). Put any concrete edit under a
+            satisfy (K-SELF-10), under a `## What must be true` heading. Put any concrete edit under a
             `## Possible approach — UNVERIFIED, not acceptance criteria` heading, with a line
-            on what must be checked first. Never head it "Suggested fix". DEDUP first: search
+            on what must be checked first. Never head it "Suggested fix". The step holds,
+            unfiled, a finding whose body lacks that section or puts a remedy under any
+            other heading (K-WORK-14). DEDUP first: search
             open issues, and add no finding already tracked.
 
             WHAT TO AUDIT:

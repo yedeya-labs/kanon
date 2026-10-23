@@ -1107,11 +1107,17 @@ describe("the Reviewer's plan command is one wrapper around Kanon's script (kano
         return { code: err.status, out: err.stdout };
       }
     };
-    const planned = run('--label', 'follow-up', '--label', 'agent:reviewer', '--label', 'sev:low', '--subject', 'product');
+    // The body the Reviewer drafts where it may write, which `plan` checks (kanon#1247).
+    const body = join(dir, 'qa-review-follow-up.md');
+    writeFileSync(body, '## What must be true\n\nThe constraint.\n');
+    const planned = run('--label', 'follow-up', '--label', 'agent:reviewer', '--label', 'sev:low', '--subject', 'product', '--body', body);
     expect(planned.code).toBe(0);
     expect(JSON.parse(planned.out)).toHaveProperty('ghArgs');
     // A follow-up with no severity is refused, as the skill says (exit 1, `{refused}`).
-    expect(run('--label', 'follow-up', '--label', 'agent:reviewer').code).toBe(1);
+    expect(run('--label', 'follow-up', '--label', 'agent:reviewer', '--body', body).code).toBe(1);
+    // So is a body with a remedy under a heading of its own (`K-WORK-14`).
+    writeFileSync(body, '## What must be true\n\nThe constraint.\n\n## Suggested fix\n\nAn edit.\n');
+    expect(run('--label', 'follow-up', '--label', 'agent:reviewer', '--label', 'sev:low', '--body', body).code).toBe(1);
     // `plan` is fixed: a word that would pick the backstop's mode is a flag plan does not take.
     expect(run('decide').code).toBe(2);
   });

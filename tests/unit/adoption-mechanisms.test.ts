@@ -231,6 +231,8 @@ export const DETECTORS: Array<[string, Detector]> = [
   ["The Explorer's telemetry mode", calls('agent-explore-telemetry.yml')],
   ['The issue-opened automation', calls('agent-issue-backstop.yml')],
   ['The filing skill', all(file('skills/file-issue/SKILL.md'), shipped(1156))],
+  // The check reaches Kanon only at a release that carries #1349.
+  ["The body check in the filing skill's `plan`", all(file('skills/file-issue/SKILL.md'), test('tests/unit/issue-triage-defaults.test.ts'), shipped(1349))],
   ['The shared milestone classifier', all(runs('backlog-feed.mjs'), runs('gate-candidate-exit.mjs'))],
   ['The label guard', runs('label-guard.mjs')],
   ['The re-dispatch sweep', calls('agent-dispatch-sweep.yml')],

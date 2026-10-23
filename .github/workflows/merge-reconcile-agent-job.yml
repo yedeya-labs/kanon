@@ -247,7 +247,8 @@ jobs:
                `gh issue create`. The excerpt was written for the Reviewer on an open
                PR: take its bar, labels, severity, subject line and body from it, and
                add no milestone or gate label of your own.
-               Body: the finding (what / why / file:line)
+               Body: the finding (what / why / file:line) under a `## What must be
+               true` heading, any remedy under the one heading K-WORK-14 fixes,
                + "Surfaced by PR #${{ env.PR_NUMBER }} review; merged without the fold-in —
                filed by merge-reconciliation." Title it as the WORK, not the symptom.
             4. If everything actionable was applied or is already tracked, do NOTHING —
