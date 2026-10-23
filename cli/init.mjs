@@ -85,7 +85,9 @@ import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL, sends } fro
 import { HOSTED_INGEST_URL } from '../scripts/lib/telemetry-token.mjs';
 import { OTHER_APP } from '../scripts/app-register.mjs';
 import { hookKind, HOOK_PATH as NOTIFY_HOOK_PATH } from '../actions/notify/notify.mjs';
-import { ADOPTION_RECORD as DEPLOY_RECORD, CHAIN_LABELS, DeclarationError, DEPLOY_HEADING, LABELS as REFERENCE_LABELS, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
+import { ADOPTION_RECORD as DEPLOY_RECORD, CHAIN_LABELS, CHOICES_HEADING, DeclarationError, DEPLOY_HEADING, LABELS as REFERENCE_LABELS, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
+import { LABEL as OVERSEER_LABEL, OVERSEER_CALLER, parseOverseerInstall } from '../scripts/lib/overseer-install.mjs';
+import { fencedLines } from '../scripts/spec-lib.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
 /** @typedef {{ status: number | null, stdout: string, stderr: string }} GhResult */
@@ -1853,6 +1855,59 @@ export const telemetryRegisters = (published) => (published ? "registers on the 
 /** @param {string} who */
 const person = (who) => (/^[A-Za-z0-9-]+$/.test(who) ? `\`@${who}\`` : who);
 
+/** The record's `## Data` heading, which comes after `## Choices` (`K-LAYOUT-10`). */
+const DATA_HEADING = '## Data';
+
+/** The Overseer's lane, and the bullet its caller needs in the record (`K-LAYOUT-10`), which lane-check holds it to. */
+const OVERSEER_LANE = 'agent-overseer';
+export const OVERSEER_BULLET = `- **${OVERSEER_LABEL}:** \`installed\``;
+
+/**
+ * The adoption record the project already has, with the Overseer's bullet added (#1315). `init`
+ * never rewrites a record that exists, but the Overseer's caller it writes needs the record to say
+ * `installed`, or lane-check fails on init's own files. So where the record doesn't say, the
+ * bullet goes at the end of its `## Choices`, or in a `## Choices` of its own before `## Data` and
+ * `## Deploy`, which come after it, or at the end; nothing else of the record changes. Null where
+ * the record says already, its bullet doesn't parse, or the bullet can't be added so that it
+ * parses, such as under `## Choices` written twice: the record is then left as it is.
+ * @param {string} text the record
+ * @returns {string | null}
+ */
+export const withOverseerBullet = (text) => {
+  try {
+    if (parseOverseerInstall(text) !== null) return null;
+  } catch {
+    return null;
+  }
+  const lines = text.split('\n');
+  const fenced = fencedLines(lines);
+  const at = (/** @type {(l: string) => boolean} */ is) => lines.flatMap((l, i) => (!fenced.has(i) && is(l.trimEnd()) ? [i] : []));
+  // Under the first `## Choices`; a record with two is refused by the parse below.
+  const [start] = at((l) => l === CHOICES_HEADING);
+  /** Whether line `i` holds text. @param {number} i */
+  const filled = (i) => Boolean(lines[i]?.trim());
+  if (start === undefined) {
+    const section = [CHOICES_HEADING, '', OVERSEER_BULLET];
+    const [next] = at((l) => l === DATA_HEADING || l === DEPLOY_HEADING);
+    if (next !== undefined) lines.splice(next, 0, ...(filled(next - 1) ? [''] : []), ...section, '');
+    // At the end, after a blank line, before the record's final newline.
+    else lines.splice(lines.at(-1) === '' ? lines.length - 1 : lines.length, 0, ...(text.trim() && !text.endsWith('\n\n') ? [''] : []), ...section);
+  } else {
+    const end = at((l) => /^#{1,2}\s/.test(l)).find((i) => i > start) ?? lines.length;
+    const last = start + 1 + lines.slice(start + 1, end).findLastIndex((l) => l.trim() !== '');
+    // Under the heading of an empty section; after the section's last list item; or after its
+    // prose, past a blank line.
+    if (last === start) lines.splice(start + 1, 0, '', OVERSEER_BULLET, ...(filled(start + 1) || start + 1 === lines.length ? [''] : []));
+    else lines.splice(last + 1, 0, ...(/^(?:[-*+]\s|\s)/.test(lines[last] ?? '') ? [] : ['']), OVERSEER_BULLET);
+  }
+  const out = lines.join('\n');
+  try {
+    return parseOverseerInstall(out) === 'installed' ? out : null;
+  } catch {
+    return null;
+  }
+};
+
 /**
  * The adoption record (`K-LAYOUT-10`), with what `init` knows: the people, the plan and its
  * fallbacks, and the bootstrap line. `## Choices` only when a choice differs from its default.
@@ -1897,7 +1952,7 @@ export const adoptionFile = (s, a, repo, today) => {
   // the review lane. `every pull request` is never written until step G7 builds it.
   if (a.feature && a.feature !== 'custom') choices.push(`- **Feature:** \`${a.feature}\``);
   if (a.reviewTrigger === 'labelled') choices.push('- **Review trigger:** `labelled`');
-  if (a.lanes.includes('agent-overseer')) choices.push('- **Overseer:** `installed`');
+  if (a.lanes.includes(OVERSEER_LANE)) choices.push('- **Overseer:** `installed`');
   if (a.upstreamFindings && a.upstreamFindings !== UPSTREAM_DEFAULT) choices.push(`- **${UPSTREAM_LABEL}:** \`${a.upstreamFindings}\``);
   // The chat channel (plan 0011 §10.2, K-ADOPT-1 step 10), for each answer, none among them; no
   // bullet where no chosen lane posts, which a record without one means ("none yet").
@@ -2291,7 +2346,10 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   const files = new Map();
   // With the caller's path taken by the project's own workflow, nothing of the lane is written (#956).
   const taken = a.deployEnvironments.length > 0 && deployPathTaken(read, req);
-  files.set('docs/qa/adoption.md', adoptionFile(s, taken ? { ...a, deployEnvironments: [] } : a, repo, today));
+  // A record the project has is the project's, but the Overseer's caller needs its bullet (#1315).
+  const record = read(DEPLOY_RECORD);
+  const added = record !== null && a.lanes.includes(OVERSEER_LANE) ? withOverseerBullet(record) : null;
+  files.set(DEPLOY_RECORD, added ?? adoptionFile(s, taken ? { ...a, deployEnvironments: [] } : a, repo, today));
   files.set('docs/qa/stack.md', stackFile(a.gates));
   if (a.delegation) files.set('docs/qa/sign-off-delegation.md', delegationFile(a.delegation, today));
   if (a.database === 'hook') files.set('docs/qa/test-database.md', TEST_DATABASE_HOOK);
@@ -2402,12 +2460,14 @@ export const projectsOwn = (rel, req) => rel.startsWith('docs/') || rel === req.
 /**
  * What `init` does with a file it plans: `same`, already as it writes it; `kept`, a declaration
  * or a hook that exists, the project's; `rewritten`, the deploy lane's caller, which follows the
- * declared list (plan 0010 D6); `differs`, any other workflow that exists and differs; or `new`.
+ * declared list (plan 0010 D6), or the project's record given the Overseer's bullet (#1315);
+ * `differs`, any other workflow that exists and differs; or `new`.
  * @param {string} rel @param {string} text @param {string | null} have @param {Requirements} req
  * @returns {'same' | 'kept' | 'rewritten' | 'differs' | 'new'}
  */
 export const fileStatus = (rel, text, have, req) =>
   have === text ? 'same'
+  : have !== null && rel === DEPLOY_RECORD && withOverseerBullet(have) === text ? 'rewritten'
   : have !== null && projectsOwn(rel, req) ? 'kept'
   : have !== null && rel === DEPLOY_CALLER_PATH && callsDeployLane(have, req) ? 'rewritten'
   : have !== null && legacyChatSwap(have, req) === text ? 'rewritten'
@@ -3040,9 +3100,10 @@ const run = async (deps, opts, req, rep) => {
       rep.files.push({ path: rel, status: 'same', content: text, diff: [] });
       continue;
     }
-    if (have !== null && projectsOwn(rel, req)) {
-      // A declaration, or a hook, is the project's once it exists: init never rewrites one, and
-      // its content is the project's to say, so no difference is printed.
+    if (have !== null && fileStatus(rel, text, have, req) === 'kept') {
+      // A declaration, or a hook, is the project's once it exists: init never rewrites one, the
+      // record's Overseer bullet aside (#1315), and its content is the project's to say, so no
+      // difference is printed.
       out(`${rel}: exists, and is the project's; left unchanged.`);
       rep.files.push({ path: rel, status: 'kept', content: null, diff: [] });
       continue;
@@ -3053,8 +3114,11 @@ const run = async (deps, opts, req, rep) => {
       const diff = lineDiff(have, text).filter((l) => !l.startsWith('  '));
       if (!dry) deps.writeFile(join(root, rel), text);
       wrote = true;
-      // Or a notifying lane's caller at this release that still maps DIGEST_WEBHOOK (plan 0011 decision 17).
-      const from = rel === DEPLOY_CALLER_PATH ? 'from the declared deploy environments' : "mapping its lane's chat secret in place of DIGEST_WEBHOOK, which no lane takes (plan 0011 decision 17)";
+      // Or a notifying lane's caller at this release that still maps DIGEST_WEBHOOK (plan 0011
+      // decision 17), or the project's record, given the bullet the Overseer's caller needs (#1315).
+      const from = rel === DEPLOY_CALLER_PATH ? 'from the declared deploy environments'
+        : rel === ADOPTION_RECORD ? `adding ${OVERSEER_BULLET} under ${CHOICES_HEADING}, which the Overseer's caller needs (K-LAYOUT-10), and nothing else`
+        : "mapping its lane's chat secret in place of DIGEST_WEBHOOK, which no lane takes (plan 0011 decision 17)";
       change('file', rel, `${dry ? 'Would rewrite' : 'Rewrote'} ${rel} ${from}`);
       rep.files.push({ path: rel, status: 'rewritten', content: text, diff });
       out(`${rel}: ${dry ? 'would rewrite it' : 'rewrote it'} ${from}. The difference:`);
@@ -3100,12 +3164,32 @@ const run = async (deps, opts, req, rep) => {
     const text = `Move your workflow to another file name with git mv, and update any reference deploy bullet that names it, then run kanon init again with the same flags: it writes the caller at ${DEPLOY_CALLER_PATH}, the file name its reference deploy names. Or keep your workflow, and answer none.`;
     step({ id: 'deploy.caller-taken', category: 'deploy', subject: DEPLOY_CALLER_PATH, prose: `${message} ${text}`, message, text, commands: [] });
   }
-  if (!pathTaken && record === 'kept' && listed(declaredEnvironments) !== listed(a.deployEnvironments)) {
+  if (!pathTaken && (record === 'kept' || record === 'rewritten') && listed(declaredEnvironments) !== listed(a.deployEnvironments)) {
     const message = `${DEPLOY_RECORD} is the project's, and its ${DEPLOY_HEADING} section declares ${declaredEnvironments.length ? `the deploy environments ${listed(declaredEnvironments)}` : 'no deploy environment'}, not ${listed(a.deployEnvironments)}.`;
     const text = a.deployEnvironments.length
       ? `Write these bullets in the ${DEPLOY_HEADING} section of ${DEPLOY_RECORD} (after ## Data, where the record has no such section), in place of any environment list and reference deploy bullets it has, keeping its CI wait and fallback bullets.`
       : `Remove the environment list from the ${DEPLOY_HEADING} section of ${DEPLOY_RECORD}, and with it the reference deploy bullets that name ${DEPLOY_CALLER_PATH.split('/').pop()}; then delete ${DEPLOY_CALLER_PATH} and the deploy hooks, unless you keep them for later.`;
     step({ id: 'deploy.declare', category: 'deploy', subject: DEPLOY_RECORD, prose: `${message} ${text}`, message, text, commands: a.deployEnvironments.length ? deployBullets(a.deployEnvironments) : [] });
+  }
+  // THE OVERSEER (#1315). A record the project has that doesn't say `installed`, and that init
+  // couldn't give the bullet (it says `not installed`, or the bullet wouldn't parse there), is the
+  // person's to change: lane-check fails on the Overseer's caller until it does.
+  if (record === 'kept' && a.lanes.includes(OVERSEER_LANE)) {
+    /** @type {string | null} */
+    let declared = null;
+    let why = '';
+    try {
+      declared = parseOverseerInstall(read(ADOPTION_RECORD) ?? '');
+    } catch (e) {
+      why = /** @type {Error} */ (e).message;
+    }
+    if (declared !== 'installed') {
+      const message = declared === 'not installed'
+        ? `${ADOPTION_RECORD} is the project's, and says the Overseer is \`not installed\`, but init writes the Overseer's caller, so lane-check fails until the record says \`installed\` (K-LAYOUT-10).`
+        : `${ADOPTION_RECORD} is the project's, and doesn't say the Overseer is installed, and init couldn't add the bullet${why ? `: ${why}` : ` without rewriting the record (it has ${CHOICES_HEADING} more than once)`}. init writes the Overseer's caller, so lane-check fails until the record says \`installed\`.`;
+      const text = `Write this bullet under ${CHOICES_HEADING} in ${ADOPTION_RECORD}, in place of any ${OVERSEER_LABEL}: bullet it has; or, to keep the Overseer out, delete ${OVERSEER_CALLER}.`;
+      step({ id: 'overseer.declare', category: 'overseer', subject: ADOPTION_RECORD, prose: `${message} ${text}`, message, text, commands: [OVERSEER_BULLET] });
+    }
   }
   // A hook still as init's stub fails the lane by name: filling it is the person's.
   const stubs = deployHookPaths(req).filter((p) => files.has(p) && ['new', 'same'].includes(rep.files.find((f) => f.path === p)?.status ?? ''));
