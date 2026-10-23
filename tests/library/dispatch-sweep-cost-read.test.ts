@@ -27,7 +27,7 @@ import { SPAWNS } from '../unit/helpers/spawns.js';
  */
 
 const NOT_READ = /^\*\*Cost rows NOT read( for [^:]+)?: .+; every dispatch charged and no run-cap exhaustion seen\.\*\*( Read: .+\.)?$/;
-const fullEnv = { QA_AWS_AUTH: 'success', QA_DYNAMO_TABLE: 't', QA_AWS_REGION: 'eu-west-1' };
+const fullEnv = { QA_AWS_AUTH: 'success', QA_DYNAMO_TABLE: 't', QA_AWS_REGION: 'eu-west-1', GITHUB_REPOSITORY_ID: '42' };
 
 describe('costReadPrecondition — why the read cannot be tried', () => {
   it('names a failed AWS step by its outcome', () => {
@@ -36,6 +36,9 @@ describe('costReadPrecondition — why the read cannot be tried', () => {
   it('names a missing table or region', () => {
     expect(costReadPrecondition({ ...fullEnv, QA_DYNAMO_TABLE: '' })).toBe('QA_DYNAMO_TABLE is unset');
     expect(costReadPrecondition({ ...fullEnv, QA_AWS_REGION: '' })).toBe('QA_AWS_REGION is unset');
+  });
+  it('names a missing repository id, which keys every store row (kanon#1346)', () => {
+    expect(costReadPrecondition({ ...fullEnv, GITHUB_REPOSITORY_ID: '' })).toBe('GITHUB_REPOSITORY_ID is unset');
   });
   it('is null when everything is present, and when no AWS step ran (a local run)', () => {
     expect(costReadPrecondition(fullEnv)).toBeNull();

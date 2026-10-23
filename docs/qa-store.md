@@ -106,20 +106,41 @@ The code is in [`infra/qa-store/aws/`](../infra/qa-store/aws/):
 | `push-run.sh` | `put`, moved from the reference adopter. It also writes the telemetry rows of the reference adopter's collector, until plan 0002's S7. |
 | `cost-rows.mjs` | The dispatch sweep's cost-row query, moved from the library. The sweep's own read calls it too. |
 | `export.mjs` | `export`. New: before it, the agents queried the store themselves. |
+| `keys.mjs` | The keys every row and raw report carries: the repository's ([Rows by repository](#rows-by-repository)). |
+| `migrate-to-repository-keys.mjs` | Copies a store's rows from before [#1346](https://github.com/yedeya-labs/kanon/issues/1346) under one repository's keys, for the account owner to run ([Upgrade a store written before rows carried the repository](#upgrade-a-store-written-before-rows-carried-the-repository)). |
 | `maintenance/action.yml`, `purge-legacy-coverage.sh` | The store's upkeep, moved from the reference adopter, which [`.github/workflows/qa-store-aws-maintenance.yml`](../.github/workflows/qa-store-aws-maintenance.yml) runs. |
 
 ### What the template creates
 
-- **The table, `kanon-qa-store`:** on demand, keyed `pk` and `sk`, with point-in-time recovery, deletion protection, and `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`.
-- **The bucket, `kanon-qa-store-<account>-<region>`:** versioned, private, encrypted with S3's own key, TLS only, and retained like the table.
-- **The role, `kanon-qa-store`:** trusted for exactly the subjects passed as the `Subjects` parameter, each `<prefix>:ref:refs/heads/<default branch>` ([Who can reach the store](#who-can-reach-the-store)), never a pattern. It may put and get objects, list the bucket, put, update, get and query items, and delete items only in the `COVERAGE` partition, the one a sweep re-derives. Listing the bucket is what makes S3 answer a missing report with 404, which an export leaves out, rather than 403, which fails it.
+- **The table, `kanon-qa-store`:** on demand, keyed `pk` and `sk`, with point-in-time recovery, deletion protection, and `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`. Every `pk` ends in the repository's id ([Rows by repository](#rows-by-repository)).
+- **The bucket, `kanon-qa-store-<account>-<region>`:** versioned, private, encrypted with S3's own key, TLS only, and retained like the table. Each raw report is under `repository/<repository id>/`.
+- **The role, `kanon-qa-store`:** trusted for exactly the subjects passed as the `Subjects` parameter, each `<prefix>:ref:refs/heads/<default branch>` ([Who can reach the store](#who-can-reach-the-store)), never a pattern. It may put and get objects, list the bucket, put, update, get and query items, and delete items only in the `COVERAGE` partitions, the ones a sweep re-derives: `COVERAGE#<repository id>`, and the unkeyed `COVERAGE` of a store written before rows carried the repository. Listing the bucket is what makes S3 answer a missing report with 404, which an export leaves out, rather than 403, which fails it.
 - **GitHub's OIDC provider,** unless the account has one.
 
 **No stage in its lifecycle** (`K-OBS-17`). Nothing in the stack is named for, conditioned on or parameterised by an application stage, and deleting the stack leaves the table and the bucket with their data. `provision.mjs` refuses a template that breaks this, and so does the unit test that parses it.
 
+### Rows by repository
+
+Every row and raw report carries the repository it belongs to ([#1346](https://github.com/yedeya-labs/kanon/issues/1346)), so repositories that share one store read and write only their own: each has its own Explorer baseline, coverage ledger, area rotation, cost rows and export.
+
+| What | Key |
+|---|---|
+| The Explorer's runs, and the gate's skips | `RUN#explorer#<id>` / `<ts>` |
+| The audit's runs | `RUN#audit#<id>` / `<ts>` |
+| Route coverage | `COVERAGE#<id>` / `<route>` |
+| The code-reading ledger | `AREAS#<id>` / `<area>` |
+| Cost rows | `COST#<agent>#<id>` / `<ts>` |
+| Raw reports | `repository/<id>/<kind>/<ts>.json`, and `repository/<id>/telemetry/<agent>/<ts>.json` |
+
+`<id>` is the repository's numeric id, which the runner sets in every job as `GITHUB_REPOSITORY_ID`. The id, not the name, because it survives a rename and a transfer: a renamed repository keeps its history, and a repository deleted and created again under the same name starts clean. A store operation without a repository id fails: a write is refused, never written unkeyed, and a read is degraded. Because the repository is in the key, two repositories that `put` the same kind in the same second write two rows and two raw reports, not one over the other ([#1367](https://github.com/yedeya-labs/kanon/issues/1367)).
+
+**The store still trusts every repository it serves with every row.** One role serves all of them, and its `dynamodb:LeadingKeys` condition can name only key patterns, not "the caller's own": the role's session carries no tag naming the repository, and no policy variable for GitHub's repository id has been verified on it. So the keys keep each repository's lanes to their own rows, and IAM does not: a job a store's role admits can still read or write another repository's keys. Give one store only repositories that may share it.
+
+**Rows written before the keys carried the repository** have none: `RUN#explorer`, `RUN#audit`, `COVERAGE`, `AREAS`, `COST#<agent>`, and reports at `<kind>/<ts>.json`. A reader reads them only while the repository has **no row of its own** in that partition, and says so in its log: the gate, while `RUN#explorer#<id>` holds no sweep (nothing, or only a skip it recorded against an unkeyed baseline); the export and `cost-rows`, while the partition holds no row at all, at any time, so an empty window doesn't count. The repository's first row in a partition ends that partition's fallback, so its lanes keep working, with the history they had, from the pin that brings this until the migration below, and read only their own rows after it.
+
 ### Provision a store
 
-The commands are the account owner's to run. Nothing costs anything until they do.
+The commands are the account owner's to run. Nothing costs anything until they do. A new store holds only rows keyed by repository, so it has nothing to migrate.
 
 From a Kanon checkout at the release you pin, after `npm ci`:
 
@@ -211,9 +232,27 @@ Kanon v0.33.0 told you to keep `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET` as repo
 
 The logs of runs before the move still hold the old values until GitHub's log retention removes them. Delete those runs if that matters to you.
 
-**An existing store** of the same item model works the same way: name its table, bucket, region and role. Its role must trust the default branch's ref subject, `<prefix>:ref:refs/heads/<default branch>` with the prefix GitHub's API reports, and hold the template's grants, `s3:ListBucket` on the bucket included: without it, one run whose raw report is missing fails the whole export.
+**An existing store** of the same item model works the same way: name its table, bucket, region and role. Its role must trust the default branch's ref subject, `<prefix>:ref:refs/heads/<default branch>` with the prefix GitHub's API reports, and hold the template's grants, `s3:ListBucket` on the bucket included: without it, one run whose raw report is missing fails the whole export. Its grants must admit the keys of [Rows by repository](#rows-by-repository): a policy that holds writes to the unkeyed partitions by `dynamodb:LeadingKeys`, or objects to the `<kind>/` prefixes, refuses them, and every write fails its job.
 
 **To delete the store,** delete the stack, then turn off the table's deletion protection and delete the table and the bucket by hand. The stack never takes the data with it.
+
+### Upgrade a store written before rows carried the repository
+
+A store that ran a Kanon release before [#1346](https://github.com/yedeya-labs/kanon/issues/1346) holds its history unkeyed. Nothing breaks when the pin moves: each partition is read unkeyed until the repository writes its first row there ([Rows by repository](#rows-by-repository)). But from then on that partition's history before the move is out of the repository's sight, until you copy it under the repository's keys. These steps are the account owner's, with their own credentials:
+
+1. **Update the stack,** so the role may delete in the keyed `COVERAGE` partitions too: re-run `provision.mjs` as in [Provision a store](#provision-a-store), from a checkout of the release you pin. Until you do, only the maintenance purge of a keyed partition fails, with `AccessDenied`.
+2. **Move the pin** to that release.
+3. **Run the migration as a dry run.** It reads the repository's id from GitHub, scans the table and lists the bucket, and prints, for each unkeyed partition, how many rows it would copy and how many the repository already has, then the raw reports. It writes nothing:
+
+   ```sh
+   node infra/qa-store/aws/migrate-to-repository-keys.mjs --repository <owner>/<repo> --region <region> --bucket <BucketName> --table <TableName> --profile <profile>
+   ```
+
+4. **Run it again with `--apply`.** It copies each unkeyed row under `<partition>#<id>`, only where the repository has no row at that key (`attribute_not_exists`), so a row a lane wrote since the pin moved, which is newer, stays as the lane wrote it. It copies each raw report to `repository/<id>/`, only where none is there. It deletes nothing, so you can run it again at any time, and a second run copies only what the first did not.
+
+The unkeyed rows and reports stay where they were. Once the repository's lanes read their own, they read none of them, and you may delete them by hand. Until you do, a repository added to the store later reads them as its own, in each partition, until it writes its first row there.
+
+**A store that served several repositories before** holds their unkeyed rows mixed, with nothing to tell them apart. Name the one repository that should keep that history, or migrate none and let each start from its own first row.
 
 ### Maintenance
 
@@ -244,10 +283,10 @@ jobs:
 
 <!-- x-release-please-end -->
 
-`purge-legacy-coverage` deletes `COVERAGE` rows whose key carries a prefix an earlier store writer used. A new store has none, so it reports itself clean.
+`purge-legacy-coverage` deletes `COVERAGE` rows whose key carries a prefix an earlier store writer used, in the calling repository's `COVERAGE#<id>` and in the unkeyed `COVERAGE`. A new store has none, so it reports itself clean.
 
 ### Cost and paging
 
-On-demand DynamoDB and S3 at the lanes' volume: a few thousand writes and reads a month, and a few megabytes stored. That is well under $0.05 a month. The template creates nothing that bills while idle: no compute, no network, no customer-managed key and no alarm. Its unit test fails if any other resource type appears.
+On-demand DynamoDB and S3 at the lanes' volume: a few thousand writes and reads a month, and a few megabytes stored. That is well under $0.05 a month. Keying the rows by repository adds a query or two to a read only when the repository's own window is empty or its partition falls back to its unkeyed rows. The migration is a one-off scan and a write per unkeyed row, a few cents at most, and the copies it leaves double the few megabytes stored until you delete the unkeyed rows. The template creates nothing that bills while idle: no compute, no network, no customer-managed key and no alarm. Its unit test fails if any other resource type appears.
 
 **No alarm** (`K-OBS-4`). A failed write turns the store job red, and that red run is the page. A degraded read says so in the run's summary and fails open.

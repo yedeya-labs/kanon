@@ -38,7 +38,8 @@ Conditions:
   CreateOidc: { 'Fn::Equals': [{ Ref: CreateOidcProvider }, 'true'] }
 
 Resources:
-  # The run rows, coverage and ledger (`push-run.sh`'s item model). Retained on delete and on
+  # The run rows, coverage and ledger (`push-run.sh`'s item model, every partition key ending in
+  # `#<repository id>` since kanon#1346, `keys.mjs`). Retained on delete and on
   # replace, and protected from deletion: its lifecycle is independent of the stack (K-OBS-17).
   Table:
     Type: AWS::DynamoDB::Table
@@ -57,7 +58,8 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
-  # The raw reports, one object per run (`<kind>/<ts>.json`). Retained, versioned, private.
+  # The raw reports, one object per run (`repository/<repository id>/<kind>/<ts>.json`, kanon#1346;
+  # `<kind>/<ts>.json` before it). Retained, versioned, private.
   # CloudFormation never empties a retained bucket, so its objects survive the stack too.
   Bucket:
     Type: AWS::S3::Bucket
@@ -157,15 +159,19 @@ Resources:
                 Action: [dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:GetItem, dynamodb:Query]
                 Resource: { 'Fn::GetAtt': [Table, Arn] }
               # Store hygiene (the maintenance workflow) needs DeleteItem, held to the COVERAGE
-              # partition, the one that is re-derivable: `push-run.sh` rewrites every
-              # COVERAGE/<route> row from each sweep's report. `RUN#*` and `AREAS` are not
-              # re-derivable, so no job can delete them.
+              # partitions, the ones that are re-derivable: `push-run.sh` rewrites every
+              # COVERAGE#<repository id>/<route> row from each sweep's report. `RUN#*`, `AREAS*`
+              # and `COST#*` are not re-derivable, so no job can delete them. `COVERAGE` is the
+              # unkeyed partition written before kanon#1346, `COVERAGE#*` a repository's own
+              # (`keys.mjs`). The wildcard admits every repository's, not only the caller's: one
+              # role serves every repository it trusts, and no policy variable that names the
+              # caller's repository id has been verified on it (`docs/qa-store.md`).
               - Effect: Allow
                 Action: dynamodb:DeleteItem
                 Resource: { 'Fn::GetAtt': [Table, Arn] }
                 Condition:
-                  ForAllValues:StringEquals:
-                    dynamodb:LeadingKeys: [COVERAGE]
+                  ForAllValues:StringLike:
+                    dynamodb:LeadingKeys: [COVERAGE, 'COVERAGE#*']
 
 Outputs:
   RoleArn:

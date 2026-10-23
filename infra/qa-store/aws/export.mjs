@@ -6,13 +6,20 @@
 // table and read the bucket themselves, from their prompts, with the store's credentials in the
 // agent's job. The export replaces that: a store job reads the same partitions with the same
 // queries the prompts gave (`pk = :p`), and the agent reads files (plan 0004 §3.2). The item
-// model is `push-run.sh`'s:
-//   RUN#explorer / <ts>  → runs-explorer.json, newest first, after `FROM`
-//   RUN#audit    / <ts>  → runs-audit.json, newest first, after `FROM`
-//   COVERAGE     / <route> → coverage.json (a ledger: every row)
-//   AREAS        / <area>  → areas.json (a ledger: every row)
-//   <kind>/<ts>.json in the bucket → reports/<kind>/<ts>.json, for each run in the window
+// model is `push-run.sh`'s, every key this repository's own (`<id>`, kanon#1346, `keys.mjs`):
+//   RUN#explorer#<id> / <ts>  → runs-explorer.json, newest first, after `FROM`
+//   RUN#audit#<id>    / <ts>  → runs-audit.json, newest first, after `FROM`
+//   COVERAGE#<id>     / <route> → coverage.json (a ledger: every row)
+//   AREAS#<id>        / <area>  → areas.json (a ledger: every row)
+//   repository/<id>/<kind>/<ts>.json in the bucket → reports/<kind>/<ts>.json, for each run in the window
 // The audit's export is `areas.json` alone; the Overseer's is all of it.
+//
+// A PARTITION THIS REPOSITORY HAS NEVER WRITTEN IS READ UNKEYED. A store written before kanon#1346
+// holds `RUN#explorer`, `COVERAGE` and the rest with no repository, and the raw reports at
+// `<kind>/<ts>.json`. While this repository's own partition holds no row at all, the export reads
+// the unkeyed one, and those rows' reports at their unkeyed keys, as it did before, and says so
+// with a notice. Its first row in that partition ends the fallback; the Owner's migration copies
+// the unkeyed history under its key first, so the export loses nothing.
 //
 // A ROW IS ITS ATTRIBUTES, UNMARSHALLED, AND ABSENT STAYS ABSENT. `S` is a string, `N` a number
 // and `BOOL` a boolean; the sort key is renamed for what it is (`ts`, `route`, `area`) and `pk`
@@ -31,6 +38,7 @@ import { join } from 'node:path';
 
 import { EXPORT_FILES, EXPORT_REPORTS } from '../../../actions/qa-store/qa-store.mjs';
 import { isCliEntry } from '../../../scripts/lib/cli-entry.mjs';
+import { keyed, reportKey, repositoryId } from './keys.mjs';
 
 /**
  * A DynamoDB attribute value as plain JSON.
@@ -66,7 +74,7 @@ export function toRow(item, keyName) {
   return row;
 }
 
-/** What each partition becomes, per export kind. */
+/** What each partition becomes, per export kind. `pk` is the unkeyed name; a repository's is `keyed(pk, id)`. */
 export const PARTITIONS = {
   'runs-explorer.json': { pk: 'RUN#explorer', key: 'ts', windowed: true, reports: 'explorer' },
   'runs-audit.json': { pk: 'RUN#audit', key: 'ts', windowed: true, reports: 'audit' },
@@ -77,17 +85,19 @@ export const PARTITIONS = {
 export const KINDS = /** @type {Record<string, Array<keyof typeof PARTITIONS>>} */ (EXPORT_FILES);
 
 /**
- * The partition's items, newest first for a windowed one. The CLI follows every page.
- * @param {{ table: string, region: string, pk: string, from?: string }} q
+ * The partition's items, newest first for a windowed one. The CLI follows every page, unless
+ * `one` asks only whether the partition holds any row.
+ * @param {{ table: string, region: string, pk: string, from?: string, one?: boolean }} q
  * @returns {Array<Record<string, any>>}
  */
-export function queryPartition({ table, region, pk, from }) {
+export function queryPartition({ table, region, pk, from, one = false }) {
   const values = from ? { ':p': { S: pk }, ':s': { S: from } } : { ':p': { S: pk } };
   const raw = execFileSync('aws', [
     'dynamodb', 'query', '--table-name', table, '--region', region,
     '--key-condition-expression', from ? 'pk = :p AND sk > :s' : 'pk = :p',
     '--expression-attribute-values', JSON.stringify(values),
     ...(from ? ['--no-scan-index-forward'] : []),
+    ...(one ? ['--max-items', '1'] : []),
     '--output', 'json',
   ], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   return JSON.parse(raw).Items ?? [];
@@ -110,10 +120,23 @@ export function copyReport({ bucket, region, key, to }) {
 }
 
 /**
- * Write the export. Returns what it wrote, for the log.
- * @param {{ table: string, bucket: string, region: string, kind: string, from: string, dir: string }} o
+ * This repository's items of a partition, or the unkeyed partition's while it has none of its own.
+ * @param {{ table: string, region: string, pk: string, repository: string, from?: string }} q
+ * @returns {{ items: Array<Record<string, any>>, unkeyed: boolean }}
  */
-export function exportStore({ table, bucket, region, kind, from, dir }) {
+export function readPartition({ table, region, pk, repository, from }) {
+  const own = queryPartition({ table, region, pk: keyed(pk, repository), from });
+  if (own.length) return { items: own, unkeyed: false };
+  // An empty window is not an empty partition: ask whether the repository has any row at all.
+  if (from && queryPartition({ table, region, pk: keyed(pk, repository), one: true }).length) return { items: [], unkeyed: false };
+  return { items: queryPartition({ table, region, pk, from }), unkeyed: true };
+}
+
+/**
+ * Write the export. Returns what it wrote, for the log.
+ * @param {{ table: string, bucket: string, region: string, kind: string, from: string, dir: string, repository: string }} o
+ */
+export function exportStore({ table, bucket, region, kind, from, dir, repository }) {
   const files = KINDS[kind];
   if (!files) throw new Error(`export kind '${kind}' is not one of ${Object.keys(KINDS).join(', ')}`);
   const root = join(dir, 'export');
@@ -122,9 +145,12 @@ export function exportStore({ table, bucket, region, kind, from, dir }) {
   const written = [];
   /** @type {string[]} */
   const missing = [];
+  /** @type {string[]} */
+  const unkeyedRead = [];
   for (const file of files) {
     const p = PARTITIONS[file];
-    const items = queryPartition({ table, region, pk: p.pk, from: p.windowed ? from : undefined });
+    const { items, unkeyed } = readPartition({ table, region, pk: p.pk, repository, from: p.windowed ? from : undefined });
+    if (unkeyed && items.length) unkeyedRead.push(p.pk);
     const rows = items.map((it) => toRow(it, p.key));
     writeFileSync(join(root, file), `${JSON.stringify(rows, null, 2)}\n`);
     written.push(`${file} (${rows.length})`);
@@ -133,20 +159,21 @@ export function exportStore({ table, bucket, region, kind, from, dir }) {
     mkdirSync(at, { recursive: true });
     for (const row of rows) {
       if (row.skipped === true || typeof row.ts !== 'string' || !/^\d{8}T\d{6}Z$/.test(row.ts)) continue;
-      const key = `${p.reports}/${row.ts}.json`;
+      const key = unkeyed ? `${p.reports}/${row.ts}.json` : reportKey(`${p.reports}/${row.ts}.json`, repository);
       if (!copyReport({ bucket, region, key, to: join(at, `${row.ts}.json`) })) missing.push(key);
     }
   }
-  return { written, missing };
+  return { written, missing, unkeyedRead };
 }
 
 if (isCliEntry(import.meta.url)) {
   const env = process.env;
   try {
-    const { written, missing } = exportStore({
+    const { written, missing, unkeyedRead } = exportStore({
       table: env.QA_DYNAMO_TABLE ?? '', bucket: env.QA_S3_BUCKET ?? '', region: env.QA_AWS_REGION ?? '',
-      kind: env.KIND ?? '', from: env.FROM ?? '', dir: env.DIR ?? '.',
+      kind: env.KIND ?? '', from: env.FROM ?? '', dir: env.DIR ?? '.', repository: repositoryId(env),
     });
+    for (const pk of unkeyedRead) console.log(`::notice title=qa-store export::this repository has no ${pk} rows of its own yet, so the export read the unkeyed ${pk}, written before kanon#1346; the Owner's migration moves them under the repository's key`);
     for (const key of missing) console.log(`::notice title=qa-store export::no raw report at ${key}; left out of reports/`);
     console.log(`export: ${written.join(', ')}`);
   } catch (err) {
