@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { count, findingRules, isReviewers, parseArgs, parsePage, renderTable, tally, weekOf } from '../../scripts/finding-counts.mjs';
+import { count, findingRules, isReviewers, parseArgs, parsePage, recordedBaselines, renderBaselines, renderTable, tally, weekOf } from '../../scripts/finding-counts.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { writeStub } from './helpers/stub-bin.js';
 
@@ -180,14 +180,46 @@ const ISSUES = 'repos/o/r/issues?labels=follow-up,agent:reviewer&state=all&since
 /** A next page's URL as GitHub's Link header gives it for the issues listing: absolute, with a cursor. */
 const ISSUES_2 = 'https://api.github.com/repositories/1/issues?labels=follow-up%2Cagent%3Areviewer&state=all&per_page=100&page=2&after=Y3Vyc29y';
 
+/** The `-f`/`-F` fields of a `gh api graphql` call, by name, the query included. */
+const fields = (args: string[]) => {
+  const out: Record<string, string> = {};
+  for (let i = 2; i < args.length; i += 2) {
+    const [k = '', ...v] = (args[i + 1] ?? '').split('=');
+    out[`${args[i] === '-F' ? '#' : ''}${k}`] = v.join('=');
+  }
+  return out;
+};
+
+/** GraphQL's answers over FIXTURE: the pull requests and each one's reviews counted, the issues by label. */
+const gqlFixture = (f: Record<string, string>): unknown => {
+  const query = f.query ?? '';
+  if (query.includes('pullRequests{totalCount}')) return { data: { repository: { pullRequests: { totalCount: FIXTURE.pulls.length } } } };
+  if (query.includes('reviews{totalCount}')) return { data: { repository: { pullRequest: { reviews: { totalCount: (FIXTURE.reviews[Number(f['#number'])] ?? []).length } } } } };
+  if (query.includes('issues(')) {
+    const nodes = FIXTURE.issues.filter((i) => !i.pull_request && i.labels.some((l) => l.name === f.label)).map((i) => ({ labels: { nodes: i.labels } }));
+    return { data: { repository: { issues: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } };
+  }
+  throw new Error(`unexpected query ${query}`);
+};
+
 /**
  * A fake `gh api --include` over FIXTURE, one page of each listing and no next page, recording
- * what it was asked. `answer` may answer a path first, with the page `gh` prints.
+ * what it was asked. `answer` may answer a path first, with the page `gh` prints; `gql` may
+ * answer a `gh api graphql` call first, given its fields.
  */
-const fakeGh = (answer: (path: string, read: number) => string | undefined = () => undefined) => {
+const fakeGh = (
+  answer: (path: string, read: number) => string | undefined = () => undefined,
+  gql: (f: Record<string, string>) => unknown = () => undefined,
+) => {
   const calls: string[] = [];
   const sleeps: number[] = [];
+  const queries: Array<Record<string, string>> = [];
   const gh = (args: string[]): string => {
+    if (args[0] === 'api' && args[1] === 'graphql') {
+      const f = fields(args);
+      queries.push(f);
+      return JSON.stringify(gql(f) ?? gqlFixture(f));
+    }
     if (args[0] !== 'api' || args[1] !== '--include') throw new Error(`unexpected gh ${args.join(' ')}`);
     const path = args[2] ?? '';
     calls.push(path);
@@ -200,7 +232,7 @@ const fakeGh = (answer: (path: string, read: number) => string | undefined = () 
     throw new Error(`unexpected gh ${args.join(' ')}`);
   };
   const sleep = (ms: number) => { sleeps.push(ms); };
-  return { gh, sleep, calls, sleeps };
+  return { gh, sleep, calls, sleeps, queries };
 };
 
 /** A second follow-up in the window, which only a next page of the issues listing holds. */
@@ -208,8 +240,9 @@ const LATER = { number: 30, created_at: '2026-10-17T00:00:00Z', labels: [{ name:
 
 describe('counting a repository\'s window (K-SELF-14)', () => {
   it('counts the Reviewer\'s request-changes reviews and follow-ups in [since, until), and reads no pull request older than the window', () => {
-    const { gh, sleep, calls, sleeps } = fakeGh();
+    const { gh, sleep, calls, sleeps, queries } = fakeGh();
     const r = count({ repo: 'o/r', gh, sleep, since: '2026-10-14', until: '2026-10-21' });
+    expect(queries).toEqual([]);
     expect(r).toMatchObject({ since: '2026-10-14', until: '2026-10-21', reviews: 2, followUpIssues: 1 });
     expect(r.rows).toEqual([
       { rule: 'K-PRIN-4', findings: 2, pullRequests: 2, followUps: 1 },
@@ -294,25 +327,136 @@ describe('where a listing ends, and an empty page (K-SELF-14)', () => {
     expect(sleeps).toEqual([200, 400, 800, 1600]);
   });
 
-  it('takes a first page that is empty on every read as an empty listing, such as a pull request with no reviews', () => {
+  it('takes a first page that is empty on every read as an empty listing only when GraphQL counts it empty too, such as a pull request with no reviews', () => {
     const NONE = 'repos/o/r/pulls/4/reviews?per_page=100&page=1';
-    const { gh, sleep, calls, sleeps } = fakeGh((path) => (path === NONE ? http([]) : undefined));
+    const { gh, sleep, calls, sleeps, queries } = fakeGh(
+      (path) => (path === NONE ? http([]) : undefined),
+      (f) => (f['#number'] === '4' ? { data: { repository: { pullRequest: { reviews: { totalCount: 0 } } } } } : undefined),
+    );
     const r = count({ ...window, gh, sleep });
     expect(calls.filter((c) => c === NONE)).toHaveLength(5);
     expect(sleeps).toEqual([200, 400, 800, 1600]);
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatchObject({ owner: 'o', name: 'r', '#number': '4' });
     expect(r.reviews).toBe(1);
+  });
+
+  it('asks GraphQL only about a first page that stays empty, never about one a read returns', () => {
+    const { gh, sleep, queries } = fakeGh((path, read) => (path === ISSUES && read === 1 ? http([]) : undefined));
+    count({ ...window, gh, sleep });
+    expect(queries).toEqual([]);
+  });
+
+  it('fails, naming the page, when a first page stays empty on every read but GraphQL counts reviews on it (#1323)', () => {
+    const SOME = 'repos/o/r/pulls/4/reviews?per_page=100&page=1';
+    const { gh, sleep } = fakeGh((path) => (path === SOME ? http([]) : undefined));
+    expect(() => count({ ...window, gh, sleep })).toThrow(`${SOME} came back empty on each of 5 reads, but GitHub's GraphQL API counts 1 in that listing`);
+  });
+
+  it('fails when the follow-ups listing stays empty but GraphQL finds an issue with both labels, and not for one with a single label (#1323)', () => {
+    // The incident's listing (#1288): its first page answered `[]` where there were follow-ups.
+    const empty = (path: string) => (path === ISSUES ? http([]) : undefined);
+    const full = fakeGh(empty);
+    expect(() => count({ ...window, gh: full.gh, sleep: full.sleep })).toThrow(`${ISSUES} came back empty on each of 5 reads, but GitHub's GraphQL API counts 2 in that listing`);
+    expect(full.queries.at(-1)).toMatchObject({ label: 'agent:reviewer', since: '2026-10-14T00:00:00Z' });
+    // An issue labelled `agent:reviewer` alone, on a second GraphQL page: GraphQL's label filter
+    // matches any label, the REST listing all of them, so it is no follow-up and the listing is empty.
+    const pagesSeen: Array<string | undefined> = [];
+    const single = fakeGh(empty, (f) => {
+      if (!(f.query ?? '').includes('issues(')) return undefined;
+      pagesSeen.push(f.after);
+      return f.after === 'c1'
+        ? { data: { repository: { issues: { nodes: [{ labels: { nodes: [{ name: 'agent:reviewer' }] } }], pageInfo: { hasNextPage: false, endCursor: null } } } } }
+        : { data: { repository: { issues: { nodes: [], pageInfo: { hasNextPage: true, endCursor: 'c1' } } } } };
+    });
+    expect(count({ ...window, gh: single.gh, sleep: single.sleep }).followUpIssues).toBe(0);
+    expect(pagesSeen).toEqual([undefined, 'c1']);
+  });
+
+  it('fails when GraphQL gives no count for a first page that stays empty, rather than take the listing as empty (#1323)', () => {
+    const PULLS = 'repos/o/r/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1';
+    // An error beside a count that looks whole: the count isn't trusted.
+    const { gh, sleep } = fakeGh(
+      (path) => (path === PULLS ? http([]) : undefined),
+      () => ({ data: { repository: { pullRequests: { totalCount: 0 } } }, errors: [{ message: 'Something went wrong' }] }),
+    );
+    expect(() => count({ ...window, gh, sleep })).toThrow(/GraphQL API answered .*Something went wrong/);
+    const blank = fakeGh((path) => (path === PULLS ? http([]) : undefined), () => ({ data: { repository: {} } }));
+    expect(() => count({ ...window, gh: blank.gh, sleep: blank.sleep })).toThrow(`${PULLS} came back empty on each of 5 reads, and GitHub's GraphQL API gave no count`);
   });
 });
 
 describe('the arguments (K-SELF-14)', () => {
   it('defaults to the seven days before today, and refuses a malformed date, rule id, or an empty window', () => {
-    expect(parseArgs([], '2026-10-21')).toEqual({ since: '2026-10-14', until: '2026-10-21', rules: null, logins: [], json: false });
+    expect(parseArgs([], '2026-10-21')).toEqual({ since: '2026-10-14', until: '2026-10-21', rules: null, logins: [], json: false, baselines: null });
     expect(parseArgs(['--since', '2026-09-30', '--until', '2026-10-21', '--rules', 'K-PRIN-4,K-MERGE-13', '--reviewer', 'a[bot]', '--json'], '2026-10-22'))
-      .toEqual({ since: '2026-09-30', until: '2026-10-21', rules: ['K-PRIN-4', 'K-MERGE-13'], logins: ['a[bot]'], json: true });
+      .toEqual({ since: '2026-09-30', until: '2026-10-21', rules: ['K-PRIN-4', 'K-MERGE-13'], logins: ['a[bot]'], json: true, baselines: null });
     expect(parseArgs(['--since', '2026-10-1'], '2026-10-21')).toHaveProperty('error');
     expect(parseArgs(['--rules', 'PRIN-4'], '2026-10-21')).toHaveProperty('error');
     expect(parseArgs(['--since', '2026-10-21'], '2026-10-21')).toHaveProperty('error');
     expect(parseArgs(['--bogus'], '2026-10-21')).toHaveProperty('error');
+  });
+
+  it('with --baselines, counts the last whole week, Monday to Monday, and takes no window or rules of its own (#1274)', () => {
+    // 2026-10-21 is a Wednesday, so the last whole week is the one that ended on Monday the 19th.
+    expect(parseArgs(['--baselines', 'docs/qa/adoption.md'], '2026-10-21')).toEqual({ since: '2026-10-12', until: '2026-10-19', rules: null, logins: [], json: false, baselines: 'docs/qa/adoption.md' });
+    // On a Monday, the week that ends that day.
+    expect(parseArgs(['--baselines', 'a.md', '--until', '2026-10-19', '--reviewer', 'r[bot]'], '2026-10-23')).toMatchObject({ since: '2026-10-12', until: '2026-10-19', logins: ['r[bot]'] });
+    for (const extra of [['--since', '2026-10-01'], ['--rules', 'K-PRIN-4'], ['--json']]) {
+      expect(parseArgs(['--baselines', 'a.md', ...extra], '2026-10-21'), extra.join(' ')).toHaveProperty('error');
+    }
+    expect(parseArgs(['--baselines'], '2026-10-21')).toHaveProperty('error');
+  });
+});
+
+/** An adoption record whose mechanism table records baselines for two gates, and not for a third. */
+const RECORD = [
+  '# Adoption record',
+  '',
+  '## Mechanisms',
+  '',
+  '| Mechanism | Rules | Status |',
+  '|---|---|---|',
+  '| The red-test check on pull requests, called by `x.yml`, and held by `K-MERGE-4`, whose own count was `K-MERGE-4` 9/9/9. Its baseline (`K-SELF-14`), findings / pull requests / follow-ups from 2026-09-30 and over the seven days from 2026-10-14: `K-PRIN-4` 0/0/0 and 0/0/0, `K-MERGE-13` 1/1/3 and 0/0/0. Measured with `finding-counts.mjs --rules K-PRIN-4,K-MERGE-13` | `K-PRIN-4`, `K-MERGE-13` | installed 2026-10-21 |',
+  '| The label guard. Its baseline (`K-SELF-14`): `K-WORK-5` 3/3/0 | `K-WORK-5` | installed 2026-10-21 |',
+  '| The finding count, which cites `K-SELF-14` and `K-PRIN-8` 1/1/1 but records no baseline | `K-SELF-14` | not yet installed |',
+  '| A gate whose baseline (`K-SELF-14`) is written in words only | `K-SPEC-2` | installed 2026-10-21 |',
+  '',
+].join('\n');
+
+describe('the week beside the gates\' baselines (K-SELF-14, #1274)', () => {
+  it('reads each row that records a baseline, its gate, and each rule\'s figures as written after the baseline, never an id before it', () => {
+    expect(recordedBaselines(RECORD)).toEqual([
+      { gate: 'The red-test check on pull requests', line: 7, rules: [{ rule: 'K-PRIN-4', baseline: '0/0/0 and 0/0/0' }, { rule: 'K-MERGE-13', baseline: '1/1/3 and 0/0/0' }] },
+      { gate: 'The label guard', line: 8, rules: [{ rule: 'K-WORK-5', baseline: '3/3/0' }] },
+      { gate: 'A gate whose baseline (`K-SELF-14`) is written in words only', line: 10, rules: [] },
+    ]);
+    expect(recordedBaselines('# Adoption record\n\nNo table.\n')).toEqual([]);
+  });
+
+  it('prints each rule\'s baseline beside the week\'s figures, a rule the week never cited at 0/0/0, and names a row it could read no figures from', () => {
+    const report = { repo: 'o/r', since: '2026-10-12', until: '2026-10-19', reviews: 1, followUpIssues: 1, weeks: [], rows: [{ rule: 'K-MERGE-13', findings: 2, pullRequests: 1, followUps: 1 }] };
+    const out = renderBaselines({ record: RECORD, recordPath: 'docs/qa/adoption.md', report, since: '2026-10-12', until: '2026-10-19' });
+    expect(out.split('\n')[0]).toBe('finding-counts: ok since=2026-10-12 until=2026-10-19 gates=3');
+    expect(out).toContain('| Gate | Rule | Baseline as recorded | This week |');
+    expect(out).toContain('| The red-test check on pull requests | `K-MERGE-13` | 1/1/3 and 0/0/0 | 2/1/1 |');
+    expect(out).toContain('| The red-test check on pull requests | `K-PRIN-4` | 0/0/0 and 0/0/0 | 0/0/0 |');
+    expect(out).toContain('| The label guard | `K-WORK-5` | 3/3/0 | 0/0/0 |');
+    expect(out).toContain('Line 10 of `docs/qa/adoption.md` says it records a baseline, but names no rule with figures');
+    expect(out).not.toContain('K-PRIN-8');
+    expect(out).not.toContain('K-MERGE-4`');
+  });
+
+  it('says there is no gate to compare when no row records a baseline', () => {
+    const out = renderBaselines({ record: '# Adoption record\n', recordPath: 'docs/qa/adoption.md', report: null, since: '2026-10-12', until: '2026-10-19' });
+    expect(out).toBe('finding-counts: ok since=2026-10-12 until=2026-10-19 gates=0\n\nNo mechanism row of `docs/qa/adoption.md` records a baseline (`K-SELF-14`), so there is no gate to compare.');
+  });
+
+  it('reads the baselines Kanon\'s own record holds', () => {
+    const gates = recordedBaselines(readFileSync(join(ROOT, 'docs/qa/adoption.md'), 'utf8'));
+    expect(gates.map((g) => g.gate)).toEqual(expect.arrayContaining(['The label guard']));
+    expect(gates.length).toBeGreaterThanOrEqual(4);
+    for (const g of gates) expect(g.rules.length, g.gate).toBeGreaterThan(0);
   });
 });
 
@@ -331,9 +475,13 @@ describe('the command, against fixtures through a stub `gh` (K-SELF-14)', SPAWNS
   put('repos/o/x/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1', FIXTURE.pulls.slice(0, 1), 'https://api.github.com/repositories/2/pulls?state=all&page=2');
   const bin = join(dir, 'bin');
   spawnSync('mkdir', [bin]);
+  // GraphQL counts 3 pull requests wherever it is asked, so an empty first page of the pull
+  // request listing disagrees with it.
   writeStub(join(bin, 'gh'), `#!/usr/bin/env bash
+printf '%s\\n' "$3" >> "${dir}/calls.log"
 f="${dir}/$(printf %s "$3" | tr -c 'A-Za-z0-9' '_')"
-if [ -f "$f.empty-once" ]; then rm "$f.empty-once"; printf 'HTTP/2.0 200 OK\\r\\n\\r\\n[]'
+if [ "$2" = graphql ]; then printf '{"data":{"repository":{"pullRequests":{"totalCount":3}}}}'
+elif [ -f "$f.empty-once" ]; then rm "$f.empty-once"; printf 'HTTP/2.0 200 OK\\r\\n\\r\\n[]'
 elif [ -f "$f.http" ]; then cat "$f.http"; else printf 'HTTP/2.0 200 OK\\r\\n\\r\\n[]'; fi
 `);
   const run = (repo: string, ...args: string[]) => spawnSync('node', [join(ROOT, 'scripts', 'finding-counts.mjs'), ...args], {
@@ -363,5 +511,45 @@ elif [ -f "$f.http" ]; then cat "$f.http"; else printf 'HTTP/2.0 200 OK\\r\\n\\r
     expect(r.status).toBe(1);
     expect(r.stdout).toBe('');
     expect(r.stderr).toContain('finding-counts: https://api.github.com/repositories/2/pulls?state=all&page=2 came back empty on each of 5 reads');
+  });
+
+  it('with --baselines, prints the last whole week beside each recorded baseline, and reads nothing from GitHub when no row records one (#1274)', () => {
+    // The week of 2026-10-12: the review on #4 (K-PRIN-4, K-WORK-5) and follow-up #20 (K-PRIN-4).
+    put('repos/o/r/issues?labels=follow-up,agent:reviewer&state=all&since=2026-10-12T00:00:00Z&per_page=100&page=1', FIXTURE.issues);
+    const record = join(dir, 'adoption.md');
+    writeFileSync(record, RECORD);
+    const r = run('o/r', '--baselines', record, '--until', '2026-10-21');
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(r.stdout.split('\n')[0]).toBe('finding-counts: ok since=2026-10-12 until=2026-10-19 gates=3');
+    expect(r.stdout).toContain('| The red-test check on pull requests | `K-PRIN-4` | 0/0/0 and 0/0/0 | 1/1/1 |');
+    expect(r.stdout).toContain('| The label guard | `K-WORK-5` | 3/3/0 | 1/1/0 |');
+
+    const none = join(dir, 'none.md');
+    writeFileSync(none, '# Adoption record\n');
+    const log = join(dir, 'calls.log');
+    rmSync(log, { force: true });
+    const quiet = run('o/r', '--baselines', none);
+    expect(quiet.status).toBe(0);
+    expect(quiet.stdout).toContain('gates=0');
+    expect(existsSync(log)).toBe(false);
+  });
+
+  it('with --baselines, says UNAVAILABLE on stdout and exits 1 when the record or a listing can\'t be read', () => {
+    const missing = run('o/r', '--baselines', join(dir, 'no-such.md'));
+    expect(missing.status).toBe(1);
+    expect(missing.stdout).toMatch(/^finding-counts: UNAVAILABLE — .*no-such\.md/);
+    const record = join(dir, 'adoption.md');
+    writeFileSync(record, RECORD);
+    const red = run('o/x', '--baselines', record, '--until', '2026-10-21');
+    expect(red.status).toBe(1);
+    expect(red.stdout).toMatch(/^finding-counts: UNAVAILABLE — https:\/\/api\.github\.com\/repositories\/2\/pulls\?state=all&page=2 came back empty/);
+  });
+
+  it('exits 1 and prints no count when a first page stays empty but GraphQL counts the listing (#1323)', () => {
+    const r = run('o/y', '--since', '2026-10-14', '--until', '2026-10-21');
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toContain("finding-counts: repos/o/y/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1 came back empty on each of 5 reads, but GitHub's GraphQL API counts 3 in that listing");
   });
 });

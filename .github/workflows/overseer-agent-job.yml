@@ -193,6 +193,29 @@ jobs:
             echo "app-slug=$APP_SLUG"
           } >> "$GITHUB_OUTPUT"
 
+      # THE WEEK'S FINDING COUNTS BESIDE THE GATES' BASELINES (`K-SELF-14`, kanon#1274): the last
+      # whole week's count, Monday to Monday, for each rule a mechanism row of the adoption record
+      # records a baseline for, beside that baseline, into the export for the agent to paste and
+      # to the step summary, so the figures survive an agent that dies. No model runs here.
+      # It runs on each Overseer run: weekly, plus dispatch and runtime-version runs.
+      # COST: none where no row records a baseline (the record is read, no API call is made);
+      # otherwise one read of each pull request updated since the week opened, plus the
+      # listings, on the agent's read-only token, bounded at ten minutes.
+      # OBSERVABILITY: the output's first line is `finding-counts: ok` or `finding-counts:
+      # UNAVAILABLE — <why>`, in the summary and the export; a step that times out leaves the
+      # file empty, which the agent reports as unavailable. It never turns the job red.
+      - name: Finding counts beside the gates' baselines
+        id: finding-counts
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          KANON: ${{ steps.kanon.outputs.path }}
+        run: |
+          set -uo pipefail
+          node "$KANON/scripts/finding-counts.mjs" --baselines docs/qa/adoption.md > qa-store-export/finding-counts.md
+          { printf '## Findings beside the gates'"'"' baselines\n\n'; cat qa-store-export/finding-counts.md; } >> "$GITHUB_STEP_SUMMARY"
+
       # CREATE-BEFORE-APPLY (plan 0005 §5.3, `K-WORK-12`): each label this lane's agent may
       # apply and the repository lacks is created first, with the taxonomy's colour and
       # description, on the agent's own token. A name outside `rulebook/labels.json` fails
@@ -286,6 +309,13 @@ jobs:
               `qa:reproduced`, and file nothing for them. If its first line is not
               `signal-outcomes: ok`, say precision is UNAVAILABLE and why. These are
               observations, never a target: propose no precision threshold.
+            - The gates' baselines (K-SELF-14) ARE COUNTED FOR YOU: a step before you wrote
+              the last whole week's findings per rule beside each baseline the adoption record
+              records, in `qa-store-export/finding-counts.md`. Paste it VERBATIM under a
+              `## Findings beside the gates' baselines` heading; do not recount it. If the file
+              is missing or empty, or its first line is not `finding-counts: ok`, say the counts
+              are UNAVAILABLE and why. A week above or below its baseline is an observation
+              for the human to judge, not a finding by itself.
             - Follow-up leakage: scan recently-merged pull requests' review bodies for
               deferred-work findings ("follow-up", "recommend", "worth a") and flag any with
               NO matching `follow-up` issue.

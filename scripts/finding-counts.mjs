@@ -48,19 +48,42 @@
 // page is read again, up to five reads with a growing wait between them, before it counts:
 //   - a page the page before it named as next, which stays empty on every read, fails the count
 //     by name: the listing said there was more, and a count without it would be low;
-//   - a first page that stays empty on every read is an empty listing, since a pull request with
-//     no reviews or a window with no follow-ups answers just that, and nothing in the answer tells
-//     it from the spurious one. Five spurious reads in a row, at that rate, is about one in 243.
+//   - a first page that stays empty on every read is asked about a second way: GitHub's GraphQL
+//     API counts what the listing holds (the repository's pull requests, a pull request's
+//     reviews, or the issues carrying the follow-ups listing's labels updated since the window
+//     opened). A pull request with no reviews or a window with no follow-ups answers `[]` for
+//     real, and nothing in the REST answer tells it from the spurious one, so the listing counts
+//     as empty only when GraphQL counts 0 too; when it counts more, or gives no count, the count
+//     fails by name (#1323).
+// What's left is both APIs answering empty for a listing that isn't. That isn't priced as a
+// product of independent odds: on 2026-10-23, 60 back-to-back reads of the follow-ups listing's
+// first page, and 60 of the GraphQL count beside them, came back full every time, so how the
+// spurious `[]` clusters in time is unmeasured, and the second read is a different API rather
+// than the same page read again.
 //
 // Usage: GITHUB_REPOSITORY=owner/repo node scripts/finding-counts.mjs [--since YYYY-MM-DD]
 //   [--until YYYY-MM-DD] [--rules K-A-1,K-B-2] [--reviewer <login>]... [--json]
 // The window defaults to the seven days before today (UTC). `--rules` limits the table to those
 // ids and lists each of them, a zero included. `--json` prints the counts and each week's.
-// Exit 0 with the counts, 1 when `gh` fails or a listing can't be read to its end, 2 on a usage
-// error. Node built-ins only.
+//
+//   GITHUB_REPOSITORY=owner/repo node scripts/finding-counts.mjs --baselines docs/qa/adoption.md
+//     [--until YYYY-MM-DD] [--reviewer <login>]...
+// THE WEEKLY COUNT BESIDE THE BASELINES (#1274), which the Overseer's lane runs before its agent
+// and its audit pastes. It reads the adoption record's mechanism rows that say "baseline
+// (`K-SELF-14`)", takes each rule id there written as `K-X-N` followed by its figures
+// (findings/pull requests/follow-ups, one window or several joined by "and"), counts those rules
+// over the last whole week, Monday to Monday UTC, that ends on or before `--until` (default
+// today), and prints a table of gate, rule, baseline as recorded and the week's figures. No row
+// records a baseline:
+// it says so and reads nothing from GitHub. Its first line is `finding-counts: ok ...`, or
+// `finding-counts: UNAVAILABLE — <why>` with exit 1, on stdout either way, for the audit to quote.
+// Exit 0 with the counts, 1 when `gh` fails, a listing can't be read to its end, or an empty first
+// page isn't confirmed empty by GraphQL, 2 on a usage error. Node built-ins only.
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { mechanismRows } from './lib/mechanisms.mjs';
 import { markedRole } from './lib/role-marker.mjs';
 
 const DAY = 86_400_000;
@@ -70,6 +93,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 /** How many times an empty page is read before it counts, and the wait before the first re-read, doubled each time. */
 const READS = 5;
 const WAIT_MS = 200;
+/** The labels a follow-up of the Reviewer's carries, all of them. */
+const FOLLOW_UP_LABELS = ['follow-up', 'agent:reviewer'];
 
 /** Block for `ms`: `gh` is called synchronously, so the wait between reads is too. @param {number} ms */
 const sleepSync = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
@@ -186,13 +211,63 @@ export const parsePage = (text) => {
 };
 
 /**
+ * Ask GitHub's GraphQL API through `gh` for a repository's fields, or throw on an error it reports.
+ * @param {(args: string[]) => string} gh
+ * @param {string} query
+ * @param {Record<string, string | number>} vars strings go as `-f`, numbers as `-F`
+ * @returns {any} the `repository` object of the answer
+ */
+const graphql = (gh, query, vars) => {
+  const args = ['api', 'graphql', '-f', `query=${query}`];
+  for (const [k, v] of Object.entries(vars)) args.push(typeof v === 'number' ? '-F' : '-f', `${k}=${v}`);
+  const out = JSON.parse(gh(args));
+  if (out?.errors?.length || !out?.data?.repository) throw new Error(`GitHub's GraphQL API answered ${JSON.stringify(out?.errors ?? out).slice(0, 200)}`);
+  return out.data.repository;
+};
+
+const PULL_COUNT = 'query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequests{totalCount}}}';
+const REVIEW_COUNT = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews{totalCount}}}}';
+// GraphQL's label filter matches an issue carrying any of the labels, the REST listing one carrying
+// all of them, so this asks for one label and keeps the issues that carry the rest.
+const LABELLED = 'query($owner:String!,$name:String!,$label:String!,$since:DateTime!,$after:String){repository(owner:$owner,name:$name){issues(first:100,after:$after,filterBy:{labels:[$label],since:$since}){nodes{labels(first:100){nodes{name}}} pageInfo{hasNextPage endCursor}}}}';
+
+/**
+ * GraphQL's counts of what each listing holds, asked when a listing's first page stays empty (the header above).
+ * @param {(args: string[]) => string} gh
+ * @param {string} repo owner/name
+ */
+const graphqlCounts = (gh, repo) => {
+  const [owner = '', name = ''] = repo.split('/');
+  return {
+    pulls: () => Number(graphql(gh, PULL_COUNT, { owner, name }).pullRequests?.totalCount),
+    reviews: (/** @type {number} */ number) => Number(graphql(gh, REVIEW_COUNT, { owner, name, number }).pullRequest?.reviews?.totalCount),
+    followUps: (/** @type {string} */ since) => {
+      let n = 0;
+      /** @type {Record<string, string | number>} */
+      const vars = { owner, name, label: FOLLOW_UP_LABELS[1] ?? '', since };
+      for (;;) {
+        const page = graphql(gh, LABELLED, vars).issues;
+        if (!page) return NaN;
+        for (const issue of page.nodes ?? []) {
+          const names = (issue?.labels?.nodes ?? []).map((/** @type {{ name?: string }} */ l) => l?.name);
+          if (FOLLOW_UP_LABELS.every((l) => names.includes(l))) n += 1;
+        }
+        if (!page.pageInfo?.hasNextPage) return n;
+        vars.after = page.pageInfo.endCursor;
+      }
+    },
+  };
+};
+
+/**
  * A listing's pages, first to last, following the next page each one names (the header above).
  * @param {string} path the first page
  * @param {(args: string[]) => string} gh
  * @param {(ms: number) => void} sleep
+ * @param {() => number} counted GraphQL's count of what the listing holds, asked only when its first page stays empty
  * @returns {Generator<unknown[]>}
  */
-function* pages(path, gh, sleep) {
+function* pages(path, gh, sleep, counted) {
   /** @type {string | null} */
   let url = path;
   for (let named = false; url; named = true) {
@@ -202,6 +277,11 @@ function* pages(path, gh, sleep) {
       page = parsePage(gh(['api', '--include', url]));
     }
     if (page.items.length === 0 && named) throw new Error(`${url} came back empty on each of ${READS} reads, though the page before it named it as the next one, so the count can't be completed`);
+    if (page.items.length === 0) {
+      const n = counted();
+      if (!Number.isInteger(n)) throw new Error(`${url} came back empty on each of ${READS} reads, and GitHub's GraphQL API gave no count to tell an empty listing from a spurious answer`);
+      if (n > 0) throw new Error(`${url} came back empty on each of ${READS} reads, but GitHub's GraphQL API counts ${n} in that listing, so the count can't be completed`);
+    }
     yield page.items;
     url = page.next;
   }
@@ -217,6 +297,7 @@ function* pages(path, gh, sleep) {
 export const count = ({ repo, since, until, gh, sleep = sleepSync, logins = [], rules = null }) => {
   const from = Date.parse(`${since}T00:00:00Z`);
   const to = Date.parse(`${until}T00:00:00Z`);
+  const also = graphqlCounts(gh, repo);
   const inWindow = (/** @type {string | null | undefined} */ t) => {
     const ms = Date.parse(t ?? '');
     return ms >= from && ms < to;
@@ -226,7 +307,7 @@ export const count = ({ repo, since, until, gh, sleep = sleepSync, logins = [], 
   // since the window opened, newest first, hold every one of them.
   /** @type {number[]} */
   const prs = [];
-  for (const page of pages(`repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=${PAGE}&page=1`, gh, sleep)) {
+  for (const page of pages(`repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=${PAGE}&page=1`, gh, sleep, also.pulls)) {
     const list = /** @type {Pull[]} */ (page);
     for (const p of list) if (Date.parse(p.updated_at) >= from) prs.push(p.number);
     if (Date.parse(list[list.length - 1]?.updated_at ?? '') < from) break;
@@ -235,7 +316,7 @@ export const count = ({ repo, since, until, gh, sleep = sleepSync, logins = [], 
   /** @type {Array<{ pr: number, review: Review }>} */
   const reviews = [];
   for (const pr of prs) {
-    for (const page of pages(`repos/${repo}/pulls/${pr}/reviews?per_page=${PAGE}&page=1`, gh, sleep)) {
+    for (const page of pages(`repos/${repo}/pulls/${pr}/reviews?per_page=${PAGE}&page=1`, gh, sleep, () => also.reviews(pr))) {
       for (const review of /** @type {Review[]} */ (page)) {
         if (review.state === 'CHANGES_REQUESTED' && inWindow(review.submitted_at) && isReviewers(review, logins)) reviews.push({ pr, review });
       }
@@ -246,10 +327,10 @@ export const count = ({ repo, since, until, gh, sleep = sleepSync, logins = [], 
   // in it, so the listing holds every follow-up created there; the creation date picks them.
   /** @type {Issue[]} */
   const followUps = [];
-  for (const page of pages(`repos/${repo}/issues?labels=follow-up,agent:reviewer&state=all&since=${since}T00:00:00Z&per_page=${PAGE}&page=1`, gh, sleep)) {
+  for (const page of pages(`repos/${repo}/issues?labels=${FOLLOW_UP_LABELS.join(',')}&state=all&since=${since}T00:00:00Z&per_page=${PAGE}&page=1`, gh, sleep, () => also.followUps(`${since}T00:00:00Z`))) {
     for (const issue of /** @type {Issue[]} */ (page)) {
       const names = labelNames(issue);
-      if (!issue.pull_request && names.includes('follow-up') && names.includes('agent:reviewer') && inWindow(issue.created_at)) followUps.push(issue);
+      if (!issue.pull_request && FOLLOW_UP_LABELS.every((l) => names.includes(l)) && inWindow(issue.created_at)) followUps.push(issue);
     }
   }
 
@@ -285,11 +366,63 @@ export const renderTable = (r) => {
   return lines.join('\n');
 };
 
+/** Where a mechanism row's baseline starts, as `K-SELF-14` has it recorded. */
+const BASELINE_AT = /baseline \(`K-SELF-14`\)/i;
+/** A rule id in a code span and the findings/pull requests/follow-ups recorded for it, one window or several joined by "and". */
+const FIGURES = /`(K-[A-Z]+-\d+)`\s+(\d+\/\d+\/\d+(?:\s+and\s+\d+\/\d+\/\d+)*)/g;
+
+/**
+ * The gates an adoption record records a baseline for (the header above): each mechanism row
+ * that says "baseline (`K-SELF-14`)", named by its text up to the first comma or full stop, with
+ * each rule id after that and the figures recorded for it, as written.
+ * @param {string} record the adoption record's markdown
+ * @returns {Array<{ gate: string, line: number, rules: Array<{ rule: string, baseline: string }> }>}
+ */
+export const recordedBaselines = (record) => mechanismRows(record).flatMap((row) => {
+  const at = row.mechanism.search(BASELINE_AT);
+  if (at === -1) return [];
+  const rules = [...row.mechanism.slice(at).matchAll(FIGURES)].map((m) => ({ rule: m[1] ?? '', baseline: (m[2] ?? '').replace(/\s+/g, ' ') }));
+  return [{ gate: row.mechanism.split(/,\s|\.\s/)[0]?.trim() ?? '', line: row.line, rules }];
+});
+
+/**
+ * The week's counts beside each gate's recorded baseline, for the Overseer's audit to paste
+ * verbatim. The first line says whether it is whole: `finding-counts: ok ...`.
+ * @param {{ record: string, recordPath: string, report: Report | null, since: string, until: string }} input
+ *   `report` is the window's count over the baselines' rules, `null` when no row records one
+ */
+export const renderBaselines = ({ record, recordPath, report, since, until }) => {
+  const gates = recordedBaselines(record);
+  const lines = [`finding-counts: ok since=${since} until=${until} gates=${gates.length}`, ''];
+  if (gates.length === 0) {
+    lines.push(`No mechanism row of \`${recordPath}\` records a baseline (\`K-SELF-14\`), so there is no gate to compare.`);
+    return lines.join('\n');
+  }
+  const week = new Map((report?.rows ?? []).map((r) => [r.rule, r]));
+  lines.push(
+    `The Reviewer's findings / pull requests / follow-ups per rule (\`K-SELF-14\`): each gate's baseline as its row of \`${recordPath}\` records it (the row says which windows), and the seven days from ${since} to ${until} (exclusive).`,
+    '',
+    '| Gate | Rule | Baseline as recorded | This week |',
+    '|---|---|---|---|',
+  );
+  /** @type {string[]} */
+  const bare = [];
+  for (const g of gates) {
+    if (g.rules.length === 0) bare.push(`Line ${g.line} of \`${recordPath}\` says it records a baseline, but names no rule with figures as \`K-X-N\` findings/pull requests/follow-ups, so it has no row above.`);
+    for (const { rule, baseline } of g.rules) {
+      const r = week.get(rule);
+      lines.push(`| ${g.gate} | \`${rule}\` | ${baseline} | ${r ? `${r.findings}/${r.pullRequests}/${r.followUps}` : '0/0/0'} |`);
+    }
+  }
+  if (bare.length) lines.push('', ...bare);
+  return lines.join('\n');
+};
+
 /**
  * Parse the arguments.
  * @param {string[]} argv
  * @param {string} today YYYY-MM-DD
- * @returns {{ since: string, until: string, rules: string[] | null, logins: string[], json: boolean } | { error: string }}
+ * @returns {{ since: string, until: string, rules: string[] | null, logins: string[], json: boolean, baselines: string | null } | { error: string }}
  */
 export const parseArgs = (argv, today) => {
   let until = today;
@@ -300,11 +433,17 @@ export const parseArgs = (argv, today) => {
   /** @type {string[]} */
   const logins = [];
   let json = false;
+  /** @type {string | null} */
+  let baselines = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const v = argv[i + 1];
     if (a === '--json') json = true;
-    else if (a === '--since' || a === '--until') {
+    else if (a === '--baselines') {
+      if (!v || v.startsWith('--')) return { error: '--baselines takes the adoption record\'s path, such as docs/qa/adoption.md' };
+      baselines = v;
+      i++;
+    } else if (a === '--since' || a === '--until') {
       if (!v || !DATE.test(v) || Number.isNaN(Date.parse(`${v}T00:00:00Z`))) return { error: `${a} takes a date, YYYY-MM-DD` };
       if (a === '--since') since = v;
       else until = v;
@@ -320,9 +459,14 @@ export const parseArgs = (argv, today) => {
       i++;
     } else return { error: `unknown argument ${a}` };
   }
+  if (baselines) {
+    // The week is a whole one, Monday to Monday, UTC, the same length as the baselines' week.
+    if (since || rules || json) return { error: '--baselines takes no --since, --rules or --json: the window is the last whole week, and the rules are the record\'s' };
+    until = weekOf(`${until}T00:00:00Z`);
+  }
   since ??= new Date(Date.parse(`${until}T00:00:00Z`) - 7 * DAY).toISOString().slice(0, 10);
   if (since >= until) return { error: `--since (${since}) must be before --until (${until})` };
-  return { since, until, rules, logins, json };
+  return { since, until, rules, logins, json, baselines };
 };
 
 if (isCliEntry(import.meta.url)) {
@@ -334,6 +478,19 @@ if (isCliEntry(import.meta.url)) {
   }
   /** @param {string[]} a */
   const gh = (a) => execFileSync('gh', a, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+  if (args.baselines) {
+    // For the Overseer's audit, pasted verbatim: a failure is said on stdout, as its first line.
+    try {
+      const record = readFileSync(args.baselines, 'utf8');
+      const rules = [...new Set(recordedBaselines(record).flatMap((g) => g.rules.map((r) => r.rule)))];
+      const report = rules.length ? count({ repo, gh, since: args.since, until: args.until, logins: args.logins, rules }) : null;
+      console.log(renderBaselines({ record, recordPath: args.baselines, report, since: args.since, until: args.until }));
+    } catch (e) {
+      console.log(`finding-counts: UNAVAILABLE — ${/** @type {Error} */ (e).message}`);
+      process.exit(1);
+    }
+    process.exit(0);
+  }
   try {
     const r = count({ repo, gh, since: args.since, until: args.until, logins: args.logins, rules: args.rules });
     console.log(args.json ? JSON.stringify(r, null, 2) : renderTable(r));
