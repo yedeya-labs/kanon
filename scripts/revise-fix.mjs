@@ -18,7 +18,7 @@
 // Usage: node scripts/revise-fix.mjs run --checks <key>[,<key>]... --base <commit> --out <file>
 //        node scripts/revise-fix.mjs push --change <file> --branch <name> --head <sha> --message <text>
 // `run` writes `changed=true|false` and `why=<reason>` to `$GITHUB_OUTPUT`, and `push` writes
-// `pushed=true` and `sha=<commit>`. `KANON` is the Kanon tree whose commands run; it defaults to
+// `pushed=true`, `sha=<commit>` and `base=<its parent, the --head>`. `KANON` is the Kanon tree whose commands run; it defaults to
 // the one this file is in. `push` reads `GH_TOKEN` and `REPO`.
 
 import { execFileSync } from 'node:child_process';
@@ -176,7 +176,7 @@ if (isCliEntry(import.meta.url)) {
     const change = /** @type {Change} */ (JSON.parse(readFileSync(arg('--change'), 'utf8')));
     const sha = pushChange({ change, repo, branch: arg('--branch'), head: arg('--head'), message, gh });
     console.log(`pushed ${sha} to ${arg('--branch')}`);
-    output({ pushed: 'true', sha });
+    output({ pushed: 'true', sha, base: arg('--head') });
   } else {
     console.error('usage: revise-fix.mjs run|push …');
     process.exitCode = 2;

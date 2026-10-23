@@ -321,6 +321,11 @@ on:
       heads:
         description: A JSON array of `{ ref, sha }`, the agent's job's local branches and HEAD after the agent, or empty.
         value: ${{ jobs.run.outputs.heads }}
+      # THE COMMIT THE AGENT'S JOB CHECKED OUT, BEFORE THE AGENT RAN (#1263): the implementer
+      # status's `carry` moves only when it is the head the run started from.
+      base:
+        description: The commit the agent's job checked out, before the agent ran, or empty.
+        value: ${{ jobs.run.outputs.base }}
     secrets:
       app-id:
         required: true
