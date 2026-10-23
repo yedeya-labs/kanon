@@ -55,7 +55,8 @@
 # repository) is exactly the one that arrives bare. A dispatch is still judged as a member's, and
 # the Kanon pin is still checked. No other lane sets the variable (tests/unit/lane-gate-run.test.ts).
 #
-# SAFE BY DEFAULT: the opened event applies; a dispatch is a DRY RUN unless `apply` is ticked.
+# SAFE BY DEFAULT: the `issues: opened` and `pull_request_target: milestoned` events apply; a
+# dispatch is a DRY RUN unless `apply` is ticked.
 #
 # NO MODEL. The only step after the gate that runs anything runs a library script and `gh`, so
 # this lane takes no Claude token, writes no telemetry row, and never calls the project-setup
