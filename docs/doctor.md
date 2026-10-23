@@ -129,7 +129,7 @@ The QA store's role and the telemetry writer trust the default branch's ref, not
 
 `kanon init` names the same jobs, with this check, before an install writes anything, and writes the acceptance the person gives with `--accept-id-token-holder` ([`docs/init.md`](init.md#existing-id-token-holders), [#631](https://github.com/yedeya-labs/kanon/issues/631)), so the adopt skill asks about each at its telemetry question, and doctor finds it already accepted.
 
-Doctor counts the workflows of the checkout it runs from. Run it on your default branch for the count the roles see; it says so when you don't.
+Doctor counts the workflows of the checkout it runs from. Run it on your default branch for the count the roles see; it says so when you don't. It reads one repository's workflows. A QA store that serves several repositories trusts each one's default branch, so run doctor in each of them, and accept each one's holders in its own adoption record ([`docs/qa-store.md`](qa-store.md#who-can-reach-the-store)).
 
 ## Waiving a finding
 
