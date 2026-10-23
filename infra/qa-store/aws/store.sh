@@ -4,7 +4,9 @@
 # action's credentials step has already assumed the store's role; this only picks the script.
 # What each operation reads and writes in "$DIR" is the contract's (`actions/qa-store/qa-store.mjs`).
 #
-# Env: OPERATION, KIND, DIR, FROM, TO, QA_AWS_REGION, QA_DYNAMO_TABLE, QA_S3_BUCKET.
+# Every operation keys its rows by the runner's GITHUB_REPOSITORY_ID (kanon#1346, `keys.mjs`).
+#
+# Env: OPERATION, KIND, DIR, FROM, TO, QA_AWS_REGION, QA_DYNAMO_TABLE, QA_S3_BUCKET, GITHUB_REPOSITORY_ID.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

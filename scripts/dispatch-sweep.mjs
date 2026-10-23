@@ -1494,6 +1494,8 @@ export function costReadPrecondition(env = process.env) {
   }
   if (!env.QA_DYNAMO_TABLE) return 'QA_DYNAMO_TABLE is unset';
   if (!env.QA_AWS_REGION) return 'QA_AWS_REGION is unset';
+  // The store keys every row by the repository's id (kanon#1346); the runner sets it in every job.
+  if (!/^[1-9][0-9]*$/.test(env.GITHUB_REPOSITORY_ID ?? '')) return 'GITHUB_REPOSITORY_ID is unset';
   return null;
 }
 
@@ -1537,7 +1539,7 @@ export function readCostRows(lane, now = Date.now(), env = process.env) {
   try {
     // The query is the AWS store action's (plan 0004 step P9): one query, which the store hook's
     // `cost-rows` operation answers too, until step 9 moves this read onto the hook.
-    const rows = queryCostRows({ agent: lane.telemetryAgent, since, table, region });
+    const rows = queryCostRows({ agent: lane.telemetryAgent, since, table, region, repository: String(env.GITHUB_REPOSITORY_ID) });
     return { rows, error: null };
   } catch (err) {
     // Fails closed — see `unreachedByIssue` — and says so (RA-2706).

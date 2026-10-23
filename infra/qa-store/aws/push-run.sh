@@ -12,6 +12,7 @@
 #
 # Usage:  push-run.sh <explorer|audit|telemetry> <report.json>
 # Env:    QA_S3_BUCKET, QA_DYNAMO_TABLE, QA_AWS_REGION  (the AWS action's inputs)
+#         GITHUB_REPOSITORY_ID  (the runner's): every key carries it (kanon#1346, `keys.mjs`)
 #         DRY_RUN=1  → print the S3 key + every DynamoDB item instead of calling AWS
 #                      (used by the local self-test; no creds needed)
 #
@@ -47,8 +48,17 @@ fi
 region="${QA_AWS_REGION:?QA_AWS_REGION unset}"
 : "${QA_S3_BUCKET:?QA_S3_BUCKET unset}"
 : "${QA_DYNAMO_TABLE:?QA_DYNAMO_TABLE unset}"
+# EVERY KEY CARRIES THE REPOSITORY (kanon#1346): `<partition>#<repository id>` in the table and
+# `repository/<id>/` in the bucket, so repositories sharing one store write apart. `keys.mjs` says
+# why the id and not the name. A write keyed by nothing would be read by everyone: refuse it.
+repo="${GITHUB_REPOSITORY_ID:-}"
+if ! [[ "$repo" =~ ^[1-9][0-9]*$ ]]; then
+  echo "push-run: GITHUB_REPOSITORY_ID is '$repo', not a repository id, and the store keys every row by it (kanon#1346)" >&2
+  exit 2
+fi
 
-# Deterministic per-run key (UTC). Matches the qa-runs layout: <kind>/<ts>.json.
+# Deterministic per-run key (UTC). The qa-runs layout, <kind>/<ts>.json, under the repository's
+# own `repository/<id>/`.
 # QA_RUN_TS lets a one-time backfill preserve each historical run's
 # original timestamp instead of stamping "now".
 ts="${QA_RUN_TS:-$(date -u +%Y%m%dT%H%M%SZ)}"
@@ -61,9 +71,9 @@ trigger="$(jq -r '.trigger // "unknown"' "$report")"
 # overwrites when two of them push in the same second. The DynamoDB sort key already
 # discriminates by agent; the S3 object did not.
 if [ "$kind" = "telemetry" ]; then
-  s3_key="${kind}/$(jq -r '.agent // "unknown"' "$report")/${ts}.json"
+  s3_key="repository/${repo}/${kind}/$(jq -r '.agent // "unknown"' "$report")/${ts}.json"
 else
-  s3_key="${kind}/${ts}.json"
+  s3_key="repository/${repo}/${kind}/${ts}.json"
 fi
 if [ "${DRY_RUN:-}" = "1" ]; then
   echo "[dry-run] s3://${QA_S3_BUCKET}/${s3_key}  <= ${report}"
@@ -86,19 +96,19 @@ case "$kind" in
     swept="$(jq -r '.routes_swept // 0' "$report")"
     passed="$(jq -r '.passed // 0' "$report")"
     failed="$(jq -r '.failed // 0' "$report")"
-    # RUN#explorer / <ts> — liveness + run history. `tier` lets the change-gate
+    # RUN#explorer#<repository id> / <ts> — liveness + run history. `tier` lets the change-gate
     # (RA-167) find the last GREEN full-tier ('all') sweep to compare against HEAD.
     put "$(jq -nc --arg ts "$ts" --arg c "$commit" --arg tr "$trigger" --arg tier "$tier" \
-      --arg sw "$swept" --arg p "$passed" --arg f "$failed" '{
-        pk:{S:"RUN#explorer"}, sk:{S:$ts}, commit:{S:$c}, trigger:{S:$tr}, tier:{S:$tier},
+      --arg sw "$swept" --arg p "$passed" --arg f "$failed" --arg r "$repo" '{
+        pk:{S:("RUN#explorer#" + $r)}, sk:{S:$ts}, commit:{S:$c}, trigger:{S:$tr}, tier:{S:$tier},
         routes_swept:{N:$sw}, passed:{N:$p}, failed:{N:$f}
       }')"
-    # COVERAGE / <route> — last status + commit each route was last seen at
+    # COVERAGE#<repository id> / <route> — last status + commit each route was last seen at
     while IFS= read -r r; do
       route="$(jq -r '.route' <<<"$r")"
       status="$(jq -r '.status' <<<"$r")"
-      put "$(jq -nc --arg rt "$route" --arg st "$status" --arg c "$commit" --arg ts "$ts" '{
-          pk:{S:"COVERAGE"}, sk:{S:$rt}, last_status:{S:$st}, last_seen_commit:{S:$c}, ts:{S:$ts}
+      put "$(jq -nc --arg rt "$route" --arg st "$status" --arg c "$commit" --arg ts "$ts" --arg r "$repo" '{
+          pk:{S:("COVERAGE#" + $r)}, sk:{S:$rt}, last_status:{S:$st}, last_seen_commit:{S:$c}, ts:{S:$ts}
         }')"
     done < <(jq -c '.routes[]?' "$report")
     ;;
@@ -132,13 +142,13 @@ case "$kind" in
       + (if has("report_invalid") then {report_invalid:{BOOL: (.report_invalid == true)}} else {} end)
       + (if has("ended_unmarked") then {ended_unmarked:{BOOL: (.ended_unmarked == true)}} else {} end)
     ' "$report")"
-    # RUN#audit / <ts> — liveness + execution-truth proxy
+    # RUN#audit#<repository id> / <ts> — liveness + execution-truth proxy
     put "$(jq -nc --arg ts "$ts" --arg c "$commit" --arg tr "$trigger" \
-      --arg fr "$fr" --arg lc "$lc" --arg tn "$tn" --argjson lv "$liveness" '{
-        pk:{S:"RUN#audit"}, sk:{S:$ts}, commit:{S:$c}, trigger:{S:$tr},
+      --arg fr "$fr" --arg lc "$lc" --arg tn "$tn" --argjson lv "$liveness" --arg r "$repo" '{
+        pk:{S:("RUN#audit#" + $r)}, sk:{S:$ts}, commit:{S:$c}, trigger:{S:$tr},
         files_read:{N:$fr}, lines_cited:{N:$lc}, turns:{N:$tn}
       } + $lv')"
-    # AREAS / <path> — unbounded code-reading coverage ledger (subsumes RA-169's
+    # AREAS#<repository id> / <path> — unbounded code-reading coverage ledger (subsumes RA-169's
     # tail -5 window). Key on the LEADING path token (the primary file/area); the
     # full text is kept in `detail`. Robust to the varied areas_scanned shapes the
     # agent writes: "path — desc", "path, sibling.ts, …", "path (note) + other",
@@ -149,13 +159,14 @@ case "$kind" in
       # Char class includes []  so dynamic route segments (…/[...path]/…) key in full.
       key="$(printf '%s' "$area" | grep -oE '^[]A-Za-z0-9._/[-]+' | head -n1 || true)"
       [ -n "$key" ] || key="$(printf '%s' "$area" | cut -c1-256)"
-      put "$(jq -nc --arg k "$key" --arg ts "$ts" --arg c "$commit" --arg full "$area" '{
-          pk:{S:"AREAS"}, sk:{S:$k}, last_scanned_ts:{S:$ts}, commit:{S:$c}, detail:{S:$full}
+      put "$(jq -nc --arg k "$key" --arg ts "$ts" --arg c "$commit" --arg full "$area" --arg r "$repo" '{
+          pk:{S:("AREAS#" + $r)}, sk:{S:$k}, last_scanned_ts:{S:$ts}, commit:{S:$c}, detail:{S:$full}
         }')"
     done < <(jq -r '.areas_scanned[]?' "$report")
     ;;
   telemetry)
-    # COST#<agent> / <ts> — one row per agent invocation (RA-1485).
+    # COST#<agent>#<repository id> / <ts> — one row per agent invocation (RA-1485), keyed by
+    # repository like every partition here (kanon#1346).
     #
     # NOT `RUN#cost`. The documented item model is `RUN#<agent>` / `<ts>`, so a
     # `RUN#cost` partition puts the string "cost" where every reader expects an agent
@@ -280,8 +291,8 @@ case "$kind" in
       | if (getpath($path) | type) == "boolean" then {($k): {BOOL: getpath($path)}} else {} end' "$report"; }
     flags="$(jq -nc --argjson a "$(b is_error is_error)" '$a')"
     put "$(jq -nc --arg ts "$ts" --arg ag "$agent" --arg c "$commit" --arg tr "$trigger" \
-      --arg oc "$outcome" --argjson m "$metrics" --argjson l "$labels" --argjson b "$flags" '{
-        pk:{S:("COST#" + $ag)}, sk:{S:$ts},
+      --arg oc "$outcome" --argjson m "$metrics" --argjson l "$labels" --argjson b "$flags" --arg r "$repo" '{
+        pk:{S:("COST#" + $ag + "#" + $r)}, sk:{S:$ts},
         agent:{S:$ag}, outcome:{S:$oc}, commit:{S:$c}, trigger:{S:$tr}
       } + $m + $l + $b')"
     ;;

@@ -7,6 +7,7 @@ import { parse } from 'yaml';
 import { writeStub } from './helpers/stub-bin.js';
 import { STACK_NAME, TEMPLATE_PATH, deployCommands, lifecycleProblems, readTemplate, trustProblems, trustedSubjects } from '../../infra/qa-store/aws/provision.mjs';
 import { PARTITIONS, toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
+import { REPORTS_ROOT, UNKEYED_PARTITIONS } from '../../infra/qa-store/aws/keys.mjs';
 import { readCostRowsFile } from '../../actions/qa-store/qa-store.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { ID_TOKEN_HOLDERS } from './helpers/store-jobs.js';
@@ -21,6 +22,9 @@ import { ID_TOKEN_HOLDERS } from './helpers/store-jobs.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type J = any;
 const fresh = (): J => readTemplate();
+/** Two repositories' ids, as the runner's `GITHUB_REPOSITORY_ID` gives them (kanon#1346). */
+const REPO = '101';
+const OTHER = '202';
 
 describe('the template: the store outlives its stack and every stage (K-OBS-17)', () => {
   const t = fresh();
@@ -186,31 +190,33 @@ describe('the subjects: the default branch\'s ref, in the repository\'s own subj
   });
 });
 
-describe('repositories sharing one store share its rows, and the docs say so (kanon#1346)', () => {
-  // The store keys nothing by repository: each partition a lane reads is one fixed name. So
-  // repositories on one store read each other's runs, coverage and areas as their own, which the
-  // docs must say where they let a store serve several. Keying the rows by repository turns the
-  // first test red, and the docs change with it.
+describe('repositories sharing one store read only their own rows, and the docs say so (kanon#1346)', () => {
+  // Every partition a lane reads is keyed by the repository's id (`keys.mjs`), which the docs must
+  // say where they let a store serve several, along with what the keys don't do: hold the role.
+  // The scripts' behaviour is held by "the store keys every row by repository" below.
   const paragraph = (start: string) => {
     const found = readFileSync('docs/qa-store.md', 'utf8').split('\n').filter((l) => l.startsWith(start));
     if (found.length !== 1) throw new Error(`docs/qa-store.md has ${found.length} paragraphs starting ${JSON.stringify(start)}, not one`);
     return found[0]!;
   };
 
-  it('reads and writes partitions that name no repository', () => {
-    expect(Object.values(PARTITIONS).map((p) => p.pk)).toEqual(['RUN#explorer', 'RUN#audit', 'COVERAGE', 'AREAS']);
-    const gate = [...readFileSync('infra/qa-store/aws/last-green.sh', 'utf8').matchAll(/":p":\{"S":"([^"]*)"\}/g)].map((m) => m[1]);
-    expect(gate).toEqual(['RUN#explorer', 'RUN#explorer']);
-    expect(readFileSync('infra/qa-store/aws/record-skip.sh', 'utf8')).toContain('pk: {S: "RUN#explorer"}');
+  it('reads and writes partitions keyed by the repository\'s id', () => {
+    expect(Object.values(PARTITIONS).map((p) => p.pk)).toEqual([...UNKEYED_PARTITIONS]);
+    const gate = readFileSync('infra/qa-store/aws/last-green.sh', 'utf8');
+    expect(gate).toContain('own="RUN#explorer#$repo"');
+    expect(gate).toContain('for pk in "$own" "$unkeyed"; do');
+    expect(readFileSync('infra/qa-store/aws/record-skip.sh', 'utf8')).toContain('pk: {S: ("RUN#explorer#" + $r)}');
   });
 
-  it('says that the store keys nothing by repository, and what sharing one store shares', () => {
-    expect(paragraph('The store\'s role trusts, for each repository it serves')).toContain('reads it as its own (below)');
-    const shared = paragraph('**Repositories on one store share its rows**');
-    expect(shared).toContain('The store keys nothing by repository');
-    for (const pk of Object.values(PARTITIONS).map((p) => p.pk)) expect(shared).toContain(`\`${pk}\``);
-    for (const what of ['one Explorer baseline', 'one coverage ledger', 'one area rotation', 'rows as its own', 'a store of its own']) expect(shared).toContain(what);
-    expect(paragraph('It needs `gh`, signed in with read access')).toContain('They then share its rows');
+  it('says that each repository reads only its own rows, that the role still reaches every row, and that old rows wait for the migration', () => {
+    expect(paragraph('The store\'s role trusts, for each repository it serves')).toContain('its lanes read only their own rows (below)');
+    const own = paragraph('**Each repository on a store reads and writes only its own rows.**');
+    expect(own).toContain('keyed by the repository\'s id');
+    expect(own).toContain('(#rows-by-repository)');
+    expect(own).toContain('the role still lets every repository it trusts reach every row');
+    expect(own).toContain('keeps its unkeyed rows until the account owner migrates them');
+    expect(readFileSync('docs/qa-store.md', 'utf8')).not.toContain('share its rows');
+    expect(paragraph('It needs `gh`, signed in with read access')).toContain('then read and write only its own rows');
   });
 });
 
@@ -224,7 +230,9 @@ describe('the role\'s grant', () => {
     expect(list).toEqual({ Effect: 'Allow', Action: 's3:ListBucket', Resource: { 'Fn::GetAtt': ['Bucket', 'Arn'] } });
     expect(ddb.Action).toEqual(['dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:GetItem', 'dynamodb:Query']);
     expect(del.Action).toBe('dynamodb:DeleteItem');
-    expect(del.Condition).toEqual({ 'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': ['COVERAGE'] } });
+    // Every repository's own COVERAGE partition and the unkeyed one written before kanon#1346,
+    // and nothing else: `RUN#…`, `AREAS…` and `COST#…` are not re-derivable.
+    expect(del.Condition).toEqual({ 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['COVERAGE', 'COVERAGE#*'] } });
   });
 });
 
@@ -394,9 +402,11 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
   const logged = (): string[][] => (existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
   const run = (op: string, extra: Record<string, string> = {}) => spawnSync('bash', ['infra/qa-store/aws/store.sh'], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, OPERATION: op, DIR: dir, QA_AWS_REGION: 'eu-central-1', QA_DYNAMO_TABLE: 't', QA_S3_BUCKET: 'b', ...extra },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, OPERATION: op, DIR: dir, QA_AWS_REGION: 'eu-central-1', QA_DYNAMO_TABLE: 't', QA_S3_BUCKET: 'b', GITHUB_REPOSITORY_ID: REPO, ...extra },
   });
   const SHA = 'd'.repeat(40);
+  /** The values a logged query asked for. */
+  const asked = (c: string[]) => JSON.parse(c[c.indexOf('--expression-attribute-values') + 1]!)[':p'].S as string;
 
   describe('last-green (the Explorer gate\'s queries, moved)', () => {
     it('writes the newest green full sweep\'s commit, from a server-side filtered query', () => {
@@ -406,15 +416,23 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
       expect(readFileSync(join(dir, 'last-green'), 'utf8')).toBe(`${SHA}\n`);
       const [q] = logged();
       expect(q).toEqual(expect.arrayContaining(['--filter-expression', '#f = :zero AND #t = :all', '--max-items', '1', '--no-scan-index-forward', '--output', 'json']));
+      expect(asked(q!), 'this repository\'s own partition (kanon#1346)').toBe(`RUN#explorer#${REPO}`);
+      expect(logged()).toHaveLength(1);
     });
 
-    it('an empty store is a quiet ok with no commit', () => {
+    it('an empty store is a quiet ok with no commit, after reading its own partition and then the unkeyed one', () => {
       aws(`echo '{"Items":[]}'`);
       const r = run('last-green');
       expect(r.status).toBe(0);
       expect(r.stdout).toContain('no sweep in the store yet');
       expect(readFileSync(join(dir, 'last-green'), 'utf8')).toBe('');
-      expect(logged()).toHaveLength(2);
+      expect(logged().map(asked)).toEqual([`RUN#explorer#${REPO}`, `RUN#explorer#${REPO}`, 'RUN#explorer', 'RUN#explorer']);
+    });
+
+    it('refuses to read with no repository id: degraded, so the lane sweeps', () => {
+      aws(`echo '{"Items":[{"commit":{"S":"${SHA}"}}]}'`);
+      expect(run('last-green', { GITHUB_REPOSITORY_ID: '' })).toMatchObject({ status: 1, stdout: expect.stringContaining('GITHUB_REPOSITORY_ID is \'\'') });
+      expect(logged()).toEqual([]);
     });
 
     it('a red streak is a quiet ok with no commit', () => {
@@ -443,7 +461,7 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
     expect(call?.slice(0, 2)).toEqual(['dynamodb', 'put-item']);
     const item = JSON.parse(call![call!.indexOf('--item') + 1]!);
     expect(item).toEqual({
-      pk: { S: 'RUN#explorer' }, sk: { S: expect.stringMatching(/^\d{8}T\d{6}Z$/) }, commit: { S: SHA },
+      pk: { S: `RUN#explorer#${REPO}` }, sk: { S: expect.stringMatching(/^\d{8}T\d{6}Z$/) }, commit: { S: SHA },
       trigger: { S: 'schedule' }, tier: { S: 'all' }, skipped: { BOOL: true }, reason: { S: 'unchanged-commit' },
     });
     writeFileSync(join(dir, 'skip.json'), JSON.stringify({ commit: 'short' }));
@@ -460,10 +478,10 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
       const r = run('put', { KIND: 'explorer', QA_RUN_TS: '20261004T120000Z' });
       expect(r.status).toBe(0);
       const c = logged();
-      expect(c[0]).toEqual(['s3', 'cp', join(dir, 'report.json'), 's3://b/explorer/20261004T120000Z.json', '--region', 'eu-central-1', '--only-show-errors']);
+      expect(c[0]).toEqual(['s3', 'cp', join(dir, 'report.json'), `s3://b/repository/${REPO}/explorer/20261004T120000Z.json`, '--region', 'eu-central-1', '--only-show-errors']);
       const items = c.slice(1).map((x) => JSON.parse(x[x.indexOf('--item') + 1]!));
-      expect(items[0]).toEqual({ pk: { S: 'RUN#explorer' }, sk: { S: '20261004T120000Z' }, commit: { S: SHA }, trigger: { S: 'schedule' }, tier: { S: 'all' }, routes_swept: { N: '2' }, passed: { N: '1' }, failed: { N: '1' } });
-      expect(items.slice(1).map((i) => [i.pk.S, i.sk.S, i.last_status.S])).toEqual([['COVERAGE', '/a', 'passed'], ['COVERAGE', '/b', 'failed']]);
+      expect(items[0]).toEqual({ pk: { S: `RUN#explorer#${REPO}` }, sk: { S: '20261004T120000Z' }, commit: { S: SHA }, trigger: { S: 'schedule' }, tier: { S: 'all' }, routes_swept: { N: '2' }, passed: { N: '1' }, failed: { N: '1' } });
+      expect(items.slice(1).map((i) => [i.pk.S, i.sk.S, i.last_status.S])).toEqual([[`COVERAGE#${REPO}`, '/a', 'passed'], [`COVERAGE#${REPO}`, '/b', 'failed']]);
     });
 
     it('writes an audit run with its liveness flags only where the report has them, and an AREAS row per area', () => {
@@ -471,9 +489,10 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
       writeFileSync(join(dir, 'report.json'), JSON.stringify({ commit: SHA, trigger: 'schedule', files_read: 3, lines_cited: 9, turns: 20, complete: true, areas_scanned: ['scripts/a.mjs — the gate'] }));
       expect(run('put', { KIND: 'audit', QA_RUN_TS: '20261004T120000Z' }).status).toBe(0);
       const items = logged().slice(1).map((x) => JSON.parse(x[x.indexOf('--item') + 1]!));
-      expect(items[0]).toMatchObject({ pk: { S: 'RUN#audit' }, complete: { BOOL: true } });
+      expect(logged()[0]).toContain(`s3://b/repository/${REPO}/audit/20261004T120000Z.json`);
+      expect(items[0]).toMatchObject({ pk: { S: `RUN#audit#${REPO}` }, complete: { BOOL: true } });
       expect(items[0]).not.toHaveProperty('no_report');
-      expect(items[1]).toMatchObject({ pk: { S: 'AREAS' }, sk: { S: 'scripts/a.mjs' }, detail: { S: 'scripts/a.mjs — the gate' } });
+      expect(items[1]).toMatchObject({ pk: { S: `AREAS#${REPO}` }, sk: { S: 'scripts/a.mjs' }, detail: { S: 'scripts/a.mjs — the gate' } });
       expect(items[0]).not.toHaveProperty('ended_unmarked');
     });
 
@@ -482,7 +501,7 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
       writeFileSync(join(dir, 'report.json'), JSON.stringify({ commit: SHA, trigger: 'schedule', turns: 20, complete: true, ended_unmarked: true, no_report: false, report_invalid: false, areas_scanned: [] }));
       expect(run('put', { KIND: 'audit', QA_RUN_TS: '20261004T120000Z' }).status).toBe(0);
       const [row] = logged().slice(1).map((x) => JSON.parse(x[x.indexOf('--item') + 1]!));
-      expect(row).toMatchObject({ pk: { S: 'RUN#audit' }, complete: { BOOL: true }, ended_unmarked: { BOOL: true }, no_report: { BOOL: false }, report_invalid: { BOOL: false } });
+      expect(row).toMatchObject({ pk: { S: `RUN#audit#${REPO}` }, complete: { BOOL: true }, ended_unmarked: { BOOL: true }, no_report: { BOOL: false }, report_invalid: { BOOL: false } });
     });
 
     it('skips a missing Explorer report, and fails a missing audit report', () => {
@@ -507,7 +526,7 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
         `  *RUN#audit*) echo '{"Items":[{"pk":{"S":"RUN#audit"},"sk":{"S":"20261001T000000Z"},"complete":{"BOOL":false}}]}';;`,
         `  *COVERAGE*) echo '{"Items":[{"pk":{"S":"COVERAGE"},"sk":{"S":"/a"},"last_status":{"S":"passed"}}]}';;`,
         `  *AREAS*) echo '{"Items":[]}';;`,
-        '  s3\\ cp\\ s3://b/audit/*) echo "fatal error: An error occurred (404) when calling the HeadObject operation: Not Found" >&2; exit 1;;',
+        '  s3\\ cp\\ s3://b/repository/101/audit/*) echo "fatal error: An error occurred (404) when calling the HeadObject operation: Not Found" >&2; exit 1;;',
         '  s3\\ cp*) echo "{}" > "$4";;',
         'esac',
       ].join('\n'));
@@ -520,7 +539,7 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
       expect(read('areas.json')).toEqual([]);
       expect(existsSync(join(dir, 'export/reports/explorer/20261003T000000Z.json'))).toBe(true);
       expect(existsSync(join(dir, 'export/reports/explorer/20261002T000000Z.json'))).toBe(false);
-      expect(r.stdout).toContain('no raw report at audit/20261001T000000Z.json');
+      expect(r.stdout).toContain('no raw report at repository/101/audit/20261001T000000Z.json');
       const windowed = logged().find((c) => c.join(' ').includes('RUN#explorer'))!;
       expect(windowed).toEqual(expect.arrayContaining(['pk = :p AND sk > :s', '--no-scan-index-forward']));
       const ledger = logged().find((c) => c.join(' ').includes('AREAS'))!;
@@ -567,7 +586,7 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
       ], error: null });
       const [q] = logged();
       expect(q).toEqual(['dynamodb', 'query', '--table-name', 't', '--region', 'eu-central-1', '--key-condition-expression', 'pk = :p AND sk > :s',
-        '--expression-attribute-values', '{":p":{"S":"COST#implementer"},":s":{"S":"20260920T000000Z"}}',
+        '--expression-attribute-values', '{":p":{"S":"COST#implementer#101"},":s":{"S":"20260920T000000Z"}}',
         '--projection-expression', 'sk, issue_number, outcome, run_id', '--output', 'json']);
     });
 
@@ -589,13 +608,279 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
   });
 
   it('the maintenance purge is a dry run unless APPLY is 1, and deletes only COVERAGE rows', () => {
-    aws(`case "$2" in query) printf 'signal sweep (dynamic): /a\\tsignal sweep (dynamic): /b\\n';; esac`);
-    const purge = (apply: string) => spawnSync('bash', ['infra/qa-store/aws/purge-legacy-coverage.sh'], {
-      encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, QA_AWS_REGION: 'r', QA_DYNAMO_TABLE: 't', APPLY: apply },
+    // This repository's own partition holds /a and /b (the migration copies legacy keys too), the
+    // unkeyed one /c; another repository's partition is never asked for.
+    aws([
+      'case "$*" in',
+      `  *query*COVERAGE#${REPO}*) printf 'signal sweep (dynamic): /a\\tsignal sweep (dynamic): /b\\n';;`,
+      `  *query*'"COVERAGE"'*) printf 'signal sweep (dynamic): /c\\n';;`,
+      '  *query*) echo None;;',
+      'esac',
+    ].join('\n'));
+    const purge = (apply: string, repo = REPO) => spawnSync('bash', ['infra/qa-store/aws/purge-legacy-coverage.sh'], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, QA_AWS_REGION: 'r', QA_DYNAMO_TABLE: 't', APPLY: apply, GITHUB_REPOSITORY_ID: repo },
     });
-    expect(purge('').stdout).toContain('2 legacy COVERAGE key(s) found');
+    expect(purge('').stdout).toContain('3 legacy COVERAGE key(s) found');
     expect(logged().filter((c) => c[1] === 'delete-item')).toEqual([]);
-    expect(purge('1').stdout).toContain('deleted 2 legacy COVERAGE key(s)');
-    expect(logged().filter((c) => c[1] === 'delete-item').map((c) => JSON.parse(c[c.indexOf('--key') + 1]!).pk.S)).toEqual(['COVERAGE', 'COVERAGE']);
+    expect(logged().map(asked)).toEqual([`COVERAGE#${REPO}`, 'COVERAGE']);
+    expect(purge('1').stdout).toContain('deleted 3 legacy COVERAGE key(s)');
+    expect(logged().filter((c) => c[1] === 'delete-item').map((c) => {
+      const key = JSON.parse(c[c.indexOf('--key') + 1]!);
+      return [key.pk.S, key.sk.S];
+    })).toEqual([[`COVERAGE#${REPO}`, 'signal sweep (dynamic): /a'], [`COVERAGE#${REPO}`, 'signal sweep (dynamic): /b'], ['COVERAGE', 'signal sweep (dynamic): /c']]);
+    expect(purge('', OTHER).stdout).toContain('1 legacy COVERAGE key(s) found');
+    expect(purge('', '').status).toBe(2);
+  });
+});
+
+// kanon#1346 (the Owner's option 2) and kanon#1367: every row and raw report carries the
+// repository, so repositories on one store read only their own; the unkeyed rows written before
+// are read only while a repository has none of its own; the Owner's migration copies them under
+// one repository's keys. Each case runs the store's scripts against `helpers/fake-aws-cli.mjs`, one
+// table and one bucket in a temp directory that every call of the case shares.
+describe('the store keys every row by repository (kanon#1346)', SPAWNS, () => {
+  let work: string;
+  let bin: string;
+  let state: string;
+  beforeEach(() => {
+    work = mkdtempSync(join(tmpdir(), 'qa-store-keys-'));
+    bin = join(work, 'bin');
+    state = join(work, 'state');
+    mkdirSync(bin);
+    mkdirSync(state);
+    writeStub(join(bin, 'aws'), `#!/usr/bin/env bash\nexec node ${JSON.stringify(join(process.cwd(), 'tests/unit/helpers/fake-aws-cli.mjs'))} ${JSON.stringify(state)} "$@"\n`);
+    writeStub(join(bin, 'gh'), `#!/usr/bin/env bash\necho '{"id":${REPO},"full_name":"o/r"}'\n`);
+  });
+  afterEach(() => rmSync(work, { recursive: true, force: true }));
+
+  type Item = Record<string, Record<string, unknown>>;
+  const table = (): Item[] => (existsSync(join(state, 'table.json')) ? JSON.parse(readFileSync(join(state, 'table.json'), 'utf8')) : []);
+  const bucket = (): Record<string, string> => (existsSync(join(state, 'bucket.json')) ? JSON.parse(readFileSync(join(state, 'bucket.json'), 'utf8')) : {});
+  const seed = (items: Item[], objects: Record<string, string> = {}) => {
+    writeFileSync(join(state, 'table.json'), JSON.stringify(items));
+    writeFileSync(join(state, 'bucket.json'), JSON.stringify(objects));
+  };
+  const calls = (): string[][] => (existsSync(join(state, 'calls')) ? readFileSync(join(state, 'calls'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  /** One store operation, as `repo`, in a fresh directory; returns the run and the directory. */
+  const op = (repo: string, operation: string, extra: Record<string, string> = {}, files: Record<string, unknown> = {}) => {
+    const dir = mkdtempSync(join(work, 'op-'));
+    for (const [f, v] of Object.entries(files)) writeFileSync(join(dir, f), JSON.stringify(v));
+    const r = spawnSync('bash', ['infra/qa-store/aws/store.sh'], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, OPERATION: operation, DIR: dir, QA_AWS_REGION: 'r', QA_DYNAMO_TABLE: 't', QA_S3_BUCKET: 'b', GITHUB_REPOSITORY_ID: repo, ...extra },
+    });
+    return { r, dir, read: (f: string) => readFileSync(join(dir, f), 'utf8') };
+  };
+  const A = 'a'.repeat(40);
+  const B = 'b'.repeat(40);
+  const TS = '20261020T100000Z';
+  const sweep = (commit: string, route: string) => ({ commit, trigger: 'schedule', tier: 'all', routes_swept: 1, passed: 1, failed: 0, routes: [{ route, status: 'passed' }] });
+  const unkeyedSweep = (commit: string, sk: string): Item => ({ pk: { S: 'RUN#explorer' }, sk: { S: sk }, commit: { S: commit }, tier: { S: 'all' }, failed: { N: '0' }, trigger: { S: 'schedule' } });
+
+  it('two repositories on one table see only their own rows: the gate, the coverage ledger, the areas, the cost rows and the export', () => {
+    for (const [repo, commit, route, area] of [[REPO, A, '/a', 'src/a.ts'], [OTHER, B, '/b', 'src/b.ts']] as const) {
+      expect(op(repo, 'put', { KIND: 'explorer', QA_RUN_TS: TS }, { 'report.json': sweep(commit, route) }).r.status).toBe(0);
+      expect(op(repo, 'put', { KIND: 'audit', QA_RUN_TS: TS }, { 'report.json': { commit, trigger: 'schedule', complete: true, areas_scanned: [area] } }).r.status).toBe(0);
+      expect(op(repo, 'put', { KIND: 'telemetry', QA_RUN_TS: TS }, { 'report.json': { agent: 'implementer', commit, outcome: 'ok', issue_number: Number(repo) } }).r.status).toBe(0);
+    }
+    // The keys, pinned: `COST#<agent>` included, which no test held before.
+    expect(table().map((i) => i.pk!.S).sort()).toEqual([REPO, OTHER].flatMap((id) => [
+      `AREAS#${id}`, `COST#implementer#${id}`, `COVERAGE#${id}`, `RUN#audit#${id}`, `RUN#explorer#${id}`,
+    ]).sort());
+    expect(Object.keys(bucket()).sort()).toEqual([REPO, OTHER].flatMap((id) => [
+      `repository/${id}/audit/${TS}.json`, `repository/${id}/explorer/${TS}.json`, `repository/${id}/telemetry/implementer/${TS}.json`,
+    ]).sort());
+
+    // The gate: each repository's own newest green sweep, never the other's.
+    expect(op(REPO, 'last-green').read('last-green')).toBe(`${A}\n`);
+    expect(op(OTHER, 'last-green').read('last-green')).toBe(`${B}\n`);
+
+    // The export: the runs, the coverage ledger, the areas and the raw reports, each its own.
+    const e = op(REPO, 'export', { KIND: 'overseer', FROM: '20261001T000000Z' });
+    expect(e.r.status, e.r.stdout + e.r.stderr).toBe(0);
+    const ex = (f: string) => JSON.parse(e.read(`export/${f}`));
+    expect(ex('runs-explorer.json').map((r: J) => r.commit)).toEqual([A]);
+    expect(ex('runs-audit.json').map((r: J) => r.commit)).toEqual([A]);
+    expect(ex('coverage.json').map((r: J) => r.route)).toEqual(['/a']);
+    expect(ex('areas.json').map((r: J) => r.area)).toEqual(['src/a.ts']);
+    expect(JSON.parse(e.read(`export/reports/explorer/${TS}.json`)).commit).toBe(A);
+    expect(JSON.parse(e.read(`export/reports/audit/${TS}.json`)).commit).toBe(A);
+    expect(op(OTHER, 'export', { KIND: 'audit', FROM: '20261001T000000Z' }).read('export/areas.json')).toContain('src/b.ts');
+
+    // The cost rows: one repository's, under the same agent.
+    const cr = op(REPO, 'cost-rows', { KIND: 'implementer', FROM: '20261001T000000Z' });
+    expect(JSON.parse(cr.read('cost-rows.json'))).toEqual({ rows: [{ ts: TS, issue_number: REPO, outcome: 'ok', run_id: null }], error: null });
+    expect(cr.r.stdout).toContain(`cost-rows: 1 COST#implementer#${REPO} rows after 20261001T000000Z`);
+    expect(cr.r.stdout).not.toContain('::notice');
+
+    // No read of either repository's lanes touched an unkeyed partition: each had rows of its own.
+    const reads = calls().filter((x) => x[1] === 'query').map((x) => JSON.parse(x[x.indexOf('--expression-attribute-values') + 1]!)[':p'].S);
+    expect(reads.filter((pk: string) => !/#\d+$/.test(pk))).toEqual([]);
+  });
+
+  it('two repositories putting the same kind in the same second keep both runs and both raw reports (kanon#1367)', () => {
+    op(REPO, 'put', { KIND: 'explorer', QA_RUN_TS: TS }, { 'report.json': sweep(A, '/a') });
+    op(OTHER, 'put', { KIND: 'explorer', QA_RUN_TS: TS }, { 'report.json': sweep(B, '/a') });
+    const runs = table().filter((i) => String(i.pk!.S).startsWith('RUN#explorer#') && i.sk!.S === TS);
+    expect(runs.map((i) => [i.pk!.S, i.commit!.S]).sort()).toEqual([[`RUN#explorer#${REPO}`, A], [`RUN#explorer#${OTHER}`, B]]);
+    expect(JSON.parse(bucket()[`repository/${REPO}/explorer/${TS}.json`]!).commit).toBe(A);
+    expect(JSON.parse(bucket()[`repository/${OTHER}/explorer/${TS}.json`]!).commit).toBe(B);
+    // The same route, swept by both: two ledger rows, not one overwritten.
+    expect(table().filter((i) => String(i.pk!.S).startsWith('COVERAGE#')).map((i) => i.last_seen_commit!.S).sort()).toEqual([A, B]);
+  });
+
+  it('a write with no repository id is refused, never written unkeyed', () => {
+    const { r } = op('', 'put', { KIND: 'explorer', QA_RUN_TS: TS }, { 'report.json': sweep(A, '/a') });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('GITHUB_REPOSITORY_ID is \'\'');
+    expect(op('', 'record-skip', {}, { 'skip.json': { commit: A } }).r.status).toBe(2);
+    expect(table()).toEqual([]);
+    expect(bucket()).toEqual({});
+  });
+
+  describe('the unkeyed rows, written before kanon#1346, are read only while a partition has none of its own', () => {
+    const UNKEYED: Item[] = [
+      unkeyedSweep(A, '20261010T000000Z'),
+      { pk: { S: 'COVERAGE' }, sk: { S: '/old' }, last_status: { S: 'passed' } },
+      { pk: { S: 'AREAS' }, sk: { S: 'src/old.ts' }, commit: { S: A } },
+      { pk: { S: 'RUN#audit' }, sk: { S: '20261010T000000Z' }, commit: { S: A } },
+      { pk: { S: 'COST#implementer' }, sk: { S: '20261010T000000Z' }, outcome: { S: 'ok' } },
+    ];
+
+    it('before the repository writes anything: the gate, the export with its raw reports, and the cost rows read the unkeyed rows, and say so', () => {
+      seed(UNKEYED, { 'explorer/20261010T000000Z.json': JSON.stringify({ commit: A }) });
+      const g = op(REPO, 'last-green');
+      expect(g.read('last-green')).toBe(`${A}\n`);
+      expect(g.r.stdout).toContain(`RUN#explorer#${REPO} holds no sweep of this repository's yet, so the gate reads the store's unkeyed RUN#explorer`);
+
+      const e = op(REPO, 'export', { KIND: 'overseer', FROM: '20261001T000000Z' });
+      expect(e.r.status, e.r.stdout + e.r.stderr).toBe(0);
+      expect(JSON.parse(e.read('export/coverage.json'))).toEqual([{ route: '/old', last_status: 'passed' }]);
+      expect(JSON.parse(e.read('export/areas.json')).map((r: J) => r.area)).toEqual(['src/old.ts']);
+      expect(JSON.parse(e.read('export/reports/explorer/20261010T000000Z.json'))).toEqual({ commit: A });
+      expect(e.r.stdout).toContain('::notice title=qa-store export::this repository has no COVERAGE rows of its own yet');
+
+      const cr = op(REPO, 'cost-rows', { KIND: 'implementer', FROM: '20261001T000000Z' });
+      expect(cr.r.status, cr.r.stdout + cr.r.stderr).toBe(0);
+      expect(JSON.parse(cr.read('cost-rows.json')).rows.map((r: J) => r.ts)).toEqual(['20261010T000000Z']);
+      expect(cr.r.stdout).toContain(`::notice title=qa-store cost-rows::this repository has no COST#implementer#${REPO} rows yet, so the query read the unkeyed COST#implementer`);
+      expect(cr.r.stdout).toContain('cost-rows: 1 COST#implementer rows after 20261001T000000Z');
+      // DynamoDB refuses an empty key-condition value, and so does the fake: no query sends one.
+      for (const c of calls().filter((x) => x[1] === 'query')) {
+        expect(Object.values(JSON.parse(c[c.indexOf('--expression-attribute-values') + 1]!)).map((v: J) => v.S)).not.toContain('');
+      }
+    });
+
+    it('after its first row in a partition, the repository reads only its own there', () => {
+      // Unkeyed rows inside the later window too, so a fallback on an empty window would show.
+      seed([...UNKEYED, unkeyedSweep(A, '20261101T000000Z'), { pk: { S: 'COST#implementer' }, sk: { S: '20261101T000000Z' }, outcome: { S: 'ok' } }]);
+      op(REPO, 'put', { KIND: 'explorer', QA_RUN_TS: TS }, { 'report.json': sweep(B, '/new') });
+      op(REPO, 'put', { KIND: 'telemetry', QA_RUN_TS: TS }, { 'report.json': { agent: 'implementer', commit: B, outcome: 'ok' } });
+      expect(op(REPO, 'last-green').read('last-green')).toBe(`${B}\n`);
+      const e = op(REPO, 'export', { KIND: 'overseer', FROM: '20261001T000000Z' });
+      expect(JSON.parse(e.read('export/coverage.json')).map((r: J) => r.route)).toEqual(['/new']);
+      expect(JSON.parse(e.read('export/runs-explorer.json')).map((r: J) => r.commit)).toEqual([B]);
+      // The audit has written nothing of its own yet, so its partitions still fall back.
+      expect(JSON.parse(e.read('export/areas.json')).map((r: J) => r.area)).toEqual(['src/old.ts']);
+      // An empty window is not an empty partition: no fallback when the repository has rows before it.
+      expect(JSON.parse(op(REPO, 'export', { KIND: 'overseer', FROM: '20261031T000000Z' }).read('export/runs-explorer.json'))).toEqual([]);
+      const cr = op(REPO, 'cost-rows', { KIND: 'implementer', FROM: '20261031T000000Z' });
+      expect(JSON.parse(cr.read('cost-rows.json'))).toEqual({ rows: [], error: null });
+      expect(cr.r.stdout).toContain(`cost-rows: 0 COST#implementer#${REPO} rows after 20261031T000000Z`);
+    });
+
+    it('the fake refuses an empty key-condition value, as DynamoDB does', () => {
+      const r = spawnSync('aws', ['dynamodb', 'query', '--table-name', 't', '--key-condition-expression', 'pk = :p AND sk > :s',
+        '--expression-attribute-values', '{":p":{"S":"COST#implementer#101"},":s":{"S":""}}'], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+      expect(r.status).toBe(254);
+      expect(r.stderr).toContain('ValidationException');
+    });
+
+    it('a repository whose own partition holds only the skip the gate recorded against the unkeyed baseline still reads that baseline', () => {
+      seed(UNKEYED);
+      expect(op(REPO, 'record-skip', {}, { 'skip.json': { commit: A } }).r.status).toBe(0);
+      const g = op(REPO, 'last-green');
+      expect(g.r.status, g.r.stdout).toBe(0);
+      expect(g.read('last-green')).toBe(`${A}\n`);
+    });
+  });
+
+  it('the docs name every keyed partition, the raw reports\' root, the fallback and the migration\'s command', () => {
+    const doc = readFileSync('docs/qa-store.md', 'utf8');
+    const section = doc.slice(doc.indexOf('### Rows by repository'), doc.indexOf('### Provision a store'));
+    for (const pk of [...UNKEYED_PARTITIONS, 'COST#<agent>']) expect(section).toContain(`\`${pk}#<id>\``);
+    expect(section).toContain(`\`${REPORTS_ROOT}/<id>/<kind>/<ts>.json\``);
+    expect(section).toContain('no row of its own');
+    expect(doc).toContain('node infra/qa-store/aws/migrate-to-repository-keys.mjs --repository <owner>/<repo> --region <region> --bucket <BucketName>');
+  });
+
+  describe('the migration (migrate-to-repository-keys.mjs, the Owner runs it)', () => {
+    const migrate = (...flags: string[]) => spawnSync('node', ['infra/qa-store/aws/migrate-to-repository-keys.mjs',
+      '--repository', 'o/r', '--region', 'r', '--bucket', 'b', '--table', 't', ...flags], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    const STORE: Item[] = [
+      unkeyedSweep(A, '20261010T000000Z'),
+      { pk: { S: 'COVERAGE' }, sk: { S: '/a' }, last_status: { S: 'failed' } },
+      { pk: { S: 'COVERAGE' }, sk: { S: '/old' }, last_status: { S: 'passed' } },
+      { pk: { S: 'COST#implementer' }, sk: { S: '20261010T000000Z' }, outcome: { S: 'ok' } },
+      // Written by the repository's lane since the pin moved: newer, and kept as it is.
+      { pk: { S: `COVERAGE#${REPO}` }, sk: { S: '/a' }, last_status: { S: 'passed' } },
+      // Another repository's own row, which the migration never touches.
+      { pk: { S: `COVERAGE#${OTHER}` }, sk: { S: '/b' }, last_status: { S: 'passed' } },
+    ];
+    const OBJECTS = { 'explorer/20261010T000000Z.json': '{"commit":"x"}', 'telemetry/implementer/20261010T000000Z.json': '{}', [`repository/${OTHER}/explorer/${TS}.json`]: '{}' };
+
+    it('a dry run prints what it would copy and writes nothing', () => {
+      seed(STORE, OBJECTS);
+      const r = migrate();
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain(`o/r is repository id ${REPO}`);
+      expect(r.stdout).toContain(`COVERAGE → COVERAGE#${REPO}: would copy 1 row(s); 1 already there.`);
+      expect(r.stdout).toContain(`RUN#explorer → RUN#explorer#${REPO}: would copy 1 row(s); 0 already there.`);
+      expect(r.stdout).toContain(`COST#implementer → COST#implementer#${REPO}: would copy 1 row(s)`);
+      expect(r.stdout).toContain(`Raw reports → repository/${REPO}/: would copy 2; 0 already there.`);
+      expect(r.stdout).toContain('Dry run: nothing written. Re-run with --apply to copy 3 row(s) and 2 report(s).');
+      expect(calls().filter((c) => c[1] === 'put-item' || c[1] === 'cp')).toEqual([]);
+      expect(table()).toEqual(STORE);
+      expect(bucket()).toEqual(OBJECTS);
+    });
+
+    it('--apply copies under the repository\'s keys, keeps what is there, deletes nothing, and a second run copies nothing', () => {
+      seed(STORE, OBJECTS);
+      const r = migrate('--apply');
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain('Copied 3 row(s) and 2 report(s)');
+      const after = table();
+      expect(after).toEqual(expect.arrayContaining(STORE));
+      expect(after).toHaveLength(STORE.length + 3);
+      const own = (pk: string, sk: string) => after.find((i) => i.pk!.S === pk && i.sk!.S === sk);
+      expect(own(`COVERAGE#${REPO}`, '/a')!.last_status).toEqual({ S: 'passed' });
+      expect(own(`COVERAGE#${REPO}`, '/old')!.last_status).toEqual({ S: 'passed' });
+      expect(own(`RUN#explorer#${REPO}`, '20261010T000000Z')!.commit).toEqual({ S: A });
+      expect(own(`COST#implementer#${REPO}`, '20261010T000000Z')!.outcome).toEqual({ S: 'ok' });
+      expect(after.filter((i) => i.pk!.S === `COVERAGE#${OTHER}`)).toHaveLength(1);
+      for (const put of calls().filter((c) => c[1] === 'put-item')) expect(put).toEqual(expect.arrayContaining(['--condition-expression', 'attribute_not_exists(pk)']));
+      expect(bucket()[`repository/${REPO}/explorer/20261010T000000Z.json`]).toBe('{"commit":"x"}');
+      expect(bucket()[`repository/${REPO}/telemetry/implementer/20261010T000000Z.json`]).toBe('{}');
+      expect(bucket()['explorer/20261010T000000Z.json']).toBe('{"commit":"x"}');
+
+      // The readers now find the history under the repository's own key.
+      expect(op(REPO, 'last-green').read('last-green')).toBe(`${A}\n`);
+      expect(calls().filter((c) => c[1] === 'query').every((c) => /#\d+"/.test(c[c.indexOf('--expression-attribute-values') + 1]!))).toBe(true);
+
+      const again = migrate('--apply');
+      expect(again.stdout).toContain('Copied 0 row(s) and 0 report(s)');
+      expect(table()).toHaveLength(STORE.length + 3);
+    });
+
+    it('refuses without its required flags, and fails when GitHub gives no id', () => {
+      expect(spawnSync('node', ['infra/qa-store/aws/migrate-to-repository-keys.mjs', '--repository', 'o/r'], { encoding: 'utf8' }).status).toBe(2);
+      writeStub(join(bin, 'gh'), '#!/usr/bin/env bash\necho \'{"message":"Not Found"}\'\n');
+      const r = migrate();
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('GitHub gave no repository id for o/r');
+      expect(calls()).toEqual([]);
+    });
   });
 });

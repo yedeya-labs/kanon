@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# The contract's `record-skip` on Kanon's AWS store: a `RUN#explorer` row saying a commit was
-# skipped, so bounded coverage doesn't read as full.
+# The contract's `record-skip` on Kanon's AWS store: a `RUN#explorer#<repository id>` row saying a
+# commit was skipped, so bounded coverage doesn't read as full.
 #
 # MOVED FROM THE REFERENCE ADOPTER'S EXPLORER GATE (Kanon plan 0004 step P9, ADR 0009). The
 # row is the one the gate wrote: no `failed` attribute, which keeps it out of `last-green`'s
@@ -10,17 +10,25 @@
 # wrote the same values as literals (`schedule`, `all`, `unchanged-commit`), which are now that
 # block's defaults. NOT best-effort: a failed write fails the store job.
 #
-# Env: QA_DYNAMO_TABLE, QA_AWS_REGION, DIR.
+# KEYED BY THE REPOSITORY (kanon#1346, `keys.mjs`): the partition is this repository's own, so a
+# repository sharing the store never reads this skip as its own.
+#
+# Env: QA_DYNAMO_TABLE, QA_AWS_REGION, DIR, GITHUB_REPOSITORY_ID (the runner's).
 set -euo pipefail
 
 : "${QA_DYNAMO_TABLE:?QA_DYNAMO_TABLE unset}"
 : "${QA_AWS_REGION:?QA_AWS_REGION unset}"
 skip="${DIR:?DIR unset}/skip.json"
+repo="${GITHUB_REPOSITORY_ID:-}"
+if ! [[ "$repo" =~ ^[1-9][0-9]*$ ]]; then
+  echo "record-skip: GITHUB_REPOSITORY_ID is '$repo', not a repository id, and the store keys every row by it (kanon#1346)" >&2
+  exit 2
+fi
 
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
-item="$(jq -ce --arg ts "$ts" '
+item="$(jq -ce --arg ts "$ts" --arg r "$repo" '
   if (.commit | type) == "string" and (.commit | test("^[0-9a-f]{40}$")) then {
-    pk: {S: "RUN#explorer"}, sk: {S: $ts}, commit: {S: .commit},
+    pk: {S: ("RUN#explorer#" + $r)}, sk: {S: $ts}, commit: {S: .commit},
     trigger: {S: (.trigger // "schedule")}, tier: {S: (.tier // "all")},
     skipped: {BOOL: true}, reason: {S: (.reason // "unchanged-commit")}
   } else error("skip.json has no 40-character commit") end' "$skip")"

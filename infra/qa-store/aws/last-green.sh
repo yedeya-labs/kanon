@@ -12,7 +12,14 @@
 # which Kanon's `qa-store` block reports as `state: degraded`, and the lane sweeps. All of them
 # fail OPEN, as the gate did: a store hiccup must run the sweep, never skip it.
 #
-# Env: QA_DYNAMO_TABLE, QA_AWS_REGION, DIR.
+# THIS REPOSITORY'S SWEEPS ONLY (kanon#1346, `keys.mjs`): the partition is
+# `RUN#explorer#<repository id>`, so another repository on the same store never supplies the
+# baseline. WHILE THAT PARTITION HOLDS NO SWEEP (nothing at all, or only a skip marker the gate
+# wrote against an unkeyed baseline), the gate reads the unkeyed `RUN#explorer` written before
+# kanon#1346 instead, with the same queries, as it did then. The repository's first sweep ends
+# that, and the Owner's migration copies the unkeyed history under the repository's key.
+#
+# Env: QA_DYNAMO_TABLE, QA_AWS_REGION, DIR, GITHUB_REPOSITORY_ID (the runner's).
 set -euo pipefail
 
 : "${QA_DYNAMO_TABLE:?QA_DYNAMO_TABLE unset}"
@@ -28,6 +35,13 @@ run_sweep() { # $1 = degraded|ok, $2 = message
   echo "$2"
   exit 0
 }
+
+repo="${GITHUB_REPOSITORY_ID:-}"
+if ! [[ "$repo" =~ ^[1-9][0-9]*$ ]]; then
+  run_sweep degraded "GITHUB_REPOSITORY_ID is '$repo', not a repository id, and the store keys every row by it (kanon#1346) — running the full sweep."
+fi
+own="RUN#explorer#$repo"
+unkeyed="RUN#explorer"
 
 # Commit of the most recent GREEN, full-tier sweep in the store.
 #
@@ -46,12 +60,14 @@ run_sweep() { # $1 = degraded|ok, $2 = message
 # warning the CLI prints on an otherwise *successful* call would
 # otherwise be spliced into the JSON and break the parse.
 query_err="$(mktemp)"
+for pk in "$own" "$unkeyed"; do
+values="$(jq -nc --arg p "$pk" '{":p":{"S":$p},":zero":{"N":"0"},":all":{"S":"all"}}')"
 if ! items="$(aws dynamodb query --region "$QA_AWS_REGION" --table-name "$QA_DYNAMO_TABLE" \
   --no-scan-index-forward --max-items 1 \
   --key-condition-expression 'pk = :p' \
   --filter-expression '#f = :zero AND #t = :all' \
   --expression-attribute-names '{"#f":"failed","#t":"tier"}' \
-  --expression-attribute-values '{":p":{"S":"RUN#explorer"},":zero":{"N":"0"},":all":{"S":"all"}}' \
+  --expression-attribute-values "$values" \
   --output json 2>"$query_err")"; then
   run_sweep degraded "the baseline query failed, so HEAD could not be compared — running the full sweep. $(tr '\n' ' ' < "$query_err")"
 fi
@@ -61,6 +77,7 @@ fi
 if ! last_green="$(printf '%s' "$items" | jq -er 'if (.Items | length) > 0 then (.Items[0].commit.S // "<matched row has no commit attribute>") else "" end')"; then
   run_sweep degraded "the baseline response did not parse as the expected JSON — running the full sweep. $(printf '%s' "$items" | head -c 300 | tr '\n' ' ')"
 fi
+[ -n "$last_green" ] && break
 
 # A ZERO-MATCH baseline is not one state but three, and only one is benign
 # (RA-714). The filter above matches nothing when the partition is genuinely
@@ -72,7 +89,8 @@ fi
 #
 # So look at the partition's NEWEST row, unfiltered. This second request is
 # made only on this branch, never on the skip/changed paths.
-#   - no row at all                → a fresh store: quiet `ok`.
+#   - no row at all                → a fresh store: quiet `ok`. In this
+#     repository's own partition, it is instead the cue to read the unkeyed one.
 #   - a RED full-tier sweep (`failed` a non-zero number, `tier` "all") → a red
 #     streak. Quiet `ok`, deliberately — the gate is behaving correctly, and an
 #     outage already has its own signal (the bugs the sweep files); a daily
@@ -84,34 +102,41 @@ fi
 #     full-tier row the filter should have returned) →
 #     `degraded`: rows exist that the baseline filter cannot see, which is
 #     the drift. A skip marker is only ever written against a green baseline,
-#     so a skip marker with no green row visible is itself impossible.
-if [ -z "$last_green" ]; then
-  if ! newest="$(aws dynamodb query --region "$QA_AWS_REGION" --table-name "$QA_DYNAMO_TABLE" \
-    --no-scan-index-forward --max-items 1 \
-    --key-condition-expression 'pk = :p' \
-    --expression-attribute-values '{":p":{"S":"RUN#explorer"}}' \
-    --output json 2>"$query_err")"; then
-    run_sweep degraded "the baseline query matched no green full-tier sweep, and the follow-up read of the partition failed, so an empty store cannot be told from a broken filter — running the full sweep. $(tr '\n' ' ' < "$query_err")"
-  fi
-  if ! shape="$(printf '%s' "$newest" | jq -er '
-      if (.Items | length) == 0 then "empty"
-      elif .Items[0].failed.N == "0" and .Items[0].tier.S == "all"
-        then "other a green full-tier row the filter did not return"
-      elif (.Items[0].failed.N // null) != null and .Items[0].tier.S == "all"
-        then "sweep failed=\(.Items[0].failed.N) tier=all sk=\(.Items[0].sk.S // "?")"
-      elif (.Items[0].failed.N // null) != null and (.Items[0].tier.S // null) != null and .Items[0].trigger.S == "workflow_dispatch"
-        then "sweep failed=\(.Items[0].failed.N) tier=\(.Items[0].tier.S) (manual) sk=\(.Items[0].sk.S // "?")"
-      elif (.Items[0].tier.S // null) != null and (.Items[0].failed.N // null) != null
-        then "other a \(.Items[0].trigger.S // "?") sweep recorded tier=\(.Items[0].tier.S), and only a manual dispatch sets a partial tier"
-      else "other attributes \(.Items[0] | keys | join(","))" end')"; then
-    run_sweep degraded "the partition read did not parse as the expected JSON, so an empty store cannot be told from a broken filter — running the full sweep. $(printf '%s' "$newest" | head -c 300 | tr '\n' ' ')"
-  fi
-  case "$shape" in
-    empty) run_sweep ok "no sweep in the store yet → running the full sweep." ;;
-    sweep*) run_sweep ok "no green full-tier sweep among the recorded runs (newest: ${shape#sweep }) → running the full sweep." ;;
-    *) run_sweep degraded "RUN#explorer holds rows, but the baseline filter (failed = 0 AND tier = all) matched none, and the newest row is not a red or manual partial-tier sweep that would explain it (${shape#other }). The filter has likely drifted from what push-run.sh writes (or a row landed between the two reads — a re-run settles that) — running the full sweep." ;;
-  esac
+#     so a skip marker with no green row visible is itself impossible — except
+#     in this repository's own partition, before its first sweep, when the
+#     baseline it was written against was the unkeyed one: read that one too.
+if ! newest="$(aws dynamodb query --region "$QA_AWS_REGION" --table-name "$QA_DYNAMO_TABLE" \
+  --no-scan-index-forward --max-items 1 \
+  --key-condition-expression 'pk = :p' \
+  --expression-attribute-values "$(jq -nc --arg p "$pk" '{":p":{"S":$p}}')" \
+  --output json 2>"$query_err")"; then
+  run_sweep degraded "the baseline query matched no green full-tier sweep, and the follow-up read of the partition failed, so an empty store cannot be told from a broken filter — running the full sweep. $(tr '\n' ' ' < "$query_err")"
 fi
+if ! shape="$(printf '%s' "$newest" | jq -er --arg own "$([ "$pk" = "$own" ] && echo yes)" '
+    if (.Items | length) == 0 then "empty"
+    elif $own == "yes" and .Items[0].skipped.BOOL == true and (.Items[0].failed.N // null) == null
+      then "empty"
+    elif .Items[0].failed.N == "0" and .Items[0].tier.S == "all"
+      then "other a green full-tier row the filter did not return"
+    elif (.Items[0].failed.N // null) != null and .Items[0].tier.S == "all"
+      then "sweep failed=\(.Items[0].failed.N) tier=all sk=\(.Items[0].sk.S // "?")"
+    elif (.Items[0].failed.N // null) != null and (.Items[0].tier.S // null) != null and .Items[0].trigger.S == "workflow_dispatch"
+      then "sweep failed=\(.Items[0].failed.N) tier=\(.Items[0].tier.S) (manual) sk=\(.Items[0].sk.S // "?")"
+    elif (.Items[0].tier.S // null) != null and (.Items[0].failed.N // null) != null
+      then "other a \(.Items[0].trigger.S // "?") sweep recorded tier=\(.Items[0].tier.S), and only a manual dispatch sets a partial tier"
+    else "other attributes \(.Items[0] | keys | join(","))" end')"; then
+  run_sweep degraded "the partition read did not parse as the expected JSON, so an empty store cannot be told from a broken filter — running the full sweep. $(printf '%s' "$newest" | head -c 300 | tr '\n' ' ')"
+fi
+if [ "$pk" = "$own" ] && [ "$shape" = empty ]; then
+  echo "$own holds no sweep of this repository's yet, so the gate reads the store's unkeyed $unkeyed, written before kanon#1346, until this repository's first sweep or the Owner's migration."
+  continue
+fi
+case "$shape" in
+  empty) run_sweep ok "no sweep in the store yet → running the full sweep." ;;
+  sweep*) run_sweep ok "no green full-tier sweep among the recorded runs (newest: ${shape#sweep }) → running the full sweep." ;;
+  *) run_sweep degraded "$pk holds rows, but the baseline filter (failed = 0 AND tier = all) matched none, and the newest row is not a red or manual partial-tier sweep that would explain it (${shape#other }). The filter has likely drifted from what push-run.sh writes (or a row landed between the two reads — a re-run settles that) — running the full sweep." ;;
+esac
+done
 # Tripwire. Anything that is not a bare 40-hex sha means the query shape
 # changed under us again; fail open, but never silently. Matched with
 # bash `=~` rather than `grep`, deliberately: grep is line-oriented and
@@ -122,4 +147,4 @@ if ! [[ "$last_green" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 printf '%s\n' "$last_green" > "$out"
-echo "last green full-tier sweep: $last_green"
+echo "last green full-tier sweep: $last_green ($pk)"
