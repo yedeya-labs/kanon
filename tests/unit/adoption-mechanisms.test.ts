@@ -193,8 +193,8 @@ export const DETECTORS: Array<[string, Detector]> = [
   ["The release workflow's release-PR guard", all(file('.github/workflows/release.yml'), test('tests/unit/release-pr-guard.test.ts'))],
   ["`actions/agent-run`'s settings that keep a headless run's commands", test('tests/unit/headless-run.test.ts')],
   // The Overseer's lane runs it weekly from the release that carries the step (#1274). The
-  // CHANGELOG names pull requests, so this is the number of the one that closes #1274.
-  ['The finding count, `scripts/finding-counts.mjs`', all(runs('finding-counts.mjs'), shipped(1274))],
+  // CHANGELOG names pull requests, so this is #1366, the one that closes #1274.
+  ['The finding count, `scripts/finding-counts.mjs`', all(runs('finding-counts.mjs'), shipped(1366))],
   ['The `main` ruleset: pull request required', outside("the `main` ruleset's rules (GitHub's API: `repos/{repo}/rulesets`)")],
   ["The ruleset's required approving review", outside("the `main` ruleset's pull-request rule, and its history")],
   ['The merge queue, with every required check', outside("the `main` ruleset's merge-queue rule; tests/unit/workflows.test.ts holds the checks to `merge_group`")],
