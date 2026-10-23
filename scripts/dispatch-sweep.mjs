@@ -740,12 +740,14 @@ export function classify(issue, comments, hasPr, opts = {}) {
     // test — keeps its exact meaning (RA-1336).
     lane = LANES[0],
     // WHICH LOGINS ARE APPS (kanon#1316). Defaults to `isBot`, every role's row required.
-    // Only the project digest, which reports and never acts, passes a predicate over the
-    // rows its register has (`listedBotLogins`).
+    // Only the project digest and the status view (`scripts/status/project.mjs`), which
+    // report and never act, pass a predicate over the rows their register has
+    // (`listedBotLogins`, `registerBotLogins`).
     isBot: bot = isBot,
     // WHOSE COMMENTS ARE THE IMPLEMENTER'S AND THE SWEEP'S (kanon#1321). Default: the register's
-    // rows, each required, read here rather than at load. Only the project digest passes them,
-    // from the rows its register has; null for a role with no row matches no comment's author.
+    // rows, each required, read here rather than at load. Only the project digest and the status
+    // view pass them, from the rows their register has; null for a role with no row matches no
+    // comment's author.
     agent = lane.agent,
     sweep = sweepLogin(),
   } = opts;

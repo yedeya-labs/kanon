@@ -1709,16 +1709,19 @@ export function revertedMerges(shas, commits) {
  * @param {{issue: number, shas: string[], prs?: {number: number, sha: string, text: string}[]}[]} byIssue
  *   from `closingMergesByIssue`
  * @param {Map<string, Set<string>>} after each closing merge's reverts in its range to the tag
+ * @param {string} [repo] the repository a full `<repo>#N` reference must name: the one the
+ *   read was given, which the status view sets to a project that need not be
+ *   `GITHUB_REPOSITORY` (project #1327)
  * @returns {{sha: string, by: string}[]}
  */
-export function relandedReverts(reverted, byIssue, after) {
+export function relandedReverts(reverted, byIssue, after, repo = REPO) {
   const undone = new Set(reverted.map((r) => r.sha));
   return reverted.filter((r) => !byIssue.some((i) => {
     if (!i.shas.includes(r.sha)) return false;
     const pr = (sha) => (i.prs ?? []).find((p) => p.sha === sha);
     const target = { pr: pr(r.sha)?.number ?? null, sha: r.sha, by: r.by };
     return i.shas.some((n) => n !== r.sha && !undone.has(n) && after.has(n) && !after.get(n).has(r.by)
-      && namesReverted(pr(n)?.text ?? '', target, REPO));
+      && namesReverted(pr(n)?.text ?? '', target, repo));
   }));
 }
 
@@ -2046,7 +2049,7 @@ export async function readDeploy(issues, io = {}) {
           }
         }
       }
-      reverted = relandedReverts(revertedMerges(shas, [...reverts.values()]), byIssue, after);
+      reverted = relandedReverts(revertedMerges(shas, [...reverts.values()]), byIssue, after, repo);
     } catch {
       return { state: 'history-unreadable', tag, url: d.url };
     }

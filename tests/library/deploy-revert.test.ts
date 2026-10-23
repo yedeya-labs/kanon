@@ -33,7 +33,7 @@ type Release = { tag: string; deploy: 'success' | 'skipped'; after?: Array<{ sha
  * as the compare API returns them: the reconciler filters them by the prefilter itself.
  * `raw` is a compare answer given verbatim, as its pages; `calls` is every read the reader saw.
  */
-const world = (releases: Release[], { closing = [[9, SHA1]] as Array<[number, string]>, issues = undefined as Record<number, Array<[number, string]>> | undefined, prs = {} as Record<number, string>, bodies = {} as Record<number, string>, unreadable = false, raw = undefined as unknown[] | undefined } = {}) => {
+const world = (releases: Release[], { closing = [[9, SHA1]] as Array<[number, string]>, issues = undefined as Record<number, Array<[number, string]>> | undefined, prs = {} as Record<number, string>, bodies = {} as Record<number, string>, unreadable = false, raw = undefined as unknown[] | undefined, repo: as = REPO } = {}) => {
   const ids = new Map(releases.map((r, i) => [r.tag, i + 1]));
   // Which pull requests close which issue: `closing` is issue 1's, unless `issues` says.
   const byIssue = issues ?? { 1: closing };
@@ -62,7 +62,7 @@ const world = (releases: Release[], { closing = [[9, SHA1]] as Array<[number, st
       return upTo.slice(upTo.findIndex((c) => c.sha === base) + 1)
         .map((c) => ({ sha: c.sha, commit: { message: c.message } }));
     },
-  }, { repo: REPO });
+  }, { repo: as });
   const io = { declared: () => DECLARED, reader, repo };
   return { io, calls: seen };
 };
@@ -183,6 +183,28 @@ describe('work re-landed through a NEW pull request that closes the same issue (
     const d = await readDeploy(CLOSED, io);
     expect(d.state).toBe('deployed');
     expect(d.tag).toBe('v1.0.1');
+  });
+
+  it('reads the re-land against the repository the read was given, not GITHUB_REPOSITORY (project #1327)', async () => {
+    // The status view reads another project's repository from the CLI or the hosted
+    // server, where `GITHUB_REPOSITORY` is unset or names a different one. A re-land that
+    // names the reverted pull request by its full reference must still be credited, or the
+    // view holds at `reverted` while the tick inside that repository moves on.
+    const OTHER = 'acme/shop';
+    expect(process.env.GITHUB_REPOSITORY).not.toBe(OTHER);
+    for (const body of [`Re-lands ${OTHER}#9.`, `Restores https://github.com/${OTHER}/pull/9`]) {
+      const { io } = world([
+        { tag: 'v1.0.0', deploy: 'success', after: [revertOf(SHA1, REV1)] },
+        { tag: 'v1.0.1', deploy: 'success', after: [merge(RELAND)] },
+      ], { closing: [[9, SHA1], [11, RELAND]], bodies: { 11: body }, repo: OTHER });
+      expect((await readDeploy(CLOSED, io)).state, body).toBe('deployed');
+    }
+    // And the module's own repository names nothing in another's.
+    const { io } = world([
+      { tag: 'v1.0.0', deploy: 'success', after: [revertOf(SHA1, REV1)] },
+      { tag: 'v1.0.1', deploy: 'success', after: [merge(RELAND)] },
+    ], { closing: [[9, SHA1], [11, RELAND]], bodies: { 11: `Re-lands ${REPO}#9.` }, repo: OTHER });
+    expect((await readDeploy(CLOSED, io)).state).toBe('reverted');
   });
 
   it('a later merge of the same issue that does not name the reverted work is a different part, and the revert holds (kanon#280)', async () => {
