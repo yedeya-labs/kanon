@@ -25,8 +25,8 @@ describe('every consumer reads the login it compared before the move', () => {
   // The fixture adopter's register (tests/fixtures/adopter), which every library test runs in.
   it('dispatch-sweep', async () => {
     const m = await import('../../scripts/dispatch-sweep.mjs');
-    expect(m.AGENT_LOGIN).toBe('example-implementer');
-    expect(m.SWEEP_LOGIN).toBe('example-lead');
+    expect(m.agentLogin()).toBe('example-implementer');
+    expect(m.sweepLogin()).toBe('example-lead');
     // `BOT_LOGINS` is the six project Apps it always named plus GitHub's two — and NOT
     // the Merger or the Intake App, which the move deliberately did not add.
     const bots = ['example-implementer', 'example-lead', 'example-reviewer', 'example-explorer',

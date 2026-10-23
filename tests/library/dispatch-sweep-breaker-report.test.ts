@@ -3,7 +3,9 @@ import { join } from 'node:path';
 import { asAgent } from './helpers/sign.js';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
-const { MARKER, actionCell, breakerTripped, classify, renderReport, SWEEP_LOGIN, AGENT_LOGIN } = await import('../../scripts/dispatch-sweep.mjs');
+const { MARKER, actionCell, breakerTripped, classify, renderReport, sweepLogin, agentLogin } = await import('../../scripts/dispatch-sweep.mjs');
+const AGENT_LOGIN = agentLogin();
+const SWEEP_LOGIN = sweepLogin();
 
 /**
  * RA-1260 — the step summary must say what the run DID, and a dry run must preview the

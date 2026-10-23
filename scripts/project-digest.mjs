@@ -98,24 +98,33 @@ import { CONFLICT_SHORT, ConflictFieldsUnread, conflictState } from './conflict-
 // nothing and the workflow's plain checkout (no `npm ci`) runs it.
 // THE SWEEP'S OWN CLASSIFIER (kanon#179), so the digest and the sweep read one state per
 // issue. Node built-ins only, like everything else this job runs; it reads the App
-// register for the Implementer's login, as the reconciler does.
-import { AGENT_LOGIN, MARKER as SWEEP_MARKER, classify as classifyLane, listedBotLogins, norm } from './dispatch-sweep.mjs';
+// register for the Implementer's and the Lead's logins when it lists them (kanon#1321).
+import { MARKER as SWEEP_MARKER, classify as classifyLane, listedBotLogins, listedRegister, norm } from './dispatch-sweep.mjs';
 import { carriedOut as reconcilerCarriedOut, declaresMembership, itemSatisfied, openGatingWork, parseProposed } from './project-closure.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { asRole, markedRole } from './lib/role-marker.mjs';
 
 /**
- * An App's login, by the rows the register HAS (kanon#1316). This lane declares no Apps, so
- * an adopter running only the digests may list some roles and not others; the sweep's own
- * `isBot` would stop the digest on the first missing row. A digest only reports, so a role
- * with no row is left out rather than required: see `listedBotLogins`.
+ * An App's login, by the rows the register HAS (kanon#1316, kanon#1321). This lane declares no
+ * Apps, so an adopter running only the digests may list some roles and not others, or keep no
+ * register at all; the sweep's own `isBot` and logins would stop the digest on the first missing
+ * row. A digest only reports, so a role with no row, or no register, is left out rather than
+ * required: no App login is known for it (see `listedRegister` and `listedBotLogins`).
  */
 let listed;
 const isBot = (/** @type {string|null|undefined} */ login) => (listed ??= listedBotLogins()).has(norm(login));
 
-/** The Implementer's own comment: its login and, from L4, its role marker (plan 0005 §3.3). */
-export const byImplementer = (/** @type {{login?: string|null, body?: string|null}} */ c) =>
-  asRole('Implementer', { login: norm(c.login), expected: AGENT_LOGIN, body: c.body });
+/** A role's login from the register's rows, or null when it has none (kanon#1321). */
+const listedLogin = (/** @type {string} */ role) => listedRegister().get(role) ?? null;
+
+/**
+ * The Implementer's own comment: its login and, from L4, its role marker (plan 0005 §3.3). With
+ * no Implementer row no comment is the Implementer's, and members read as the sweep reads silence.
+ */
+export const byImplementer = (/** @type {{login?: string|null, body?: string|null}} */ c) => {
+  const expected = listedLogin('Implementer');
+  return expected != null && asRole('Implementer', { login: norm(c.login), expected, body: c.body });
+};
 
 /** Where briefs live. A brief's basename IS its tracking issue number (RA-1032). */
 export const BRIEF_DIR = 'docs/projects';
@@ -264,7 +273,8 @@ export function classifyDispatch({ comments = [], labels = [], hasPr = false, pr
   if (hasPr) return { disposition: 'building', waitedDays: ageDays };
 
   const conversation = comments.map((c) => ({ login: norm(c.login), body: c.body ?? '', createdAt: c.createdAt }));
-  const v = classifyLane({ labels: labels.map((name) => ({ name })) }, conversation, false, { now: now.getTime(), isBot });
+  const v = classifyLane({ labels: labels.map((name) => ({ name })) }, conversation, false,
+    { now: now.getTime(), isBot, agent: listedLogin('Implementer'), sweep: listedLogin('Lead') });
   const lastAgent = conversation.filter(byImplementer).at(-1);
   const at = Date.parse(lastAgent?.createdAt ?? '');
   const waitedDays = Number.isFinite(at) ? Math.max(0, Math.floor((now.getTime() - at) / 86400000)) : ageDays;

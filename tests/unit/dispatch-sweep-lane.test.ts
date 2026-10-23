@@ -152,7 +152,7 @@ describe('the workflow that runs it (moved from the reference adopter)', () => {
     expect(assertion.env?.MINTED_SLUG).toBe('${{ steps.app-token.outputs.app-slug }}');
     // Read from the script, never repeated as a literal.
     expect(assertion.run).toContain("import(process.env.KANON + '/scripts/dispatch-sweep.mjs')");
-    expect(assertion.run).toContain('m.SWEEP_LOGIN');
+    expect(assertion.run).toContain('m.sweepLogin()');
     expect(assertion.run).toMatch(/App slug mismatch[\s\S]{0,400}?exit 1/);
   });
 

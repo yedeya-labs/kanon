@@ -39,7 +39,7 @@
 // Usage: node scripts/dispatch-sweep.mjs [--apply]
 
 import { execFileSync } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 import { exhaustedRoute, projectOf } from './split-lineage.mjs';
 import { APP_REGISTER, appLogin, appPersona, loadAppRegister } from './app-register.mjs';
 import { asRole, markedRole, signed, slugOf } from './lib/role-marker.mjs';
@@ -65,12 +65,19 @@ export const norm = (login) => (login || '').replace(/\[bot\]$/, '');
 // "the agent spoke" from "the sweep spoke", so losing the marker on one comment
 // stranded the issue in a human queue permanently. With distinct logins the
 // distinction is structural and the marker only has to be right for counting.
-// EXPORTED so `agent-implement.yml` can assert its minted App slug against it the way
-// the sweep's own workflow already does for SWEEP_LOGIN (RA-918). This is the login the
-// classifier actually hinges on — `never-ran` and `answered` are both decided by
-// whether a comment's author equals it — and a wrong value fails toward ACTION:
-// `isBot` treats an unrecognised login as human, which is the re-dispatch path.
-export const AGENT_LOGIN = appLogin('Implementer');
+// EXPORTED so a lane can assert its minted App slug against it the way the sweep's own
+// workflow does for `sweepLogin()` (RA-918). This is the login the classifier actually
+// hinges on — `never-ran` and `answered` are both decided by whether a comment's author
+// equals it — and a wrong value fails toward ACTION: `isBot` treats an unrecognised login
+// as human, which is the re-dispatch path.
+//
+// BOTH LOGINS ARE READ ON CALL, NOT WHEN THE MODULE LOADS (kanon#1321), as `botLogins()` is
+// (kanon#1316). The project digest, `implement-crash.mjs` and `backlog-feed.mjs` import this
+// module, and the digest's lane declares no Apps, so its register may lack these rows or be
+// absent. Each call throws, naming the role, on a missing row (`appLogin`), and the sweep's
+// `main()` reads every row before it reads or changes an issue.
+/** The Implementer App's login. Throws, naming the role, when the register lacks its row. */
+export const agentLogin = () => appLogin('Implementer');
 // This is the App's SLUG, which is what GitHub derives the comment-author login
 // from — so the App must be NAMED to give that slug ("Example Lead" gives `example-lead`). Both logins are read from the
 // App register's `App slug` column (docs/qa/agent-identities.md, RA-2701), which since
@@ -80,7 +87,8 @@ export const AGENT_LOGIN = appLogin('Implementer');
 // `isSweep` collapses back to the marker, and because isBot() treats an unknown
 // login as human, a markerless sweep comment would read as a human reply and reach
 // the re-dispatch path. See RA-918.
-export const SWEEP_LOGIN = appLogin('Lead');
+/** The sweep's own login, the Lead App's. Throws, naming the role, when the register lacks its row. */
+export const sweepLogin = () => appLogin('Lead');
 
 // There is no reliable is-a-bot flag on this payload, so the bots are named. An
 // UNKNOWN login is therefore treated as human, which errs toward re-dispatching
@@ -108,17 +116,29 @@ let botSet;
 export const botLogins = () => (botSet ??= new Set([...BOT_ROLES.map((role) => appLogin(role)), ...GITHUB_BOTS]));
 
 /**
+ * The register's rows, role → login, for a caller that only REPORTS, the project digest. No
+ * register file reads as no rows: no App login is known (kanon#1321). A register that is
+ * present but malformed still throws, by its path and line, as `loadAppRegister` does.
+ *
+ * @param {string} [path] the App register
+ * @returns {Map<string, string>}
+ */
+export function listedRegister(path = APP_REGISTER) {
+  return existsSync(path) ? loadAppRegister(path) : new Map();
+}
+
+/**
  * The logins of the roles the register lists, leaving out a role with no row, and GitHub's
  * own bots. For a caller that only REPORTS, the project digest: a register without a role's
- * row has no lane of that role running, and an App read as a human there changes a line
- * of the digest, not what any lane does. The sweep never uses this — reading an unknown
- * App as a human is its re-dispatch path, so it keeps `botLogins()`.
+ * row, or no register at all (`listedRegister`), has no lane of that role running, and an App
+ * read as a human there changes a line of the digest, not what any lane does. The sweep never
+ * uses this — reading an unknown App as a human is its re-dispatch path, so it keeps `botLogins()`.
  *
  * @param {string} [path] the App register
  * @returns {Set<string>}
  */
 export function listedBotLogins(path = APP_REGISTER) {
-  const register = loadAppRegister(path);
+  const register = listedRegister(path);
   return new Set([...BOT_ROLES.flatMap((role) => (register.get(role) ? [register.get(role)] : [])), ...GITHUB_BOTS]);
 }
 
@@ -189,7 +209,8 @@ export const LANES = [
   {
     key: 'implement',
     label: LABEL,
-    agent: AGENT_LOGIN,
+    // Read on use (kanon#1321): importing LANES needs no register row.
+    get agent() { return agentLogin(); },
     // The `agent` the TELEMETRY row is written under — `COST#<telemetryAgent>` in the
     // L1 store — which is not `agent` above. That one is the App LOGIN this lane's
     // comments come from; this is the name `agent-implement.yml` passes to the
@@ -240,7 +261,8 @@ export const LANES = [
   {
     key: 'triage',
     label: TRIAGE_LABEL,
-    agent: AGENT_LOGIN,
+    // Read on use (kanon#1321): importing LANES needs no register row.
+    get agent() { return agentLogin(); },
     telemetryAgent: 'triage-fix',
     stopLabel: STOP_LABEL,
     workflow: 'agent-triage.yml',
@@ -417,7 +439,14 @@ export const isBot = (login) => botLogins().has(norm(login));
  * the sweep's MARKER. Either signal alone excludes it from the conversation (RA-1336).
  * @param {{login: string, body: string}} c
  */
-export const isSweepComment = (c) => asRole('Lead', { login: c.login, expected: SWEEP_LOGIN, body: c.body }) || c.body.includes(MARKER);
+/**
+ * The sweep's own comment: by its login, or carrying its marker. `sweep` is the sweep's login,
+ * the register's Lead row by default; null (a register without one) leaves the marker alone.
+ * @param {{login?: string|null, body: string}} c
+ * @param {string|null} [sweep]
+ */
+export const isSweepComment = (c, sweep = sweepLogin()) =>
+  (sweep != null && asRole('Lead', { login: c.login, expected: sweep, body: c.body })) || c.body.includes(MARKER);
 
 /** A secret must never reach a public issue comment — see `lead-reconcile.mjs`'s copy,
  *  which carries the reasoning (including why the body class admits `.`, `-` and `_`).
@@ -697,6 +726,11 @@ export function classify(issue, comments, hasPr, opts = {}) {
     // Only the project digest, which reports and never acts, passes a predicate over the
     // rows its register has (`listedBotLogins`).
     isBot: bot = isBot,
+    // WHOSE COMMENTS ARE THE IMPLEMENTER'S AND THE SWEEP'S (kanon#1321). Default: the register's
+    // rows, each required, read here rather than at load. Only the project digest passes them,
+    // from the rows its register has; null for a role with no row matches no comment's author.
+    agent = lane.agent,
+    sweep = sweepLogin(),
   } = opts;
 
   // Normalise HERE, not only at fetch time: the comparison is the thing that must
@@ -713,7 +747,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
   // carries `agent:implement` is still the sweep talking, and reading it as a human
   // reply would trip `humanRepliedToSweep` and hold the issue forever. Counting, by
   // contrast, must be per-lane: attempts in one lane are not attempts in the other.
-  const isSweep = isSweepComment;
+  const isSweep = (c) => isSweepComment(c, sweep);
   const sweepComments = comments.filter((c) => isLaneComment(c.body, lane));
   const dispatched = sweepComments.length;
   // CHARGED = DISPATCHED − NEVER REACHED THE MODEL. Floored at 0: the store is read
@@ -723,7 +757,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
   const lastSweep = sweepComments.at(-1);
   const conversation = comments.filter((c) => !isSweep(c));
   // The Implementer's comments: its login and, from L4, its role marker (plan 0005 §3.3).
-  const byAgent = (c) => asRole('Implementer', { login: c.login, expected: lane.agent, body: c.body });
+  const byAgent = (c) => agent != null && asRole('Implementer', { login: c.login, expected: agent, body: c.body });
   const agentComments = conversation.filter(byAgent);
   const lastAgent = agentComments.at(-1);
   const last = conversation.at(-1);
@@ -788,7 +822,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
   // member line reads it the same way (`classifyDispatch` in project-digest.mjs). Holding
   // instead means changing this paragraph and the kanon#393 test in
   // tests/library/dispatch-sweep.test.ts together.
-  const unmarked = conversation.filter((c) => slugOf(c.login) === slugOf(lane.agent)
+  const unmarked = conversation.filter((c) => agent != null && slugOf(c.login) === slugOf(agent)
     && markedRole(c.body) === null && (!lastAgent || after(c, lastAgent))).length;
 
   // STATE describes the world; ACTION is decided separately below. Keeping them
@@ -1393,7 +1427,7 @@ export function makeSweepTriggerCheck({ json = ghJson } = {}) {
       } catch {
         login = null;
       }
-      cache.set(id, norm(login) === SWEEP_LOGIN);
+      cache.set(id, norm(login) === sweepLogin());
     }
     return cache.get(id);
   };
