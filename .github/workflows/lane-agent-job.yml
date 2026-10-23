@@ -233,6 +233,12 @@ on:
       heads:
         description: A JSON array of `{ ref, sha }`, the local branches and HEAD after the agent, or empty.
         value: ${{ jobs.run.outputs.heads }}
+      # THE COMMIT THIS JOB CHECKED OUT, BEFORE THE AGENT RAN (#1263): a revise lane's pull
+      # request branch as `actions/checkout` fetched it. The implementer status's `carry` moves
+      # only when it is the head the run started from, so nothing landed in between.
+      base:
+        description: The commit `actions/checkout` checked out (its `commit` output), or empty.
+        value: ${{ jobs.run.outputs.base }}
     secrets:
       app-token:
         description: >-
@@ -257,6 +263,8 @@ jobs:
       # outcome is the action's — see that block's header.
       outcome: ${{ steps.agent.outcome }}
       heads: ${{ steps.heads.outputs.heads }}
+      # The checkout's own output, set before any step of the agent's could write one.
+      base: ${{ steps.checkout.outputs.commit }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1): a cancelled
       # job that ran at least its `timeout-minutes` timed out. Nothing else in the job's

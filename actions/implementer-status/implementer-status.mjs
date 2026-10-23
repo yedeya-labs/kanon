@@ -19,16 +19,24 @@
 //          runs would each see both pull requests, and a run that opened none would stamp
 //          another lane's. None, or more than one, and it stamps nothing and says so by name.
 //   carry  (implement-revise, rebase): the status moves to the new head only when the head the
-//          run started from carried one created by this App, the new head descends from it,
-//          and every commit between them is authored by the App. A person's push breaks the
-//          chain, and so does a head that never had the status: the lane says so, and sets none.
+//          run started from carried one created by this App, and only to a head THIS RUN
+//          PUSHED, built on exactly what it checked out (#1263). All three must hold: the new
+//          head is one the agent's job held when the agent finished (`heads`) or the commit the
+//          revise lane's no-model fix pushed (`fix-sha`); the branch's head as the agent's job
+//          checked it out (`base`) is the head the run started from, so nothing landed between
+//          the filter's read and the checkout; and every commit on the first-parent path from
+//          the new head back to it is authored by the App. The email alone binds nothing, as
+//          for `open`: a person's commit under the App's address, pushed below the run's tip
+//          or above it, fails the second or the first. A missing input carries nothing. A
+//          person's push breaks the chain, and so does a head that never had the status: the
+//          lane says so, and sets none.
 //
 // NEVER FAILS THE LANE. Every outcome, the App lacking the permission included, is a line in
 // the run's summary; the action's call is `continue-on-error` besides.
 //
 // Inputs, by environment: MODE, GITHUB_REPOSITORY, READ_TOKEN (contents and pull requests
 // read), STATUS_TOKEN (Commit statuses write), APP_SLUG, RUN_URL, and SINCE + BRANCHES_BEFORE
-// + HEADS (open) or PR + START_HEAD (carry).
+// + HEADS (open) or PR + START_HEAD + HEADS + BASE + FIX_SHA (carry).
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
@@ -88,15 +96,18 @@ export function pickOpened({ prs, repo, since, branchesBefore, email, heads, hea
 
 /**
  * Whether the status may move from the head the run started from to the pull request's head.
+ * `heads` and `base` are what the agent's job recorded (null and '' when unknown); `fixSha` is
+ * the commit the revise lane's no-model fix pushed ('' when it pushed none).
  *
  * @param {{
  *   startHead: string, head: string, slug: string, email: string,
  *   startStatuses: Array<{ context?: string, state?: string, creator?: { login?: string } | null }>,
  *   compare: { status?: string, commits?: ApiCommit[] } | null,
+ *   heads: Array<{ ref?: string, sha?: string }> | null, base: string, fixSha: string,
  * }} input
  * @returns {{ carry: string } | { none: string }}
  */
-export function carryDecision({ startHead, head, slug, email, startStatuses, compare }) {
+export function carryDecision({ startHead, head, slug, email, startStatuses, compare, heads, base, fixSha }) {
   if (!/^[0-9a-f]{40}$/i.test(startHead)) return { none: 'the head the run started from is unknown' };
   // The same question the Merger and the rebase lane ask (`implementerStatusOn`): the NEWEST
   // status of the context is the App's success.
@@ -105,12 +116,24 @@ export function carryDecision({ startHead, head, slug, email, startStatuses, com
     return { none: `the head it started from, \`${startHead.slice(0, 7)}\`, is not provably the Implementer's (${had.why}), so the chain has no start` };
   }
   if (head === startHead) return { none: `the head is still \`${startHead.slice(0, 7)}\`, which already carries the status` };
+  // THE BINDING (#1263), failing closed: a head this run pushed, on exactly the head it started
+  // from. Unknown heads and no fix commit bind nothing; an unknown checkout is not the start.
+  const pushed = new Set((Array.isArray(heads) ? heads : []).map((h) => String(h?.sha ?? '').toLowerCase()).filter((x) => /^[0-9a-f]{40}$/.test(x)));
+  const fix = /^[0-9a-f]{40}$/i.test(fixSha) ? fixSha.toLowerCase() : '';
+  if (!pushed.has(head.toLowerCase()) && head.toLowerCase() !== fix) {
+    return { none: `the head \`${head.slice(0, 7)}\` is not one this run pushed (${Array.isArray(heads) ? `its agent's job held ${pushed.size ? [...pushed].slice(0, 5).map((x) => x.slice(0, 7)).join(', ') : 'none'}` : 'the heads its agent\'s job held are unknown'}${fix ? `, its fix pushed \`${fix.slice(0, 7)}\`` : ''}): a push after the run's is not the Implementer's` };
+  }
+  if (!/^[0-9a-f]{40}$/i.test(base)) return { none: 'the head the agent\'s job checked out is unknown, so nothing shows the run built on the head it started from' };
+  if (base.toLowerCase() !== startHead.toLowerCase()) {
+    return { none: `the agent's job checked out \`${base.slice(0, 7)}\`, not \`${startHead.slice(0, 7)}\`, the head the run started from: what landed between is not the Implementer's` };
+  }
   if (!compare || compare.status !== 'ahead') {
     return { none: `the new head \`${head.slice(0, 7)}\` does not descend from \`${startHead.slice(0, 7)}\` (${compare?.status ?? 'unreadable'})` };
   }
-  // THE FIRST-PARENT PATH from the new head back to the start, every commit on it the App's. A
-  // merge's second parent is what it merged in (the default branch, for the rebase lane), so
-  // its commits are other people's by design; the merge itself must be the App's.
+  // THE FIRST-PARENT PATH from the new head back to the start, which is the checkout, as above;
+  // every commit on it the App's. A merge's second parent is what it merged in (the default
+  // branch, for the rebase lane), so its commits are other people's by design; the merge itself
+  // must be the App's.
   const bySha = new Map((compare.commits ?? []).map((c) => [c.sha, c]));
   for (let sha = head, steps = 0; sha !== startHead; steps += 1) {
     const c = bySha.get(sha);
@@ -176,8 +199,11 @@ function main() {
     if (/^[0-9a-f]{40}$/i.test(startHead) && head !== startHead) {
       try { compare = ghJson(['api', `repos/${repo}/compare/${startHead}...${head}`], read); } catch { compare = null; }
     }
+    /** @type {Array<{ ref?: string, sha?: string }> | null} */
+    let heads;
+    try { heads = JSON.parse(String(env.HEADS ?? '')); } catch { heads = null; }
     const verdict = carryDecision({
-      startHead, head, slug, email, compare,
+      startHead, head, slug, email, compare, heads, base: String(env.BASE ?? ''), fixSha: String(env.FIX_SHA ?? ''),
       startStatuses: /^[0-9a-f]{40}$/i.test(startHead) ? ghJson(['api', '--paginate', '--slurp', `repos/${repo}/commits/${startHead}/statuses?per_page=100`], write).flat() : [],
     });
     if ('none' in verdict) return say(`${lead} not carried to PR #${env.PR}: ${verdict.none}.`);

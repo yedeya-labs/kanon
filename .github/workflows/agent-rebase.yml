@@ -299,8 +299,12 @@ jobs:
   # the agent's, never the agent, one per PR the lane resolved: it moves `kanon/role:
   # implementer` to the resolved head only when the head recorded before the agent ran carried
   # one created by the Implementer's App, and every commit on the first-parent path between
-  # them is the App's (the merge's second parent is the default branch). Otherwise it sets
-  # none and says why. It never reds the lane. Since L4 the Merger requires the status, and this
+  # them is the App's (the merge's second parent is the default branch). And only to a head
+  # the entry's agent job held, made on the head it fetched, which must be the one recorded
+  # before the agent (#1263): `resolve`'s `checked`. A matrix keeps ONE entry's outputs, so
+  # `checked` names its pull request, and an entry whose own was overwritten carries nothing
+  # and says so: in a run that resolved several, only the last keeps the status.
+  # Otherwise it sets none and says why. It never reds the lane. Since L4 the Merger requires the status, and this
   # lane's filter refuses a pull request whose head lacks it (`rebase-lane.mjs`, `ineligible`).
   implementer-status:
     needs: [filter, resolve]
@@ -321,3 +325,5 @@ jobs:
           app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           pr: ${{ matrix.pr }}
           start-head: ${{ fromJson(needs.filter.outputs.heads || '{}')[format('{0}', matrix.pr)] }}
+          heads: ${{ fromJson(needs.resolve.outputs.checked || '{}').pr == matrix.pr && toJSON(fromJson(needs.resolve.outputs.checked || '{}').heads) || '' }}
+          base: ${{ fromJson(needs.resolve.outputs.checked || '{}').pr == matrix.pr && fromJson(needs.resolve.outputs.checked || '{}').base || '' }}

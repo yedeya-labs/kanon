@@ -745,6 +745,10 @@ jobs:
     timeout-minutes: 10
     outputs:
       pushed: ${{ steps.push.outputs.pushed }}
+      # What the implementer status's `carry` binds to on this path (#1263), where `revise` is
+      # skipped: the commit this job pushed, and the head it made it on (its one parent).
+      sha: ${{ steps.push.outputs.sha }}
+      base: ${{ steps.push.outputs.base }}
     steps:
       - uses: $/actions/kanon-path
       - name: Mint the implementer token for the fix
@@ -1104,10 +1108,14 @@ jobs:
   # the agent's, never the agent: it moves `kanon/role: implementer` to the pull request's new
   # head only when the head this run started from (`head_sha`, read before the agent ran)
   # carried one created by the Implementer's App, and every commit between them is the App's.
+  # And only to a head this run pushed, on exactly that head (#1263): one the agent's job held
+  # (`revise`'s `heads`) or the fix commit (`fix-push`'s `sha`), made on a checkout (`base`)
+  # that is `head_sha`. `fix-push` is a need so its outputs reach the step; on that path
+  # `revise` is skipped and its outputs are empty, and the reverse on every other.
   # Otherwise it sets none and says why. It never reds the lane. Since L4 the Merger requires the
   # status, and this lane's filter refuses a pull request whose head has none.
   implementer-status:
-    needs: [filter, revise]
+    needs: [filter, fix-push, revise]
     if: ${{ !cancelled() && needs.filter.outputs.act == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1121,3 +1129,6 @@ jobs:
           app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           pr: ${{ needs.filter.outputs.pr }}
           start-head: ${{ needs.filter.outputs.head_sha }}
+          heads: ${{ needs.revise.outputs.heads }}
+          base: ${{ needs.revise.outputs.base || needs.fix-push.outputs.base }}
+          fix-sha: ${{ needs.fix-push.outputs.sha }}

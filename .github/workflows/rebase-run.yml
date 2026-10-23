@@ -36,6 +36,12 @@ on:
         required: false
       anthropic-api-key:
         required: false
+    outputs:
+      # `rebase-agent-job.yml`'s `{ pr, base, heads }`, passed up for the lane's implementer
+      # status (#1263).
+      checked:
+        description: "`{ pr, base, heads }` as JSON, or empty."
+        value: ${{ jobs.resolve.outputs.checked }}
 
 # NO `permissions:` BLOCK: the lane's matrix job sets this call's ceiling, and without a block
 # here each job gets exactly what that job was given.
