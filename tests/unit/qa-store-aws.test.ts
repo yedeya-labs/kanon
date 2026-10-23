@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { writeStub } from './helpers/stub-bin.js';
 import { STACK_NAME, TEMPLATE_PATH, deployCommands, lifecycleProblems, readTemplate, trustProblems, trustedSubjects } from '../../infra/qa-store/aws/provision.mjs';
-import { toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
+import { PARTITIONS, toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
 import { readCostRowsFile } from '../../actions/qa-store/qa-store.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { ID_TOKEN_HOLDERS } from './helpers/store-jobs.js';
@@ -183,6 +183,34 @@ describe('the subjects: the default branch\'s ref, in the repository\'s own subj
     const given = ['repo:e/fixture:context:ref:refs/heads/trunk', 'repo:e@1/harness@2:ref:refs/heads/main'];
     expect(trustedSubjects(['e/harness', 'e/fixture'], given, two([], { use_default: false }))).toEqual({ defaultBranches: { 'e/harness': 'main', 'e/fixture': 'trunk' }, subjects: given });
     expect(() => trustedSubjects(['e/harness', 'E/Harness'], [], two([]))).toThrow(/--repository 'E\/Harness' is named twice/);
+  });
+});
+
+describe('repositories sharing one store share its rows, and the docs say so (kanon#1346)', () => {
+  // The store keys nothing by repository: each partition a lane reads is one fixed name. So
+  // repositories on one store read each other's runs, coverage and areas as their own, which the
+  // docs must say where they let a store serve several. Keying the rows by repository turns the
+  // first test red, and the docs change with it.
+  const paragraph = (start: string) => {
+    const found = readFileSync('docs/qa-store.md', 'utf8').split('\n').filter((l) => l.startsWith(start));
+    if (found.length !== 1) throw new Error(`docs/qa-store.md has ${found.length} paragraphs starting ${JSON.stringify(start)}, not one`);
+    return found[0]!;
+  };
+
+  it('reads and writes partitions that name no repository', () => {
+    expect(Object.values(PARTITIONS).map((p) => p.pk)).toEqual(['RUN#explorer', 'RUN#audit', 'COVERAGE', 'AREAS']);
+    const gate = [...readFileSync('infra/qa-store/aws/last-green.sh', 'utf8').matchAll(/":p":\{"S":"([^"]*)"\}/g)].map((m) => m[1]);
+    expect(gate).toEqual(['RUN#explorer', 'RUN#explorer']);
+    expect(readFileSync('infra/qa-store/aws/record-skip.sh', 'utf8')).toContain('pk: {S: "RUN#explorer"}');
+  });
+
+  it('says that the store keys nothing by repository, and what sharing one store shares', () => {
+    expect(paragraph('The store\'s role trusts, for each repository it serves')).toContain('reads it as its own (below)');
+    const shared = paragraph('**Repositories on one store share its rows**');
+    expect(shared).toContain('The store keys nothing by repository');
+    for (const pk of Object.values(PARTITIONS).map((p) => p.pk)) expect(shared).toContain(`\`${pk}\``);
+    for (const what of ['one Explorer baseline', 'one coverage ledger', 'one area rotation', 'rows as its own', 'a store of its own']) expect(shared).toContain(what);
+    expect(paragraph('It needs `gh`, signed in with read access')).toContain('They then share its rows');
   });
 });
 
