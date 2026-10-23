@@ -9,7 +9,9 @@ import { appLogin } from '../../scripts/app-register.mjs';
 // The sweep reads the repository it acts on when it loads (`REPO`), and the recordings under
 // `tests/fixtures/gh/` are of this repository's own public payloads.
 process.env.GITHUB_REPOSITORY = 'yedeya-labs/kanon';
-const { MARKER, classify, isBot, linkedPrIndex, norm, breakerTripped, AGENT_LOGIN, SWEEP_LOGIN, LANES, laneTag, isLaneComment, terminalVerdict, actionable, unreachedByIssue, unreachedWindowStart, costStamp, parseCostStamp, makeSweepTriggerCheck, PAIR_WINDOW_MINUTES, attemptsCell, exhaustedAtByIssue, lastLabeledAt, makeLabeledAtReader, COST_PROJECTION, makeCommentsReader, redactSecrets, READ_SHAPES, keyPaths, shapeDrift, redispatchReason, renderReport } = await import('../../scripts/dispatch-sweep.mjs');
+const { MARKER, classify, isBot, linkedPrIndex, norm, breakerTripped, agentLogin, sweepLogin, LANES, laneTag, isLaneComment, terminalVerdict, actionable, unreachedByIssue, unreachedWindowStart, costStamp, parseCostStamp, makeSweepTriggerCheck, PAIR_WINDOW_MINUTES, attemptsCell, exhaustedAtByIssue, lastLabeledAt, makeLabeledAtReader, COST_PROJECTION, makeCommentsReader, redactSecrets, READ_SHAPES, keyPaths, shapeDrift, redispatchReason, renderReport } = await import('../../scripts/dispatch-sweep.mjs');
+const AGENT_LOGIN = agentLogin();
+const SWEEP_LOGIN = sweepLogin();
 
 /** The fixture adopter's App logins (`tests/fixtures/adopter/docs/qa/agent-identities.md`). */
 const REVIEWER_LOGIN = appLogin('Reviewer');

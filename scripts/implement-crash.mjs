@@ -36,7 +36,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
-import { AGENT_LOGIN, linkedPrIndex, norm } from './dispatch-sweep.mjs';
+import { agentLogin, linkedPrIndex, norm } from './dispatch-sweep.mjs';
 import { SPLIT_LABEL, exhaustedRoute, projectOf } from './split-lineage.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
@@ -112,7 +112,7 @@ export function agentSpokeSince(comments, since) {
   // No start time is no evidence of silence: treat it as "spoke", which keeps the label.
   if (!Number.isFinite(t)) return true;
   // The Implementer's login and, from L4, its role marker (plan 0005 §3.3).
-  return (comments ?? []).some((c) => asRole('Implementer', { login: norm(c.login ?? c.author?.login), expected: AGENT_LOGIN, body: c.body })
+  return (comments ?? []).some((c) => asRole('Implementer', { login: norm(c.login ?? c.author?.login), expected: agentLogin(), body: c.body })
     && Date.parse(c.createdAt) >= t);
 }
 
@@ -129,7 +129,7 @@ export function agentSpokeSince(comments, since) {
 export function unmarkedSince(comments, since) {
   const t = Date.parse(since ?? '');
   if (!Number.isFinite(t)) return 0;
-  return (comments ?? []).filter((c) => slugOf(norm(c.login ?? c.author?.login)) === slugOf(AGENT_LOGIN)
+  return (comments ?? []).filter((c) => slugOf(norm(c.login ?? c.author?.login)) === slugOf(agentLogin())
     && markedRole(c.body) === null && Date.parse(c.createdAt) >= t).length;
 }
 

@@ -117,7 +117,7 @@ const isReviewEventRacer = (c) =>
  * The merger App's slug — the login GitHub derives from its NAME ("Example
  * Merger" gives `example-merger`). Exported so `agent-merge.yml` can compare it against the slug the
  * minted token actually authenticates as and FAIL on a mismatch, the way
- * `dispatch-sweep.mjs` does with SWEEP_LOGIN.
+ * `dispatch-sweep.mjs` does with `sweepLogin()`.
  *
  * Worth a machine check because the failure is silent: the workflow's `if:` guard
  * stops the Merger from processing his own comments and merges, and a slug that does

@@ -1,6 +1,8 @@
 import { asAgent } from './helpers/sign.js';
 import { describe, expect, it } from 'vitest';
-import { AGENT_LOGIN, LANES, classify, terminalVerdict } from '../../scripts/dispatch-sweep.mjs';
+import { agentLogin, LANES, classify, terminalVerdict } from '../../scripts/dispatch-sweep.mjs';
+
+const AGENT_LOGIN = agentLogin();
 
 /**
  * kanon#170 — a human-parked implement issue must leave the sweep's lane.

@@ -12,9 +12,11 @@ import {
 } from '../../scripts/implement-crash.mjs';
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { SPLIT_LABEL, splitMarker } from '../../scripts/split-lineage.mjs';
-import { AGENT_LOGIN } from '../../scripts/dispatch-sweep.mjs';
+import { agentLogin } from '../../scripts/dispatch-sweep.mjs';
 import { ROOT } from './helpers/adopter.js';
 import { SPAWNS } from '../unit/helpers/spawns.js';
+
+const AGENT_LOGIN = agentLogin();
 
 /**
  * RA-2118 — a crashed implementer run must not hold a WIP slot for 48 hours.

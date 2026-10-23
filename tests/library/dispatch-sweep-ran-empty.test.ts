@@ -3,9 +3,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
-  AGENT_LOGIN, LANES, MARKER, classify, exhaustedAtByIssue, latestRunByIssue, laneTag, makeRunJobsReader,
+  agentLogin, LANES, MARKER, classify, exhaustedAtByIssue, latestRunByIssue, laneTag, makeRunJobsReader,
   renderReport, runLeftNothing,
 } from '../../scripts/dispatch-sweep.mjs';
+
+const AGENT_LOGIN = agentLogin();
 
 /**
  * kanon#254: an issue outside a project whose latest implement run ended green with nothing to

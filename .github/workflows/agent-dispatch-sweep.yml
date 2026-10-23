@@ -270,7 +270,7 @@ jobs:
       - uses: $/actions/kanon-path
 
       # The App register (`docs/qa/agent-identities.md`, `K-LAYOUT-6`) is read from the
-      # checkout: `SWEEP_LOGIN` and the Implementer's login come from it.
+      # checkout: `sweepLogin()` and `agentLogin()` read it.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -301,12 +301,12 @@ jobs:
           MINTED_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
-          EXPECTED=$(node -e "import(process.env.KANON + '/scripts/dispatch-sweep.mjs').then(m => console.log(m.SWEEP_LOGIN))")
+          EXPECTED=$(node -e "import(process.env.KANON + '/scripts/dispatch-sweep.mjs').then(m => console.log(m.sweepLogin()))")
           if [ "$MINTED_SLUG" != "$EXPECTED" ]; then
-            echo "::error title=agent-dispatch-sweep::App slug mismatch — minted '$MINTED_SLUG', the script expects '$EXPECTED'. Rename the App to produce the expected slug, or correct the Lead row's App slug in docs/qa/agent-identities.md, which SWEEP_LOGIN is read from (RA-2701). Left disagreeing, the sweep's identity check is silently off."
+            echo "::error title=agent-dispatch-sweep::App slug mismatch — minted '$MINTED_SLUG', the script expects '$EXPECTED'. Rename the App to produce the expected slug, or correct the Lead row's App slug in docs/qa/agent-identities.md, which sweepLogin() reads (RA-2701). Left disagreeing, the sweep's identity check is silently off."
             exit 1
           fi
-          echo "App slug \`$MINTED_SLUG\` matches SWEEP_LOGIN." >> "$GITHUB_STEP_SUMMARY"
+          echo "App slug \`$MINTED_SLUG\` matches the Lead row." >> "$GITHUB_STEP_SUMMARY"
 
       # No `npm ci`: the script uses only Node's built-in modules and `gh`.
       - name: Reconcile open agent:implement and qa:needs-triage issues

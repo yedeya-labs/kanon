@@ -46,8 +46,8 @@
 //
 // WHAT THIS DOES NOT PROVE. The register is a claim; the live App's slug is not in any
 // file. `K-AGENT-5`'s run-time slug assertions (the workflows compare the minted
-// `app-slug` against these exported values) are what turn the claim into a check, and
-// they keep working unchanged because the exports keep their names.
+// `app-slug` against the logins the scripts export) are what turn the claim into a check. The
+// dispatch sweep exports its two as functions, read on call (kanon#1321), so a workflow calls them.
 //
 // WHERE IT IS READ FROM. `docs/qa/agent-identities.md` relative to the working directory —
 // the same convention as `spec-lib`'s `SPEC_DIR`, and what every workflow and test runs

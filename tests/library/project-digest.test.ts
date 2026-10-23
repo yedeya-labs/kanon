@@ -35,7 +35,8 @@ const { validate, measure, renderText, LIMITS } = await import('../../scripts/li
 const { payload: slackPayload } = await import('../../actions/notify/slack/slack.mjs');
 const { signed } = await import('../../scripts/lib/role-marker.mjs');
 const { CONFLICT_SHORT } = await import('../../scripts/conflict-state.mjs');
-const { AGENT_LOGIN, classify: sweepClassify, LANES } = await import('../../scripts/dispatch-sweep.mjs');
+const { agentLogin, classify: sweepClassify, LANES } = await import('../../scripts/dispatch-sweep.mjs');
+const AGENT_LOGIN = agentLogin();
 const reconciler = await import('../../scripts/lead-reconcile.mjs');
 const closure = await import('../../scripts/project-closure.mjs');
 const { carriedOut: reconcilerCarriedOut, openGatingWork, parseProposed, renderHoldComment } = await import('../../scripts/lead-reconcile.mjs');
@@ -742,10 +743,20 @@ describe('buildMessage: one Kanon notification (plan 0011 §3, step N7)', () => 
     expect(text({ projects: [] })).not.toMatch(/No narrative today/);
   });
 
-  it('says so plainly when no project is open', () => {
-    const m = build({ projects: [] });
-    expect(m.summary).toContain('No open projects');
+  it('says so plainly when no project is open: every brief has a closed tracking issue', () => {
+    const m = build({ projects: [], briefs: 2 });
+    expect(m.summary).toContain('No open projects — every brief in `docs/projects/` has a closed tracking issue.');
+    expect(m.summary).not.toContain('No projects yet');
     expect(m.sections).toBeUndefined();
+  });
+
+  it('kanon#1325: with no briefs, says no project exists yet, never that every brief is closed', () => {
+    for (const m of [build({ projects: [], briefs: 0 }), build({ projects: [] })]) {
+      expect(m.summary).toMatch(/^No projects yet\b/);
+      expect(m.summary).not.toContain('closed tracking issue');
+      expect(m.sections).toBeUndefined();
+      expect(validate(m)).toEqual({ ok: true });
+    }
   });
 
   it('is a valid project-digest message, from this run, with a section per project', () => {
@@ -1135,6 +1146,118 @@ console.log(JSON.stringify([read(${JSON.stringify(comments)}), read(${JSON.strin
   });
 });
 
+describe('kanon#1321 — the digest runs with no register, or one without the Implementer and Lead rows', SPAWNS, () => {
+  // The sweep's module read the Implementer's and the Lead's rows when it loaded, and the
+  // digest imports it; the register's loader threw on a missing file. Each case runs in a
+  // process of its own, in a temp dir, because the register is read from the working
+  // directory and cached per process.
+  const checkout = (register: string | null) => {
+    const dir = mkdtempSync(join(tmpdir(), 'kanon-1321-'));
+    if (register !== null) {
+      mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+      writeFileSync(join(dir, 'docs/qa/agent-identities.md'), register);
+    }
+    return dir;
+  };
+  const full = readFileSync(join(ADOPTER, 'docs/qa/agent-identities.md'), 'utf8');
+  const without = (dropped: RegExp) => full.split('\n').filter((l) => !dropped.test(l)).join('\n');
+  const run = (dir: string, code: string) => spawnSync('node', ['--input-type=module', '-e', code], { cwd: dir, encoding: 'utf8', timeout: 20_000 });
+  const href = (script: string) => JSON.stringify(pathToFileURL(join(ROOT, 'scripts', script)).href);
+  // The Implementer stops and a human answers: with no Implementer row, no comment is the
+  // Implementer's, and the member reads as the sweep reads a conversation with no agent in it.
+  const comments = [
+    { login: `${AGENT_LOGIN}[bot]`, body: signed('SCOPE-FIRST BAIL: which gateway?', 'Implementer'), createdAt: '2026-08-29T00:00:00Z' },
+    { login: 'a-maintainer', body: 'The new one. Go ahead.', createdAt: '2026-08-30T00:00:00Z' },
+  ];
+  const classifyIn = (dir: string) => run(dir, `const { classifyDispatch, byImplementer } = await import(${href('project-digest.mjs')});
+const comments = ${JSON.stringify(comments)};
+console.log(JSON.stringify({ member: classifyDispatch({ comments, ageDays: 5, now: new Date('2026-09-04T00:00:00Z') }), byImplementer: comments.map(byImplementer) }));`);
+
+  it.each([
+    ['no register file', null],
+    ['a register without the Implementer and Lead rows', without(/^\| (Implementer|Lead) \|/)],
+  ])('classifies a member with %s, knowing no Implementer login', (_name, register) => {
+    const dir = checkout(register);
+    try {
+      const r = classifyIn(dir);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const out = JSON.parse(r.stdout);
+      expect(out.byImplementer).toEqual([false, false]);
+      expect(out.member.disposition, 'a quiet dispatch, five days old').toBe('stall');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('posts from a checkout with no register and no briefs, reading nothing from GitHub', () => {
+    const dir = checkout(null);
+    try {
+      const env: NodeJS.ProcessEnv = { ...process.env, GITHUB_TOKEN: 'unused', GITHUB_REPOSITORY: 'o/r', DRY_RUN: '1', TODAY: '2026-10-22' };
+      delete env.GITHUB_STEP_SUMMARY;
+      const r = spawnSync('node', [join(ROOT, 'scripts/project-digest.mjs')], { cwd: dir, env, encoding: 'utf8', timeout: 20_000 });
+      expect(r.stderr).not.toContain('App register');
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('"kind": "project-digest"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads the sweep, implement-crash and the digest with no register: the logins are read on use', () => {
+    const dir = checkout(null);
+    try {
+      const r = run(dir, `for (const s of [${['dispatch-sweep.mjs', 'implement-crash.mjs', 'project-digest.mjs'].map(href).join(', ')}]) await import(s);
+const { LANES } = await import(${href('dispatch-sweep.mjs')});
+console.log(LANES.map((l) => l.key).join(','));`);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(r.stdout.trim()).toBe('implement,triage');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a malformed register still stops the digest, by its path', () => {
+    const dir = checkout('| Role | App slug |\n|---|---|\n| Implementer | Not A Slug |\n');
+    try {
+      const r = classifyIn(dir);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain('docs/qa/agent-identities.md');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves the sweep strict: its logins, its lanes, its workflow\'s slug check and its run fail by name on a missing row', () => {
+    const dir = checkout(without(/^\| Lead \|/));
+    try {
+      const sweep = href('dispatch-sweep.mjs');
+      expect(run(dir, `const m = await import(${sweep}); m.sweepLogin();`).stderr).toContain('lists no Lead App');
+      // The sweep workflow's App-slug check runs this exact import (agent-dispatch-sweep.yml).
+      const check = spawnSync('node', ['-e', "import(process.env.KANON + '/scripts/dispatch-sweep.mjs').then(m => console.log(m.sweepLogin()))"],
+        { cwd: dir, env: { ...process.env, KANON: ROOT }, encoding: 'utf8', timeout: 20_000 });
+      expect(check.status).not.toBe(0);
+      expect(check.stderr).toContain('lists no Lead App');
+      const env = { ...process.env };
+      delete env.GITHUB_REPOSITORY;
+      const main = spawnSync('node', [join(ROOT, 'scripts/dispatch-sweep.mjs')], { cwd: dir, env, encoding: 'utf8', timeout: 20_000 });
+      expect(main.status).not.toBe(0);
+      expect(main.stderr).toContain('lists no Lead App');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    const noImplementer = checkout(without(/^\| Implementer \|/));
+    try {
+      const r = run(noImplementer, `const { LANES } = await import(${href('dispatch-sweep.mjs')}); LANES[0].agent;`);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain('lists no Implementer App');
+    } finally {
+      rmSync(noImplementer, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('kanon#1317 — no `docs/projects/` folder is no briefs', SPAWNS, () => {
   it('reads an absent folder as none, and still reads a present one by number', () => {
     const dir = mkdtempSync(join(tmpdir(), 'kanon-1317-'));
@@ -1153,7 +1276,7 @@ describe('kanon#1317 — no `docs/projects/` folder is no briefs', SPAWNS, () =>
     }
   });
 
-  it('posts "No open projects" from a checkout with no folder, reading nothing from GitHub', () => {
+  it('posts "No projects yet" from a checkout with no folder, reading nothing from GitHub (kanon#1325)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'kanon-1317-'));
     try {
       mkdirSync(join(dir, 'docs/qa'), { recursive: true });
@@ -1163,7 +1286,30 @@ describe('kanon#1317 — no `docs/projects/` folder is no briefs', SPAWNS, () =>
       const r = spawnSync('node', [join(ROOT, 'scripts/project-digest.mjs')], { cwd: dir, env, encoding: 'utf8', timeout: 20_000 });
       expect(r.stderr).not.toContain('ENOENT');
       expect(r.status).toBe(0);
-      expect(r.stdout).toContain('No open projects');
+      expect(r.stdout).toContain('No projects yet');
+      expect(r.stdout).not.toContain('closed tracking issue');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('kanon#1325: posts that every brief has a closed tracking issue when the briefs it read are all closed', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kanon-1325-'));
+    try {
+      mkdirSync(join(dir, 'docs/projects'), { recursive: true });
+      writeFileSync(join(dir, 'docs/projects/7.md'), '# Seven\n');
+      // GitHub, stubbed in the digest's own process: brief 7's tracking issue is closed.
+      writeFileSync(join(dir, 'fetch-stub.mjs'), `globalThis.fetch = async (url) => {
+  if (!String(url).endsWith('/repos/o/r/issues/7')) throw new Error('unexpected read ' + url);
+  return { ok: true, json: async () => ({ number: 7, state: 'closed', labels: [] }) };
+};\n`);
+      const env: NodeJS.ProcessEnv = { ...process.env, GITHUB_TOKEN: 'unused', GITHUB_REPOSITORY: 'o/r', DRY_RUN: '1', TODAY: '2026-10-22' };
+      delete env.GITHUB_STEP_SUMMARY;
+      const r = spawnSync('node', ['--import', pathToFileURL(join(dir, 'fetch-stub.mjs')).href, join(ROOT, 'scripts/project-digest.mjs')], { cwd: dir, env, encoding: 'utf8', timeout: 20_000 });
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('No open projects — every brief in `docs/projects/` has a closed tracking issue.');
+      expect(r.stdout).not.toContain('No projects yet');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

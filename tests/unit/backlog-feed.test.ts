@@ -5,8 +5,11 @@ import { parse } from 'yaml';
 import {
   FEED_MARKER, feedComment, feedMilestones, feedValve, handledBefore, ineligibility, renderFeedSummary, run, selectFeed,
 } from '../../scripts/backlog-feed.mjs';
-import { AGENT_LOGIN, SWEEP_LOGIN } from '../../scripts/dispatch-sweep.mjs';
+import { agentLogin, sweepLogin } from '../../scripts/dispatch-sweep.mjs';
 import { parkedRead } from '../../scripts/lead-reconcile.mjs';
+
+const AGENT_LOGIN = agentLogin();
+const SWEEP_LOGIN = sweepLogin();
 
 /**
  * kanon#609: the backlog feeder. A step of the dispatch sweep that labels up to
