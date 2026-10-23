@@ -325,5 +325,5 @@ jobs:
           app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           pr: ${{ matrix.pr }}
           start-head: ${{ fromJson(needs.filter.outputs.heads || '{}')[format('{0}', matrix.pr)] }}
-          heads: ${{ fromJson(needs.resolve.outputs.checked || '{}').pr == matrix.pr && toJSON(fromJson(needs.resolve.outputs.checked || '{}').heads) || '' }}
+          heads: ${{ fromJson(needs.resolve.outputs.checked || '{}').pr == matrix.pr && fromJson(needs.resolve.outputs.checked || '{}').heads || '' }}
           base: ${{ fromJson(needs.resolve.outputs.checked || '{}').pr == matrix.pr && fromJson(needs.resolve.outputs.checked || '{}').base || '' }}

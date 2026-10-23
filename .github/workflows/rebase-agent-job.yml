@@ -55,11 +55,12 @@ on:
     outputs:
       # WHAT THE IMPLEMENTER STATUS'S `carry` BINDS TO (#1263), as ONE JSON value
       # `{ pr, base, heads }`: the pull request, its head as this job fetched it before the
-      # agent, and the branch heads the job held after. One value, because the lane calls this
-      # once per matrix entry and keeps only one entry's outputs; the status job uses it only
-      # when its `pr` is the entry's own. See `Record the branch heads the agent left`.
+      # agent, and the branch heads the job held after, as the JSON array text the spine's
+      # `heads` output is. One value, because the lane calls this once per matrix entry and
+      # keeps only one entry's outputs; the status job uses it only when its `pr` is the
+      # entry's own. The `resolve` job's `checked` output below says where it is built, and why.
       checked:
-        description: "`{ pr, base, heads }` as JSON, or empty."
+        description: "`{ pr, base, heads }` as JSON, `heads` a JSON array as text, or empty."
         value: ${{ jobs.resolve.outputs.checked }}
 
 jobs:
@@ -69,7 +70,13 @@ jobs:
     env:
       PR_NUMBER: ${{ inputs.pr }}
     outputs:
-      checked: ${{ steps.heads.outputs.checked }}
+      # Built HERE, from `inputs.pr` and `steps.base.outputs.base`, a step output written
+      # before the agent, never from a step after it (#1357): code the agent runs can rewrite
+      # `$GITHUB_PATH` and `BASH_ENV`, so a later step's `jq` or `sed` can print anything, but
+      # no step can rewrite an earlier step's output. `toJSON` quotes each value, `heads`
+      # included, so the post-agent heads text can add no key beside `pr` and `base`. Empty
+      # when either record is, which carries nothing.
+      checked: ${{ steps.base.outputs.base && steps.heads.outputs.heads && format('{{"pr":{0},"base":{1},"heads":{2}}}', toJSON(inputs.pr), toJSON(steps.base.outputs.base), toJSON(steps.heads.outputs.heads)) || '' }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
       # it is as close to the job's start as a step can be.
@@ -324,22 +331,20 @@ jobs:
           fi
 
       # THE BRANCH HEADS THE AGENT LEFT (#1263), the spine's step of the same name (#324), which
-      # says why local branches only and what the agent could rewrite. Here it also carries the
-      # pull request and the head recorded before the agent, as one value: see `checked` above.
+      # says why local branches only and what the agent could rewrite. It writes the heads
+      # alone: the job's `checked` output pairs them with the pull request and the head
+      # recorded before the agent, which this step, running after the agent, never handles.
       - name: Record the branch heads the agent left
         id: heads
         if: always() && steps.agent.outcome != 'skipped'
         continue-on-error: true
-        env:
-          BASE: ${{ steps.base.outputs.base }}
         run: |
           set -euo pipefail
           {
             git -c core.fsmonitor=false for-each-ref --count=100 --format='%(objectname) %(refname:strip=2)' refs/heads
             if sha="$(git -c core.fsmonitor=false rev-parse --verify -q HEAD)"; then echo "$sha HEAD"; fi
-          } | jq -Rsc --argjson pr "$PR_NUMBER" --arg base "$BASE" \
-              '{ pr: $pr, base: $base, heads: (split("\n") | map(select(length > 0) | capture("^(?<sha>[0-9a-f]{40}) (?<ref>.+)$"))) }' \
-            | sed 's/^/checked=/' >> "$GITHUB_OUTPUT"
+          } | jq -Rsc 'split("\n") | map(select(length > 0) | capture("^(?<sha>[0-9a-f]{40}) (?<ref>.+)$"))' \
+            | sed 's/^/heads=/' >> "$GITHUB_OUTPUT"
 
       # Explain a red run (`classify-agent-result.mjs --arm 'rebase lane'`) and record what
       # it cost. `always()` and `continue-on-error` for the reasons in the block's header;
