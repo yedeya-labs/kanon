@@ -1,6 +1,6 @@
 # Kanon status
 
-What Kanon's status core computes about a repository that runs Kanon, and what `kanon status` prints from it, where a project has needed a clause to cite. The core is one library that reads GitHub and stores nothing; `kanon status --json` and the hosted MCP server (the `MCP` area, [`mcp.md`](mcp.md)) are two surfaces over it. Seeded by project [#1327](https://github.com/yedeya-labs/kanon/issues/1327)'s brief, whose decision 13 chooses which pull requests count as ready for a person's merge: `[STAT-10]` and `[STAT-14]` are written to that brief's recommended answer, and are rewritten on its branch before it merges if the answer differs. Every clause is `[seed]` until a human promotes it (`K-SPEC-8`).
+What Kanon's status core computes about a repository that runs Kanon, and what `kanon status` prints from it, where a project has needed a clause to cite. The core is one library that reads GitHub and stores nothing; `kanon status --json` and the hosted MCP server (the `MCP` area, [`mcp.md`](mcp.md)) are two surfaces over it. Seeded by project [#1327](https://github.com/yedeya-labs/kanon/issues/1327)'s brief, whose decision 13 chooses which pull requests count as ready for a person's merge: `[STAT-10]` and `[STAT-14]` are written to the answer the Owner gave it on 2026-10-23, which was the recommended one. Every clause is `[seed]` until a human promotes it (`K-SPEC-8`).
 
 **Id prefix:** `STAT`
 

@@ -1,6 +1,6 @@
 # Kanon's hosted MCP server
 
-What Kanon's hosted, remote MCP server answers and refuses, where a project has needed a clause to cite. It is a read-only surface over the status core (the `STAT` area, [`status.md`](status.md)). Seeded by project [#1327](https://github.com/yedeya-labs/kanon/issues/1327)'s brief, whose decisions 1 to 5 choose how it authenticates, where it runs, whom it serves and how fresh it is: the authentication, tenancy and freshness clauses below are written to that brief's recommended answers, and are rewritten on its branch before it merges if an answer differs. Every clause is `[seed]` until a human promotes it (`K-SPEC-8`).
+What Kanon's hosted, remote MCP server answers and refuses, where a project has needed a clause to cite. It is a read-only surface over the status core (the `STAT` area, [`status.md`](status.md)). Seeded by project [#1327](https://github.com/yedeya-labs/kanon/issues/1327)'s brief, whose decisions 1 to 5 choose how it authenticates, where it runs, whom it serves and how fresh it is: the authentication, tenancy and freshness clauses below are written to the answers the Owner gave on 2026-10-23, which were the recommended ones. Every clause is `[seed]` until a human promotes it (`K-SPEC-8`).
 
 **Id prefix:** `MCP`
 
