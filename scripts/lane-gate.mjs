@@ -162,7 +162,7 @@ const MEMBER_PERMISSIONS = ['admin', 'maintain', 'push', 'triage'];
  *   sender?: User,
  *   review?: { user?: User, author_association?: string },
  *   pull_request?: { merged?: boolean, merged_by?: User },
- *   workflow_run?: { triggering_actor?: User, actor?: User, head_sha?: string },
+ *   workflow_run?: { triggering_actor?: User, actor?: User, head_sha?: string, head_repository?: { full_name?: string } },
  *   schedule?: string,
  *   repository?: { default_branch?: string },
  * }} GitHubEvent
@@ -251,10 +251,14 @@ export const REVIEW_LABELS = ['review:please', 'agent:triage', 'agent:implement'
  * @param {string | undefined} sha `workflow_run.head_sha`
  * @param {() => PullRef[]} pullsFor the open-or-closed PRs whose head is that commit
  * @param {(n: number) => IssueEvent[]} eventsOf the PR's issue events, oldest first
+ * @param {string} [fork] `workflow_run.head_repository.full_name`, when it isn't this repository:
+ *   a fork's head, which `commits/<sha>/pulls` on this repository doesn't list (kanon#368), so it
+ *   is refused by name before that read rather than as a commit no pull request has
  * @returns {ActorResult}
  */
-export function reviewLabeller(sha, pullsFor, eventsOf) {
+export function reviewLabeller(sha, pullsFor, eventsOf, fork) {
   if (!sha) return { refuse: 'the workflow_run event names no head commit' };
+  if (fork) return { refuse: `the head ${sha.slice(0, 7)} is on a fork, ${fork}, and the review lane never runs a fork's code in a job that holds an App key` };
   const pr = pullsFor().find((p) => p.state === 'open');
   if (!pr?.number) return { refuse: `no open pull request has ${sha.slice(0, 7)} as its head` };
   const onIt = new Set((pr.labels ?? []).map((l) => l.name).filter((n) => n !== undefined && REVIEW_LABELS.includes(n)));
@@ -410,11 +414,13 @@ export function main(env = process.env, { sleep = sleepSync } = {}) {
   let who;
   if (eventName === 'workflow_run' && env.LANE_GATE_WORKFLOW_RUN === 'review-label') {
     const wr = event.workflow_run ?? {};
+    const headRepo = wr.head_repository?.full_name;
     try {
       who = reviewLabeller(
         wr.head_sha,
         () => retried(() => JSON.parse(ghApi([`repos/${repo}/commits/${wr.head_sha}/pulls`]))),
         (n) => retried(() => JSON.parse(ghApi(['--paginate', '--slurp', `repos/${repo}/issues/${n}/events?per_page=100`]))).flat(),
+        headRepo && headRepo.toLowerCase() !== repo.toLowerCase() ? headRepo : undefined,
       );
     } catch (e) {
       console.log(`::error title=Membership gate::could not read who applied the review label for ${wr.head_sha ?? 'the head'} on ${repo}${afterAttempts(e)}: ${stderrOf(e)}`);
