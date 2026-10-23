@@ -132,8 +132,10 @@ export const normaliseLogin = (login) =>
 export const REVIEW_WORKFLOW_FILE = 'agent-review.yml';
 
 /** The App whose label churn IS the recovery, so that its runs are the loop bound —
- *  the register's `Lead` (RA-2701). */
-export const RECOVERY_LOGIN = appLogin('Lead');
+ *  the register's `Lead` (RA-2701). Read on call, not when the module loads, as `botLogins()` is
+ *  (kanon#1316): the status core imports the reconciler, and this file with it, with no checkout
+ *  (project #1327). */
+export const recoveryLogin = () => appLogin('Lead');
 
 /** Conclusions that mean the run tried and broke — re-firing repeats it. */
 export const BROKEN = ['failure', 'timed_out', 'startup_failure'];
@@ -308,7 +310,7 @@ export function reviewRunsFor(sha, { repo, json, since = null }) {
  * @param {{id: number, actor: string, event?: string, status: string, conclusion: string|null, createdAt: string}[] | null | undefined} runs
  * @param {{recovery?: string, churnedAfter?: number|string|null}} [opts]
  */
-export function reviewAttempts(runs, { recovery = RECOVERY_LOGIN, churnedAfter = null } = {}) {
+export function reviewAttempts(runs, { recovery = recoveryLogin(), churnedAfter = null } = {}) {
   const list = runs ?? [];
   const floor = churnedAfter == null ? null : new Date(churnedAfter).getTime();
   // A run by the recovery identity is only THIS recovery's when it was started after

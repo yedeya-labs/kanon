@@ -66,7 +66,7 @@ const sourceFiles = () => {
 };
 
 /** A test file's titles, by its language's reader. */
-const titlesOf = (file, text) => conventionFor(file)?.titles?.(text) ?? titlesIn(text);
+export const titlesOf = (file, text) => conventionFor(file)?.titles?.(text) ?? titlesIn(text);
 /** A test file minus its string literals, comments kept, by its language's reader. */
 const mentionsOf = (file, text) => conventionFor(file)?.mentions?.(text) ?? outsideStrings(text);
 
@@ -588,15 +588,24 @@ export function mentionsWithoutTitle(known, optedOut, pipelineDirs) {
  *  ID -> the set of test files that CITE it. Exported for RA-1068: phase 5 asks the
  *  same question per acceptance criterion that this asks per invariant. */
 export function citations() {
+  return citationsIn(testFiles().map((file) => ({ file, text: readFileSync(file, 'utf8') })), idPattern());
+}
+
+/**
+ * The same map over test files already read, with the ID pattern to look for: `citations()` for a
+ * caller that reads the tree from somewhere other than the working tree (the status core reads it
+ * from the default branch, project #1327). Only the files' test titles are read.
+ * @param {{ file: string, text: string }[]} files
+ * @param {RegExp} pattern a global pattern whose two groups are the prefix and the number
+ * @returns {Map<string, Set<string>>}
+ */
+export function citationsIn(files, pattern) {
   const found = new Map();
-  {
-    for (const file of testFiles()) {
-      const text = titlesOf(file, readFileSync(file, 'utf8'));
-      for (const m of text.matchAll(idPattern())) {
-        const id = `${m[1]}-${m[2]}`;
-        if (!found.has(id)) found.set(id, new Set());
-        found.get(id).add(file);
-      }
+  for (const { file, text } of files) {
+    for (const m of titlesOf(file, text).matchAll(pattern)) {
+      const id = `${m[1]}-${m[2]}`;
+      if (!found.has(id)) found.set(id, new Set());
+      found.get(id).add(file);
     }
   }
   return found;
@@ -733,14 +742,14 @@ const CLAIM = /`([A-Za-z0-9._/-]+\.[A-Za-z]+)`/g;
  *  announced a red `main`, so two releases shipped red and both were repaired
  *  incidentally by unrelated traffic. That is `.github/workflows/main-red.yml` (RA-1848).
  *
- *  KEPT AS CARDINALITY. `LOCKED_FLOOR` is now derived, not authored — the report lines
- *  and `spec-ids.test.ts` want a number, and a second hand-maintained count would be a
- *  second thing to drift. */
-export const LOCKED_FLOOR = readLockedSet().length;
+ *  KEPT AS CARDINALITY. `lockedFloor()` is now derived, not authored — the report lines
+ *  want a number, and a second hand-maintained count would be a second thing to drift.
+ *  Read on call rather than when the module loads, so a caller with no checkout (the status
+ *  core, project #1327) can import this file's scanner. */
+export const lockedFloor = () => readLockedSet().length;
 
-/** The ids themselves, which is what the gate actually compares. `LOCKED_FLOOR` stays
- *  exported as its cardinality: callers that only want the number (the report lines,
- *  `spec-ids.test.ts`'s armed-ratchet assertion) keep working unchanged. */
+/** The ids themselves, which is what the gate actually compares. `lockedFloor()` stays
+ *  exported as its cardinality, for the report lines, which only want the number. */
 export const lockedBaseline = () => new Set(readLockedSet());
 
 /** THE GATE, IN ONE PLACE. `--quiet` and the full report both need it, and two copies
@@ -863,7 +872,7 @@ function main() {
       return;
     }
     const mentionedQ = mentionsWithoutTitle(known, citationOptOut(invariants), dirs);
-    console.log(`spec-coverage: ${locked.length} locked (floor ${LOCKED_FLOOR}), ${dangling.length} dangling, ${mentionedQ.size} mentioned but not cited in a title. Run it without \`--quiet\` for the full ladder.`);
+    console.log(`spec-coverage: ${locked.length} locked (floor ${lockedFloor()}), ${dangling.length} dangling, ${mentionedQ.size} mentioned but not cited in a title. Run it without \`--quiet\` for the full ladder.`);
     return;
   }
 
@@ -941,7 +950,7 @@ function main() {
     process.exitCode = 1;
     return;
   }
-  console.log(`\nspec-coverage: ${locked.length} locked (floor ${LOCKED_FLOOR}), ${dangling.length} dangling, ${mentioned.size} mentioned-not-cited.`);
+  console.log(`\nspec-coverage: ${locked.length} locked (floor ${lockedFloor()}), ${dangling.length} dangling, ${mentioned.size} mentioned-not-cited.`);
 }
 
 // Guarded so this module can be IMPORTED for its `citations()` map without

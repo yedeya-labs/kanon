@@ -15,6 +15,7 @@ import * as reExport from '../../scripts/lib/reference-deploy.mjs';
 import { readDeploy } from '../../scripts/lead-reconcile.mjs';
 import { referenceDeployCli } from '../../scripts/reference-deploy.mjs';
 import { ROOT } from './helpers/adopter.js';
+import { fakeReads } from './helpers/fake-reader.js';
 
 /**
  * Plan 0004 P6 (kanon#197, kanon#54): the reference environment's deploy is the adopter's, declared
@@ -197,46 +198,37 @@ describe("the reconciler's reader, from the default branch (K-MERGE-17)", () => 
 describe('readDeploy reads the declared workflow and job (plan 0004 P6)', () => {
   const CLOSED = [{ number: 1, state: 'CLOSED' }];
   const DECL = { environment: 'preview', workflow: 'deploy-preview.yml', job: 'ship' };
-  const fakeGh = (jobs: Array<{ name: string; conclusion: string }>) => {
-    const seen: string[][] = [];
-    return {
-      seen,
-      json: (args: string[]) => {
-        seen.push(args);
-        if (args[0] === 'issue') return { closedByPullRequestsReferences: [{ number: 9 }] };
-        if (args[0] === 'pr') return { state: 'MERGED', mergeCommit: { oid: 'a'.repeat(40) } };
-        if (args[0] === 'api' && String(args[1]).includes('/releases')) return [{ tag: 'v1.0.0' }];
-        if (args[0] === 'run' && args[1] === 'list') {
-          return [{ displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u' }];
-        }
-        if (args[0] === 'run' && args[1] === 'view') return { jobs };
-        throw new Error(`unexpected gh ${args.join(' ')}`);
-      },
-      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
-    };
-  };
+  const fakeGh = (jobs: Array<{ name: string; conclusion: string }>, closing: number[] = [9]) => fakeReads({
+    closedBy: { 1: closing },
+    prs: { 9: { state: 'MERGED', mergeCommit: { oid: 'a'.repeat(40) } } },
+    releases: ['v1.0.0'],
+    runs: [{ displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u' }],
+    jobs: { 1: jobs },
+    compare: () => 'behind',
+  });
 
-  it('lists the declared workflow, and takes only the declared job as the deploy', () => {
+  it('lists the declared workflow, and takes only the declared job as the deploy', async () => {
     const io = fakeGh([{ name: 'gate', conclusion: 'success' }, { name: 'ship', conclusion: 'success' }]);
-    const d = readDeploy(CLOSED, { ...io, declared: () => DECL });
+    const d = await readDeploy(CLOSED, { ...io, declared: () => DECL });
     expect(d).toMatchObject({ state: 'deployed', tag: 'v1.0.0', ...DECL });
-    const list = io.seen.find((a) => a[0] === 'run' && a[1] === 'list') ?? [];
-    expect(list[list.indexOf('--workflow') + 1]).toBe('deploy-preview.yml');
+    // The runs listed are the declared workflow's: its file name is in the path read.
+    const list = io.seen.filter((s) => /\/actions\/workflows\//.test(s));
+    expect(list).toEqual(['GET repos/o/r/actions/workflows/deploy-preview.yml/runs?per_page=100&page=1']);
   });
 
-  it('a job that merely contains "deploy" is not the declared job', () => {
+  it('a job that merely contains "deploy" is not the declared job', async () => {
     const io = fakeGh([{ name: 'deploy', conclusion: 'success' }, { name: 'announce-deploy', conclusion: 'success' }]);
-    expect(readDeploy(CLOSED, { ...io, declared: () => DECL }).state).toBe('deploy-job-absent');
-    expect(readDeploy(CLOSED, { ...io, declared: () => ({ ...DECL, job: 'deploy' }) }).state).toBe('deployed');
+    expect((await readDeploy(CLOSED, { ...io, declared: () => DECL })).state).toBe('deploy-job-absent');
+    expect((await readDeploy(CLOSED, { ...io, declared: () => ({ ...DECL, job: 'deploy' }) })).state).toBe('deployed');
   });
 
-  it('a missing declaration fails the read by name, but only once there is a merge to look for', () => {
+  it('a missing declaration fails the read by name, but only once there is a merge to look for', async () => {
     const io = fakeGh([{ name: 'ship', conclusion: 'success' }]);
     const none = () => requireReferenceDeploy(null, ' on `main`');
-    expect(() => readDeploy(CLOSED, { ...io, declared: none })).toThrow(/declares no reference environment, so no project can close \(K-PROJ-11\)/);
+    await expect(readDeploy(CLOSED, { ...io, declared: none })).rejects.toThrow(/declares no reference environment, so no project can close \(K-PROJ-11\)/);
     // Nothing merged closed these issues: no run is looked for, so nothing is read.
-    const noMerge = { ...io, json: (args: string[]) => (args[0] === 'issue' ? { closedByPullRequestsReferences: [] } : io.json(args)) };
-    expect(readDeploy(CLOSED, { ...noMerge, declared: none }).state).toBe('nothing-to-deploy');
+    const noMerge = fakeGh([{ name: 'ship', conclusion: 'success' }], []);
+    expect((await readDeploy(CLOSED, { ...noMerge, declared: none })).state).toBe('nothing-to-deploy');
   });
 });
 
