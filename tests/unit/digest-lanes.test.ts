@@ -104,7 +104,23 @@ describe('each digest is a called lane, with its caller’s two triggers', () =>
   it('keeps `dry_run` on both and `week_end` on the weekly one', () => {
     expect(Object.keys(callerInputs(lane(PROJECT).on.workflow_call.inputs)!)).toEqual(['dry_run']);
     expect(Object.keys(callerInputs(lane(WEEKLY).on.workflow_call.inputs)!)).toEqual(['week_end', 'dry_run']);
-    expect(post(WEEKLY).env?.WEEK_END).toBe('${{ inputs.week_end }}');
+    // The input reaches the step that pins the window; the message reads the pinned one (kanon#1326).
+    expect(step(WEEKLY, 'digest', (s) => s.id === 'week').env?.WEEK_END).toBe('${{ inputs.week_end }}');
+    expect(post(WEEKLY).env?.WEEK_END).toBe('${{ steps.week.outputs.week-end }}');
+  });
+
+  it("tells the weekly narrative the week the digest counts, before the model runs (kanon#1326)", () => {
+    const steps = lane(WEEKLY).jobs.digest!.steps!;
+    const week = steps.findIndex((s) => s.id === 'week');
+    expect(week).toBeGreaterThan(-1);
+    expect(week).toBeLessThan(steps.findIndex((s) => s.id === 'agent'));
+    expect(String(steps[week]!.run)).toContain('node "$KANON/scripts/weekly-digest.mjs" --brief');
+    expect(steps[week]!['continue-on-error']).toBeUndefined();
+    const prompt = String(narrative(WEEKLY).with?.prompt);
+    expect(prompt.startsWith('${{ steps.week.outputs.brief }}')).toBe(true);
+    expect(prompt).toMatch(/THE RELEASES NAMED ABOVE ARE YOUR ONLY SOURCE/);
+    expect(prompt).toMatch(/If no release is named, write an empty\s+`narrative.txt`/);
+    expect(prompt).not.toMatch(/last 7 days/);
   });
 
   it.each(DIGESTS)('%s: holds its own concurrency group, never cancelling a post in flight', (file) => {
@@ -504,7 +520,7 @@ describe('the weekly digest posts only through its notify job (plan 0011 N8)', (
     expect(write.env).toEqual({
       GITHUB_TOKEN: '${{ github.token }}',
       GITHUB_REPOSITORY: '${{ github.repository }}',
-      WEEK_END: '${{ inputs.week_end }}',
+      WEEK_END: '${{ steps.week.outputs.week-end }}',
       DRY_RUN: "${{ inputs.dry_run == 'true' && '1' || '' }}",
       MESSAGE_PATH: '${{ runner.temp }}/kanon-notify-message/message.json',
     });
