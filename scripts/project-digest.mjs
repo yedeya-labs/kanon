@@ -103,6 +103,7 @@ import { MARKER as SWEEP_MARKER, classify as classifyLane, listedBotLogins, list
 import { carriedOut as reconcilerCarriedOut, declaresMembership, itemSatisfied, openGatingWork, parseProposed } from './project-closure.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { asRole, markedRole } from './lib/role-marker.mjs';
+import { trustedSearch } from './lib/search.mjs';
 
 /**
  * An App's login, by the rows the register HAS (kanon#1316, kanon#1321). This lane declares no
@@ -135,14 +136,14 @@ export const BAIL_RE = /SCOPE-FIRST BAIL/i;
 /**
  * A PR body that actually CLOSES an issue, as GitHub's own closing keywords spell it.
  *
- * The search that finds candidate PRs is `in:body`, which is a term search — it
- * matches a PR that merely NAMES the number in prose. This PR's own body named
+ * The search that once found candidate PRs was `in:body`, a term search — it
+ * matched a PR that merely NAMES the number in prose. This PR's own body named
  * RA-1305-RA-1308 without implementing any of them, and would have reported all four as
  * "building", which suppresses the bail line entirely (RA-1443 review, finding 1).
  *
- * So the search is a cheap filter and this is the predicate, exactly as
- * `qa:project` is searched loosely and then re-checked. Verified against the live
- * repo: PR RA-1445 (`Closes RA-1305`) matches, PR RA-1443 (prose mention) does not.
+ * So this is the predicate, over every open PR the listing returns (`openPullsOf`,
+ * kanon#1342). Verified against the live repo: PR RA-1445 (`Closes RA-1305`) matches,
+ * PR RA-1443 (prose mention) does not.
  *
  * Deliberately NOT `closedByPullRequestsReferences`: that is GraphQL-only and its
  * reachability under the workflow's plain `GITHUB_TOKEN` is unverified, and a 403
@@ -551,6 +552,54 @@ export async function dispatchCommentsOf(api, repo, issue, commentCount) {
 }
 
 /**
+ * The issues whose bodies carry `project`'s marker: the member search, settled (kanon#1342).
+ *
+ * Search is the only way to ask for a body marker, and GitHub's search can answer 0 for a query
+ * that has matches (kanon#1322). Read once, a spurious zero reported an open project as having no
+ * members. So the answer goes through `trustedSearch`, which reads a zero again and fails the run
+ * by name when the reads don't settle. A true zero costs `SEARCH_READS` searches, once per open
+ * project, against the search API's 30 a minute.
+ *
+ * @param {(path: string) => Promise<any>} api
+ * @param {string} repo
+ * @param {number} project
+ * @param {{ sleep?: (ms: number) => Promise<void> }} [io]
+ * @returns {Promise<any[]>} the hits, which `membersOf` narrows to members
+ */
+export async function memberHitsOf(api, repo, project, { sleep } = {}) {
+  // `is:issue` is BOTH the AGENTS.md counting rule (never count PRs alongside
+  // issues) and a hard API requirement — the search endpoint 422s without
+  // `is:issue` or `is:pull-request`, which the first dry run found.
+  const q = `is:issue "qa:project ${project}" in:body`;
+  const answer = await trustedSearch(
+    () => api(`/search/issues?q=${encodeURIComponent(`repo:${repo} ${q}`)}&per_page=${PER_PAGE}`),
+    { what: `\`${q}\``, sleep },
+  );
+  return answer.items;
+}
+
+/**
+ * Every open pull request, from the REST listing rather than a search (kanon#1342).
+ *
+ * The digest used to search `is:pr is:open <n> in:body` once per dispatched member, and a
+ * spurious zero there marked a member with an open PR as not started. The listing reads the
+ * repository's own records, so it has no such zero, and it is read once per run instead of one
+ * search per member. `closesIssue` was always the predicate; the search was only a filter.
+ *
+ * @param {(path: string) => Promise<any>} api
+ * @param {string} repo
+ * @returns {Promise<{number: number, body?: string|null}[]>}
+ */
+export async function openPullsOf(api, repo) {
+  const pulls = [];
+  for (let page = 1; ; page++) {
+    const batch = await api(`/repos/${repo}/pulls?state=open&per_page=${PER_PAGE}&page=${page}`);
+    pulls.push(...batch);
+    if (batch.length < PER_PAGE) return pulls;
+  }
+}
+
+/**
  * Each project status, as the word its section opens with. They were emoji before plan 0011:
  * the message holds Kanon text only, and a hook decides how to show it.
  */
@@ -883,8 +932,8 @@ if (isCliEntry(import.meta.url)) {
     if (!res.ok) throw new Error(`GitHub GET ${path} → ${res.status}: ${await res.text()}`);
     return res.json();
   };
-  const search = async (q) =>
-    (await api(`/search/issues?q=${encodeURIComponent(`repo:${repo} ${q}`)}&per_page=100`)).items;
+  // Read once, and only when a dispatched member needs it (kanon#1342).
+  let openPulls = null;
 
   const today = TODAY ? new Date(TODAY) : new Date();
   const days = (iso) => Math.floor((today - new Date(iso)) / 86400000);
@@ -908,11 +957,9 @@ if (isCliEntry(import.meta.url)) {
     const heldReason = held ? await holdReasonOf(api, repo, b.number, tracking.comments) : null;
 
     // Membership is the marker (RA-1066), by the reconciler's position rule — see
-    // `membersOf`. `in:body` is a term search, so it only narrows.
-    // `is:issue` is BOTH the AGENTS.md counting rule (never count PRs alongside
-    // issues) and a hard API requirement — the search endpoint 422s without
-    // `is:issue` or `is:pull-request`, which the first dry run found.
-    const hits = await search(`is:issue "qa:project ${b.number}" in:body`);
+    // `membersOf`. `in:body` is a term search, so it only narrows, and its zero is
+    // settled before it is believed (`memberHitsOf`, kanon#1342).
+    const hits = await memberHitsOf(api, repo, b.number);
     const members = membersOf(hits, b.number);
 
     const enriched = [];
@@ -938,17 +985,16 @@ if (isCliEntry(import.meta.url)) {
         continue;
       }
       const comments = await dispatchCommentsOf(api, repo, m.number, m.comments);
-      // The search is `in:body`, a TERM search that matches a PR merely naming the
-      // number. `closesIssue` is the predicate; without it this PR's own body would
-      // have marked RA-1305-RA-1308 "building".
-      const candidates = await search(`is:pr is:open ${m.number} in:body`);
-      const closing = candidates.filter((p) => closesIssue(p.body, m.number, repo));
+      // Every open PR, listed rather than searched (`openPullsOf`, kanon#1342).
+      // `closesIssue` is the predicate: a PR merely naming the number in prose
+      // would have marked RA-1305-RA-1308 "building".
+      openPulls ??= await openPullsOf(api, repo);
+      const closing = openPulls.filter((p) => closesIssue(p.body, m.number, repo));
       const hasPr = closing.length > 0;
       // ONE EXTRA READ, AND ONLY FOR A MEMBER THAT HAS A PR — the same shape as the
       // `held`-gated comments read above, and for the same cost objection (RA-1469).
-      // Mergeability is not on the search result: `/search/issues` returns the issue
-      // projection of a PR, which carries no `mergeable_state`, so the pull object has
-      // to be fetched. A read that fails is NOT conflicting — this digest must not
+      // Mergeability is not on the listing: the pulls list carries no `mergeable_state`
+      // (GitHub computes it only for a single pull), so the pull object has to be fetched. A read that fails is NOT conflicting — this digest must not
       // invent a stop — and `conflictState` already reports GitHub's own
       // still-computing answer as `computing`, which is not one either.
       let prConflicting = false;

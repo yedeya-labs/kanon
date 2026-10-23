@@ -29,10 +29,7 @@ const COMMENT = /^\s*(?:\/\/|\*|\/\*)/;
  * Searches another change is moving, each with the issue that holds it to this guard. The test
  * below fails once a file here has no unheld search left, so the entry goes with the fix.
  */
-const PENDING: Record<string, string> = {
-  // The project digest's searches still trust a zero; kanon#1342 holds their move to the helper.
-  'scripts/project-digest.mjs': 'kanon#1342',
-};
+const PENDING: Record<string, string> = {};
 
 type Site = { at: string; held: boolean };
 
@@ -60,7 +57,7 @@ describe('every search Kanon\'s scripts send is settled before it is trusted (ka
     for (const f of [
       'scripts/weekly-digest.mjs', 'scripts/actions-minutes.mjs', 'scripts/capability-interlock.mjs', 'scripts/promote.mjs',
       'scripts/telemetry/kanon-health.mjs', 'scripts/agent-quality-columns.mjs', 'scripts/lead-reconcile.mjs',
-      'scripts/merge-gate.mjs', 'scripts/protocol-census.mjs',
+      'scripts/merge-gate.mjs', 'scripts/protocol-census.mjs', 'scripts/project-digest.mjs',
     ]) expect(files, f).toContain(f);
   });
 

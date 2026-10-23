@@ -23,6 +23,8 @@ const {
   holdReason,
   holdReasonOf,
   dispatchCommentsOf,
+  memberHitsOf,
+  openPullsOf,
   membersOf,
   stopReason,
   HELD_MARKER,
@@ -35,6 +37,7 @@ const { validate, measure, renderText, LIMITS } = await import('../../scripts/li
 const { payload: slackPayload } = await import('../../actions/notify/slack/slack.mjs');
 const { signed } = await import('../../scripts/lib/role-marker.mjs');
 const { CONFLICT_SHORT } = await import('../../scripts/conflict-state.mjs');
+const { SEARCH_READS } = await import('../../scripts/lib/search.mjs');
 const { agentLogin, classify: sweepClassify, LANES } = await import('../../scripts/dispatch-sweep.mjs');
 const AGENT_LOGIN = agentLogin();
 const reconciler = await import('../../scripts/lead-reconcile.mjs');
@@ -1012,6 +1015,71 @@ describe('classifyDispatch is fed the NEWEST comments, not the oldest hundred (R
     const { api, seen } = apiOver([]);
     expect(await dispatchCommentsOf(api, 'o/r', 1305, 0)).toEqual([]);
     expect(seen).toEqual([1]);
+  });
+});
+
+/**
+ * kanon#1342 — a search's zero is not a fact. GitHub's search API can answer 0 for a query that
+ * has matches (kanon#1322), and the digest read its two searches once: a spurious zero on the
+ * member search reported an open project as having no members, and one on the PR search marked
+ * a member with an open PR as not started.
+ */
+describe('the digest settles its member search and lists open PRs rather than searching them (kanon#1342)', () => {
+  const sleep = async () => {};
+  /** A search that answers each of `answers` in turn, recording every path it was sent. */
+  const answering = (answers: unknown[]) => {
+    const paths: string[] = [];
+    const api = async (path: string) => { paths.push(path); return answers[Math.min(paths.length - 1, answers.length - 1)]; };
+    return { api, paths };
+  };
+  const hit = (n: number) => ({ number: n, body: `x\n\n<!-- qa:project 7 -->` });
+
+  it('reads a member search\'s spurious zero again and returns the members it settles on', async () => {
+    const { api, paths } = answering([
+      { total_count: 0, incomplete_results: false, items: [] },
+      { total_count: 2, items: [hit(11), hit(12)] },
+      { total_count: 2, items: [hit(11), hit(12)] },
+    ]);
+    expect((await memberHitsOf(api, 'o/r', 7, { sleep })).map((i: { number: number }) => i.number)).toEqual([11, 12]);
+    expect(paths).toHaveLength(3);
+    expect(decodeURIComponent(paths[0] ?? '')).toContain('repo:o/r is:issue "qa:project 7" in:body');
+  });
+
+  it('sends one request when the member search finds members at once', async () => {
+    const { api, paths } = answering([{ total_count: 1, items: [hit(11)] }]);
+    expect(await memberHitsOf(api, 'o/r', 7, { sleep })).toHaveLength(1);
+    expect(paths).toHaveLength(1);
+  });
+
+  it('trusts a project\'s zero members only once every read found none', async () => {
+    const { api, paths } = answering([{ total_count: 0, items: [] }]);
+    expect(await memberHitsOf(api, 'o/r', 7, { sleep })).toEqual([]);
+    expect(paths).toHaveLength(SEARCH_READS);
+  });
+
+  it('fails the run by name when the member search does not settle, rather than report no members', async () => {
+    const { api } = answering([
+      { total_count: 0, items: [] }, { total_count: 2, items: [hit(11), hit(12)] },
+      { total_count: 0, items: [] }, { total_count: 0, items: [] },
+    ]);
+    await expect(memberHitsOf(api, 'o/r', 7, { sleep })).rejects.toThrow(/the search for `is:issue "qa:project 7" in:body` answered 0, 2, 0, 0/);
+  });
+
+  it('lists every open PR through REST, page by page, and sends no search', async () => {
+    const pr = (n: number) => ({ number: n, body: `Closes #${n - 1000}` });
+    const full = Array.from({ length: 100 }, (_, i) => pr(2000 + i));
+    const paths: string[] = [];
+    const api = async (path: string) => { paths.push(path); return path.endsWith('&page=1') ? full : [pr(3000)]; };
+    const pulls = await openPullsOf(api, 'o/r');
+    expect(pulls).toHaveLength(101);
+    expect(paths).toEqual(['/repos/o/r/pulls?state=open&per_page=100&page=1', '/repos/o/r/pulls?state=open&per_page=100&page=2']);
+    expect(paths.some((p) => p.includes('search'))).toBe(false);
+  });
+
+  it('stops after one page when the first is short, and an empty list is no open PR', async () => {
+    const paths: string[] = [];
+    expect(await openPullsOf(async (p: string) => { paths.push(p); return []; }, 'o/r')).toEqual([]);
+    expect(paths).toHaveLength(1);
   });
 });
 
