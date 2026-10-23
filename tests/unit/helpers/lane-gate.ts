@@ -233,6 +233,7 @@ if [ "\${1:-}" = "api" ] && [[ "\${2:-}" =~ /collaborators/([^/]+)/permission$ ]
 fi
 # kanon#81: the review lane's CI completion asks who applied the review label.
 if [ "\${1:-}" = "api" ] && [[ "$*" == *"/commits/"*"/pulls"* ]]; then
+  printf '%s\n' "$*" >> "\${STUB_CALLS:-/dev/null}"
   flake pulls "\${STUB_PULLS_FLAKES:-}"
   [ -z "\${STUB_PULLS_FAILS:-}" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
   printf '%s' "\${STUB_PULLS:-[]}"; exit 0

@@ -59,7 +59,7 @@
 //                            head is the commit (the lane's filter picks the same), and the
 //                            actor is the user on the latest `labeled` event among the review
 //                            labels on it now. No such PR, or no review label: refused. A
-//                            fork's head is refused separately, by the lane's own filter.
+//                            fork's head is refused here first, by name, before that read.
 //   release `published`      whoever published it, `sender`, checked the same way: a person by
 //                            the permission lookup, an App by the register, where the Releaser
 //                            that publishes a promotion is (kanon#1190). Only the release
