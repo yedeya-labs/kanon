@@ -121,3 +121,54 @@ export function defaultBranchFile(repo, run = gh) {
     },
   };
 }
+
+/**
+ * @typedef {{ name: string, path: string, type: string }} BranchEntry one entry of a directory
+ * @typedef {{ branch: string, read: (path: string) => Promise<string | null>, list: (dir: string) => Promise<BranchEntry[]> }} BranchFiles
+ */
+
+/**
+ * The same reader over an injected reader (`scripts/status/reader.mjs`), for a caller with no
+ * `gh` and no checkout: the status core, which the hosted server runs (project #1327,
+ * `[STAT-2]`). Every read is a REST `GET` at the default branch. `read` resolves to the file's
+ * text, or `null` when it doesn't exist there; `list` to a directory's entries, or `[]` when it
+ * doesn't exist. A 404 is that answer, so it's marked `expected` for a reader that counts
+ * failures; any other failure throws as the reader threw it.
+ * @param {{ get: (path: string) => unknown }} reader
+ * @param {string} repo `owner/name`
+ * @returns {Promise<BranchFiles>}
+ */
+export async function defaultBranchReader(reader, repo) {
+  const meta = /** @type {{ default_branch?: unknown }} */ (await reader.get(`repos/${repo}`));
+  const branch = typeof meta?.default_branch === 'string' ? meta.default_branch : '';
+  if (!branch) throw new DeclarationError(`${repo} names no default branch to read its declarations from`);
+  /** @param {string} path */
+  const contents = async (path) => {
+    try {
+      return await reader.get(`repos/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`);
+    } catch (e) {
+      const err = /** @type {{ status?: unknown, expected?: boolean }} */ (e);
+      if (err?.status !== 404) throw e;
+      err.expected = true;
+      return null;
+    }
+  };
+  return {
+    branch,
+    read: async (path) => {
+      const file = /** @type {{ type?: unknown, encoding?: unknown, content?: unknown, sha?: unknown } | null} */ (await contents(path));
+      if (file === null) return null;
+      if (Array.isArray(file) || file.type !== 'file') throw new DeclarationError(`${path} on \`${branch}\` isn't a file`);
+      if (file.encoding === 'base64' && typeof file.content === 'string') return Buffer.from(file.content, 'base64').toString('utf8');
+      // Over 1 MB the contents API sends no content, and the blob API sends the file.
+      const blob = /** @type {{ content?: unknown }} */ (await reader.get(`repos/${repo}/git/blobs/${String(file.sha)}`));
+      return Buffer.from(String(blob?.content ?? ''), 'base64').toString('utf8');
+    },
+    list: async (dir) => {
+      const entries = await contents(dir);
+      if (entries === null) return [];
+      if (!Array.isArray(entries)) throw new DeclarationError(`${dir} on \`${branch}\` isn't a directory`);
+      return entries.map((e) => ({ name: String(e?.name), path: String(e?.path), type: String(e?.type) }));
+    },
+  };
+}

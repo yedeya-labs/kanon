@@ -270,8 +270,8 @@ describe('main runs the derivation after every project, and only over all of the
   it('is wired after reconcileAll, gated on no failures and the full scope', () => {
     // Static: `main` is the CLI entry and shells `gh`.
     const src = readFileSync(join(ROOT, 'scripts/lead-reconcile.mjs'), 'utf8');
-    const main = src.slice(src.indexOf('function main() {'));
-    expect(main).toContain('const { decisions, failures, worlds } = reconcileAll(projects, { evidenceOf: makeRetryEvidenceReader({ json: ghJson }) });');
+    const main = src.slice(src.indexOf('async function main() {'));
+    expect(main).toContain('const { decisions, failures, worlds } = await reconcileAll(projects, { evidenceOf: makeRetryEvidenceReader({ json: ghJson }) });');
     expect(main).toContain("if (!failures.length && process.env.QA_LEAD_SCOPE === 'all') deriveFollowUps(worlds);");
   });
 

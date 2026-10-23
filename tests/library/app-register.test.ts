@@ -42,9 +42,9 @@ describe('every consumer reads the login it compared before the move', () => {
     expect(gate.MERGER_LOGIN).toBe('example-merger');
     expect(gate.REVIEWER_LOGIN).toBe('example-reviewer');
     expect((await import('../../scripts/review-recovery.mjs')).REVIEWER_LOGIN).toBe('example-reviewer');
-    expect((await import('../../scripts/review-run-evidence.mjs')).RECOVERY_LOGIN).toBe('example-lead');
+    expect((await import('../../scripts/review-run-evidence.mjs')).recoveryLogin()).toBe('example-lead');
     expect((await import('../../scripts/brief-revise-recovery.mjs')).LEAD_LOGIN).toBe('example-lead');
-    expect((await import('../../scripts/lead-reconcile.mjs')).EXPLORER_LOGIN).toBe('example-explorer');
+    expect((await import('../../scripts/lead-reconcile.mjs')).explorerLogin()).toBe('example-explorer');
   });
 
   it('incremental-review matches the reviewer by exact login, decorated or not, and nothing else', async () => {

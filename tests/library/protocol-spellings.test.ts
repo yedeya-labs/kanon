@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
+import { connection, fakeReader } from './helpers/fake-reader.js';
 import { writeStub } from '../unit/helpers/stub-bin.js';
 const P = await import('../../scripts/lib/protocol-spellings.mjs');
 const { FOLLOW_UP_MS, MERGER_LOGIN, apply, checkPartition, followQueueMerges, readPr } = await import('../../scripts/merge-gate.mjs');
@@ -149,16 +150,18 @@ esac
 });
 
 describe('the Lead reads both spellings', () => {
-  it('finds a split pull request on either branch', () => {
+  it('finds a split pull request on either branch', async () => {
     const asked: string[] = [];
-    const ev = splitEvidenceRead(42, {
-      text: () => '',
-      json: (args: string[]) => {
-        const head = args[args.indexOf('--head') + 1]!;
-        asked.push(head);
-        return head === 'bezalel/split-42' ? [{ number: 5, state: 'OPEN', createdAt: 'x' }] : [];
+    const { reader } = fakeReader({
+      events: {},
+      graphql: {
+        PullRequestsOn: ({ head }) => {
+          asked.push(String(head));
+          return { repository: { pullRequests: connection(head === 'bezalel/split-42' ? [{ number: 5, state: 'OPEN', createdAt: 'x' }] : []) } };
+        },
       },
     });
+    const ev = await splitEvidenceRead(42, { reader, repo: 'o/r', warn: () => {} });
     expect(asked).toEqual(['lead/split-42', 'bezalel/split-42']);
     expect(ev?.prs).toEqual([{ number: 5, state: 'OPEN', createdAt: 'x' }]);
   });
@@ -257,7 +260,7 @@ describe('the census asks what every reader asks (#157)', () => {
   };
   const retryJob = (name: string) => ({ name, steps: [{ name: `${P.RETRY_STEPS.api_error} (RA-2519)`, conclusion: 'success' }] });
 
-  it('finds a closed split pull request on the old branch, whose branch is gone, as splitEvidenceRead would read it', () => {
+  it('finds a closed split pull request on the old branch, whose branch is gone, as splitEvidenceRead would read it', async () => {
     const { world, calls } = read({
       issues: [
         { number: 42, state: 'open', body: '', labels: [{ name: 'qa:needs-split' }] },
@@ -269,13 +272,25 @@ describe('the census asks what every reader asks (#157)', () => {
     });
     expect(where(censusOf(world))).toEqual(['split branch @ PR #9 (closed, a split of issue #42)']);
     // The same question the reader asks, on each old spelling of the branch.
-    const asked: string[][] = [];
-    splitEvidenceRead(42, { text: () => '', json: (args: string[]) => { asked.push(args); return []; } });
-    const legacy = asked.filter((a) => !a.includes(P.splitBranch(42)));
+    // The reader asks GraphQL where the census asks `gh pr list`, so the question is compared
+    // as what it filters on: the branch, and every state.
+    const asked: Array<{ query: string, head: string }> = [];
+    const base = fakeReader({ events: {}, branchPrs: {} }).reader;
+    const reader = {
+      ...base,
+      graphql: (query: string, variables: Record<string, unknown> = {}) => {
+        asked.push({ query, head: String(variables.head) });
+        return base.graphql(query, variables);
+      },
+    };
+    expect(await splitEvidenceRead(42, { reader, repo: REPO, warn: () => {} })).not.toBeNull();
+    const legacy = asked.filter((a) => a.head !== P.splitBranch(42));
     expect(legacy.length).toBeGreaterThan(0);
     // Up to the fields, which differ: the census reports the branch, the reader its age.
-    const query = (c: string[]) => c.slice(0, c.indexOf('--json')).filter((_, i) => c[i - 1] !== '--repo');
-    expect(calls.filter((c) => c.includes('--head')).map(query)).toEqual(legacy.map(query));
+    const census = calls.filter((c) => c.includes('--head'));
+    expect(census.map((c) => c[c.indexOf('--head') + 1])).toEqual(legacy.map((a) => a.head));
+    for (const c of census) expect(c[c.indexOf('--state') + 1]).toBe('all');
+    for (const a of legacy) expect(/states:\s*\[OPEN, CLOSED, MERGED\]/.test(a.query)).toBe(true);
   });
 
   it('counts a merged split pull request too, and leaves an open one to the open-PR read', () => {

@@ -8,6 +8,7 @@ import { runWorkflowStep } from '../unit/helpers/workflow-step.js';
 import { asOneWorkflow, readCaller, readKanonLane } from './helpers/kanon-lane.js';
 const { CONFLICT_WHY, ConflictFieldsUnread } = await import('../../scripts/conflict-state.mjs');
 import { readRepoDoc } from './helpers/adopter-doc.js';
+import { connection, fakeReads, type FakePr, type FakeRun } from './helpers/fake-reader.js';
 const { SPLIT_LABEL } = await import('../../scripts/split-lineage.mjs');
 const { itemSatisfied, satisfiedTitles, classifyDeploy, readDeploy: kanonReadDeploy, closingMergeShas, isReviewBlocked, awaitingReview, dependencyCycles, needsVerification, verificationCaveat, declaresMembership, findDeployRun, nextActions, reachesPhase6, renderCloseAction, renderCloseComment, ownFailureCaveat, DEPLOY_PHASE, reconcileAll, report, retro, parseProposed, phaseOf, readBudget, reviewRecovery, chargeable, reviseRecovery, reviseRunsFor, startedAfter, standingChangesRequest, projectReviews, execute, qaIssueOf, hold, renderHoldComment, applyDecision, repoLabels, ghCause, redactSecrets, isTransient, holdMarker, occupiesSlot, isParkedOnHuman, linkedPrsRead, laneStateOf, adoptedProvenance, HUMAN_ACTION, carriedOut, inDecomposition, isProjectWork, SPEC_FINDING, FINDING_ANCHOR, openGatingWork, blockedOf, labelMirror, mirrorLabels, mirrorCap, projectLabel, qaIssueTitle, isQaIssueTitle } = await import('../../scripts/lead-reconcile.mjs');
 const { qaRoundBudget, heldClearsRead, QA_ROUND_CAP } = await import('../../scripts/lead-reconcile.mjs');
@@ -1076,17 +1077,23 @@ describe('phase 4 — the deploy derivation itself (RA-1061)', () => {
    */
   const CLOSED = [{ number: 1, state: 'CLOSED' }];
 
-  /** A `gh` double: routes on the argv shape, like the real CLI. */
-  const fakeGh = (routes: Record<string, unknown>) => ({
-    json: (args: string[]) => {
-      if (args[0] === 'issue' && args[1] === 'view') return routes.issue ?? { closedByPullRequestsReferences: [] };
-      if (args[0] === 'pr' && args[1] === 'view') return routes.pr ?? { state: 'MERGED', mergeCommit: { oid: 'sha1' } };
-      if (args[0] === 'api' && String(args[1]).includes('releases')) return routes.releases ?? [];
-      if (args[0] === 'run' && args[1] === 'list') return routes.runs ?? [];
-      if (args[0] === 'run' && args[1] === 'view') return routes.runView ?? { jobs: [] };
-      throw new Error(`unrouted: ${args.join(' ')}`);
-    },
-    text: (a: string[]) => (a.includes('--paginate') ? '' : (routes.compare as string) ?? 'behind'),
+  /**
+   * A reader double over a small world, like the real API: issue #1's closing pull requests,
+   * every pull request's merge (merged at `sha1` unless `pr` says otherwise), the releases
+   * (newest first), the deploy workflow's runs, every run's jobs, and every compare's status
+   * (`behind` unless `compare` says otherwise). No range holds a revert.
+   */
+  const fakeGh = (routes: {
+    closedBy?: number[]; pr?: FakePr; releases?: string[]; runs?: FakeRun[];
+    jobs?: Array<Record<string, unknown>>; compare?: string; tagShas?: Record<string, string>;
+  }) => fakeReads({
+    closedBy: { 1: routes.closedBy ?? [] },
+    ...(routes.pr ? { prs: { 9: routes.pr } } : {}),
+    releases: routes.releases ?? [],
+    runs: routes.runs ?? [],
+    pages: (path) => (/\/actions\/runs\/\d+\/jobs$/.test(path.split('?')[0]!) ? [{ jobs: routes.jobs ?? [] }] : undefined),
+    compare: () => routes.compare ?? 'behind',
+    ...(routes.tagShas ? { tagShas: routes.tagShas } : {}),
   });
 
   it('every state it can emit is a state phaseOf knows', () => {
@@ -1130,129 +1137,132 @@ describe('phase 4 — the deploy derivation itself (RA-1061)', () => {
     expect(phaseOf(w('deploy-failed'))).toBe('deploy-unknown');
   });
 
-  it('an issue closed with no merged PR yields no SHA — and that is nothing-to-deploy', () => {
+  it('an issue closed with no merged PR yields no SHA — and that is nothing-to-deploy', async () => {
     // `closed !== deployed`. Issues get closed as duplicates, or by a human who did
     // the work another way; calling that `deployed` asserted a deploy that provably
     // did not happen, including a retro reading "on staging in `(untagged)`".
-    const io = fakeGh({ issue: { closedByPullRequestsReferences: [] } });
-    expect(closingMergeShas(CLOSED, io)).toEqual([]);
-    expect(readDeploy(CLOSED, io).state).toBe('nothing-to-deploy');
+    const io = fakeGh({ closedBy: [] });
+    expect(await closingMergeShas(CLOSED, io)).toEqual([]);
+    expect((await readDeploy(CLOSED, io)).state).toBe('nothing-to-deploy');
   });
 
-  it('an OPEN closing PR is not a merge', () => {
+  it('an OPEN closing PR is not a merge', async () => {
     const io = fakeGh({
-      issue: { closedByPullRequestsReferences: [{ number: 9 }] },
+      closedBy: [9],
       pr: { state: 'OPEN', mergeCommit: null },
     });
-    expect(closingMergeShas(CLOSED, io)).toEqual([]);
+    expect(await closingMergeShas(CLOSED, io)).toEqual([]);
   });
 
-  it('a tag whose deploy run is not in the window read is run-not-found, not deployed', () => {
+  it('a tag whose deploy run is not in the window read is run-not-found, not deployed', async () => {
     // `gh run list --limit 30`. An older release falls out of that window; treating
     // absence as success would auto-close a project on no evidence.
     const io = fakeGh({
-      issue: { closedByPullRequestsReferences: [{ number: 9 }] },
-      releases: [{ tag: 'v1.0.0' }],
+      closedBy: [9],
+      releases: ['v1.0.0'],
       runs: [{ displayTitle: 'v9.9.9', status: 'completed', conclusion: 'success', databaseId: 1 }],
     });
-    expect(readDeploy(CLOSED, io).state).toBe('run-not-found');
+    expect((await readDeploy(CLOSED, io)).state).toBe('run-not-found');
   });
 
-  it('a SKIPPED deploy job is gate-declined, however green the run is', () => {
+  it('a SKIPPED deploy job is gate-declined, however green the run is', async () => {
     // 32% of releases. `deploy-staging.yml` is a `gate` job plus a `deploy` job
     // guarded on it, so the run concludes `success` with nothing shipped. The
     // workflow RAN is not the code SHIPPED.
     const io = fakeGh({
-      issue: { closedByPullRequestsReferences: [{ number: 9 }] },
-      releases: [{ tag: 'v1.0.0' }],
+      closedBy: [9],
+      releases: ['v1.0.0'],
       runs: [{ displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u' }],
-      runView: { jobs: [{ name: 'deploy', conclusion: 'skipped' }] },
+      jobs: [{ name: 'deploy', conclusion: 'skipped' }],
     });
-    const d = readDeploy(CLOSED, io);
+    const d = await readDeploy(CLOSED, io);
     expect(d.state).toBe('gate-declined');
     expect(reachesPhase6(d.state), 'and it must NOT close the project').toBe(false);
   });
 
-  it('finds a deploy started by the release CI, titled by the tag commit SHA (RA-1190)', () => {
+  it('finds a deploy started by the release CI, titled by the tag commit SHA (RA-1190)', async () => {
     const sha = 'c'.repeat(40);
-    const base = fakeGh({
-      issue: { closedByPullRequestsReferences: [{ number: 9 }] },
-      releases: [{ tag: 'v1.0.0' }],
-      runs: [{ displayTitle: sha, status: 'completed', conclusion: 'success', databaseId: 1, url: 'u' }],
-      runView: { jobs: [{ name: 'deploy', conclusion: 'success' }] },
-    });
-    const io = {
-      ...base,
-      json: (args: string[]) =>
-        args[0] === 'api' && String(args[1]).endsWith('/commits/v1.0.0') ? { sha } : base.json(args),
-    };
-    expect(readDeploy(CLOSED, io).state).toBe('deployed');
-    // And the window is wide enough for the per-merge no-op runs (RA-1190).
-    const seen: string[][] = [];
-    readDeploy(CLOSED, { ...io, json: (a: string[]) => (seen.push(a), io.json(a)) });
-    expect(seen.find((a) => a[0] === 'run' && a[1] === 'list')).toContain('200');
-  });
-
-  it('the gate job is not mistaken for the deploy job', () => {
     const io = fakeGh({
-      issue: { closedByPullRequestsReferences: [{ number: 9 }] },
-      releases: [{ tag: 'v1.0.0' }],
-      runs: [{ displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u' }],
-      runView: { jobs: [{ name: 'gate', conclusion: 'success' }, { name: 'deploy', conclusion: 'success' }] },
+      closedBy: [9],
+      releases: ['v1.0.0'],
+      runs: [{ displayTitle: sha, status: 'completed', conclusion: 'success', databaseId: 1, url: 'u' }],
+      jobs: [{ name: 'deploy', conclusion: 'success' }],
+      tagShas: { 'v1.0.0': sha },
     });
-    expect(readDeploy(CLOSED, io).state).toBe('deployed');
+    expect((await readDeploy(CLOSED, io)).state).toBe('deployed');
+    // And the window is wide enough for the per-merge no-op runs (RA-1190). `gh run list
+    // --limit 200` read 200 runs; the reader reads them a page of 100 at a time, so the
+    // 200th run, behind 199 per-merge no-op runs, is still found, and the read stops there:
+    // two full pages, never a third.
+    const noOps = Array.from({ length: 249 }, (_, i) => ({ displayTitle: `merge ${i}`, status: 'completed', conclusion: 'success', databaseId: 1000 + i }));
+    const wide = fakeGh({
+      closedBy: [9],
+      releases: ['v1.0.0'],
+      runs: [...noOps.slice(0, 199), { displayTitle: sha, status: 'completed', conclusion: 'success', databaseId: 1, url: 'u' }, ...noOps.slice(199)],
+      jobs: [{ name: 'deploy', conclusion: 'success' }],
+      tagShas: { 'v1.0.0': sha },
+    });
+    expect((await readDeploy(CLOSED, wide)).state).toBe('deployed');
+    const runReads = wide.seen.filter((r) => r.includes('/actions/workflows/deploy-staging.yml/runs'));
+    expect(runReads).toEqual([
+      'GET repos/o/r/actions/workflows/deploy-staging.yml/runs?per_page=100&page=1',
+      'GET repos/o/r/actions/workflows/deploy-staging.yml/runs?per_page=100&page=2',
+    ]);
   });
 
-  it('walks past a DECLINED gate to the release that actually deployed (RA-1258)', () => {
+  it('the gate job is not mistaken for the deploy job', async () => {
+    const io = fakeGh({
+      closedBy: [9],
+      releases: ['v1.0.0'],
+      runs: [{ displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u' }],
+      jobs: [{ name: 'gate', conclusion: 'success' }, { name: 'deploy', conclusion: 'success' }],
+    });
+    expect((await readDeploy(CLOSED, io)).state).toBe('deployed');
+  });
+
+  it('walks past a DECLINED gate to the release that actually deployed (RA-1258)', async () => {
     // The earliest containing release never changes, so classifying from it alone made
     // `gate-declined` permanent: project RA-961 had every issue closed and its code on
     // staging via v0.48.9, while the tick read v0.48.8 — whose deploy was skipped —
     // forever. Nothing could ever move it.
-    const jobsByRun: Record<string, unknown> = {
-      1: { jobs: [{ name: 'deploy', conclusion: 'skipped' }] },   // v1.0.0 — gate declined
-      2: { jobs: [{ name: 'deploy', conclusion: 'success' }] },   // v1.0.1 — shipped
-    };
-    const io = {
-      json: (args: string[]) => {
-        if (args[0] === 'issue') return { closedByPullRequestsReferences: [{ number: 9 }] };
-        if (args[0] === 'pr') return { state: 'MERGED', mergeCommit: { oid: 'sha1' } };
-        if (args[0] === 'api') return [{ tag: 'v1.0.1' }, { tag: 'v1.0.0' }];   // newest first
-        if (args[0] === 'run' && args[1] === 'list') return [
-          { displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u1' },
-          { displayTitle: 'v1.0.1', status: 'completed', conclusion: 'success', databaseId: 2, url: 'u2' },
-        ];
-        if (args[0] === 'run' && args[1] === 'view') return jobsByRun[args[2]];
-        throw new Error(`unrouted: ${args.join(' ')}`);
+    const io = fakeReads({
+      closedBy: { 1: [9] },
+      prs: { 9: { state: 'MERGED', mergeCommit: { oid: 'sha1' } } },
+      releases: ['v1.0.1', 'v1.0.0'],   // newest first
+      runs: [
+        { displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u1' },
+        { displayTitle: 'v1.0.1', status: 'completed', conclusion: 'success', databaseId: 2, url: 'u2' },
+      ],
+      jobs: {
+        1: [{ name: 'deploy', conclusion: 'skipped' }],   // v1.0.0 — gate declined
+        2: [{ name: 'deploy', conclusion: 'success' }],   // v1.0.1 — shipped
       },
-      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
-    };
-    const d = readDeploy([{ number: 1, state: 'CLOSED' }], io);
+      compare: () => 'behind',
+    });
+    const d = await readDeploy([{ number: 1, state: 'CLOSED' }], io);
     expect(d.state).toBe('deployed');
     expect(d.tag, 'must name the tag actually BUILT, not the earliest containing one')
       .toBe('v1.0.1');
     expect(reachesPhase6(d.state), 'and the project can now reach phase 5/6').toBe(true);
   });
 
-  it('still reports gate-declined when NO containing release deployed', () => {
-    const io = {
-      json: (args: string[]) => {
-        if (args[0] === 'issue') return { closedByPullRequestsReferences: [{ number: 9 }] };
-        if (args[0] === 'pr') return { state: 'MERGED', mergeCommit: { oid: 'sha1' } };
-        if (args[0] === 'api') return [{ tag: 'v1.0.0' }];
-        if (args[0] === 'run' && args[1] === 'list') return [
-          { displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u1' },
-        ];
-        if (args[0] === 'run' && args[1] === 'view') return { jobs: [{ name: 'deploy', conclusion: 'skipped' }] };
-        throw new Error('unrouted');
-      },
-      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
-    };
-    const d = readDeploy([{ number: 1, state: 'CLOSED' }], io);
+  it('still reports gate-declined when NO containing release deployed', async () => {
+    const io = fakeReads({
+      closedBy: { 1: [9] },
+      prs: { 9: { state: 'MERGED', mergeCommit: { oid: 'sha1' } } },
+      releases: ['v1.0.0'],
+      runs: [
+        { displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u1' },
+      ],
+      jobs: { 1: [{ name: 'deploy', conclusion: 'skipped' }] },
+      compare: () => 'behind',
+    });
+    const d = await readDeploy([{ number: 1, state: 'CLOSED' }], io);
     expect(d.state).toBe('gate-declined');
     expect(d.tag, 'and names the first declined release, not nothing').toBe('v1.0.0');
   });
 
-  it('carries a real failure forward rather than discarding OR parking on it', () => {
+  it('carries a real failure forward rather than discarding OR parking on it', async () => {
     // DELIBERATELY REWRITTEN (RA-1372), and the argument matters because this case
     // predates RA-1364 and locked the opposite behaviour.
     //
@@ -1268,60 +1278,59 @@ describe('phase 4 — the deploy derivation itself (RA-1061)', () => {
     //
     // The failure is now carried on the verdict instead of ending the walk, so the
     // project reaches phase 5 and every artifact still says its release failed.
-    const io = {
-      json: (args: string[]) => {
-        if (args[0] === 'issue') return { closedByPullRequestsReferences: [{ number: 9 }] };
-        if (args[0] === 'pr') return { state: 'MERGED', mergeCommit: { oid: 'sha1' } };
-        if (args[0] === 'api') return [{ tag: 'v1.0.1' }, { tag: 'v1.0.0' }];
-        if (args[0] === 'run' && args[1] === 'list') return [
-          { displayTitle: 'v1.0.0', status: 'completed', conclusion: 'failure', databaseId: 1, url: 'u1' },
-          { displayTitle: 'v1.0.1', status: 'completed', conclusion: 'success', databaseId: 2, url: 'u2' },
-        ];
-        if (args[0] === 'run' && args[1] === 'view') return { jobs: [{ name: 'deploy', conclusion: 'success' }] };
-        throw new Error('unrouted');
-      },
-      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
-    };
-    const d = readDeploy([{ number: 1, state: 'CLOSED' }], io);
+    const io = fakeReads({
+      closedBy: { 1: [9] },
+      prs: { 9: { state: 'MERGED', mergeCommit: { oid: 'sha1' } } },
+      releases: ['v1.0.1', 'v1.0.0'],
+      runs: [
+        { displayTitle: 'v1.0.0', status: 'completed', conclusion: 'failure', databaseId: 1, url: 'u1' },
+        { displayTitle: 'v1.0.1', status: 'completed', conclusion: 'success', databaseId: 2, url: 'u2' },
+      ],
+      jobs: { 1: [{ name: 'deploy', conclusion: 'success' }], 2: [{ name: 'deploy', conclusion: 'success' }] },
+      compare: () => 'behind',
+    });
+    const d = await readDeploy([{ number: 1, state: 'CLOSED' }], io);
     expect(d.state, 'the later whole-tree deploy really did ship this code').toBe('deployed');
     expect(d.tag, 'and the tag named is the one that actually deployed').toBe('v1.0.1');
     expect(d.failedAt, 'the #1056 property: the failure is not discarded').toBe('v1.0.0');
     expect(d.failedUrl, 'and a human can still reach the failed run').toBe('u1');
   });
 
-  it('an unreadable compare is not containment', () => {
+  it('an unreadable compare is not containment', async () => {
     // The `catch` returns false deliberately: unreadable must not read as "contained",
     // which would name a release that may not hold the merge.
-    const io = {
-      ...fakeGh({
-        issue: { closedByPullRequestsReferences: [{ number: 9 }] },
-        releases: [{ tag: 'v1.0.0' }],
-      }),
-      text: () => { throw new Error('boom'); },
-    };
-    expect(readDeploy(CLOSED, io).state).toBe('awaiting-release');
+    const io = fakeReads({
+      closedBy: { 1: [9] },
+      releases: ['v1.0.0'],
+      runs: [],
+      compare: () => { throw new Error('boom'); },
+      pages: () => { throw new Error('boom'); },
+    });
+    expect((await readDeploy(CLOSED, io)).state).toBe('awaiting-release');
   });
 
-  it('picks the EARLIEST release containing every merge', () => {
+  it('picks the EARLIEST release containing every merge', async () => {
     // Locks the walk's START ORDER and its short-circuit: it begins at the oldest
     // containing release and stops at the first one that deployed. Reversed, a later
     // release would be named while an earlier one had already shipped the work.
     const io = fakeGh({
-      issue: { closedByPullRequestsReferences: [{ number: 9 }] },
-      releases: [{ tag: 'v2.0.0' }, { tag: 'v1.0.0' }],   // gh returns newest-first
+      closedBy: [9],
+      releases: ['v2.0.0', 'v1.0.0'],   // the API returns newest-first
       runs: [
         { displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u1' },
         { displayTitle: 'v2.0.0', status: 'completed', conclusion: 'success', databaseId: 2, url: 'u2' },
       ],
-      runView: { jobs: [{ name: 'deploy', conclusion: 'success' }] },
+      jobs: [{ name: 'deploy', conclusion: 'success' }],
     });
-    expect(readDeploy(CLOSED, io).tag).toBe('v1.0.0');
+    expect((await readDeploy(CLOSED, io)).tag).toBe('v1.0.0');
   });
 
-  it('a throwing gh is absorbed per-issue, not propagated', () => {
-    // The tick must not die on one unreadable issue.
-    const io = { json: () => { throw new Error('403'); }, text: () => 'behind' };
-    expect(closingMergeShas(CLOSED, io)).toEqual([]);
+  it('a throwing gh is absorbed per-issue, not propagated', async () => {
+    // The tick must not die on one unreadable issue. Every GraphQL read fails; a compare
+    // would still answer `behind`, as the old double's `text` did.
+    const boom = () => { throw new Error('403'); };
+    const io = { reader: { get: () => ({ status: 'behind' }), pages: boom, graphql: boom }, repo: 'o/r' };
+    expect(await closingMergeShas(CLOSED, io)).toEqual([]);
   });
 });
 
@@ -1863,7 +1872,7 @@ describe('phase 5 — staging verification (RA-1063)', () => {
 
       it('readWorld reads the clears once the bound is reached, and hands them to phaseOf', () => {
         const src = readFileSync(join(ROOT, 'scripts/lead-reconcile.mjs'), 'utf8');
-        expect(src).toMatch(/qaRounds\.readable && qaRounds\.rounds >= QA_ROUND_CAP \? \{ clearedAt: heldClearsRead\(project\) \}/);
+        expect(src).toMatch(/qaRounds\.readable && qaRounds\.rounds >= QA_ROUND_CAP \? \{ clearedAt: await heldClearsRead\(project, reads\) \}/);
         expect(src).toMatch(/roundsAt: mine\.map\(\(c\) => c\.createdAt\)/);
       });
 
@@ -1871,15 +1880,24 @@ describe('phase 5 — staging verification (RA-1063)', () => {
         expect(nextActions(qa([R1, R2])).escalate?.[0]).toMatch(/removing `needs:human` grants exactly one more verification round/);
       });
 
-      it('reads only a HUMAN\'s removal of `needs:human`, and fails toward the hold', () => {
-        const calls: string[][] = [];
-        const text = (args: string[]) => { calls.push(args); return `${CLEAR}\n\n`; };
-        expect(heldClearsRead(961, { text })).toEqual([CLEAR]);
-        const jq = calls[0][calls[0].indexOf('--jq') + 1];
-        expect(jq).toMatch(/\.event == "unlabeled"/);
-        expect(jq).toMatch(/\.label\.name == "needs:human"/);
-        expect(jq).toMatch(/\.actor\.type == "User"/);
-        expect(heldClearsRead(961, { text: () => { throw new Error('502'); } })).toEqual([]);
+      it('reads only a HUMAN\'s removal of `needs:human`, and fails toward the hold', async () => {
+        // The filter used to be a `--jq` program asserted on by its text; it now runs in JS
+        // over the events, so each of its three conditions is asserted by an event it drops.
+        const at = (h: number) => `2026-08-27T0${h}:00:00Z`;
+        const io = fakeReads({
+          events: {
+            961: [
+              { event: 'unlabeled', label: { name: 'needs:human' }, actor: { type: 'User' }, created_at: CLEAR },
+              { event: 'labeled', label: { name: 'needs:human' }, actor: { type: 'User' }, created_at: at(1) },
+              { event: 'unlabeled', label: { name: 'qa:blocked' }, actor: { type: 'User' }, created_at: at(2) },
+              { event: 'unlabeled', label: { name: 'needs:human' }, actor: { type: 'Bot' }, created_at: at(3) },
+            ],
+          },
+        });
+        expect(await heldClearsRead(961, io)).toEqual([CLEAR]);
+        expect(io.seen).toEqual(['PAGES repos/o/r/issues/961/events?per_page=100']);
+        const warned: string[] = [];
+        expect(await heldClearsRead(961, { ...fakeReads({ pages: () => { throw new Error('502'); } }), warn: (m: string) => warned.push(m) })).toEqual([]);
       });
     });
 
@@ -2091,9 +2109,13 @@ describe('the report names the declared environment before the deploy phase (kan
 
   it('readWorld reads the name softly, once per tick, and only when the deploy phase did not', () => {
     const src = readFileSync(join(ROOT, 'scripts/lead-reconcile.mjs'), 'utf8');
-    expect(src).toMatch(/const environment = deploy\?\.environment \?\? declaredEnvironment\(\);/);
+    // Only when the deploy phase did not: the deploy's own name comes first, and the read
+    // after it (the tick's, or the default branch's) answers `null` on a failure, softly.
+    expect(src).toMatch(/const environment = deploy\?\.environment \?\? \(io\.environment\n\s+\? await io\.environment\(\)\n\s+: await defaultBranchReader\(reader, repo\)\.then\(declaredEnvironmentAt, \(\) => null\)\);/);
     expect(src).toMatch(/return \{ project, briefMerged, briefPath, proposed, filed, open, blocked, unmilestoned, all, deploy, environment,/);
-    expect(src).toMatch(/if \(declaredEnvironmentRead === undefined\) declaredEnvironmentRead = declaredEnvironmentFrom\(REPO\);/);
+    // Once per tick: the tick's read is memoised, softly, and it is the one readWorld hands in.
+    expect(src).toMatch(/const declaredEnvironment = \(\) => \(declaredEnvironmentRead \?\?= defaultBranchReader\(ghReader\(\), REPO\)\.then\(declaredEnvironmentAt, \(\) => null\)\);/);
+    expect(src).toMatch(/environment: declaredEnvironment,/);
   });
 });
 
@@ -3627,38 +3649,35 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
   /** Builds the `io` seam for a release sequence, oldest LAST (as the API returns it). */
   const deployWorld = (tags: Array<{ tag: string; deploy: 'success' | 'skipped' | 'failure' | 'missing' | 'running' | 'nojob' | 'unreadable' }>) => {
     const ids = new Map(tags.map((t, i) => [t.tag, i + 1]));
-    return {
-      json: (args: string[]) => {
-        if (args[0] === 'issue') return { closedByPullRequestsReferences: [{ number: 9 }] };
-        if (args[0] === 'pr') return { state: 'MERGED', mergeCommit: { oid: 'sha1' } };
-        if (args[0] === 'api') return tags.map((t) => ({ tag: t.tag }));
-        if (args[0] === 'run' && args[1] === 'list') {
-          return tags.filter((t) => t.deploy !== 'missing').map((t) => ({
-            displayTitle: t.tag,
-            status: t.deploy === 'running' ? 'in_progress' : 'completed',
-            conclusion: t.deploy === 'running' ? null : (t.deploy === 'failure' ? 'failure' : 'success'),
-            databaseId: ids.get(t.tag),
-            url: `u-${t.tag}`,
-          }));
-        }
-        if (args[0] === 'run' && args[1] === 'view') {
-          const tag = [...ids].find(([, id]) => String(id) === args[2])?.[0];
-          const d = tags.find((t) => t.tag === tag)!.deploy;
-          // RA-1369's two causes, which the shipped code must tell apart:
-          //   `unreadable` — the call throws (or returns no `jobs`): TRANSIENT.
-          //   `nojob`      — jobs come back and none is the deploy job: PERMANENT,
-          //                  which is what a rename of `deploy` produces for every
-          //                  release cut under the old name.
-          if (d === 'unreadable') throw new Error('gh: 502');
-          if (d === 'nojob') return { jobs: [{ name: 'gate', conclusion: 'success' }] };
-          return { jobs: [{ name: 'deploy', conclusion: d === 'skipped' ? 'skipped' : 'success' }] };
-        }
-        throw new Error(`unrouted: ${args.join(' ')}`);
+    return fakeReads({
+      closedBy: { 1: [9] },
+      prs: { 9: { state: 'MERGED', mergeCommit: { oid: 'sha1' } } },
+      releases: tags.map((t) => t.tag),
+      runs: tags.filter((t) => t.deploy !== 'missing').map((t) => ({
+        displayTitle: t.tag,
+        status: t.deploy === 'running' ? 'in_progress' : 'completed',
+        conclusion: t.deploy === 'running' ? null : (t.deploy === 'failure' ? 'failure' : 'success'),
+        databaseId: ids.get(t.tag)!,
+        url: `u-${t.tag}`,
+      })),
+      pages: (path) => {
+        const id = /\/actions\/runs\/(\d+)\/jobs/.exec(path)?.[1];
+        if (id === undefined) return undefined;
+        const tag = [...ids].find(([, n]) => String(n) === id)?.[0];
+        const d = tags.find((t) => t.tag === tag)!.deploy;
+        // RA-1369's two causes, which the shipped code must tell apart:
+        //   `unreadable` — the call throws (or returns no `jobs`): TRANSIENT.
+        //   `nojob`      — jobs come back and none is the deploy job: PERMANENT,
+        //                  which is what a rename of `deploy` produces for every
+        //                  release cut under the old name.
+        if (d === 'unreadable') throw new Error('gh: 502');
+        if (d === 'nojob') return [{ jobs: [{ name: 'gate', conclusion: 'success' }] }];
+        return [{ jobs: [{ name: 'deploy', conclusion: d === 'skipped' ? 'skipped' : 'success' }] }];
       },
       // Every tag contains the merge — the walk's containment check is not what is
       // under test here, and `readDeploy` re-checks it by ancestry per candidate.
-      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
-    };
+      compare: () => 'behind',
+    });
   };
   const CLOSED = [{ number: 1, state: 'CLOSED' }];
   /** A world at phase 4: every proposed issue closed, so `nextActions` reaches the
@@ -3671,11 +3690,11 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
   // Newest first, as `releases?per_page=30` returns them; the walk reverses it.
   const seq = (...t: Array<{ tag: string; deploy: 'success' | 'skipped' | 'failure' | 'missing' | 'running' | 'nojob' | 'unreadable' }>) => [...t].reverse();
 
-  it('RA-1268 — walks past a run that aged out of the 30-run window, to a later success', () => {
+  it('RA-1268 — walks past a run that aged out of the 30-run window, to a later success', async () => {
     // vA declined · vB's run fell out of the window · vC deployed. `deploy-staging.yml`
     // checks out the tag and runs a whole-tree `sst deploy`, so vC's success really is
     // evidence for this project's commits.
-    const d = readDeploy(CLOSED, deployWorld(seq(
+    const d = await readDeploy(CLOSED, deployWorld(seq(
       { tag: 'v1.0.0', deploy: 'skipped' },
       { tag: 'v1.0.1', deploy: 'missing' },
       { tag: 'v1.0.2', deploy: 'success' },
@@ -3684,11 +3703,11 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
     expect(d.tag, 'and it names the release that actually deployed').toBe('v1.0.2');
   });
 
-  it('RA-1271 — walks past an unrelated later failure, to a success after it', () => {
+  it('RA-1271 — walks past an unrelated later failure, to a success after it', async () => {
     // vA declined · vB failed · vC deployed. At candidate two or later the failing
     // release is whatever release happened to fail next; the project was being parked
     // on someone else's failure.
-    const d = readDeploy(CLOSED, deployWorld(seq(
+    const d = await readDeploy(CLOSED, deployWorld(seq(
       { tag: 'v1.0.0', deploy: 'skipped' },
       { tag: 'v1.0.1', deploy: 'failure' },
       { tag: 'v1.0.2', deploy: 'success' },
@@ -3697,12 +3716,12 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
     expect(d.tag).toBe('v1.0.2');
   });
 
-  it("names the project's OWN failed release even when a later one deployed", () => {
+  it("names the project's OWN failed release even when a later one deployed", async () => {
     // REWRITTEN WITH RA-1364's OWN REASONING CORRECTED (RA-1372). I wrote this case to
     // lock "terminate on the first containing failure", on the RA-1056 argument. The
     // argument was right about what must not be LOST and wrong about what must be
     // RETURNED: discarding the failure and parking are not the only two options.
-    const d = readDeploy(CLOSED, deployWorld(seq(
+    const d = await readDeploy(CLOSED, deployWorld(seq(
       { tag: 'v1.0.0', deploy: 'failure' },
       { tag: 'v1.0.1', deploy: 'success' },
     )));
@@ -3711,14 +3730,14 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
     expect(d.failedAt).toBe('v1.0.0');
   });
 
-  it('never carries a failure onto itself', () => {
+  it('never carries a failure onto itself', async () => {
     // RA-1440 review. When the reported state IS the own failure, `remembered.get('failed')`
     // and `ownFailure` are the same object, so an ungated spread gives `failedAt === tag`
     // — a sentence reading "release vA failed; the work reached staging only via the
     // later deploy of vA". Unreachable through any artifact today, because
     // `deploy-failed` never gets to a caveat renderer, so it is asserted on the VERDICT
     // where it is actually decidable rather than left to be caught if that ever changes.
-    const d = readDeploy(CLOSED, deployWorld(seq(
+    const d = await readDeploy(CLOSED, deployWorld(seq(
       { tag: 'v1.0.0', deploy: 'failure' },
       { tag: 'v1.0.1', deploy: 'skipped' },
     )));
@@ -3726,11 +3745,11 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
     expect(d.failedAt, 'the verdict IS the failure — it must not also carry it').toBeUndefined();
   });
 
-  it('reports the failure alone when nothing later deployed', () => {
+  it('reports the failure alone when nothing later deployed', async () => {
     // NON-VACUITY for the row above: if no candidate deploys, the verdict is still
     // `failed` and still parks — carrying the failure forward must not have turned
     // every failure into a pass.
-    const d = readDeploy(CLOSED, deployWorld(seq(
+    const d = await readDeploy(CLOSED, deployWorld(seq(
       { tag: 'v1.0.0', deploy: 'failure' },
       { tag: 'v1.0.1', deploy: 'skipped' },
     )));
@@ -3738,8 +3757,8 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
     expect(d.tag).toBe('v1.0.0');
   });
 
-  it('does not invent a failedAt when the project\'s own release was fine', () => {
-    const d = readDeploy(CLOSED, deployWorld(seq(
+  it('does not invent a failedAt when the project\'s own release was fine', async () => {
+    const d = await readDeploy(CLOSED, deployWorld(seq(
       { tag: 'v1.0.0', deploy: 'skipped' },
       { tag: 'v1.0.1', deploy: 'success' },
     )));
@@ -3747,10 +3766,10 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
     expect(d.failedAt).toBeUndefined();
   });
 
-  it('absent evidence still never reads as deployed', () => {
+  it('absent evidence still never reads as deployed', async () => {
     // The property RA-1056 exists for, and the one thing continuing must never buy: only
     // a candidate whose own deploy job concluded success may return `deployed`.
-    const d = readDeploy(CLOSED, deployWorld(seq(
+    const d = await readDeploy(CLOSED, deployWorld(seq(
       { tag: 'v1.0.0', deploy: 'skipped' },
       { tag: 'v1.0.1', deploy: 'missing' },
       { tag: 'v1.0.2', deploy: 'missing' },
@@ -3759,10 +3778,10 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
   });
 
   describe('when no candidate ever deploys, it reports the most actionable negative', () => {
-    it('prefers a failure over a declined gate', () => {
+    it('prefers a failure over a declined gate', async () => {
       // A `failed` names a run a human can re-run; `gate-declined` is evidence of
       // nothing. RA-1271 names this preference explicitly.
-      const d = readDeploy(CLOSED, deployWorld(seq(
+      const d = await readDeploy(CLOSED, deployWorld(seq(
         { tag: 'v1.0.0', deploy: 'skipped' },
         { tag: 'v1.0.1', deploy: 'failure' },
       )));
@@ -3770,18 +3789,18 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
       expect(d.tag, 'and names the tag that actually failed').toBe('v1.0.1');
     });
 
-    it('prefers an aged-out run over a declined gate', () => {
-      const d = readDeploy(CLOSED, deployWorld(seq(
+    it('prefers an aged-out run over a declined gate', async () => {
+      const d = await readDeploy(CLOSED, deployWorld(seq(
         { tag: 'v1.0.0', deploy: 'skipped' },
         { tag: 'v1.0.1', deploy: 'missing' },
       )));
       expect(d.state).toBe('run-not-found');
     });
 
-    it('still reports a declined gate when that is all there is', () => {
+    it('still reports a declined gate when that is all there is', async () => {
       // RA-1258's own case must be unchanged, and it must name the FIRST declined tag so
       // the message stays honest about which release was examined.
-      const d = readDeploy(CLOSED, deployWorld(seq(
+      const d = await readDeploy(CLOSED, deployWorld(seq(
         { tag: 'v1.0.0', deploy: 'skipped' },
         { tag: 'v1.0.1', deploy: 'skipped' },
       )));
@@ -3790,12 +3809,12 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
     });
   });
 
-  it('waits on an in-flight deploy rather than walking past it', () => {
+  it('waits on an in-flight deploy rather than walking past it', async () => {
     // `deploying` is deliberately NOT in the continue set. It is transient — the next
     // tick reads a completed run — so it can never park a project, and waiting on a
     // containing release's running deploy is the right answer rather than reaching for
     // a later one.
-    const d = readDeploy(CLOSED, deployWorld(seq(
+    const d = await readDeploy(CLOSED, deployWorld(seq(
       { tag: 'v1.0.0', deploy: 'skipped' },
       { tag: 'v1.0.1', deploy: 'running' },
       { tag: 'v1.0.2', deploy: 'success' },
@@ -3809,8 +3828,8 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
     // as though one tag was checked — which is exactly what the old behaviour did. This
     // is what lets a human tell "we looked at the one release" from "we looked at all
     // of them and none deployed", and stops them re-checking later releases by hand.
-    it('counts the containing releases it classified', () => {
-      const d = readDeploy(CLOSED, deployWorld(seq(
+    it('counts the containing releases it classified', async () => {
+      const d = await readDeploy(CLOSED, deployWorld(seq(
         { tag: 'v1.0.0', deploy: 'skipped' },
         { tag: 'v1.0.1', deploy: 'skipped' },
         { tag: 'v1.0.2', deploy: 'skipped' },
@@ -3833,7 +3852,7 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
     });
   });
 
-  it('the tag it reports is always one the walk classified', () => {
+  it('the tag it reports is always one the walk classified', async () => {
     // `verificationCaveat` and the retro line both print this tag, so a verdict naming
     // a release the walk never examined would be a false statement about what was built.
     for (const s of [
@@ -3841,7 +3860,7 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
       seq({ tag: 'v2.0.0', deploy: 'skipped' }, { tag: 'v2.0.1', deploy: 'missing' }),
       seq({ tag: 'v2.0.0', deploy: 'skipped' }, { tag: 'v2.0.1', deploy: 'skipped' }),
     ]) {
-      const d = readDeploy(CLOSED, deployWorld(s));
+      const d = await readDeploy(CLOSED, deployWorld(s));
       expect(s.map((t) => t.tag), `${d.state} named ${d.tag}`).toContain(d.tag);
     }
   });
@@ -3936,31 +3955,28 @@ describe('a run whose jobs have no deploy job is permanent, not unreadable (RA-1
   // either `?? null` or the CONTINUE_PAST entry left the classifier tests green.
   const world = (tags: Array<{ tag: string; deploy: string }>) => {
     const ids = new Map(tags.map((t, i) => [t.tag, i + 1]));
-    return {
-      json: (args: string[]) => {
-        if (args[0] === 'issue') return { closedByPullRequestsReferences: [{ number: 9 }] };
-        if (args[0] === 'pr') return { state: 'MERGED', mergeCommit: { oid: 'sha1' } };
-        if (args[0] === 'api') return [...tags].reverse().map((t) => ({ tag: t.tag }));
-        if (args[0] === 'run' && args[1] === 'list') {
-          return tags.map((t) => ({
-            displayTitle: t.tag, status: 'completed', conclusion: 'success',
-            databaseId: ids.get(t.tag), url: `u-${t.tag}`,
-          }));
-        }
-        if (args[0] === 'run' && args[1] === 'view') {
-          const tag = [...ids].find(([, id]) => String(id) === args[2])?.[0];
-          const d = tags.find((t) => t.tag === tag)!.deploy;
-          if (d === 'unreadable') throw new Error('gh: 502');
-          // `.jobs` ABSENT is the issue's cause 2 — the answer came back and is
-          // unusable, which is transient like a throw and unlike `nojob`.
-          if (d === 'nojobs-key') return {};
-          if (d === 'nojob') return { jobs: [{ name: 'gate', conclusion: 'success' }] };
-          return { jobs: [{ name: 'deploy', conclusion: d === 'skipped' ? 'skipped' : 'success' }] };
-        }
-        throw new Error(`unrouted: ${args.join(' ')}`);
+    return fakeReads({
+      closedBy: { 1: [9] },
+      prs: { 9: { state: 'MERGED', mergeCommit: { oid: 'sha1' } } },
+      releases: [...tags].reverse().map((t) => t.tag),
+      runs: tags.map((t) => ({
+        displayTitle: t.tag, status: 'completed', conclusion: 'success',
+        databaseId: ids.get(t.tag)!, url: `u-${t.tag}`,
+      })),
+      pages: (path) => {
+        const id = /\/actions\/runs\/(\d+)\/jobs/.exec(path)?.[1];
+        if (id === undefined) return undefined;
+        const tag = [...ids].find(([, n]) => String(n) === id)?.[0];
+        const d = tags.find((t) => t.tag === tag)!.deploy;
+        if (d === 'unreadable') throw new Error('gh: 502');
+        // `.jobs` ABSENT is the issue's cause 2 — the answer came back and is
+        // unusable, which is transient like a throw and unlike `nojob`.
+        if (d === 'nojobs-key') return [{}];
+        if (d === 'nojob') return [{ jobs: [{ name: 'gate', conclusion: 'success' }] }];
+        return [{ jobs: [{ name: 'deploy', conclusion: d === 'skipped' ? 'skipped' : 'success' }] }];
       },
-      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
-    };
+      compare: () => 'behind',
+    });
   };
   const CLOSED = [{ number: 1, state: 'CLOSED' }];
   /** A world at phase 4, so `nextActions` reaches the deploy outcomes. */
@@ -3970,32 +3986,32 @@ describe('a run whose jobs have no deploy job is permanent, not unreadable (RA-1
     deploy,
   });
 
-  it('the producer emits the two causes distinctly', () => {
-    expect(readDeploy(CLOSED, world([{ tag: 'v1.0.0', deploy: 'nojob' }])).state)
+  it('the producer emits the two causes distinctly', async () => {
+    expect((await readDeploy(CLOSED, world([{ tag: 'v1.0.0', deploy: 'nojob' }]))).state)
       .toBe('deploy-job-absent');
-    expect(readDeploy(CLOSED, world([{ tag: 'v1.0.0', deploy: 'unreadable' }])).state)
+    expect((await readDeploy(CLOSED, world([{ tag: 'v1.0.0', deploy: 'unreadable' }]))).state)
       .toBe('run-unreadable');
     // All THREE producer paths, because the issue enumerates three and only one of
     // them is permanent. A missing `jobs` key is an unusable answer, not an answer
     // saying there is no deploy job — collapsing it would make a transient API shape
     // park the project forever.
-    expect(readDeploy(CLOSED, world([{ tag: 'v1.0.0', deploy: 'nojobs-key' }])).state)
+    expect((await readDeploy(CLOSED, world([{ tag: 'v1.0.0', deploy: 'nojobs-key' }]))).state)
       .toBe('run-unreadable');
   });
 
-  it('an absent jobs key does not continue the walk either', () => {
-    const d = readDeploy(CLOSED, world([
+  it('an absent jobs key does not continue the walk either', async () => {
+    const d = await readDeploy(CLOSED, world([
       { tag: 'v1.0.0', deploy: 'nojobs-key' },
       { tag: 'v1.0.1', deploy: 'success' },
     ]));
     expect(d.state, 'transient: the next tick re-reads it').toBe('run-unreadable');
   });
 
-  it('the walk continues past an absent deploy job, to a later real deploy', () => {
+  it('the walk continues past an absent deploy job, to a later real deploy', async () => {
     // The reachable case: `deploy-staging.yml`'s job names come from the workflow as it
     // was at that tag, and the walk deliberately reads OLDER releases — so a rename of
     // `deploy` makes every release cut under the old name classify this way, forever.
-    const d = readDeploy(CLOSED, world([
+    const d = await readDeploy(CLOSED, world([
       { tag: 'v1.0.0', deploy: 'nojob' },
       { tag: 'v1.0.1', deploy: 'success' },
     ]));
@@ -4003,20 +4019,20 @@ describe('a run whose jobs have no deploy job is permanent, not unreadable (RA-1
     expect(d.tag).toBe('v1.0.1');
   });
 
-  it('but still refuses when nothing later deployed', () => {
+  it('but still refuses when nothing later deployed', async () => {
     // Absent evidence never reads as a deploy — RA-1056's property, and the one thing
     // continuing must not buy.
-    const d = readDeploy(CLOSED, world([
+    const d = await readDeploy(CLOSED, world([
       { tag: 'v1.0.0', deploy: 'nojob' },
       { tag: 'v1.0.1', deploy: 'nojob' },
     ]));
     expect(d.state).toBe('deploy-job-absent');
   });
 
-  it('does NOT continue past a genuinely unreadable run', () => {
+  it('does NOT continue past a genuinely unreadable run', async () => {
     // NON-VACUITY on the split: an API failure is transient, so parking one tick is
     // correct and the walk must still stop there.
-    const d = readDeploy(CLOSED, world([
+    const d = await readDeploy(CLOSED, world([
       { tag: 'v1.0.0', deploy: 'unreadable' },
       { tag: 'v1.0.1', deploy: 'success' },
     ]));
@@ -4024,8 +4040,8 @@ describe('a run whose jobs have no deploy job is permanent, not unreadable (RA-1
     expect(d.tag).toBe('v1.0.0');
   });
 
-  it('prefers it over run-not-found when reporting, being strictly more informative', () => {
-    const d = readDeploy(CLOSED, world([
+  it('prefers it over run-not-found when reporting, being strictly more informative', async () => {
+    const d = await readDeploy(CLOSED, world([
       { tag: 'v1.0.0', deploy: 'skipped' },
       { tag: 'v1.0.1', deploy: 'nojob' },
     ]));
@@ -4334,7 +4350,7 @@ describe('reconcileAll: the loop, the shared budget and the global cap (RA-1447)
     };
   };
 
-  const run = (worlds: Record<string, unknown>, o: Record<string, unknown> = {}) => {
+  const run = async (worlds: Record<string, unknown>, o: Record<string, unknown> = {}) => {
     const seen: string[] = [];
     // The `read` seam returns whatever `readWorld` does; these fixtures are
     // deliberately partial worlds, so the options object is typed once here rather
@@ -4350,14 +4366,14 @@ describe('reconcileAll: the loop, the shared budget and the global cap (RA-1447)
       budget: Infinity,
       ...o,
     } as unknown as Parameters<typeof reconcileAll>[1];
-    const r = reconcileAll(Object.keys(worlds), opts);
+    const r = await reconcileAll(Object.keys(worlds), opts);
     return { ...r, seen };
   };
 
-  it('reads every project, in the order given', () => {
+  it('reads every project, in the order given', async () => {
     // The whole point: RA-1291 and RA-1292 had filed ZERO issues for four days because
     // RA-1015 was open. Nothing about that was a queue — they were never read.
-    const r = run({ 1015: proj(1015), 1291: proj(1291), 1292: proj(1292) });
+    const r = await run({ 1015: proj(1015), 1291: proj(1291), 1292: proj(1292) });
     expect(r.seen).toEqual(['1015', '1291', '1292']);
     expect(r.decisions).toHaveLength(3);
   });
@@ -4380,28 +4396,28 @@ describe('reconcileAll: the loop, the shared budget and the global cap (RA-1447)
     // silently removes a file or dispatch from the third, so the tick where work is
     // piling up behind unreviewed PRs is exactly the tick that files least.
     const src = readFileSync(join(ROOT, 'scripts/lead-reconcile.mjs'), 'utf8');
-    const loop = src.slice(src.indexOf('export function reconcileAll'));
+    const loop = src.slice(src.indexOf('export async function reconcileAll'));
     expect(loop).toMatch(/budgetLeft -= chargeable\(decision\.actions\);/);
     expect(loop, 'the raw count is what charged the churn').not.toMatch(/budgetLeft -= decision\.actions\.length/);
     // The sibling line was always right; it must stay that way.
     expect(loop).toMatch(/globalLeft -= inFlightCount\(world\)/);
   });
 
-  it('shares ONE tick budget across projects rather than granting it to each', () => {
+  it('shares ONE tick budget across projects rather than granting it to each', async () => {
     // Otherwise reconciling N projects would let a tick do N times more than the
     // bound `QA_LEAD_TICK_BUDGET` exists to impose.
-    const r = run({ 1: proj(1, { open: 3 }), 2: proj(2, { open: 3 }), 3: proj(3, { open: 3 }) }, { budget: 4 });
+    const r = await run({ 1: proj(1, { open: 3 }), 2: proj(2, { open: 3 }), 3: proj(3, { open: 3 }) }, { budget: 4 });
     const total = r.decisions.reduce((n: number, d: { decision: { actions: unknown[] } }) => n + d.decision.actions.length, 0);
     expect(total, 'the shared budget bounds the whole tick').toBeLessThanOrEqual(4);
     expect(r.budgetLeft).toBeGreaterThanOrEqual(0);
   });
 
-  it('bounds in-flight work GLOBALLY, not just per project', () => {
+  it('bounds in-flight work GLOBALLY, not just per project', async () => {
     // wip answers "how many of THIS project's issues may be in flight" — a statement
     // about the brief's dependency order. Once every project is reconciled, that stops
     // bounding the total: three projects at wip 3 is nine concurrent implementer runs,
     // and the Implementer's real ceiling is quota (a usage cap was hit 2026-09-02).
-    const r = run({ 1: proj(1, { open: 4, inFlight: 3 }), 2: proj(2, { open: 4 }) }, { globalWip: 3, wipPerProject: 3 });
+    const r = await run({ 1: proj(1, { open: 4, inFlight: 3 }), 2: proj(2, { open: 4 }) }, { globalWip: 3, wipPerProject: 3 });
     // Project 1 consumes the whole global allowance, so project 2 gets wip 0 and
     // dispatches nothing — it is still READ and reported, which is the fix.
     expect(r.seen).toEqual(['1', '2']);
@@ -4411,7 +4427,7 @@ describe('reconcileAll: the loop, the shared budget and the global cap (RA-1447)
     expect(second!.decision.actions.filter((a: { kind: string }) => a.kind === 'dispatch')).toEqual([]);
   });
 
-  it('bounds the total this tick DISPATCHES, not only what was already labelled', () => {
+  it('bounds the total this tick DISPATCHES, not only what was already labelled', async () => {
     // THE CASE THE FIRST VERSION OF THIS SUITE WAS MISSING (RA-1483 review), and the
     // reason the cap shipped broken: every global-cap fixture pre-set `inFlight`, so
     // only the branch that works was exercised — a project whose allowance is
@@ -4423,7 +4439,7 @@ describe('reconcileAll: the loop, the shared budget and the global cap (RA-1447)
     // Production settings from the workflow: budget 6, wip 3, globalWip 3, three open
     // projects, NOTHING in flight — the live RA-1015/RA-1291/RA-1292 shape. Before the fix
     // this dispatched 6 under a guard reading 3, and settled there permanently.
-    const r = run(
+    const r = await run(
       { 1015: proj(1015, { open: 4 }), 1291: proj(1291, { open: 4 }), 1292: proj(1292, { open: 4 }) },
       { budget: 6, globalWip: 3, wipPerProject: 3 },
     );
@@ -4434,11 +4450,11 @@ describe('reconcileAll: the loop, the shared budget and the global cap (RA-1447)
     expect(r.globalLeft).toBeLessThanOrEqual(0);
   });
 
-  it('says WHICH cap stopped a project, when the shared allowance is what ran out', () => {
+  it('says WHICH cap stopped a project, when the shared allowance is what ran out', async () => {
     // `wip` is now min(own cap, global remaining), so a project with NOTHING in flight
     // could be stopped at `WIP cap reached (0/0)` — which reads as its own cap and is
     // not. More visible after the fix above, not less.
-    const r = run(
+    const r = await run(
       { 1: proj(1, { open: 4 }), 2: proj(2, { open: 4 }) },
       { budget: 6, globalWip: 3, wipPerProject: 3 },
     );
@@ -4447,26 +4463,26 @@ describe('reconcileAll: the loop, the shared budget and the global cap (RA-1447)
     expect(second!.decision.stopped, 'and must not blame the project\'s own cap').not.toMatch(/WIP cap reached/);
   });
 
-  it('changes nothing at one open project', () => {
+  it('changes nothing at one open project', async () => {
     // GLOBAL_WIP_DEFAULT is WIP_DEFAULT, so the two caps are the same number and bind
     // identically until a second project exists. That is what makes this safe to ship.
-    const one = run({ 1015: proj(1015, { open: 3 }) }, { globalWip: 3, wipPerProject: 3 });
+    const one = await run({ 1015: proj(1015, { open: 3 }) }, { globalWip: 3, wipPerProject: 3 });
     expect(one.failures).toEqual([]);
     expect(one.decisions).toHaveLength(1);
   });
 
-  it('one project failing does not strand the rest', () => {
+  it('one project failing does not strand the rest', async () => {
     // THE COUPLING THIS CHANGE REMOVES, and the way it could come back worse: a throw
     // reconciling RA-1015 used to take every higher-numbered project with it. Now it can
     // reach every project, so isolation is load-bearing rather than tidy.
-    const r = run({ 1015: new Error('gh: 502'), 1291: proj(1291), 1292: proj(1292) });
+    const r = await run({ 1015: new Error('gh: 502'), 1291: proj(1291), 1292: proj(1292) });
     expect(r.seen).toEqual(['1015', '1291', '1292']);
     expect(r.failures).toEqual([{ project: '1015', message: 'gh: 502' }]);
     expect(r.decisions.map((d: { project: string }) => d.project)).toEqual(['1291', '1292']);
   });
 
-  it('reports a failure rather than swallowing it', () => {
-    const r = run({ 1015: new Error('boom') });
+  it('reports a failure rather than swallowing it', async () => {
+    const r = await run({ 1015: new Error('boom') });
     expect(r.failures).toHaveLength(1);
     expect(r.decisions).toEqual([]);
   });
@@ -4880,11 +4896,11 @@ describe('the half of the hold that WRITES it (RA-1202)', () => {
     expect(calls, 'a dry run reports and writes nothing').toEqual([]);
   });
 
-  it('repoLabels returns undefined, not an empty set, when the read fails', () => {
+  it('repoLabels returns undefined, not an empty set, when the read fails', async () => {
     // The property that stops an API hiccup deadlocking a project: an empty set rejects
     // EVERY label the brief names, and a dropped label fails closed.
-    expect(repoLabels({ json: () => { throw new Error('gh label list failed: HTTP 502'); } })).toBeUndefined();
-    expect(repoLabels({ json: () => [{ name: 'sev:critical' }] })).toEqual(new Set(['sev:critical']));
+    expect(await repoLabels(fakeReads({ graphql: { Labels: () => { throw new Error('gh label list failed: HTTP 502'); } } }))).toBeUndefined();
+    expect(await repoLabels(fakeReads({ labels: ['sev:critical'] }))).toEqual(new Set(['sev:critical']));
   });
 });
 
@@ -5073,8 +5089,8 @@ describe('one PR snapshot per in-flight issue per tick (RA-1207)', () => {
     const reads = (fn.match(/parkedRead\(i\.number\b/g) ?? []).length;
     expect(reads, 'exactly one read per issue').toBe(1);
     expect(fn, 'and readWorld reads no PR list of its own').not.toMatch(/linkedPrsRead\(/);
-    const shared = src.slice(src.indexOf('export function parkedRead('), src.indexOf('function readWorld(project) {'));
-    expect((shared.match(/\bprs\(number\)/g) ?? []).length, 'parkedRead reads the PRs once').toBe(1);
+    const shared = src.slice(src.indexOf('export async function parkedRead('), src.indexOf('function readWorld(project) {'));
+    expect((shared.match(/\breadPrs\(number\)/g) ?? []).length, 'parkedRead reads the PRs once').toBe(1);
     expect(fn, 'prs is that read').toMatch(/const prs = prRead\.prs;/);
     expect(fn, 'and both fields derive from it').toMatch(/reviewBlocked: isReviewBlocked\(prs\)/);
   });
@@ -5180,24 +5196,24 @@ describe('a project allocated nothing says so (RA-1484)', () => {
     budget,
   } as unknown as Parameters<typeof reconcileAll>[1]);
 
-  it('records what each project was allowed and what it took', () => {
-    const out = runTick(5, 3);
+  it('records what each project was allowed and what it took', async () => {
+    const out = await runTick(5, 3);
     expect(out.allocations.map((a: { project: string; spent: number }) => [a.project, a.spent]))
       .toEqual([['1', 3], ['2', 0]]);
   });
 
-  it('distinguishes STARVED from cut short, which is the whole point', () => {
-    const out = runTick(5, 3);
+  it('distinguishes STARVED from cut short, which is the whole point', async () => {
+    const out = await runTick(5, 3);
     expect(out.allocations[0]).toMatchObject({ starved: false, cutShort: true });
     expect(out.allocations[1]).toMatchObject({ starved: true, cutShort: false });
   });
 
-  it('says nothing when the budget never bound', () => {
-    const out = runTick(1, 10);
+  it('says nothing when the budget never bound', async () => {
+    const out = await runTick(1, 10);
     expect(out.allocations.every((a: { starved: boolean; cutShort: boolean }) => !a.starved && !a.cutShort)).toBe(true);
   });
 
-  it('does not call a project with nothing to ask for STARVED (RA-1679)', () => {
+  it('does not call a project with nothing to ask for STARVED (RA-1679)', async () => {
     // The conflation RA-1484 was filed about, re-created by its own measurement.
     // `starved` was `budgetAtStart <= 0`, evaluated before anything about the project's
     // world — and it cannot be otherwise from inside the decision, because the budget
@@ -5208,7 +5224,7 @@ describe('a project allocated nothing says so (RA-1484)', () => {
     //
     // #1 proposes 5 issues and drains the budget of 3; #2's brief proposes nothing, so
     // it reaches an exhausted budget with nothing to ask for.
-    const out = reconcileAll(['1', '2'], {
+    const out = await reconcileAll(['1', '2'], {
       read: (project: string) => (project === '1'
         ? worldFrom(BRIEF(['t1', 't2', 't3', 't4', 't5']), [])
         // Every proposed issue already filed AND closed: nothing to file, nothing to
@@ -5222,10 +5238,10 @@ describe('a project allocated nothing says so (RA-1484)', () => {
     expect(out.allocations[1]).toMatchObject({ budgetAtStart: 0, starved: false, cutShort: false, demand: 0 });
   });
 
-  it('records HOW MUCH the starved project could not take, not just that it got nothing', () => {
+  it('records HOW MUCH the starved project could not take, not just that it got nothing', async () => {
     // "Allocated nothing" is what `budgetAtStart <= 0` already said. The number is what
     // makes the line a measurement of the queue rather than a restatement of the tick.
-    const out = runTick(5, 3);
+    const out = await runTick(5, 3);
     expect(out.allocations[1]).toMatchObject({ starved: true, demand: 5 });
   });
 });
@@ -5328,41 +5344,48 @@ describe('RA-2038 — an issue parked on a human does not occupy an implementer 
     number: n, title: `t${n}`, state: 'OPEN', labels: [IMPL], order: n, ...o,
   });
 
-  it('linkedPrsRead reports ok:false when the read throws — the arm that only runs on a bad day', () => {
+  it('linkedPrsRead reports ok:false when the read throws — the arm that only runs on a bad day', async () => {
     // WITHOUT THIS, `ok` IS UNTESTED. Mutating `ok: false` to `ok: true` passed a
     // full green tier: `isParkedOnHuman` takes `prOk` as an INPUT, so the decision
     // was covered and the reader producing it was not. That is RA-2106's finding one
-    // level up, and it is why this uses the injectable `json` seam (RA-1061).
+    // level up, and it is why this uses the injectable reader seam (RA-1061).
     const boom = () => { throw new Error('gh exploded'); };
-    expect(linkedPrsRead(1, { json: boom })).toEqual({ prs: [], ok: false });
+    expect(await linkedPrsRead(1, { reader: { get: boom, pages: boom, graphql: boom }, repo: 'o/r', warn: () => {} })).toEqual({ prs: [], ok: false });
 
     // And the success path still reports ok:true with the PRs.
-    const fake = (args: string[]) => (args[1] === 'view' && args[0] === 'issue'
-      ? { closedByPullRequestsReferences: [{ number: 7 }] }
-      : { number: 7, state: 'OPEN', headRefOid: 'abc', commits: [], reviews: [], mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE' });
-    const good = linkedPrsRead(1, { json: fake as never });
+    const fake = fakeReads({
+      closedBy: { 1: [7] },
+      prs: { 7: { number: 7, state: 'OPEN', headRefOid: 'abc', commits: [], reviews: [], mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE' } },
+    });
+    const good = await linkedPrsRead(1, fake);
     expect(good.ok).toBe(true);
     expect(good.prs.map((p: { number: number }) => p.number)).toEqual([7]);
     expect(good.prs[0].conflicting, 'mergeability is normalised onto the PR (#1722)').toBe(false);
   });
 
-  it('a PR read that forgot to ask about mergeability REDS the tick, it does not degrade (RA-1722)', () => {
+  it('a PR read that forgot to ask about mergeability REDS the tick, it does not degrade (RA-1722)', async () => {
     // THE WHOLE POINT OF THE THROW. Every other failure in `linkedPrsRead` becomes
     // `ok: false` — a warning line the tick already prints for 502s and deleted
     // branches — and a trimmed `--json` list arriving on that line would leave the
     // conflict detector answering "clear" for every PR while looking like a bad day.
     // So the caller's defect is a different class and is re-thrown past the degrade.
-    const trimmed = (args: string[]) => (args[1] === 'view' && args[0] === 'issue'
-      ? { closedByPullRequestsReferences: [{ number: 7 }] }
-      : { number: 7, state: 'OPEN', headRefOid: 'abc', commits: [], reviews: [] });
-    expect(() => linkedPrsRead(1, { json: trimmed as never })).toThrow(ConflictFieldsUnread);
+    // The pull request comes back without either mergeability field, as a query that
+    // did not ask for them answers.
+    const trimmed = fakeReads({
+      closedBy: { 1: [7] },
+      graphql: {
+        PullRequest: () => ({ repository: { pullRequest: { number: 7, state: 'OPEN', headRefOid: 'abc', commits: { nodes: [] }, reviews: connection([]) } } }),
+      },
+    });
+    await expect(linkedPrsRead(1, trimmed)).rejects.toThrow(ConflictFieldsUnread);
   });
 
-  it('marks a conflicting PR so every consumer reads one answer (RA-1722)', () => {
-    const dirty = (args: string[]) => (args[1] === 'view' && args[0] === 'issue'
-      ? { closedByPullRequestsReferences: [{ number: 7 }] }
-      : { number: 7, state: 'OPEN', headRefOid: 'abc', commits: [], reviews: [], mergeStateStatus: 'DIRTY', mergeable: 'CONFLICTING' });
-    expect(linkedPrsRead(1, { json: dirty as never }).prs[0].conflicting).toBe(true);
+  it('marks a conflicting PR so every consumer reads one answer (RA-1722)', async () => {
+    const dirty = fakeReads({
+      closedBy: { 1: [7] },
+      prs: { 7: { number: 7, state: 'OPEN', headRefOid: 'abc', commits: [], reviews: [], mergeStateStatus: 'DIRTY', mergeable: 'CONFLICTING' } },
+    });
+    expect((await linkedPrsRead(1, dirty)).prs[0].conflicting).toBe(true);
   });
 
   it('the DERIVATION fails closed three ways (RA-2106/RA-2107)', () => {
@@ -5499,7 +5522,7 @@ describe('RA-2038 — an issue parked on a human does not occupy an implementer 
     expect(r.stopped, 'with no doubled full stop').not.toMatch(/\.\./);
   });
 
-  it('the shared allowance is not spent on parked issues either (reconcileAll)', () => {
+  it('the shared allowance is not spent on parked issues either (reconcileAll)', async () => {
     // THE MEASURED RA-1292 SHAPE, and the assertion is a BEFORE/AFTER on one world.
     //
     // The first version of this test asserted the wrong thing and is worth
@@ -5521,25 +5544,25 @@ describe('RA-2038 — an issue parked on a human does not occupy an implementer 
       const issues = [{ number: 400, title: 't0', state: 'OPEN', labels: [], order: 0 }];
       return { ...worldFrom(BRIEF(['t0'])), project: '4', all: issues, open: issues, filed: issues };
     };
-    const runWith = (parked: boolean) => {
+    const runWith = async (parked: boolean) => {
       const worlds: Record<string, unknown> = {
         1: onlyParked(1, parked), 2: onlyParked(2, parked), 3: onlyParked(3, parked), 4: target(),
       };
       // Same cast the `run` helper above uses: these are deliberately partial
       // worlds, so the options object is widened once rather than each field.
-      const out = reconcileAll(['1', '2', '3', '4'], {
+      const out = await reconcileAll(['1', '2', '3', '4'], {
         read: (p: string) => worlds[p], onDecision: () => {}, budget: 6, globalWip: 3, wipPerProject: 3,
       } as unknown as Parameters<typeof reconcileAll>[1]);
       return out.decisions.find((d: { project: string }) => d.project === '4')!.decision;
     };
 
     // Before: three held-but-idle slots spend the whole shared allowance.
-    const before = runWith(false);
+    const before = await runWith(false);
     expect(before.actions).toEqual([]);
     expect(before.stopped).toMatch(/shared implementer allowance is spent/);
 
     // After: the slots are not occupied, so the allowance reaches project 4.
-    expect(runWith(true).actions.map((a: { number: number }) => a.number)).toEqual([400]);
+    expect((await runWith(true)).actions.map((a: { number: number }) => a.number)).toEqual([400]);
   });
 });
 
@@ -5656,11 +5679,14 @@ describe('RA-2112 — `human-held` frees a slot only once it is stale', () => {
     expect(isParkedOnHuman({ ...base, laneState: 'awaiting-human', laneLastAt: null })).toBe(true);
   });
 
-  it('laneStateOf carries the last word’s time from `classify`, and null on a failed read', () => {
+  it('laneStateOf carries the last word’s time from `classify`, and null on a failed read', async () => {
     const classify = () => ({ state: 'human-held', last: { createdAt: '2026-09-20T00:00:00Z' } });
-    expect(laneStateOf(1, { comments: () => [], classify: classify as never })).toEqual({ state: 'human-held', lastAt: '2026-09-20T00:00:00Z' });
+    expect(await laneStateOf(1, { comments: () => [], classify: classify as never })).toEqual({ state: 'human-held', lastAt: '2026-09-20T00:00:00Z' });
     const boom = () => { throw new Error('502'); };
-    expect(laneStateOf(1, { comments: boom as never })).toEqual({ state: null, lastAt: null });
+    expect(await laneStateOf(1, { comments: boom as never, warn: () => {} })).toEqual({ state: null, lastAt: null });
+    // And through the reader, when no `comments` is handed in: a failed comments read is the same null.
+    const failing = fakeReads({ graphql: { Comments: boom } });
+    expect(await laneStateOf(1, { reader: failing.reader, repo: failing.repo, warn: failing.warn })).toEqual({ state: null, lastAt: null });
   });
 
   it('reads the SAME window the sweep ages `awaiting-human` with', () => {
@@ -5872,7 +5898,7 @@ describe('RA-1783 — membership is not closure: the project WORK gates, carried
 
   it('readWorld waits on staging only for gating members’ merges', () => {
     const src = readFileSync(join(ROOT, 'scripts/lead-reconcile.mjs'), 'utf8');
-    expect(src).toMatch(/readDeploy\(all\.filter\(\(i\) => gatesClosure\(i, proposed\)\)\)/);
+    expect(src).toMatch(/readDeploy\(all\.filter\(\(i\) => gatesClosure\(i, proposed\)\), \{/);
   });
 
   it('the tick report names each carried-out member by number and severity', () => {
@@ -6053,9 +6079,9 @@ describe('retrying a run that died of its cause (RA-2519)', () => {
     expect(reviewRecovery(worldWith([pr]), { runsFor: runs, evidenceOf: died(null), retryHours: 5 }).churn).toEqual([]);
   });
 
-  it('reaches both lanes from reconcileAll, and the churn stays off the budget', () => {
+  it('reaches both lanes from reconcileAll, and the churn stays off the budget', async () => {
     const decisions: { actions: { kind: string; retry?: unknown }[] }[] = [];
-    reconcileAll(['1'], {
+    await reconcileAll(['1'], {
       read: () => worldWith([blocked()]),
       onDecision: (_w: unknown, d: { actions: { kind: string }[] }) => decisions.push(d),
       runsFor: () => [reviseRun(9)],

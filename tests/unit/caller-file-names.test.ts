@@ -57,7 +57,7 @@ const SITES: Site[] = [
   { file: 'scripts/brief-revise-recovery.mjs', line: "'--workflow', laneCallerFile(WORKFLOW,", reaches: 'agent-lead-revise.yml', constant: 'WORKFLOW', via: 'caller' },
   { file: 'scripts/lead-reconcile.mjs', line: "'--workflow', laneCallerFile(REVISE_WORKFLOW,", reaches: 'agent-implement-revise.yml', constant: 'REVISE_WORKFLOW', via: 'caller' },
   { file: 'scripts/lib/lane-caller.mjs', line: "l.startsWith('agent-')", reaches: 'callers' },
-  { file: 'scripts/lead-reconcile.mjs', line: "'--workflow', deploy.workflow,", reaches: 'declared' },
+  { file: 'scripts/lead-reconcile.mjs', line: 'actions/workflows/${encodeURIComponent(workflow)}/runs', reaches: 'declared' },
   { file: 'scripts/review-recovery.mjs', line: "'--workflow', 'ci.yml'", reaches: 'ci.yml' },
   // The dispatch sweep's review re-ask waits for CI on a head, as the review lane's filter does (kanon#1197).
   { file: 'scripts/review-reask.mjs', line: "'--workflow', 'ci.yml'", reaches: 'ci.yml' },
