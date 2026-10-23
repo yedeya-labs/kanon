@@ -92,7 +92,7 @@ import { THRESHOLD, countInterlock } from './capability-interlock.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { buildRows, levelOf, notWritten, readUpstream, renderSent, sendFromEnv, sentSentence } from './lib/finding-rows.mjs';
 import { beforeApply } from './lib/labels.mjs';
-import { plan } from './issue-triage-defaults.mjs';
+import { bodyProblems, plan } from './issue-triage-defaults.mjs';
 import { appPersona } from './app-register.mjs';
 import { signed } from './lib/role-marker.mjs';
 
@@ -240,6 +240,10 @@ export function route(findings, interlock, upstream = 'drafted') {
     // The capability anchor searches `audit-summary in:title`, so a filed issue titled so, with
     // a quoted `Watermark:` in its body, could become the anchor. It is never filed.
     if (/audit-summary/i.test(finding.title)) { held.push({ finding, why: 'its title holds `audit-summary`, which the capability anchor searches for' }); continue; }
+    // The body's form, as the filing skill's plan command checks an agent's (`K-WORK-14`,
+    // kanon#1247): the agent has finished by now, so a finding that breaks it is held, by name.
+    const form = bodyProblems(finding.body);
+    if (form.length) { held.push({ finding, why: `its body breaks K-WORK-14: ${form.join('; ')}` }); continue; }
     if (!finding.capability) { file.push(finding); continue; }
     if (interlock === null) held.push({ finding, why: 'the capability interlock could not be counted, so it is closed' });
     else if (interlock > THRESHOLD) held.push({ finding, why: `the capability interlock is closed (${interlock} open, more than ${THRESHOLD})` });

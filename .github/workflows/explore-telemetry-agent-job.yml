@@ -217,9 +217,10 @@ jobs:
               `sev:critical`, `sev:high`, `sev:medium` or `sev:low`, by the playbook's rubric.
               One that rests on cells alone is filed as a `spec-delta`, an observation, and
               needs none.
-            - Its body leads with what the aggregate shows and why it matters, then what
-              probably causes it. Put any concrete change under a
-              `## Possible approach — UNVERIFIED, not acceptance criteria` heading.
+            - Its body opens with a `## What must be true` heading, over what the aggregate
+              shows and why it matters, then what probably causes it. Put any concrete
+              change under a `## Possible approach — UNVERIFIED, not acceptance criteria`
+              heading, and under no other remedy heading (K-WORK-14).
             Every issue is public.
             Before writing an upstream finding's `evidence` or `suggested_fix`, read and follow
             `$KANON/skills/upstream-finding/SKILL.md`.

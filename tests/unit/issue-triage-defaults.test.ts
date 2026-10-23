@@ -1,6 +1,11 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   BUCKET_MILESTONES,
+  POSSIBLE_APPROACH_HEADING,
+  bodyProblems,
   DEFAULT_MILESTONE,
   GATE_CANDIDATE_LABEL,
   PIPELINE_MILESTONE,
@@ -283,9 +288,58 @@ describe('shadow: the backstop logs what plan() would have chosen, and writes no
   });
 });
 
+/** A body file for `plan --body`, which every filing now passes (kanon#1247). */
+const DIR = mkdtempSync(join(tmpdir(), 'plan-body-'));
+let bodies = 0;
+const bodyFile = (text: string): string => {
+  const path = join(DIR, `body-${bodies++}.md`);
+  writeFileSync(path, text);
+  return path;
+};
+const GOOD = bodyFile(`## What must be true\n\nThe constraint.\n\n${POSSIBLE_APPROACH_HEADING}\n\nAn edit.\n`);
+
+describe('bodyProblems (K-WORK-14, kanon#1247)', () => {
+  const MUST = '## What must be true\n\nThe constraint and its evidence.\n';
+
+  it('passes a body with the section and the one fixed remedy heading', () => {
+    expect(bodyProblems(`${MUST}\n${POSSIBLE_APPROACH_HEADING}\n\nAn edit.\n`)).toEqual([]);
+    expect(bodyProblems(`${MUST}\n### What must be true, in short\n`)).toEqual([]);
+  });
+
+  it('fails a body with no "What must be true" heading, by name', () => {
+    const [problem] = bodyProblems('## Evidence\n\nWhat must be true: prose is not a section.\n');
+    expect(problem).toMatch(/no "What must be true" section/);
+    expect(problem).toMatch(/K-WORK-14/);
+    expect(bodyProblems('**What must be true**\n')).toHaveLength(1);
+  });
+
+  it.each([
+    '## Suggested fix', '## Proposed fix', '## Fix', '## Remedy', '## Solution', '### Solution sketch',
+    '## Possible approach', '## Possible approach (unverified)', '## Possible approach — unverified, not acceptance criteria',
+    '# Possible approach — UNVERIFIED, not acceptance criteria', '**Suggested fix:**', '**Remedy**', '## Fix:',
+    '**Suggested fix:** Add the label.', '**Fix**: retry', '__Remedy:__ re-run it',
+  ])('fails the remedy heading %j, by name', (heading) => {
+    const problems = bodyProblems(`${MUST}\n${heading}\n\nAn edit.\n`);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(`"${heading}"`);
+    expect(problems[0]).toContain(POSSIBLE_APPROACH_HEADING);
+  });
+
+  it('reads no heading in a fenced block, and none that only starts with a remedy word', () => {
+    expect(bodyProblems(`${MUST}\n\`\`\`md\n## Suggested fix\n\`\`\`\n`)).toEqual([]);
+    expect(bodyProblems(`${MUST}\n~~~~\n## Fix\n~~~\n## Fix\n~~~~\n`)).toEqual([]);
+    expect(bodyProblems(`${MUST}\n## Fixture layout\n## Solutions architect notes\n`)).toEqual([]);
+    expect(bodyProblems(`${MUST}\n**Fix** the typo in the README.\n**Fixture**: a temp dir.\n`)).toEqual([]);
+  });
+
+  it('names every problem it finds', () => {
+    expect(bodyProblems('## Fix\n## Remedy\n')).toHaveLength(3);
+  });
+});
+
 describe('cli', () => {
   it('plan: prints the decision and the arguments for one gh issue create', () => {
-    const r = cli(['plan', '--label', 'follow-up', '--label', 'agent:reviewer', '--label', 'sev:critical'], '');
+    const r = cli(['plan', '--label', 'follow-up', '--label', 'agent:reviewer', '--label', 'sev:critical', '--body', GOOD], '');
     expect(r.code).toBe(0);
     const out = JSON.parse(r.out);
     expect(out.milestone).toBe(DEFAULT_MILESTONE);
@@ -294,23 +348,39 @@ describe('cli', () => {
   });
 
   it('plan: passes an explicit milestone through', () => {
-    const r = cli(['plan', '--label', 'enhancement', '--explicit-milestone', "Bob's launch"], '');
+    const r = cli(['plan', '--label', 'enhancement', '--explicit-milestone', "Bob's launch", '--body', GOOD], '');
     expect(JSON.parse(r.out).milestone).toBe("Bob's launch");
     expect(JSON.parse(r.out).ghArgs).toBe(`--label enhancement --milestone 'Bob'\\''s launch'`);
   });
 
   it('plan: takes the filer\'s subject', () => {
-    const r = cli(['plan', '--label', 'follow-up', '--label', 'agent:reviewer', '--label', 'sev:low', '--subject', 'pipeline'], '');
+    const r = cli(['plan', '--label', 'follow-up', '--label', 'agent:reviewer', '--label', 'sev:low', '--subject', 'pipeline', '--body', GOOD], '');
     expect(r.code).toBe(0);
     expect(JSON.parse(r.out).ghArgs).toBe(`--label follow-up --label agent:reviewer --label sev:low --milestone 'Development Automation'`);
-    expect(cli(['plan', '--label', 'bug', '--subject', 'platform'], '').code).toBe(1);
+    expect(cli(['plan', '--label', 'bug', '--subject', 'platform', '--body', GOOD], '').code).toBe(1);
   });
 
   it('plan: a refusal exits 1, says why on stderr, and prints no arguments', () => {
-    const r = cli(['plan', '--label', 'follow-up', '--label', 'agent:reviewer'], '');
+    const r = cli(['plan', '--label', 'follow-up', '--label', 'agent:reviewer', '--body', GOOD], '');
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/K-WORK-9/);
     expect(JSON.parse(r.out)).toEqual({ refused: expect.stringMatching(/K-WORK-9/) });
+  });
+
+  it('plan: refuses a body that breaks K-WORK-14, by name, beside a label refusal', () => {
+    const bare = cli(['plan', '--label', 'bug', '--label', 'sev:low', '--body', bodyFile('## Evidence\n\nx\n')], '');
+    expect(bare.code).toBe(1);
+    expect(JSON.parse(bare.out)).toEqual({ refused: expect.stringMatching(/no "What must be true" section.*K-WORK-14/) });
+    const both = cli(['plan', '--label', 'follow-up', '--label', 'agent:reviewer', '--body', bodyFile('## What must be true\n\n## Proposed fix\n')], '');
+    expect(both.code).toBe(1);
+    expect(both.err).toMatch(/K-WORK-9.*; the heading "## Proposed fix" proposes a remedy/);
+  });
+
+  it('plan: --body is required, and an unreadable one is a usage error', () => {
+    const none = cli(['plan', '--label', 'bug', '--label', 'sev:low'], '');
+    expect(none.code).toBe(2);
+    expect(none.err).toMatch(/needs --body/);
+    expect(cli(['plan', '--label', 'bug', '--body', join(DIR, 'missing.md')], '').code).toBe(2);
   });
 
   it('plan: an unknown flag is a usage error, never a silent default', () => {

@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -130,6 +131,15 @@ describe('the filing skill (K-WORK-8)', () => {
     for (const flag of PLAN_FLAGS) expect(named, flag).toContain(flag);
   });
 
+  // kanon#1247, `K-WORK-14`: `plan` checks the body, so the skill passes the body file it files.
+  it('passes the body file to plan, and files that same file', () => {
+    const call = fenced.find((l) => l.includes('issue-triage-defaults.mjs" plan'))!;
+    expect(call).toMatch(/ --body <file>$/);
+    expect(fenced.find((l) => l.startsWith('gh issue create'))).toContain('--body-file <file>');
+    expect(body).toContain('## What must be true');
+    expect(body).toContain('## Possible approach — UNVERIFIED, not acceptance criteria');
+  });
+
   it('files with plan\'s arguments alone, in one gh issue create', () => {
     const creates = fenced.filter((l) => l.startsWith('gh issue create'));
     expect(creates).toHaveLength(1);
@@ -138,8 +148,10 @@ describe('the filing skill (K-WORK-8)', () => {
   });
 
   it('reads only fields plan prints: ghArgs and args on a plan, refused on a refusal', () => {
-    const planned = JSON.parse(cli(['plan', '--label', 'bug', '--label', 'sev:low'], '').out) as Record<string, unknown>;
-    const refused = cli(['plan', '--label', 'follow-up', '--label', 'agent:reviewer'], '');
+    const good = join(mkdtempSync(join(tmpdir(), 'filing-skill-')), 'body.md');
+    writeFileSync(good, '## What must be true\n\nThe constraint.\n');
+    const planned = JSON.parse(cli(['plan', '--label', 'bug', '--label', 'sev:low', '--body', good], '').out) as Record<string, unknown>;
+    const refused = cli(['plan', '--label', 'follow-up', '--label', 'agent:reviewer', '--body', good], '');
     expect(refused.code).toBe(1);
     for (const field of ['ghArgs', 'args']) {
       expect(body).toContain(`\`${field}\``);
@@ -223,6 +235,8 @@ describe('each filer moved onto the skill files through it, and restates no rout
     expect(prompt).toContain('`--subject product`');
     expect(prompt).toContain('In this run `$KANON` is `${{ steps.kanon.outputs.path }}`');
     expect(prompt).toContain('run `kanon-plan` with the same flags instead');
+    // The body it checks is a draft where the Reviewer may write (kanon#1247).
+    expect(prompt).toMatch(/kanon-plan --label follow-up [^`]*--body \$\{\{ runner\.temp \}\}\/qa-review-<name>\.md`/);
     expect(prompt).toContain('ALWAYS APPLY A `sev:*` (RA-729) TO EACH FOLLOW-UP ISSUE YOU FILE');
   });
 

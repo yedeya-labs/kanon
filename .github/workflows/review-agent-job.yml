@@ -222,8 +222,9 @@ jobs:
       # variable (`$KANON` is refused), so this puts one wrapper on the PATH, outside the
       # workspace, as the Lead's lanes do for their scripts: `kanon-plan` runs Kanon's Node on
       # Kanon's script at the pinned tag, with `plan` fixed as its first argument, and nothing
-      # else. `plan` reads its flags and prints JSON; it reads no file of the tree and writes
-      # none. The path is the `kanon` step's output, not `KANON`. It runs here, right after the
+      # else. `plan` reads its flags and the one body file its `--body` names (kanon#1247, for
+      # `K-WORK-14`'s form), prints JSON with none of that file's text but a heading it refuses,
+      # and writes nothing. The path is the `kanon` step's output, not `KANON`. It runs here, right after the
       # `kanon` step, so nothing but the token and the label step stands between the pin's
       # re-check and the agent (`tests/unit/judging-inputs.test.ts`); it writes only the runner's
       # temp directory, which the pin's digest does not read.
@@ -726,7 +727,7 @@ jobs:
             - `kanon-plan`, the filing skill's plan command, by that name (below).
             - Write only to `${{ runner.temp }}/qa-review-<name>.md`, with the Write
               tool or a heredoc: the verdict file above, and any follow-up body you pass
-              to `gh issue create --body-file`.
+              to `kanon-plan --body` and then `gh issue create --body-file`.
             - Write every value literally. A shell variable other than `$HOME`
               (`$RUNNER_TEMP` included) is refused, and so are loops, `find`, `awk`,
               `xargs`, `git fetch` and any interpreter or package manager.
@@ -837,8 +838,10 @@ jobs:
             `$KANON`, so where the skill says to run
             `node "$KANON/scripts/issue-triage-defaults.mjs" plan`, run `kanon-plan`
             with the same flags instead, e.g. `kanon-plan --label follow-up --label
-            agent:reviewer --label sev:medium --subject product`: it is that command,
-            on your PATH by name.
+            agent:reviewer --label sev:medium --subject product --body
+            ${{ runner.temp }}/qa-review-<name>.md`: it is that command, on your PATH
+            by name. It checks the body file too, and refuses one that breaks K-WORK-14
+            (below): fix the file and run it again.
 
             Body = the finding (what/why/file refs) +
             "Surfaced by PR #${{ env.PR_NUMBER }} review", and list any filed issues in
@@ -851,7 +854,7 @@ jobs:
 
             MARK AN UNVERIFIED REMEDY: your issue comes back as an `agent:implement` PR
             and gets BUILT as written. Lead with the CONSTRAINT the fix must satisfy
-            (the part you verified); put any concrete edit you propose under a
+            (the part you verified), under a `## What must be true` heading; put any concrete edit you propose under a
             `## Possible approach — UNVERIFIED, not acceptance criteria` heading, with a
             line on what must be checked before adopting it. NEVER head it "Suggested
             fix" — that framing produced RA-528. If you DID verify the remedy (you read

@@ -29,7 +29,7 @@ import {
  */
 
 const finding = (subject: string, title = `a ${subject} finding`, extra: Record<string, unknown> = {}) =>
-  ({ title, body: `Evidence for ${title}.`, subject, capability: false, ...extra });
+  ({ title, body: `## What must be true\n\nEvidence for ${title}.`, subject, capability: false, ...extra });
 const report = (findings: unknown[], audit = '## Progress since the prior audit\n\nAll quiet.\n\n### Capability watch\nCapability watch: not due this audit\n') =>
   JSON.stringify({ audit, findings });
 
@@ -102,7 +102,7 @@ describe('who can act decides where a finding goes', () => {
       expect(r.findings).toHaveLength(1);
       const { args, body } = r.findings[0]!;
       // Opened with the Overseer's header and role marker (plan 0005 §3.3).
-      expect(body).toBe(`**Overseer** <!-- kanon:role=overseer -->\n\nEvidence for a ${subject} finding.`);
+      expect(body).toBe(`**Overseer** <!-- kanon:role=overseer -->\n\n## What must be true\n\nEvidence for a ${subject} finding.`);
       expect(args.filter((_, i) => args[i - 1] === '--label')).toEqual(LABELS);
       expect(args[args.indexOf('--milestone') + 1]).toBe(PIPELINE_MILESTONE);
       expect(r.audit!.body).toContain(`- #100 a ${subject} finding`);
@@ -256,6 +256,19 @@ describe('the report', () => {
       audit: expect.any(String),
       findings: [{ title: 't', body: 'b', subject: 'guard', capability: false }],
     });
+  });
+
+  it('holds a finding whose body breaks K-WORK-14, by name, and files the rest (kanon#1247)', () => {
+    const bare = finding('playbook', 'The playbook names no liveness query', { body: 'Evidence, and no section.' });
+    const remedy = finding('labels', 'A label is missing', { body: '## What must be true\n\nIt exists.\n\n## Suggested fix\n\nAdd it.' });
+    const r = route([bare, remedy, finding('hook')], 0);
+    expect(r.file.map((f) => f.subject)).toEqual(['hook']);
+    expect(r.held.map((h) => h.why)).toEqual([
+      expect.stringMatching(/^its body breaks K-WORK-14: the body has no "What must be true" section/),
+      expect.stringMatching(/^its body breaks K-WORK-14: the heading "## Suggested fix" proposes a remedy/),
+    ]);
+    // Only what is filed here is held to it: a draft upstream is a person's to file.
+    expect(route([finding('guard', 'A guard', { body: 'No section.' })], 0).upstream).toHaveLength(1);
   });
 
   it('routes without the network: route() is pure', () => {

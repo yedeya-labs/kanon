@@ -141,7 +141,7 @@ export const BATTERY = [
   { id: 'cd-ls', expect: 'allowed', tags: ['read'], tool: 'Bash', command: 'cd sub && ls' },
   { id: 'jq-head', expect: 'allowed', tags: ['read'], tool: 'Bash', command: 'jq -n 1 | head -1' },
   { id: 'gh-help', expect: 'allowed', tags: ['read'], tool: 'Bash', command: 'gh pr view --help' },
-  { id: 'kanon-plan', expect: 'allowed', tags: ['plan'], tool: 'Bash', command: 'kanon-plan --label follow-up --label agent:reviewer --label sev:low --subject product' },
+  { id: 'kanon-plan', expect: 'allowed', tags: ['plan'], tool: 'Bash', command: 'kanon-plan --label follow-up --label agent:reviewer --label sev:low --subject product --body {temp}/qa-review-follow-up.md' },
   { id: 'heredoc-verdict', expect: 'allowed', tags: ['verdict'], tool: 'Bash', command: "cat > {temp}/qa-review-note.md <<'EOF'\nx\nEOF" },
   { id: 'write-verdict', expect: 'allowed', tags: ['verdict'], tool: 'Write', file: '{temp}/qa-review-verdict.md' },
 ];
@@ -390,6 +390,9 @@ function workspace(lane) {
   // would still fail at the file system.
   chmodSync(join(bin, 'kanon-plan'), 0o555);
   chmodSync(bin, 0o555);
+  // A follow-up body for the plan command's required `--body` (kanon#1247), where the Reviewer
+  // writes its own drafts, holding the section `K-WORK-14` asks for, so the allowed call exits 0.
+  writeFileSync(join(temp, 'qa-review-follow-up.md'), '## What must be true\n\nThe probe passes.\n');
   const touch = (/** @type {string} */ name) => `touch ${JSON.stringify(join(markers, name))}`;
   const hooks = (/** @type {string} */ who) => ({
     SessionStart: [{ hooks: [{ type: 'command', command: touch(`${who}-hook-session-start`) }] }],

@@ -60,7 +60,8 @@ import { GATE_CANDIDATE_LABEL, SEVERITY_LABELS, severityOf as severityOfLabels }
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { GATE_CANDIDATE_QUERY, GATE_DECLINED_LABEL, gateCandidateDecision } from './gate-candidate-exit.mjs';
 import { declaredEnvironmentFrom } from './lib/reference-deploy.mjs';
-import { trustedSearch } from './lib/search.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
+import { SEARCH_READS, trustedSearch } from './lib/search.mjs';
 
 /**
  * Scopes that are real engineering work but have no stakeholder-facing surface.
@@ -249,6 +250,69 @@ export async function countMergedPrs({ api, repo, weekStart, weekEnd, maxPages =
   );
 }
 
+/** GitHub's search API allows 30 requests a minute per token. */
+export const SEARCH_PER_MINUTE = 30;
+/**
+ * How many search requests the message step sends in any 60 seconds. Below the API's 30, so the
+ * `--brief` step's one count, read up to `SEARCH_READS` times by the same token moments before,
+ * still fits in the same minute, with two to spare.
+ */
+export const SEARCH_BUDGET = SEARCH_PER_MINUTE - 2 - SEARCH_READS;
+/**
+ * The most search requests one run sends before it fails by name: ten minutes of the budget, well
+ * inside the job's 20-minute timeout, so a run that would need more stops saying why, rather
+ * than being cancelled by the timeout.
+ */
+export const SEARCH_REQUEST_CAP = SEARCH_BUDGET * 10;
+
+/**
+ * Paces the digest's search REQUESTS, re-reads included, so no 60 seconds holds more than
+ * `perWindow` of them (kanon#1343). `trustedSearch` reads a zero up to `SEARCH_READS` times, so
+ * the number of searches the digest asks for says little about the requests it sends: a quiet
+ * week and five roadmap milestones that each have one empty side came to 33 requests in well
+ * under a minute, and the API answers the 31st with a 403. Every request takes a turn here
+ * first, in order, and a request that would exceed the window waits until the oldest one in it
+ * has aged out. Past `cap` requests the run fails by name, naming the budget.
+ * `now` and `sleep` are injected so a test runs the clock.
+ * @param {{ perWindow?: number, windowMs?: number, cap?: number, now?: () => number,
+ *   sleep?: (ms: number) => Promise<unknown> }} [opts]
+ * @returns {{ take: () => Promise<void>, sent: () => number }} `take` before each request;
+ *   `sent` is how many requests have taken a turn
+ */
+export function searchPacer({
+  perWindow = SEARCH_BUDGET, windowMs = 60_000, cap = SEARCH_REQUEST_CAP, now = Date.now, sleep = (ms) => delay(ms),
+} = {}) {
+  /** When each request in the current window took its turn. @type {number[]} */
+  const stamps = [];
+  let sent = 0;
+  /** @type {Promise<unknown>} */
+  let turn = Promise.resolve();
+  const take = () => {
+    const mine = turn.then(async () => {
+      if (sent >= cap) {
+        throw new Error(
+          `Refusing to post: the digest's searches need more than ${cap} requests, re-reads included, and its ` +
+          `search budget is ${perWindow} a minute against the API's ${SEARCH_PER_MINUTE} (kanon#1343). ` +
+          'Fewer roadmap milestones, or a higher cap, would let it finish.',
+        );
+      }
+      for (;;) {
+        const t = now();
+        while (stamps.length && /** @type {number} */ (stamps[0]) <= t - windowMs) stamps.shift();
+        if (stamps.length < perWindow) {
+          stamps.push(t);
+          sent += 1;
+          return;
+        }
+        await sleep(/** @type {number} */ (stamps[0]) + windowMs - t);
+      }
+    });
+    turn = mine.catch(() => {});
+    return mine;
+  };
+  return { take, sent: () => sent };
+}
+
 /**
  * The issue searches the digest still sends, the milestone counts and the week's closed issues,
  * each read through `trustedSearch` (kanon#1322), with `api` INJECTED so the re-reads are tested
@@ -257,9 +321,16 @@ export async function countMergedPrs({ api, repo, weekStart, weekEnd, maxPages =
  * issue's milestone back in one answer. But search can answer 0 for a query with matches, so an
  * answer that found nothing, or says it is incomplete, is read again before the digest states it,
  * and answers that don't settle fail the run by name rather than post a wrong number.
- * @param {{ api: (path: string) => Promise<any>, repo: string, sleep?: (ms: number) => Promise<void> }} io
+ * Every request, each re-read and page included, takes a turn from `pacer` (`searchPacer`)
+ * first, so the reads stay inside the search budget however many come back zero (kanon#1343).
+ * @param {{ api: (path: string) => Promise<any>, repo: string, sleep?: (ms: number) => Promise<void>,
+ *   pacer?: ReturnType<typeof searchPacer> }} io
  */
-export function issueSearch({ api, repo, sleep }) {
+export function issueSearch({ api: rawApi, repo, sleep, pacer = searchPacer() }) {
+  const api = async (/** @type {string} */ path) => {
+    await pacer.take();
+    return rawApi(path);
+  };
   const url = (/** @type {string} */ q, /** @type {number} */ perPage, page = 1) =>
     `/search/issues?q=${encodeURIComponent(`repo:${repo} ${q}`)}&per_page=${perPage}${page > 1 ? `&page=${page}` : ''}`;
   return {
@@ -291,6 +362,8 @@ export function issueSearch({ api, repo, sleep }) {
       }
       return items;
     },
+    /** How many search requests have been sent, re-reads included. */
+    sent: pacer.sent,
   };
 }
 
@@ -398,9 +471,11 @@ export function pickCrossCheckMilestone(allMilestones) {
  *
  *  1. **ONE search, only when nothing else covered it** (§12). The job is
  *     deliberately written to spend a handful of searches, not one per milestone,
- *     against a ~30 req/min limit. This adds exactly one request, and only in the
+ *     against a ~30 req/min limit. This adds exactly one search, and only in the
  *     no-effective-check case — with a populated gate present, as today, it never
- *     runs at all and the request count is unchanged.
+ *     runs at all and the request count is unchanged. The search is one request
+ *     when it finds something; a zero is read `SEARCH_READS` times before it fails
+ *     the run, and every one of those reads is paced (`searchPacer`, kanon#1343).
  *  2. **It keeps the zero-vs-nonzero property.** The comparison is still two
  *     independent APIs disagreeing about EMPTY vs NON-EMPTY — never magnitudes,
  *     and never "issuesClosed === 0 is suspicious", which a genuinely quiet week
@@ -476,14 +551,19 @@ export function closedCountsByMilestone(items) {
  * Milestone state is counted as ISSUES ONLY (AGENTS.md), never from
  * `milestone.open_issues`/`closed_issues`, which mix in pull requests.
  *
- * WHAT COSTS A SEARCH (RA-1648). A per-milestone PAIR of searches is spent on:
+ * WHAT COSTS A SEARCH (RA-1648). A per-milestone PAIR of searches is asked for on:
  *  - every OPEN ROADMAP milestone (`isRoadmapMilestone`: open and dated), which
  *    needs a real denominator for its burndown;
  *  - one that COMPLETED this week, which needs its final total for the
  *    celebration line.
  * Every other milestone is a bucket, reported as flow from the single
  * closed-this-week search, so adding a BUCKET costs nothing. Adding a roadmap
- * milestone costs a pair per run, against a ~30 req/min search limit.
+ * milestone costs a pair of searches per run, and a search is not one request:
+ * `trustedSearch` reads a zero `SEARCH_READS` times, so a new milestone with
+ * nothing closed, or a completed one with nothing open, costs 1 + `SEARCH_READS`
+ * requests. `searches` counts the searches asked for; `issueSearch`'s `sent`
+ * counts the requests, and its pacer holds them to `SEARCH_BUDGET` a minute
+ * against the API's 30 (kanon#1343).
  *
  * THE CROSS-CHECK ACCOUNTING LIVES HERE TOO, deliberately. `crossChecked`
  * counts EFFECTIVE comparisons only (a REST-empty milestone passes vacuously),
@@ -1225,7 +1305,7 @@ if (isCliEntry(import.meta.url)) {
    * Issue counts come from search so `is:issue` can exclude PRs (AGENTS.md), settled before they are
    * trusted (`issueSearch`, kanon#1322); merged PRs come from REST.
    */
-  const { count, items: searchAll } = issueSearch({ api, repo });
+  const { count, items: searchAll, sent: searchesSent } = issueSearch({ api, repo });
 
   const { weekStart, weekEnd, qualifier: window } = weekWindow(WEEK_END ? new Date(WEEK_END) : new Date());
 
@@ -1244,6 +1324,7 @@ if (isCliEntry(import.meta.url)) {
       appendFileSync(process.env.GITHUB_OUTPUT, `week-end=${weekEnd.toISOString()}\nbrief=${brief}\n`);
     }
     console.log(brief);
+    console.log(`Sent ${searchesSent()} search request(s), re-reads included.`);
   } else {
     const [prsMerged, closedThisWeekItems, allReleases, allMilestones, gateCandidates] = await Promise.all([
       // Core REST, not search: search's total for merged PRs comes back 0 for a week with merges (kanon#1318).
@@ -1336,7 +1417,7 @@ if (isCliEntry(import.meta.url)) {
       server,
     });
 
-    console.log(`Window ${window}.`);
+    console.log(`Window ${window}. Sent ${searchesSent()} search request(s), re-reads included, at most ${SEARCH_BUDGET} a minute.`);
     process.exitCode = emit({
       message,
       env: process.env,

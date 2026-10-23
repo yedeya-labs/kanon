@@ -92,9 +92,11 @@ permissions:
   # `GET /issues?labels=gate-candidate`, not search. If it goes, that section says "could not
   # be read" rather than "none"; it never fails the post on its own.
   issues: read
-  # REQUIRED, and its absence is silent. The search API scopes results to what the token can
-  # see, so `is:pr is:merged` returns an EMPTY result set, not a 403, without this. The first
-  # real run reported "0 PRs merged" in a week with 25 releases, and nothing errored.
+  # REQUIRED, by two readers. `countMergedPrs` counts the week's merged pull requests from the
+  # core REST pulls list (`GET /repos/{repo}/pulls`, kanon#1318), which fails with a 403 or 404
+  # and stops the job without this. The milestone cross-check's fallback (`crossCheckFallback`)
+  # searches `milestone:"…"` over issues AND pull requests, and the search API scopes results to
+  # what the token can see, so without this its pull requests silently drop out, with no 403.
   pull-requests: read
 
 jobs:

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { writeStub } from './helpers/stub-bin.js';
 import { STACK_NAME, TEMPLATE_PATH, deployCommands, lifecycleProblems, readTemplate, trustProblems, trustedSubjects } from '../../infra/qa-store/aws/provision.mjs';
-import { toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
+import { PARTITIONS, toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
 import { REPORTS_ROOT, UNKEYED_PARTITIONS } from '../../infra/qa-store/aws/keys.mjs';
 import { readCostRowsFile } from '../../actions/qa-store/qa-store.mjs';
 import { SPAWNS } from './helpers/spawns.js';
@@ -187,6 +187,36 @@ describe('the subjects: the default branch\'s ref, in the repository\'s own subj
     const given = ['repo:e/fixture:context:ref:refs/heads/trunk', 'repo:e@1/harness@2:ref:refs/heads/main'];
     expect(trustedSubjects(['e/harness', 'e/fixture'], given, two([], { use_default: false }))).toEqual({ defaultBranches: { 'e/harness': 'main', 'e/fixture': 'trunk' }, subjects: given });
     expect(() => trustedSubjects(['e/harness', 'E/Harness'], [], two([]))).toThrow(/--repository 'E\/Harness' is named twice/);
+  });
+});
+
+describe('repositories sharing one store read only their own rows, and the docs say so (kanon#1346)', () => {
+  // Every partition a lane reads is keyed by the repository's id (`keys.mjs`), which the docs must
+  // say where they let a store serve several, along with what the keys don't do: hold the role.
+  // The scripts' behaviour is held by "the store keys every row by repository" below.
+  const paragraph = (start: string) => {
+    const found = readFileSync('docs/qa-store.md', 'utf8').split('\n').filter((l) => l.startsWith(start));
+    if (found.length !== 1) throw new Error(`docs/qa-store.md has ${found.length} paragraphs starting ${JSON.stringify(start)}, not one`);
+    return found[0]!;
+  };
+
+  it('reads and writes partitions keyed by the repository\'s id', () => {
+    expect(Object.values(PARTITIONS).map((p) => p.pk)).toEqual([...UNKEYED_PARTITIONS]);
+    const gate = readFileSync('infra/qa-store/aws/last-green.sh', 'utf8');
+    expect(gate).toContain('own="RUN#explorer#$repo"');
+    expect(gate).toContain('for pk in "$own" "$unkeyed"; do');
+    expect(readFileSync('infra/qa-store/aws/record-skip.sh', 'utf8')).toContain('pk: {S: ("RUN#explorer#" + $r)}');
+  });
+
+  it('says that each repository reads only its own rows, that the role still reaches every row, and that old rows wait for the migration', () => {
+    expect(paragraph('The store\'s role trusts, for each repository it serves')).toContain('its lanes read only their own rows (below)');
+    const own = paragraph('**Each repository on a store reads and writes only its own rows.**');
+    expect(own).toContain('keyed by the repository\'s id');
+    expect(own).toContain('(#rows-by-repository)');
+    expect(own).toContain('the role still lets every repository it trusts reach every row');
+    expect(own).toContain('keeps its unkeyed rows until the account owner migrates them');
+    expect(readFileSync('docs/qa-store.md', 'utf8')).not.toContain('share its rows');
+    expect(paragraph('It needs `gh`, signed in with read access')).toContain('then read and write only its own rows');
   });
 });
 

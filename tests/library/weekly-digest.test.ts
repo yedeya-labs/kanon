@@ -23,6 +23,9 @@ import {
   completedInWindow,
   countMergedPrs,
   issueSearch,
+  searchPacer,
+  SEARCH_BUDGET,
+  SEARCH_PER_MINUTE,
   narrativeBrief,
   releasesInWindow,
   sourcedNarrative,
@@ -46,6 +49,7 @@ import {
   sectionsOf,
 } from '../../scripts/weekly-digest.mjs';
 import { LIMITS, renderText, validate } from '../../scripts/lib/notify-contract.mjs';
+import { SEARCH_READS } from '../../scripts/lib/search.mjs';
 import { payload } from '../../actions/notify/slack/slack.mjs';
 
 /** Where every assembled message in this file comes from. */
@@ -278,6 +282,62 @@ describe('issueSearch: the searches the digest still sends are settled first (ka
     const { api, asked } = answering(() => [{ total_count: 0, items: [] }]);
     await expect(issueSearch({ api, repo, sleep: noWait }).items('is:issue is:closed')).resolves.toEqual([]);
     expect(asked).toHaveLength(4);
+  });
+});
+
+describe("the search budget counts requests, a zero's re-reads included (kanon#1343)", () => {
+  const repo = 'o/r';
+  const noWait = async () => {};
+  /** A clock the pacer reads and advances: `sleep` moves time on rather than waiting. */
+  const fakeClock = () => {
+    let t = 0;
+    return { now: () => t, sleep: async (ms: number) => { t += ms; } };
+  };
+  /** The most requests any 60 seconds held. */
+  const busiestMinute = (at: number[]) => Math.max(0, ...at.map((s) => at.filter((u) => u >= s && u < s + 60_000).length));
+
+  it('holds the busiest minute to the budget, under the API limit, and waits rather than send the next', async () => {
+    const clock = fakeClock();
+    const pacer = searchPacer(clock);
+    const at: number[] = [];
+    await Promise.all(Array.from({ length: SEARCH_BUDGET + 3 }, async () => { await pacer.take(); at.push(clock.now()); }));
+    expect(SEARCH_BUDGET).toBeLessThan(SEARCH_PER_MINUTE);
+    expect(pacer.sent()).toBe(SEARCH_BUDGET + 3);
+    expect(busiestMinute(at)).toBe(SEARCH_BUDGET);
+    expect(at.at(-1), 'the overflow waited for the first minute to age out').toBe(60_000);
+  });
+
+  it("paces the issue's worked case: a quiet week and five roadmap milestones that each have one empty side", async () => {
+    // The closed-items search reads its zero four times, and each milestone spends 4 + 1:
+    // 29 requests, which unpaced all land in the same second.
+    const clock = fakeClock();
+    const at: number[] = [];
+    const api = async (path: string) => {
+      at.push(clock.now());
+      const q = decodeURIComponent(path);
+      return { total_count: q.includes('is:open') ? 3 : 0, incomplete_results: false, items: [] };
+    };
+    const search = issueSearch({ api, repo, sleep: noWait, pacer: searchPacer(clock) });
+    expect(await search.items('is:issue is:closed closed:2026-09-14..2026-09-21')).toEqual([]);
+    const all = ['A', 'B', 'C', 'D', 'E'].map((title) => ({
+      title, state: 'open', due_on: '2027-01-31T08:00:00Z', closed_at: null, open_issues: 3, closed_issues: 0,
+    }));
+    const { searches } = await collectMilestones(all, {
+      closedByMilestone: new Map(), weekStart: new Date('2026-09-14T08:00:00Z'), weekEnd: new Date('2026-09-21T08:00:00Z'), count: search.count,
+    });
+    expect(searches, 'the searches asked for').toBe(10);
+    expect(search.sent(), 'the requests sent, re-reads included').toBe(4 + 5 * (SEARCH_READS + 1));
+    expect(at).toHaveLength(search.sent());
+    expect(busiestMinute(at)).toBeLessThanOrEqual(SEARCH_BUDGET);
+  });
+
+  it('fails by name, naming the budget, rather than send past its cap', async () => {
+    const clock = fakeClock();
+    const pacer = searchPacer({ ...clock, cap: 3 });
+    const api = async () => ({ total_count: 0, incomplete_results: false });
+    const search = issueSearch({ api, repo, sleep: noWait, pacer });
+    await expect(search.count('is:issue is:open')).rejects.toThrow(/searches need more than 3 requests, re-reads included, and its search budget is 24 a minute/);
+    expect(search.sent()).toBe(3);
   });
 });
 
