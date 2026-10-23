@@ -1,11 +1,11 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { callerFile, TRIGGERS } from '../../cli/callers.mjs';
-import { appIdentities, appsArgs, callsRelease, LANE_CHECK, lineDiff, registerRolesOf, RULESET_NAME, rulesetGaps, workflowName } from '../../cli/init.mjs';
+import { appIdentities, appsArgs, callsRelease, LANE_CHECK, lineDiff, registerRolesOf, RULESET_NAME, rulesetGaps, withOverseerBullet, workflowName } from '../../cli/init.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { KEYS_HELP } from '../../cli/apps.mjs';
 import { ROOT, hasYq, REQ, REPO, dirs, checkout, no, fakeGitHub, writes, run, changing, laneCheck, read, type Doc, parse } from './helpers/kanon-init.js';
@@ -178,6 +178,103 @@ describe('kanon init, safely', () => {
     const dir = checkout({ '.github/workflows/ci.yml': 'name: "CI #1"\non:\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n' });
     await run(dir, fakeGitHub());
     expect(read(dir, '.github/workflows/agent-review.yml')).toContain('workflows: ["CI #1"]');
+  });
+});
+// #1315: a re-run that adds the Overseer's caller to a repository whose adoption record is the
+// project's adds the one bullet lane-check holds that caller to, and nothing else of the record.
+describe("kanon init, adding a lane to a record that is the project's (#1315)", () => {
+  const RECORD = 'docs/qa/adoption.md';
+  const BULLET = '- **Overseer:** `installed`';
+  /** A repository a first run installed with Review, its record as `strip` leaves it. */
+  const installed = async (strip: (record: string) => string = (t) => t) => {
+    const dir = checkout();
+    expect((await run(dir, fakeGitHub(), ['--yes'])).status).toBe(0);
+    writeFileSync(join(dir, RECORD), strip(read(dir, RECORD)));
+    return { dir, before: read(dir, RECORD) };
+  };
+  const full = async (dir: string, argv: string[] = []) => {
+    const r = await run(dir, fakeGitHub(), ['--yes', '--json', '--feature', 'full', ...argv]);
+    expect(r.status, r.err).toBe(0);
+    return parse(r);
+  };
+
+  it.skipIf(!hasYq)('adds a ## Choices section holding the Overseer bullet, before ## Data, to a record without one, and lane-check passes', async () => {
+    const { dir, before } = await installed((t) => t.replace(/## Choices\n\n(?:- [^\n]*\n)+\n/, ''));
+    expect(before).not.toContain('## Choices');
+    const d = await full(dir);
+    expect(read(dir, '.github/workflows/agent-overseer.yml')).toContain('agent-overseer.yml@');
+    const after = read(dir, RECORD);
+    expect(after).toBe(before.replace('## Data\n', `## Choices\n\n${BULLET}\n\n## Data\n`));
+    const f = d.files.find((x) => x.path === RECORD)!;
+    expect(f).toMatchObject({ status: 'rewritten', content: after });
+    expect(f.diff).toEqual(['+ ## Choices', '+ ', `+ ${BULLET}`, '+ ']);
+    expect(d.changes).toContainEqual(expect.objectContaining({ kind: 'file', subject: RECORD, message: expect.stringContaining(BULLET) }));
+    expect(d.findings.map((x) => x.id)).not.toContain('overseer.declare');
+    const lc = laneCheck(dir);
+    expect(lc.status, lc.out).toBe(0);
+  }, 60_000);
+
+  it.skipIf(!hasYq)("adds the bullet at the end of the record's ## Choices, changing nothing else, and lane-check passes", async () => {
+    const { dir, before } = await installed();
+    const d = await full(dir);
+    expect(read(dir, RECORD)).toBe(before.replace('- **Review trigger:** `labelled`\n', `- **Review trigger:** \`labelled\`\n${BULLET}\n`));
+    expect(d.files.find((x) => x.path === RECORD)?.diff).toEqual([`+ ${BULLET}`]);
+    const lc = laneCheck(dir);
+    expect(lc.status, lc.out).toBe(0);
+    // Run again, the record has the bullet, and is the project's: kept, as ever.
+    const again = await full(dir);
+    expect(again.files.find((x) => x.path === RECORD)).toMatchObject({ status: 'kept', content: null });
+  }, 60_000);
+
+  it('changes nothing in a dry run, and says what it would add', async () => {
+    const { dir, before } = await installed();
+    const d = await full(dir, ['--dry-run']);
+    expect(read(dir, RECORD)).toBe(before);
+    expect(d.files.find((x) => x.path === RECORD)).toMatchObject({ status: 'rewritten', diff: [`+ ${BULLET}`] });
+  });
+
+  it("leaves a record that says the Overseer is not installed, and names the bullet to write as a person's step", async () => {
+    const { dir, before } = await installed((t) => t.replace('- **Review trigger:** `labelled`\n', '- **Review trigger:** `labelled`\n- **Overseer:** `not installed`\n'));
+    const d = await full(dir);
+    expect(read(dir, RECORD)).toBe(before);
+    expect(d.files.find((x) => x.path === RECORD)).toMatchObject({ status: 'kept', content: null });
+    const f = d.findings.find((x) => x.id === 'overseer.declare')!;
+    expect(f).toMatchObject({ category: 'overseer', blocking: false, subject: RECORD });
+    expect(f.message).toMatch(/says the Overseer is `not installed`/);
+    expect(f.fix.commands).toEqual([BULLET]);
+  });
+
+  it('places the bullet where the record parses, and gives up on a record it would have to rewrite', () => {
+    const cases: Array<[string, string | null]> = [
+      ['# R\n\n## Choices\n\n## Data\n', `# R\n\n## Choices\n\n${BULLET}\n\n## Data\n`],
+      ['# R\n\n## Choices\n## Data\n', `# R\n\n## Choices\n\n${BULLET}\n\n## Data\n`],
+      ['# R\n\n## Choices\n\nWhat we chose.\n\n## Data\n', `# R\n\n## Choices\n\nWhat we chose.\n\n${BULLET}\n\n## Data\n`],
+      ['# R\n\n## Choices\n\n- **Feature:** `full`\n', `# R\n\n## Choices\n\n- **Feature:** \`full\`\n${BULLET}\n`],
+      ['# R\n\n## Plan\n\nPublic.\n', `# R\n\n## Plan\n\nPublic.\n\n## Choices\n\n${BULLET}\n`],
+      ['# R\n\n## Plan\n\nPublic.\n## Deploy\n', `# R\n\n## Plan\n\nPublic.\n\n## Choices\n\n${BULLET}\n\n## Deploy\n`],
+      ['# R\n\n```\n## Data\n```\n', `# R\n\n\`\`\`\n## Data\n\`\`\`\n\n## Choices\n\n${BULLET}\n`],
+      ['# R\n\n## Choices\n\n- a\n\n## Choices\n', null],
+      [`# R\n\n## Choices\n\n${BULLET}\n`, null],
+      ['# R\n\n## Choices\n\n- **Overseer:** `not installed`\n', null],
+      ['# R\n\n```\n', null],
+    ];
+    for (const [record, want] of cases) expect(withOverseerBullet(record), record).toBe(want);
+  });
+
+  it("names the bullet as a person's step where the record has ## Choices twice", async () => {
+    const { dir, before } = await installed((t) => `${t}\n## Choices\n\n- **Weekly digest audience:** us\n`);
+    const d = await full(dir);
+    expect(read(dir, RECORD)).toBe(before);
+    const f = d.findings.find((x) => x.id === 'overseer.declare')!;
+    expect(f.message).toMatch(/couldn't add the bullet without rewriting the record \(it has ## Choices more than once\)/);
+    expect(f.fix.commands).toEqual([BULLET]);
+  });
+
+  it("adds nothing where the record doesn't get the Overseer's caller", async () => {
+    const { dir } = await installed();
+    const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--feature', 'build']));
+    expect(d.files.find((x) => x.path === RECORD)).toMatchObject({ status: 'kept', content: null });
+    expect(d.findings.map((x) => x.id)).not.toContain('overseer.declare');
   });
 });
 describe('kanon init, from the answers', () => {
