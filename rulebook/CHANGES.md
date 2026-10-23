@@ -160,6 +160,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-12.** The Owner decided that a project whose releases other repositories pin may declare a release cadence, and that a project which declares none releases on every merge. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
 - **2026-10-14.** Release tags drive the deploy through the stages the project declares, not to a pre-production stage alone, and that deploy is Kanon's deploy lane: a published release runs `deploy-release.yml`, then `deploy.yml` for each environment the adoption record declares, in order. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+- **2026-10-23.** The Owner decided that Kanon doesn't dictate an adopter's release cadence: it suggests one, releasing on every merge, or on a cadence such as weekly when other repositories pin the releases, and the adopter chooses to release on every merge, on a declared cadence, or whenever it decides. A declared `Release cadence` bullet is a statement of intent, not an obligation, and an off-cadence release needs no stated reason, so the proposal that an off-cadence release pull request state its reason was closed as not planned. [#1251](https://github.com/yedeya-labs/kanon/issues/1251)
 
 ## `K-SHIP-8`
 

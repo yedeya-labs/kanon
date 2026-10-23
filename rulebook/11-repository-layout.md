@@ -294,13 +294,13 @@ A project whose production promotion is human-gated may declare it under `## Cho
 
 Declared, the Merger merges a pull request on one of the project's high-risk paths in the green zone, and every other escalation still applies (`K-MERGE-4`). **A record without the bullet, or no record, means Kanon's default: not declared, and every escalation path escalates.** A bullet outside `## Choices`, in another shape or with another value, written twice, with nothing in its parentheses or more than 200 characters there is malformed.
 
-A project may declare its release cadence (`K-SHIP-7`) under `## Choices` in one bullet, its value as one code span with nothing after it: `every merge`, or `weekly, ` and the day its release pull request merges, one of `weekly, Monday`, `weekly, Tuesday`, `weekly, Wednesday`, `weekly, Thursday`, `weekly, Friday`, `weekly, Saturday` or `weekly, Sunday` ([plan 0009](../docs/plans/0009-release-channels-and-api-key.md)):
+A project may record the release cadence it intends (`K-SHIP-7`) under `## Choices` in one bullet, its value as one code span with nothing after it: `every merge`, or `weekly, ` and the day its release pull request merges, one of `weekly, Monday`, `weekly, Tuesday`, `weekly, Wednesday`, `weekly, Thursday`, `weekly, Friday`, `weekly, Saturday` or `weekly, Sunday` ([plan 0009](../docs/plans/0009-release-channels-and-api-key.md)):
 
 ```markdown
 - **Release cadence:** `weekly, Monday`
 ```
 
-**A record without the bullet, or no record, means `every merge`**, which is what `K-SHIP-7` asks of a project that declares nothing. A bullet outside `## Choices`, in another shape, with another value, such as `weekly` with no day, or written twice is malformed.
+**A record without the bullet, or no record, reads as `every merge`**, Kanon's suggestion for a project that declares nothing. Either way the bullet states an intent, not an obligation: a release on another day breaks nothing and needs no reason (`K-SHIP-7`). A bullet outside `## Choices`, in another shape, with another value, such as `weekly` with no day, or written twice is malformed.
 
 A job of the project's own workflows that holds `id-token: write` on the default branch is accepted under `## Choices` in one bullet per job, the bold label, the workflow's file name as one code span, `job`, the job's key as one code span, and then in parentheses why it holds the grant, on one line:
 
