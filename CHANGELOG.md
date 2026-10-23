@@ -1,5 +1,114 @@
 # Changelog
 
+## [0.43.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.42.0...candidate-v0.43.0) (2026-10-23)
+
+
+### Features
+
+* **code-audit:** file through the filing skill and restate no routing ([#1164](https://github.com/yedeya-labs/kanon/issues/1164)) ([a8a0d0a](https://github.com/yedeya-labs/kanon/commit/a8a0d0a921456f277fb17b9db9314ffb5b976b7a))
+* **deploy:** announce a live release whose smoke check failed as live, and run a reset hook first ([#1198](https://github.com/yedeya-labs/kanon/issues/1198)) ([0461d32](https://github.com/yedeya-labs/kanon/commit/0461d32e9a02d5260e80095c19327838916c1274))
+* **file-issue:** plan checks the body's form (K-WORK-14); K-SHIP-7 suggests a cadence ([#1349](https://github.com/yedeya-labs/kanon/issues/1349)) ([e1157ee](https://github.com/yedeya-labs/kanon/commit/e1157ee16d7a7cb7070fa80ef808586154526749))
+* **force-push-notice:** name the reviews a force-push over a pull request detached ([#1257](https://github.com/yedeya-labs/kanon/issues/1257)) ([a1711bb](https://github.com/yedeya-labs/kanon/commit/a1711bbcf0a30e8136d8c0580325939b7068b063))
+* **guards:** strip a PR's milestone, check a brief's tracking issue, and report GitHub's default labels ([#1259](https://github.com/yedeya-labs/kanon/issues/1259)) ([f0f442f](https://github.com/yedeya-labs/kanon/commit/f0f442f0684636fdb8f36eb842d6d7a315f86da3))
+* **lane-check:** fail a broadened App permission with no register footnote ([#1272](https://github.com/yedeya-labs/kanon/issues/1272)) ([db8854d](https://github.com/yedeya-labs/kanon/commit/db8854db50c105478e8de6bed9253daf06fb7271))
+* **lanes:** give Kanon's dispatch sweep and reconciler callers the event re-ask ([#1199](https://github.com/yedeya-labs/kanon/issues/1199)) ([16470f2](https://github.com/yedeya-labs/kanon/commit/16470f25c613abc0b59c75f47c0d280ce263cb81))
+* **lanes:** the dispatch sweep re-asks the review of a labelled pull request with none on its head ([#1212](https://github.com/yedeya-labs/kanon/issues/1212)) ([5f8282b](https://github.com/yedeya-labs/kanon/commit/5f8282b08fa7036de5ef867dff1fb8b0508de312))
+* **lead-reconcile:** file a brief's issues through plan() and guard every lane prompt ([#1193](https://github.com/yedeya-labs/kanon/issues/1193)) ([cdbf762](https://github.com/yedeya-labs/kanon/commit/cdbf762cbe66dfa7f7ccead5125d1f7701f2a74e))
+* **lead:** a lead:file-only switch that files a project's issues and dispatches none ([#1177](https://github.com/yedeya-labs/kanon/issues/1177)) ([2a9d64e](https://github.com/yedeya-labs/kanon/commit/2a9d64e442a0f33eadd516900063a736169d6565))
+* **merge-reconcile:** file through the filing skill and restate no routing ([#1180](https://github.com/yedeya-labs/kanon/issues/1180)) ([6915d9f](https://github.com/yedeya-labs/kanon/commit/6915d9f23302b31bf23ade788b04276961772523))
+* **notify:** announce each published release in chat, through a release kind and lane ([#1195](https://github.com/yedeya-labs/kanon/issues/1195)) ([48ca711](https://github.com/yedeya-labs/kanon/commit/48ca71102348366901eb2049af15ac0d0ba862da))
+* **qa-store:** key the store's rows and raw reports by repository ([#1372](https://github.com/yedeya-labs/kanon/issues/1372)) ([ba6ee8f](https://github.com/yedeya-labs/kanon/commit/ba6ee8f916aab40c52db82e47ddd8bf602ba0867))
+* **qa-store:** let one store trust several repositories, and record plan 0012's decisions ([#1337](https://github.com/yedeya-labs/kanon/issues/1337)) ([9b62fc8](https://github.com/yedeya-labs/kanon/commit/9b62fc89779ac0690cba33175a212e3f99c4e8d9))
+* **reviewer:** file through the filing skill and restate no routing ([#1192](https://github.com/yedeya-labs/kanon/issues/1192)) ([2d700e4](https://github.com/yedeya-labs/kanon/commit/2d700e499fc06ee89a799462b1ae183f6c4a3516))
+* **revise:** run a red check's own fix command before a model run, on a hand-back ([#1184](https://github.com/yedeya-labs/kanon/issues/1184)) ([7abdd28](https://github.com/yedeya-labs/kanon/commit/7abdd288828d49d58baca0c9e2b6fc5b6d881e46))
+* **rulebook:** the smoke rules and the Smoke schedule declaration ([#1168](https://github.com/yedeya-labs/kanon/issues/1168)) ([9034ef2](https://github.com/yedeya-labs/kanon/commit/9034ef2d51bbdb21a0062f9b30a8cde7fb21cd30))
+* **skills:** a mandate skill that starts a project and carries its brief to the merge ([#1234](https://github.com/yedeya-labs/kanon/issues/1234)) ([9290ecd](https://github.com/yedeya-labs/kanon/commit/9290ecdc8b96cdaf8fa1f67bfad48b50ebff4ac6))
+* **skills:** file the Explorer's sweep bugs through a filing skill that runs plan ([#1156](https://github.com/yedeya-labs/kanon/issues/1156)) ([6160415](https://github.com/yedeya-labs/kanon/commit/61604155bee1218a3db8e2c0874d4e4aaac73432))
+* **telemetry-store:** store the smoke-check row under &lt;key&gt;#smoke_check, collect it, and erase it (plan 0013 S3) ([#1172](https://github.com/yedeya-labs/kanon/issues/1172)) ([c52e764](https://github.com/yedeya-labs/kanon/commit/c52e764186e3d15a23af014ba15eda001108ab22))
+* **telemetry:** record which Claude credential each run ran on (plan 0009 A6) ([#1155](https://github.com/yedeya-labs/kanon/issues/1155)) ([71f0f5d](https://github.com/yedeya-labs/kanon/commit/71f0f5d10fa6c3fc1d20b0fd751fcb9a745cf125))
+* **telemetry:** the smoke-check row and the deploy row's reset stage (plan 0013 S2) ([#1170](https://github.com/yedeya-labs/kanon/issues/1170)) ([eae6052](https://github.com/yedeya-labs/kanon/commit/eae60522065bdb9bd407b38d41adbf910b071394))
+* **verify-acs:** file through the filing skill and restate no routing ([#1174](https://github.com/yedeya-labs/kanon/issues/1174)) ([1669bc4](https://github.com/yedeya-labs/kanon/commit/1669bc41c7ed72bd96d87a5b7a1dbea7599b48fc))
+
+
+### Bug Fixes
+
+* **actions-minutes:** sample a lane's long runs and the rest on their own, so its model runs are read ([#1217](https://github.com/yedeya-labs/kanon/issues/1217)) ([3dee462](https://github.com/yedeya-labs/kanon/commit/3dee462eb8ce4f0d8c02bbd14e24b9cc6c27802b))
+* **adoption:** say truthfully what runs on Kanon, and hold the record to its workflows ([#1240](https://github.com/yedeya-labs/kanon/issues/1240)) ([087ef60](https://github.com/yedeya-labs/kanon/commit/087ef6054182561cbbaeabf31d2d5c2e4edb469c))
+* **announce:** keep every section of categorized and hand-written release notes ([#1227](https://github.com/yedeya-labs/kanon/issues/1227)) ([b2294ef](https://github.com/yedeya-labs/kanon/commit/b2294ef419fb9fd1d545cc9bab10c26c5c0821e9))
+* **apps:** hold an unknown App permission in Other; ask GitHub which rulesets cover the branch ([#1359](https://github.com/yedeya-labs/kanon/issues/1359)) ([d59b671](https://github.com/yedeya-labs/kanon/commit/d59b67107824ddfb7b42cd6740894e7eccb2e5f9))
+* **apps:** read every page of the installation's repositories ([#1267](https://github.com/yedeya-labs/kanon/issues/1267)) ([4b8ab65](https://github.com/yedeya-labs/kanon/commit/4b8ab65318d4ad12a6bf2b08986a8bf5673d4618))
+* **code-audit:** mark a finished audit complete without its final write, and name the cap it ran under ([#1154](https://github.com/yedeya-labs/kanon/issues/1154)) ([6d9edec](https://github.com/yedeya-labs/kanon/commit/6d9edec43fc78fbfcf73b004665c2fdb09882f66))
+* **code-audit:** store a finished audit with no final write apart from one cut short ([#1141](https://github.com/yedeya-labs/kanon/issues/1141)) ([7011917](https://github.com/yedeya-labs/kanon/commit/70119175ac13eda380b8fba65efab04c1cede043))
+* **dependabot:** change an existing kanon group in the ungrouped fix, never add a second ([#1229](https://github.com/yedeya-labs/kanon/issues/1229)) ([8d7e07a](https://github.com/yedeya-labs/kanon/commit/8d7e07a95de915b9fce84dd0ff03fbd678d7fcd7))
+* **deploy:** a failed announcement never blocks the next environment's deploy ([#1215](https://github.com/yedeya-labs/kanon/issues/1215)) ([1977c81](https://github.com/yedeya-labs/kanon/commit/1977c815bc02fffddcb87631d2c57b9581f92963))
+* **doc-path-guard:** read no link inside an inline code span ([#1241](https://github.com/yedeya-labs/kanon/issues/1241)) ([cf305d4](https://github.com/yedeya-labs/kanon/commit/cf305d4e71fbec8e6f8f0b18d71ae09b20ae3b96))
+* **filers:** the telemetry Explorer's filer asks plan() for its routing ([#1221](https://github.com/yedeya-labs/kanon/issues/1221)) ([3842113](https://github.com/yedeya-labs/kanon/commit/38421130f794ff1823e2ee432aa64a1157a6e070))
+* **filing:** refuse pipeline work on the product bucket, so plan() and the backstop agree ([#1222](https://github.com/yedeya-labs/kanon/issues/1222)) ([5feb499](https://github.com/yedeya-labs/kanon/commit/5feb499666718eca66fe9f7945e08f3fbd54b346))
+* **finding-counts:** end a listing at its Link header, and re-read an empty page ([#1289](https://github.com/yedeya-labs/kanon/issues/1289)) ([fefb143](https://github.com/yedeya-labs/kanon/commit/fefb143cc56b68449422888e0cf7217177257bfa))
+* **follow-ups:** route the Overseer and workflow-health through plan(), and correct four Reviewer follow-ups ([#1201](https://github.com/yedeya-labs/kanon/issues/1201)) ([29efc15](https://github.com/yedeya-labs/kanon/commit/29efc15da5307e529821aa1cb6c9dad7e04151f0))
+* **implementer-status:** carry only what this run checked out and pushed ([#1357](https://github.com/yedeya-labs/kanon/issues/1357)) ([2a292f0](https://github.com/yedeya-labs/kanon/commit/2a292f0975b47f2485c3566054e76541b55a40b6))
+* **init:** add the Overseer bullet to a kept adoption record ([#1338](https://github.com/yedeya-labs/kanon/issues/1338)) ([7277374](https://github.com/yedeya-labs/kanon/commit/7277374707fad84a1d90d29492d684894fa409b1))
+* **lane-check:** require every Dependabot entry that proposes Kanon to group it, in doctor too ([#1157](https://github.com/yedeya-labs/kanon/issues/1157)) ([eb7e83b](https://github.com/yedeya-labs/kanon/commit/eb7e83be7b43eba56d1f9e11f66c165caef0b6ac))
+* **lane-gate:** name a fork's head on the review lane's CI path, and record how the lanes treat a fork's PR ([#1330](https://github.com/yedeya-labs/kanon/issues/1330)) ([7e3c8e4](https://github.com/yedeya-labs/kanon/commit/7e3c8e44b540fdeb661c1e52899f99eb3ad580e2))
+* **lane-gate:** retry a transient GitHub read before failing closed ([#1202](https://github.com/yedeya-labs/kanon/issues/1202)) ([f1323b9](https://github.com/yedeya-labs/kanon/commit/f1323b9f4245b3e9b1f463744659a7bb75df3e2f))
+* **lane-gate:** retry an empty body on the register and caller-pin reads ([#1254](https://github.com/yedeya-labs/kanon/issues/1254)) ([f8c7e71](https://github.com/yedeya-labs/kanon/commit/f8c7e71680a5badcb5163dcd12a6e41df8256fa8))
+* **lanes:** classify the Overseer's and telemetry Explorer's own agent failure ([#1270](https://github.com/yedeya-labs/kanon/issues/1270)) ([86b0d89](https://github.com/yedeya-labs/kanon/commit/86b0d89ef5e32b96f0a138dce456019405f1c4f8))
+* **merge:** hand a red approved agent PR back to the revise lane once ([#1171](https://github.com/yedeya-labs/kanon/issues/1171)) ([94899ab](https://github.com/yedeya-labs/kanon/commit/94899aba6b3662ef76c36c54dfea91b9f8ebdfc5))
+* **metrics:** narrow an existing details file to its owner before writing it ([#1268](https://github.com/yedeya-labs/kanon/issues/1268)) ([adff931](https://github.com/yedeya-labs/kanon/commit/adff93102da16cf6a458454790409aadeca64516))
+* **notify:** read release notes not in release-please's format in the release announcement ([#1205](https://github.com/yedeya-labs/kanon/issues/1205)) ([67a126c](https://github.com/yedeya-labs/kanon/commit/67a126cef32e2f1efe9ad7e7cea7b5d783f07ed2))
+* **project-digest:** run on a partial App register and with no docs/projects/ folder ([#1320](https://github.com/yedeya-labs/kanon/issues/1320)) ([0422152](https://github.com/yedeya-labs/kanon/commit/04221523dce9f0b2818089166fca198aa0098886))
+* **project-digest:** run with no App register; say "No projects yet" with no briefs ([#1336](https://github.com/yedeya-labs/kanon/issues/1336)) ([b041dbd](https://github.com/yedeya-labs/kanon/commit/b041dbdab4ab5a6aa78579a6d95fe30027e57c65))
+* **protocol-census:** read everything the old spellings' readers read ([#1232](https://github.com/yedeya-labs/kanon/issues/1232)) ([8a80c7c](https://github.com/yedeya-labs/kanon/commit/8a80c7cacd90ac42c01c8aa35fa325884136fab0))
+* **reconcile:** skip a fork's pull-request event before minting an App token ([#1334](https://github.com/yedeya-labs/kanon/issues/1334)) ([a1193d3](https://github.com/yedeya-labs/kanon/commit/a1193d34566f90de78ac521ca9ad635c322e075c))
+* **red-test:** a scope failure fails the verification check, never skips it ([#1189](https://github.com/yedeya-labs/kanon/issues/1189)) ([c459248](https://github.com/yedeya-labs/kanon/commit/c4592480dea8698a5b9f6216c65567d8784aadce))
+* **red-test:** judge with the default branch's code areas, never the pull request's ([#1183](https://github.com/yedeya-labs/kanon/issues/1183)) ([0c431ce](https://github.com/yedeya-labs/kanon/commit/0c431ce602bdeee42ac07926c5fee0f4d7061c32))
+* **review-reask:** hold a head the review lane declines by design ([#1231](https://github.com/yedeya-labs/kanon/issues/1231)) ([349dbb5](https://github.com/yedeya-labs/kanon/commit/349dbb5952f946a622bcc2582c16b8e8ecd21906))
+* **search:** never trust a search zero that decides an action; weekly digest narrates only its own data ([#1340](https://github.com/yedeya-labs/kanon/issues/1340)) ([fd4653d](https://github.com/yedeya-labs/kanon/commit/fd4653d93c1ab4b31118e654727cdb22b1c343d2))
+* settle the project digest's member search and list its open PRs ([#1369](https://github.com/yedeya-labs/kanon/issues/1369)) ([007b760](https://github.com/yedeya-labs/kanon/commit/007b76008ddc9efe57f21ebdee9a6cb4d1819c56))
+* **spec:** record the ETE invariants tests cite; scope two lanes.md statements to non-fork PRs ([#1348](https://github.com/yedeya-labs/kanon/issues/1348)) ([5d78bb0](https://github.com/yedeya-labs/kanon/commit/5d78bb0003452d0233acf8bf611022f97ab3a118))
+* **verify-acs:** run the criteria step on Kanon's own Node, not the PATH's ([#1188](https://github.com/yedeya-labs/kanon/issues/1188)) ([20bf919](https://github.com/yedeya-labs/kanon/commit/20bf9192c4748e566d172b429ef7babf7459642a))
+* **weekly-digest:** count merged PRs from the pulls list, and post a release-only week ([#1319](https://github.com/yedeya-labs/kanon/issues/1319)) ([0bfabf3](https://github.com/yedeya-labs/kanon/commit/0bfabf3f2615f3087c6bda01bf0425891aa80f21))
+* **weekly-digest:** pace every search request, a zero's re-reads included ([#1368](https://github.com/yedeya-labs/kanon/issues/1368)) ([9643149](https://github.com/yedeya-labs/kanon/commit/9643149bd77d5f935348a97663025848c0a40159))
+* **workflow-security:** follow called workflows in the K-AGENT-48 guard and name the same-repository head checkouts ([#1149](https://github.com/yedeya-labs/kanon/issues/1149)) ([72559b4](https://github.com/yedeya-labs/kanon/commit/72559b4922ba5d0a46408326fa85d9cf3543c734))
+
+
+### Documentation
+
+* **adoption:** mark the job-made user scope, the watermark reader and K-PRIN-13 installed ([#1140](https://github.com/yedeya-labs/kanon/issues/1140)) ([6a95f41](https://github.com/yedeya-labs/kanon/commit/6a95f419afcee0a66f1308f631e227e7647ecc6f))
+* **cost:** state each lane's cost under both credentials, and refresh the Actions minutes ([#1210](https://github.com/yedeya-labs/kanon/issues/1210)) ([742badd](https://github.com/yedeya-labs/kanon/commit/742badd1edaf34c7c9cb9f56968e64ca9cdb854e))
+* fold in four Reviewer follow-ups on plans 0009 and 0012, telemetry and release notes ([#1167](https://github.com/yedeya-labs/kanon/issues/1167)) ([7ced2da](https://github.com/yedeya-labs/kanon/commit/7ced2da99f1126748a8269ca5b9640a8bbfb1f98))
+* four Reviewer follow-ups (minutes count, plan 0011 pointers, plan 0013 S5 consent texts) ([#1226](https://github.com/yedeya-labs/kanon/issues/1226)) ([354057a](https://github.com/yedeya-labs/kanon/commit/354057a840fac3f892d385158fbee7ba1928787b))
+* **lanes:** fold in [#1330](https://github.com/yedeya-labs/kanon/issues/1330)'s review notes on the fork refusal ([#1332](https://github.com/yedeya-labs/kanon/issues/1332)) ([f3d69b6](https://github.com/yedeya-labs/kanon/commit/f3d69b6de510315f42ba969be01c5f585eb05a40))
+* name the dispatch sweep among the lanes that need ci.yml, and state the fixed stall window ([#1230](https://github.com/yedeya-labs/kanon/issues/1230)) ([0bbf39c](https://github.com/yedeya-labs/kanon/commit/0bbf39c61a3a41b090f50b3405a3331ac7a47da1))
+* **notifications:** drop the claim that kanon init doesn't map KANON_CHAT_DEPLOY ([#1269](https://github.com/yedeya-labs/kanon/issues/1269)) ([8158891](https://github.com/yedeya-labs/kanon/commit/815889104d166e24009253953f8f420135f032ac))
+* **overseer-playbook:** read the dispatch sweep's and reconciler's workflow_run re-ask ([#1233](https://github.com/yedeya-labs/kanon/issues/1233)) ([c697dd8](https://github.com/yedeya-labs/kanon/commit/c697dd8cf42e18575058eb110991ee0aadfbbb37))
+* **plans:** plan 0012 decision 9 changed: the deploy rehearsal cancels at the wait on a candidate's run too ([#1151](https://github.com/yedeya-labs/kanon/issues/1151)) ([8bccf57](https://github.com/yedeya-labs/kanon/commit/8bccf5774352306f636e2702b9e501b7451eb223))
+* **plans:** plan 0013, the smoke-test lifecycle outside a deploy ([#1158](https://github.com/yedeya-labs/kanon/issues/1158)) ([a41d648](https://github.com/yedeya-labs/kanon/commit/a41d6489c89cf208e182a2ef810f04da54cfe3da))
+* **plans:** settle plan 0013's no-caller outcome and via path, and carry the collector caller's row list into S5 ([#1224](https://github.com/yedeya-labs/kanon/issues/1224)) ([465ec86](https://github.com/yedeya-labs/kanon/commit/465ec863dec7ddc4f196260f86b7a9ef5b7f7f2d))
+* **project-digest:** say what the lane's pull-requests: read grant is for ([#1371](https://github.com/yedeya-labs/kanon/issues/1371)) ([bbacb8c](https://github.com/yedeya-labs/kanon/commit/bbacb8cc93ea02770930b68ce49b23dd9b3aad70))
+* **projects:** brief for [#1327](https://github.com/yedeya-labs/kanon/issues/1327), Kanon status as a hosted MCP server and a status API ([#1328](https://github.com/yedeya-labs/kanon/issues/1328)) ([ba20b71](https://github.com/yedeya-labs/kanon/commit/ba20b71cb83c07c4032e98b99702697cfd157487))
+* **projects:** brief for [#1373](https://github.com/yedeya-labs/kanon/issues/1373), Author lanes commit through GitHub's API ([#1378](https://github.com/yedeya-labs/kanon/issues/1378)) ([8fefce8](https://github.com/yedeya-labs/kanon/commit/8fefce82e6a0dabeb0dc9b4b3ee0e4419079082e))
+* **qa-store:** say that repositories on one store share its rows ([#1350](https://github.com/yedeya-labs/kanon/issues/1350)) ([4ca4db2](https://github.com/yedeya-labs/kanon/commit/4ca4db24f93d7514349bc4b78dc7c4e3fec4274b))
+* **qa-store:** the id-token holder check is due in each repository a store serves ([#1381](https://github.com/yedeya-labs/kanon/issues/1381)) ([846fa27](https://github.com/yedeya-labs/kanon/commit/846fa27d99aa0cb0328fec1dd41d7846cd53d0e7))
+* **red-test:** state what the check guards against, and how a new tests tree lands ([#1187](https://github.com/yedeya-labs/kanon/issues/1187)) ([197e6ca](https://github.com/yedeya-labs/kanon/commit/197e6ca35051e1ab222c39fef1e98d26c190f65b))
+* **reviewer:** request changes on a PR body that would make a wrong squash message ([#1142](https://github.com/yedeya-labs/kanon/issues/1142)) ([bf92368](https://github.com/yedeya-labs/kanon/commit/bf923688a84c70e9db72f1578ef4166b008957b2))
+* **rulebook:** make K-WS-8 branch naming a convention, and fail a rule sentence copied outside the rulebook ([#1271](https://github.com/yedeya-labs/kanon/issues/1271)) ([0d77239](https://github.com/yedeya-labs/kanon/commit/0d772393b0f837a5fcdd7d454c12675481cd9293))
+* **security:** accept the implementer status's mid-run re-fetch gap until verified commits ([#1375](https://github.com/yedeya-labs/kanon/issues/1375)) ([eefac44](https://github.com/yedeya-labs/kanon/commit/eefac4406df63aac50c426f760b46ba4b6bbc882))
+* **skills:** offer the stable release to a candidate pin, and write the urgent path (plan 0009 S6) ([#1153](https://github.com/yedeya-labs/kanon/issues/1153)) ([9efc1bd](https://github.com/yedeya-labs/kanon/commit/9efc1bd5a8fdddf8095ff4fb371240525340525b))
+* the issue backstop's pull-request path; the adopt skill's rewritten record state ([#1365](https://github.com/yedeya-labs/kanon/issues/1365)) ([d68bc2d](https://github.com/yedeya-labs/kanon/commit/d68bc2deee099c86f986b99be871c600f2842c53))
+
+
+### Tests
+
+* split the four slowest test files, and fix the cases that time out under load ([#1216](https://github.com/yedeya-labs/kanon/issues/1216)) ([e275c11](https://github.com/yedeya-labs/kanon/commit/e275c11de4b73ba8987337b45ccda293838346b7))
+
+
+### CI
+
+* **deps:** run Kanon on candidate v0.42.0 ([#1152](https://github.com/yedeya-labs/kanon/issues/1152)) ([4de9749](https://github.com/yedeya-labs/kanon/commit/4de9749b20162d452f1e96b053ff0f111e0040ad))
+* **issue-backstop:** install Kanon's caller of the issue-opened backstop lane ([#1176](https://github.com/yedeya-labs/kanon/issues/1176)) ([1345750](https://github.com/yedeya-labs/kanon/commit/13457500cef6719a385071e087f6d66cc02ba85d))
+* run the red-test check and the spec, brief and label guards on Kanon's own repository ([#1237](https://github.com/yedeya-labs/kanon/issues/1237)) ([5e39ca5](https://github.com/yedeya-labs/kanon/commit/5e39ca5c70769dab7cdcf67d63689f5e40c70079))
+
 ## [0.42.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.41.0...candidate-v0.42.0) (2026-10-19)
 
 
