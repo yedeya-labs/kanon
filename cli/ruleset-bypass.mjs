@@ -33,40 +33,73 @@ const ghJson = async (gh, args) => {
   }
 };
 
+/** @typedef {{ id: number, name: string, why: string, source_type?: string, source?: string }} UnreadableRuleset */
+
 /**
  * The branch rulesets that cover the default branch, each read whole (the list carries no rules
- * and no bypass list): `covering` the `active` ones, `inactive` the `disabled` or `evaluate` ones.
+ * and no bypass list). GitHub says which apply (#1262): `GET repos/<repo>/rules/branches/<branch>`
+ * returns every active rule that applies to the branch, from rulesets at any level, each with its
+ * `ruleset_id`, so Kanon matches no ref pattern, include or exclude, itself.
+ * - `covering`: the rulesets those rules come from, each read whole;
+ * - `unreadable`: a ruleset that applies but couldn't be read whole, as `{ id, name, why }` (with
+ *   its `source_type` and `source` when GitHub named them); every branch ruleset of the list when
+ *   the branch's rules couldn't be read, since then none is known to cover it or not;
+ * - `inactive`: the `disabled` and `evaluate` branch rulesets. GitHub's answer leaves their rules
+ *   out, so they are listed, not matched against the branch: they enforce nothing either way.
  * @param {Gh} gh @param {string} repo @param {any[]} list the answer of `GET repos/<repo>/rulesets` @param {string} defaultBranch
+ * @returns {Promise<{ covering: any[], inactive: any[], unreadable: UnreadableRuleset[] }>}
  */
 export const coveringRulesets = async (gh, repo, list, defaultBranch) => {
   /** @type {any[]} */
   const covering = [];
   /** @type {any[]} */
   const inactive = [];
-  for (const s of list.filter((x) => x?.target === 'branch')) {
-    const full = await ghJson(gh, ['api', `repos/${repo}/rulesets/${s.id}`]);
-    if (!full.ok) continue;
-    const include = full.json?.conditions?.ref_name?.include ?? [];
-    if (include.some((/** @type {string} */ p) => p === '~DEFAULT_BRANCH' || p === '~ALL' || p === `refs/heads/${defaultBranch}`)) {
-      (full.json?.enforcement === 'active' ? covering : inactive).push(full.json);
+  /** @type {UnreadableRuleset[]} */
+  const unreadable = [];
+  const branchRulesets = list.filter((x) => x?.target === 'branch');
+  if (!branchRulesets.length) return { covering, inactive, unreadable };
+  /** @param {{ status: number | null, stderr: string }} r */
+  const cause = (r) => r.stderr.trim() || `exit ${r.status}`;
+  const branch = encodeURIComponent(defaultBranch).replace(/%2F/g, '/');
+  const rules = await ghJson(gh, ['api', '--paginate', '--slurp', `repos/${repo}/rules/branches/${branch}?per_page=100`]);
+  if (!rules.ok || !Array.isArray(rules.json)) {
+    const why = `could not read the rules that apply to ${defaultBranch} (${rules.r ? cause(rules.r) : 'not a list'})`;
+    for (const s of branchRulesets) unreadable.push({ id: Number(s.id), name: String(s.name ?? `ruleset ${s.id}`), why, ...(s.source_type ? { source_type: s.source_type, source: s.source } : {}) });
+    return { covering, inactive, unreadable };
+  }
+  /** @type {Map<number, any>} ruleset id → the first rule naming it */
+  const applying = new Map();
+  for (const rule of rules.json.flat()) if (Number.isInteger(rule?.ruleset_id) && !applying.has(rule.ruleset_id)) applying.set(rule.ruleset_id, rule);
+  for (const [id, rule] of applying) {
+    const full = await ghJson(gh, ['api', `repos/${repo}/rulesets/${id}`]);
+    if (full.ok) covering.push(full.json);
+    else {
+      const listed = branchRulesets.find((s) => Number(s.id) === id);
+      unreadable.push({ id, name: String(listed?.name ?? `ruleset ${id}`), why: cause(full.r), source_type: rule.ruleset_source_type, source: rule.ruleset_source });
     }
   }
-  return { covering, inactive };
+  for (const s of branchRulesets.filter((x) => !applying.has(Number(x.id)))) {
+    const full = await ghJson(gh, ['api', `repos/${repo}/rulesets/${s.id}`]);
+    if (full.ok && full.json?.enforcement !== 'active') inactive.push(full.json);
+  }
+  return { covering, inactive, unreadable };
 };
 
 /**
  * Reads what `kanon apps` needs to set the Releaser's bypass on one repository: its default
- * branch and the active rulesets covering it, or why it can't.
+ * branch, the active rulesets covering it, and those that apply but couldn't be read; or, as
+ * `failed`, why none of that could be read.
  * @param {Gh} gh @param {string} repo
- * @returns {Promise<{ defaultBranch: string, covering: any[] } | { unreadable: string }>}
+ * @returns {Promise<{ defaultBranch: string, covering: any[], unreadable: UnreadableRuleset[] } | { failed: string }>}
  */
 export const readCovering = async (gh, repo) => {
   const meta = await ghJson(gh, ['api', `repos/${repo}`]);
-  if (!meta.ok || typeof meta.json?.default_branch !== 'string') return { unreadable: `could not read ${repo} (${meta.r ? meta.r.stderr.trim() || `exit ${meta.r.status}` : 'no default branch'})` };
+  if (!meta.ok || typeof meta.json?.default_branch !== 'string') return { failed: `could not read ${repo} (${meta.r ? meta.r.stderr.trim() || `exit ${meta.r.status}` : 'no default branch'})` };
   const list = await ghJson(gh, ['api', `repos/${repo}/rulesets?includes_parents=true&per_page=100`]);
-  if (!list.ok || !Array.isArray(list.json)) return { unreadable: `could not list ${repo}'s rulesets (${list.r ? list.r.stderr.trim() || `exit ${list.r.status}` : 'not a list'})` };
+  if (!list.ok || !Array.isArray(list.json)) return { failed: `could not list ${repo}'s rulesets (${list.r ? list.r.stderr.trim() || `exit ${list.r.status}` : 'not a list'})` };
   const defaultBranch = String(meta.json.default_branch);
-  return { defaultBranch, covering: (await coveringRulesets(gh, repo, list.json, defaultBranch)).covering };
+  const { covering, unreadable } = await coveringRulesets(gh, repo, list.json, defaultBranch);
+  return { defaultBranch, covering, unreadable };
 };
 
 /** @param {BypassActor} a @param {number} appId */

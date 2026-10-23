@@ -6,6 +6,7 @@ import { afterAll } from 'vitest';
 import { writeRegisterRow } from '../../../cli/app-register.mjs';
 import { ciFile, loadRequirements } from '../../../cli/callers.mjs';
 import { init, registerRolesOf } from '../../../cli/init.mjs';
+import { branchRules } from './branch-rules.js';
 
 /**
  * The fixtures of the `kanon init` tests (tests/unit/kanon-init*.test.ts): a committed checkout of
@@ -88,6 +89,8 @@ export type State = {
   milestones: Set<string>;
   secrets: Set<string> | null;
   rulesets: Array<Record<string, unknown> & { id: number }>;
+  /** Ruleset ids whose GET answers 404, as for one the token can't read whole (#1262). */
+  unreadableRulesets?: number[];
   settings: Record<string, unknown>;
   labelCreateFails?: boolean;
   /** The workflows on the default branch, as GitHub has them (#444); null when the token can't read them. */
@@ -195,7 +198,9 @@ export const fakeGitHub = (over: Partial<State> = {}) => {
       if (!st.rulesetsOnPlan) return no('gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)');
       return ok(st.rulesets.map((r) => ({ id: r.id, name: r.name, target: r.target })));
     }
+    if (path.startsWith(`repos/${REPO}/rules/branches/`)) return ok(branchRules(st.rulesets, REPO));
     const one = /^repos\/acme\/widgets\/rulesets\/(\d+)$/.exec(path);
+    if (one && st.unreadableRulesets?.includes(Number(one[1]))) return no('gh: Not Found (HTTP 404)');
     if (one) return ok(st.rulesets.find((r) => r.id === Number(one[1])));
     if (path === 'orgs/acme') return st.orgPlan ? ok({ plan: { name: st.orgPlan } }) : no('gh: Not Found (HTTP 404)');
     if (path.startsWith(`repos/${REPO}/environments?`)) return st.environments ? ok({ total_count: st.environments.length, environments: st.environments.map((name) => ({ name })) }) : no('gh: Not Found (HTTP 404)');

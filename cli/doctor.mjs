@@ -408,6 +408,7 @@ export const FINDINGS = {
   'label.missing': { category: 'label', blocking: false },
   'label.github-default': { category: 'label', blocking: false },
   'ruleset.missing': { category: 'ruleset', blocking: true },
+  'ruleset.unreadable': { category: 'ruleset', blocking: true },
   'ruleset.rule-missing': { category: 'ruleset', blocking: true },
   'ruleset.check-unreported': { category: 'ruleset', blocking: true },
   'ruleset.releaser-bypass-missing': { category: 'ruleset', blocking: true },
@@ -2258,16 +2259,30 @@ export const diagnose = async (deps, opts) => {
   /** @type {Promise<Awaited<ReturnType<typeof branchWorkflows>>> | null} */
   let defaultRead = null;
   const defaultWorkflows = () => (defaultRead ??= branchWorkflows(deps, repo, s.defaultBranch));
+  // A ruleset GitHub says applies to the default branch, or may, that couldn't be read (#1262): its
+  // rules, its bypass list, its approvals and its merge queue are all unknown, so each check below
+  // reads the covering rulesets alone, and none says that nothing covers the branch.
+  const unreadRulesets = s.rulesets === 'yes' ? s.unreadable : [];
+  const unread = unreadRulesets.map((u) => `"${u.name}" (${u.why})`).join(', ');
+  if (unreadRulesets.length) {
+    find('ruleset.unreadable', s.defaultBranch, `The ruleset(s) ${unread} on ${s.defaultBranch} could not be read, so doctor can't check their rules, their bypass list, or whether they require an approving review or a merge queue (K-ADOPT-1 step 8).`, {
+      text: `Run doctor again; if a ruleset still can't be read, run it with a token that can read it, or check it on its page.`,
+      url: rulesetUrl(repo, unreadRulesets[0]),
+    });
+  }
   if (s.rulesets === 'no') notes.push(`${repo} is a private repository on a plan without rulesets: nothing on the platform refuses a merge without the Reviewer's approval, and the repository stays in bootstrap (K-ADOPT-3, K-ADOPT-6).`);
   else if (s.rulesets === 'unknown') unchecked.push({ check: 'ruleset', subject: repo, reason: "the token can't read the repository's rulesets" });
   else if (!s.covering.length) {
-    find('ruleset.missing', s.defaultBranch, `no active ruleset covers ${s.defaultBranch}${s.inactive.length ? ` (${s.inactive.map((c) => `"${c.name}" is ${c.enforcement}`).join(', ')})` : ''} (K-ADOPT-1 step 8).`, {
-      text: `Let kanon init create "${RULESET_NAME}"; it needs Administration: write.`,
-      commands: ['kanon init'],
-    });
+    if (!unreadRulesets.length) {
+      find('ruleset.missing', s.defaultBranch, `no active ruleset covers ${s.defaultBranch}${s.inactive.length ? ` (the branch ruleset${s.inactive.length > 1 ? 's' : ''} ${s.inactive.map((c) => `"${c.name}" is ${c.enforcement}`).join(', ')})` : ''} (K-ADOPT-1 step 8).`, {
+        text: `Let kanon init create "${RULESET_NAME}"; it needs Administration: write.`,
+        commands: ['kanon init'],
+      });
+    }
   } else {
+    const mayHold = unreadRulesets.length ? ` The ruleset(s) ${unreadRulesets.map((u) => `"${u.name}"`).join(', ')} could not be read, and may hold it (ruleset.unreadable).` : '';
     for (const gap of await checkGaps({ defaultWorkflows, s, checked, gaps: rulesetGaps(s.covering), checkout: workflows, find, unchecked })) {
-      find('ruleset.rule-missing', s.defaultBranch, `The ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) does not ${gap} (K-ADOPT-1 step 8).`, { text: `In the repository's Settings, Rules, Rulesets: ${gap}.`, url: `https://github.com/${repo}/settings/rules` });
+      find('ruleset.rule-missing', s.defaultBranch, `The ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) does not ${gap} (K-ADOPT-1 step 8).${mayHold}`, { text: `In the repository's Settings, Rules, Rulesets: ${gap}.`, url: `https://github.com/${repo}/settings/rules` });
     }
     // THE RELEASER'S BYPASS (K-MERGE-8, plan 0005 §3.1, #49), only where the release caller maps
     // the Releaser: it is then the one bypass actor, through pull requests only. Without it, the
@@ -2358,7 +2373,7 @@ export const diagnose = async (deps, opts) => {
     };
     if (ended && approvals < 1) {
       const fix = switchOn();
-      find('ruleset.approval-off', s.defaultBranch, `${ADOPTION_RECORD} says bootstrap \`ended ${ended}\`, but ${s.rulesets === 'no' ? `${repo} has no rulesets on its plan, so nothing requires an approving review` : s.covering.length ? `the ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) requires no approving review` : `no active ruleset covers ${s.defaultBranch}, so nothing requires an approving review`}. Bootstrap never returns: an approval no longer required is an incident to fix, and until it is, any merge needs no approval (K-ADOPT-6).`, fix);
+      find('ruleset.approval-off', s.defaultBranch, `${ADOPTION_RECORD} says bootstrap \`ended ${ended}\`, but ${s.rulesets === 'no' ? `${repo} has no rulesets on its plan, so nothing requires an approving review` : s.covering.length ? `the ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) requires no approving review` : unreadRulesets.length ? `no ruleset doctor could read on ${s.defaultBranch} requires an approving review (${unreadRulesets.map((u) => `"${u.name}"`).join(', ')} could not be read)` : `no active ruleset covers ${s.defaultBranch}, so nothing requires an approving review`}. Bootstrap never returns: an approval no longer required is an incident to fix, and until it is, any merge needs no approval (K-ADOPT-6).`, fix);
     } else if (!ended && approvals < 1 && judge && s.rulesets === 'yes' && s.covering.length) {
       const onDefault = await defaultWorkflows();
       if (onDefault.error !== null) {

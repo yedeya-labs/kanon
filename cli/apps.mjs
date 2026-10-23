@@ -796,12 +796,18 @@ export const setReleaserBypass = async ({ owner, repos, slug, appId, deps }) => 
   out(`== The Releaser's ruleset bypass (K-MERGE-8): the App ${slug}, through pull requests only ==`);
   for (const repo of repos.map((r) => `${owner}/${r}`)) {
     const read = await readCovering(deps.gh, repo);
-    if ('unreadable' in read) {
+    if ('failed' in read) {
       left += 1;
-      out(`${repo}: ${read.unreadable}. In its Settings, Rules, Rulesets, add the App ${slug} to the default branch's ruleset's bypass list, "For pull requests only".`);
+      out(`${repo}: ${read.failed}. In its Settings, Rules, Rulesets, add the App ${slug} to the default branch's ruleset's bypass list, "For pull requests only".`);
       continue;
     }
-    if (!read.covering.length) {
+    // A ruleset that applies to the default branch but couldn't be read (#1262): its bypass list
+    // is unknown, so it is the Owner's step, on its page.
+    for (const u of read.unreadable) {
+      left += 1;
+      out(`${repo}: could not read the ruleset "${u.name}" on ${read.defaultBranch} (${u.why}). If its bypass list doesn't name the App ${slug}, add it there, "For pull requests only": ${rulesetUrl(repo, u)}`);
+    }
+    if (!read.covering.length && !read.unreadable.length) {
       left += 1;
       out(`${repo}: no active ruleset covers ${read.defaultBranch} yet. When you create it (K-ADOPT-1 step 8; kanon init does), add the App ${slug} to its bypass list, "For pull requests only", and no other actor.`);
       continue;

@@ -9,6 +9,7 @@ import { parseAppRegister, parseOtherApps, registerFootnotes } from '../../scrip
 import { registerRows } from '../../cli/init.mjs';
 import { appRoles, apps, buildManifest, checkoutCheck, loadApps, loadRoles, ownerPages, realDeps, remoteRepo, rotationSteps } from '../../cli/apps.mjs';
 import { readAppExtras, withExtras } from '../../scripts/lib/app-extras.mjs';
+import { branchRules } from './helpers/branch-rules.js';
 import { appsTable, grantsOf } from './helpers/roles-table.js';
 
 /**
@@ -88,7 +89,7 @@ type Scenario = {
   /** Writing the App register fails, as a full disk or a read-only checkout would (#1261). */
   registerWriteFails?: boolean;
   /** The repository's rulesets, as `gh api` answers them (#49); unset, every such read fails. */
-  rulesets?: { list: Array<{ id: number; target: string }>; full: Record<number, unknown>; putStatus?: number };
+  rulesets?: { list: Array<{ id: number; target: string; name?: string }>; full: Record<number, unknown>; putStatus?: number; unreadable?: number[] };
 };
 
 let stdout: ReturnType<typeof vi.spyOn>;
@@ -184,12 +185,17 @@ const run = async (s: Scenario = {}): Promise<Run> => {
       if (args[0] === 'api' && args[1] === `users/${ORG}`) return { status: 0, stdout: JSON.stringify({ login: ORG, type: s.kind ?? 'Organization' }), stderr: '' };
       // Kanon's Apps are private, and GitHub answers 404 to a person's token for a private App (#623).
       if (args[0] === 'api' && args[1] === `apps/${s.reuse?.slug}`) return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
+      // The rules that apply to the default branch (#1262), as `gh api --paginate --slurp` reads them.
+      if (args[0] === 'api' && args[1] === '--paginate' && String(args[3]).startsWith(`repos/${ORG}/${REPO}/rules/branches/`)) {
+        return s.rulesets ? { status: 0, stdout: JSON.stringify(branchRules(Object.values(s.rulesets.full), `${ORG}/${REPO}`)), stderr: '' } : { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
+      }
       if (args[0] === 'api' && String(args[1] ?? '').startsWith(`repos/${ORG}/${REPO}`)) {
         const rs = s.rulesets;
         if (!rs) return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
         if (args[1] === `repos/${ORG}/${REPO}`) return { status: 0, stdout: JSON.stringify({ default_branch: 'main' }), stderr: '' };
         if (String(args[1]).startsWith(`repos/${ORG}/${REPO}/rulesets?`)) return { status: 0, stdout: JSON.stringify(rs.list), stderr: '' };
         const id = Number(String(args[1]).split('/').pop());
+        if (rs.unreadable?.includes(id)) return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
         if (args.length === 2) return { status: 0, stdout: JSON.stringify(rs.full[id]), stderr: '' };
       }
       if (args[0] === 'api' && args[1] === '-X' && args[2] === 'PUT') {
@@ -1271,6 +1277,16 @@ describe('the Releaser\'s ruleset bypass (#49, K-MERGE-8)', () => {
     const unread = await releaser(undefined);
     expect(unread.status).toBe(0);
     expect(unread.output).toMatch(/could not read acme\/widgets .*add the App acme-releaser to the default branch's ruleset's bypass list/);
+  });
+
+  // #1262: a ruleset GitHub applies to the default branch whose GET fails was dropped, and the
+  // Owner's step with it.
+  it('counts a ruleset that applies but could not be read as a step left, with its page', async () => {
+    const org = { ...ruleset([RELEASER]), id: 11, name: 'org-main', source_type: 'Organization', source: ORG };
+    const r = await releaser({ list: [{ id: 9, target: 'branch' }, { id: 11, target: 'branch', name: 'org-main' }], full: { 9: ruleset([RELEASER]), 11: org }, unreadable: [11] });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain(`could not read the ruleset "org-main" on main (gh: Not Found (HTTP 404)). If its bypass list doesn't name the App ${ORG}-releaser, add it there, "For pull requests only": https://github.com/organizations/${ORG}/settings/rules/11`);
+    expect(r.output).toContain('Done, with 1 warning(s)');
   });
 
   it('says what to do when no ruleset covers the default branch yet', async () => {

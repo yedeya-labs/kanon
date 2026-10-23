@@ -178,8 +178,20 @@ describe('kanon init, on what the plan and the token allow', () => {
     const github = fakeGitHub({ rulesets: [{ id: 7, name: 'off', enforcement: 'disabled', ...full }, { id: 8, name: 'trial', enforcement: 'evaluate', ...full }] });
     const r = await run(dir, github);
     expect(r.out).not.toContain('has every rule');
-    expect(r.out).toContain('Not counted: the ruleset(s) "off" (disabled), "trial" (evaluate) on main, which enforce nothing.');
+    // GitHub's rules for the branch leave them out, so they are listed, not matched to it (#1262).
+    expect(r.out).toContain('Not counted: the branch ruleset(s) "off" (disabled), "trial" (evaluate), which enforce nothing.');
     expect(github.st.rulesets.map((x) => x.name)).toEqual(['off', 'trial', RULESET_NAME]);
+  });
+
+  // #1262: a ruleset GitHub says applies to main, which the token couldn't read whole, may already
+  // protect it, so init creates no second ruleset beside it, and says why.
+  it('creates no ruleset while one that applies to the default branch could not be read, and says why', async () => {
+    const dir = checkout();
+    const github = fakeGitHub({ rulesets: [{ id: 7, name: 'org-main', target: 'branch', enforcement: 'active', conditions: { ref_name: { include: ['~DEFAULT_BRANCH'] } }, rules: [{ type: 'deletion' }] }] });
+    github.st.unreadableRulesets = [7];
+    const r = await run(dir, github);
+    expect(github.st.rulesets.map((x) => x.name)).toEqual(['org-main']);
+    expect(r.out).toContain('Init created no ruleset on main: the ruleset(s) "org-main" (gh: Not Found (HTTP 404)) could not be read, and may already cover it.');
   });
 
   it('says it does not know the merge queue when the token cannot read an organisation\'s plan', async () => {
