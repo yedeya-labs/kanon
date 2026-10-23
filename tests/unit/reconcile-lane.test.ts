@@ -125,7 +125,7 @@ describe('the Lead’s login comes from the App register on the default branch (
     expect(absent.output).toContain('could not read docs/qa/agent-identities.md from the default branch');
   });
   it('is read only once the gate admitted, like every step after it', () => {
-    expect(lead.if).toBe("steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'");
+    expect(lead.if).toBe("steps.gate.outputs.member == 'true' && steps.fork.outputs.fork == 'false' && steps.reask.outputs.due != 'false'");
   });
 });
 

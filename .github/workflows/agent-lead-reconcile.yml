@@ -173,6 +173,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
 
+      # A FORK'S MERGE SKIPS HERE, BEFORE ANY MINT (kanon#1331). GitHub runs a fork's
+      # `pull_request: closed` in the fork's context, with no secrets, so the Lead token below
+      # would be minted from empty ones whenever a project is open. `scripts/fork-event.mjs`
+      # says `fork=true` with a notice: the hourly schedule picks the merge up from the default
+      # branch. Every other event, and a pull request whose head is on this repository, says
+      # `fork=false` and ticks as before. Every step below reads it, as it reads the gate.
+      - name: Is it a fork's pull request?
+        if: steps.gate.outputs.member == 'true'
+        id: fork
+        run: node "$KANON/scripts/fork-event.mjs" lead-reconcile
+
       # IS A RE-ASKED TICK DUE? (kanon#813). Only on a re-ask. The lanes that re-ask complete far
       # more often than hourly, so a re-ask ticks only when no run of this caller, besides this
       # one, ran the `scope` step below in the last 45 minutes (`scripts/reask-due.mjs`). A
@@ -183,7 +194,7 @@ jobs:
       # caller's runs on the workflow token, which the caller grants `actions: read`.
       - name: Is a re-asked tick due?
         id: reask
-        if: steps.gate.outputs.member == 'true' && github.event_name == 'workflow_run'
+        if: steps.gate.outputs.member == 'true' && steps.fork.outputs.fork == 'false' && github.event_name == 'workflow_run'
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -195,7 +206,7 @@ jobs:
       # The brief is read from the checkout (`docs/projects/<n>.md`, `K-PROJ-2`). Nothing in it
       # runs: this lane installs nothing and never calls the project-setup hook.
       - uses: actions/checkout@v7
-        if: steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'
+        if: steps.gate.outputs.member == 'true' && steps.fork.outputs.fork == 'false' && steps.reask.outputs.due != 'false'
 
       # THE LEAD'S LOGIN COMES FROM THE APP REGISTER (plan 0004 P5), not from this file:
       # Kanon cannot write an adopter's logins. Read from the default branch over the API, as
@@ -206,7 +217,7 @@ jobs:
       # `brief-revise-recovery.mjs` reads the same row (`LEAD_LOGIN`).
       - name: Read the Lead's login from the App register
         id: lead
-        if: steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'
+        if: steps.gate.outputs.member == 'true' && steps.fork.outputs.fork == 'false' && steps.reask.outputs.due != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -226,7 +237,7 @@ jobs:
       # not tokens.
       - name: Is there a project to reconcile?
         id: scope
-        if: steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'
+        if: steps.gate.outputs.member == 'true' && steps.fork.outputs.fork == 'false' && steps.reask.outputs.due != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_PROJECT: ${{ inputs.project }}
@@ -311,7 +322,7 @@ jobs:
       # brief PR at all.
       - name: Is a brief PR parked on an unanswered review?
         id: briefs
-        if: steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'
+        if: steps.gate.outputs.member == 'true' && steps.fork.outputs.fork == 'false' && steps.reask.outputs.due != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -353,7 +364,7 @@ jobs:
       # if it finds something does the App token get minted for it.
       - name: Is any PR parked with no review?
         id: unreviewed
-        if: steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'
+        if: steps.gate.outputs.member == 'true' && steps.fork.outputs.fork == 'false' && steps.reask.outputs.due != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

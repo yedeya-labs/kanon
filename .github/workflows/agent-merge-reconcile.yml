@@ -167,8 +167,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
-      - name: Decide whether to reconcile
+      # A FORK'S PULL REQUEST SKIPS HERE, BEFORE ANY MINT (kanon#1331). GitHub runs a fork's
+      # `pull_request` and `pull_request_review` events in the fork's context, with no secrets,
+      # so the Judge token below would be minted from empty ones and the run would go red.
+      # `scripts/fork-event.mjs` says `fork=true` with a notice: dispatch this lane with
+      # `pr_number` from the default branch instead. Every other event, and a pull request whose
+      # head is on this repository, says `fork=false` and goes on as before.
+      - name: Is it a fork's pull request?
         if: steps.gate.outputs.member == 'true'
+        id: fork
+        run: node "$KANON/scripts/fork-event.mjs" merge-reconcile
+      - name: Decide whether to reconcile
+        if: steps.gate.outputs.member == 'true' && steps.fork.outputs.fork == 'false'
         id: decide
         env:
           GH_TOKEN: ${{ github.token }}
