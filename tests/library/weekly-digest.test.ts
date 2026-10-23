@@ -22,6 +22,7 @@ import {
   weekWindow,
   completedInWindow,
   countMergedPrs,
+  issueSearch,
   releasedWithoutMerges,
   assertMilestoneSearchSane,
   assertGuardRan,
@@ -223,6 +224,57 @@ describe('a release with no merged PR (kanon#1318)', () => {
     });
     expect(validate(m)).toEqual({ ok: true });
     expect(renderText(m)).toContain('no PR merged this week · 0 issues closed · 1 release');
+  });
+});
+
+describe('issueSearch: the searches the digest still sends are settled first (kanon#1322)', () => {
+  const repo = 'o/r';
+  /** A search API that answers each path from a queue, the last answer repeating. */
+  const answering = (byPath: (path: string) => Array<Record<string, unknown>>) => {
+    const asked: string[] = [];
+    const seen = new Map<string, number>();
+    const api = async (path: string) => {
+      asked.push(path);
+      const n = seen.get(path) ?? 0;
+      seen.set(path, n + 1);
+      const queue = byPath(path);
+      return queue[Math.min(n, queue.length - 1)];
+    };
+    return { api, asked };
+  };
+  const noWait = async () => {};
+
+  it('reads a spurious zero count again and states the count it settles on', async () => {
+    const { api, asked } = answering(() => [{ total_count: 0, incomplete_results: false }, { total_count: 4 }, { total_count: 4 }]);
+    await expect(issueSearch({ api, repo, sleep: noWait }).count('is:issue is:open milestone:"M"')).resolves.toBe(4);
+    expect(asked).toHaveLength(3);
+    expect(decodeURIComponent(asked[0]!)).toContain('repo:o/r is:issue is:open milestone:"M"');
+  });
+
+  it('fails the run by name when the counts disagree, rather than post either', async () => {
+    const { api } = answering(() => [{ total_count: 0 }, { total_count: 4 }, { total_count: 5 }]);
+    await expect(issueSearch({ api, repo, sleep: noWait }).count('is:issue is:open')).rejects.toThrow(/the search for `is:issue is:open` answered 0, 4, 5/);
+  });
+
+  it("reads the week's closed issues again when the first page comes back empty", async () => {
+    const item = (n: number) => ({ number: n, milestone: { title: 'M' } });
+    const { api } = answering((p) => (p.includes('page=2')
+      ? [{ total_count: 101, items: [item(101)] }]
+      : [{ total_count: 0, items: [] }, { total_count: 101, items: Array.from({ length: 100 }, (_, i) => item(i + 1)) }, { total_count: 101, items: Array.from({ length: 100 }, (_, i) => item(i + 1)) }]));
+    await expect(issueSearch({ api, repo, sleep: noWait }).items('is:issue is:closed')).resolves.toHaveLength(101);
+  });
+
+  it('refuses a later page that stays empty before the total is reached', async () => {
+    const { api } = answering((p) => (p.includes('page=2')
+      ? [{ total_count: 150, items: [] }]
+      : [{ total_count: 150, items: Array.from({ length: 100 }, (_, i) => ({ number: i + 1 })) }]));
+    await expect(issueSearch({ api, repo, sleep: noWait }).items('is:issue is:closed')).rejects.toThrow(/counted 150 but page 2 stayed empty after 100/);
+  });
+
+  it('trusts a zero that every read agrees on: a quiet week is a real week', async () => {
+    const { api, asked } = answering(() => [{ total_count: 0, items: [] }]);
+    await expect(issueSearch({ api, repo, sleep: noWait }).items('is:issue is:closed')).resolves.toEqual([]);
+    expect(asked).toHaveLength(4);
   });
 });
 

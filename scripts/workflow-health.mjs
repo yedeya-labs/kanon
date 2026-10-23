@@ -447,7 +447,7 @@ export function classifyAudit(issues, now, { maxAgeDays = AUDIT_MAX_AGE_DAYS } =
   if (issues === null || issues === undefined) return { status: 'unreadable', ...none };
   // ZERO IS NOT SILENCE, IT IS A BROKEN QUERY. The heartbeat runs only where an Overseer is
   // installed, and the reference adopter's had filed eighteen of these when this was
-  // written, so an empty answer far more likely means the label, the title or the search
+  // written, so an empty answer far more likely means the label, the title or the listing
   // changed under this check than that the Overseer has never run. Escalating says so; returning `fresh` would
   // be the detector quietly deciding its own blindness is health.
   if (issues.length === 0) return { status: 'missing', ...none };
@@ -472,7 +472,7 @@ export function renderAuditFinding(verdict, { maxAgeDays = AUDIT_MAX_AGE_DAYS } 
   const head =
     verdict.status === 'missing'
       ? [
-          '**No Overseer audit-summary issue could be found at all.** This repository has an Overseer caller, so this is far more likely to mean the search in Kanon\'s `scripts/workflow-health.mjs` no longer matches how they are labelled or titled than that the Overseer has never run.',
+          '**No Overseer audit-summary issue could be found at all.** This repository has an Overseer caller, so this is far more likely to mean the listing in Kanon\'s `scripts/workflow-health.mjs` no longer matches how they are labelled or titled than that the Overseer has never run.',
           '',
           'Check the `agent:overseer` label and the `audit-summary` title convention before trusting any other line in this check.',
         ]
@@ -570,20 +570,20 @@ function runsFor(file) {
   }
 }
 
-/** The open escalation issue, or null.
- *
- *  NARROWED BY TITLE, DECIDED BY MARKER — the "search then re-filter exactly" idiom
- *  `agent-verify-acs.yml` already uses, because GitHub search is tokenised and fuzzy
- *  while the marker is not. The search term is deliberately the title phrase rather
- *  than the marker: `scripts/label-guard.mjs` reads any quoted `qa:<word>` literal
- *  as a label this pipeline applies, so searching for the marker text made the guard
- *  demand a repo label named `qa:workflow-health` that does not and should not exist.
- *  (Caught by that guard on this PR's first CI run, which is the guard working.) */
+/** The open `pipeline-improvement` issues, each with its body. One listing, not a search
+ *  (kanon#1322): GitHub search can answer nothing for a query that has matches, and an empty
+ *  answer here files a second escalation beside the open one. The label narrows the listing
+ *  and each escalation's marker decides, as before; no title phrase is needed. */
+function openPipelineIssues() {
+  return ghJson(['issue', 'list', '--repo', REPO, '--state', 'open',
+    '--label', 'pipeline-improvement', '--limit', '500', '--json', 'number,body']);
+}
+
+/** The open escalation issue, or null: the open `pipeline-improvement` issue whose body
+ *  carries the marker. The marker decides because a title can be edited and the marker is
+ *  the script's own. */
 function openFinding() {
-  const hits = ghJson(['issue', 'list', '--repo', REPO, '--state', 'open',
-    '--label', 'pipeline-improvement', '--search', 'in:title "red on every recent run"',
-    '--limit', '50', '--json', 'number,body']);
-  return hits.find((i) => (i.body ?? '').includes(HEALTH_MARKER)) ?? null;
+  return openPipelineIssues().find((i) => (i.body ?? '').includes(HEALTH_MARKER)) ?? null;
 }
 
 /** Every Overseer audit-summary issue, in ANY state. `null` when the read failed.
@@ -594,22 +594,20 @@ function openFinding() {
  *  instead of reading it as health. */
 function auditIssues() {
   try {
+    // A listing by label, newest first, filtered by title here, not a search: search can answer
+    // nothing for a query that has matches (kanon#1322), and `classifyAudit` escalates that.
     return ghJson(['issue', 'list', '--repo', REPO, '--state', 'all',
-      '--label', 'agent:overseer', '--search', 'in:title "audit-summary"',
-      '--limit', '30', '--json', 'number,createdAt,url']);
+      '--label', 'agent:overseer', '--limit', '200', '--json', 'number,title,createdAt,url'])
+      .filter((/** @type {{ title?: string }} */ i) => (i.title ?? '').includes('audit-summary'));
   } catch (err) {
     warn(`could not read the Overseer's audit issues: ${err.message.split('\n')[0]}`);
     return null;
   }
 }
 
-/** The open heartbeat escalation, or null. Same search-then-filter-on-marker idiom as
- *  `openFinding` — GitHub search is tokenised and fuzzy; the marker is not. */
+/** The open heartbeat escalation, or null, decided by its marker as `openFinding` is. */
 function openAuditFinding() {
-  const hits = ghJson(['issue', 'list', '--repo', REPO, '--state', 'open',
-    '--label', 'pipeline-improvement', '--search', 'in:title "no Overseer audit has landed"',
-    '--limit', '50', '--json', 'number,body']);
-  return hits.find((i) => (i.body ?? '').includes(AUDIT_MARKER)) ?? null;
+  return openPipelineIssues().find((i) => (i.body ?? '').includes(AUDIT_MARKER)) ?? null;
 }
 
 /**
@@ -814,12 +812,9 @@ function scheduleFacts(file) {
   return { workflow, lastRunAt, lastRunUrl, changedAt };
 }
 
-/** The open schedule escalation, or null. Narrowed by title, decided by marker. */
+/** The open schedule escalation, or null, decided by its marker as `openFinding` is. */
 function openScheduleFinding() {
-  const hits = ghJson(['issue', 'list', '--repo', REPO, '--state', 'open',
-    '--label', 'pipeline-improvement', '--search', 'in:title "silent far longer than their cron"',
-    '--limit', '50', '--json', 'number,body']);
-  return hits.find((i) => (i.body ?? '').includes(SCHEDULE_MARKER)) ?? null;
+  return openPipelineIssues().find((i) => (i.body ?? '').includes(SCHEDULE_MARKER)) ?? null;
 }
 
 /**

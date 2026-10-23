@@ -42,6 +42,7 @@ import { appendFileSync } from "node:fs";
 
 import { appLogin } from "./app-register.mjs";
 import { isCliEntry } from "./lib/cli-entry.mjs";
+import { trustedSearchSync } from "./lib/search.mjs";
 
 const args = (() => {
   const out = {};
@@ -132,9 +133,15 @@ export function readFiled({ marker = null, since = null, label = null }, run = g
     // A row that is re-derivable only until someone closes an issue is not a durable
     // measurement, and RA-1504 deferred this half of the row precisely BECAUSE quality
     // signals were supposed to stay queryable indefinitely.
-    const out = run(["issue", "list", "--repo", REPO, "--state", "all", "--search", q,
-                     "--limit", "100", "--json", "number,labels"]);
-    const issues = JSON.parse(out);
+    //
+    // SETTLED BEFORE IT IS STORED (kanon#1322): search can answer nothing for a query that has
+    // matches, so an empty answer is read again before `count: 0` is stored as a fact, and
+    // answers that don't settle are a failed read (null).
+    const issues = trustedSearchSync(
+      () => JSON.parse(run(["issue", "list", "--repo", REPO, "--state", "all", "--search", q,
+                            "--limit", "100", "--json", "number,labels"])),
+      { what: `\`${q}\``, size: (a) => a.length, partial: () => false },
+    );
     return { count: issues.length, severities: tallySeverities(issues.map((i) => i.labels.map((l) => l.name))) };
   } catch {
     return null;

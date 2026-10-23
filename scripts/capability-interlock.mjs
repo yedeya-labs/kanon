@@ -32,6 +32,12 @@
 // counting it out would be the same silent unlock by another route. A result that was
 // truncated by paging throws rather than under-counting.
 //
+// A ZERO IS READ AGAIN. GitHub search can answer 0 for a query that has matches, with
+// `incomplete_results` false (kanon#1322), and a zero is the unlock direction too. So both
+// searches go through `trustedSearchSync` (`scripts/lib/search.mjs`): an answer that found
+// nothing, or says it is incomplete, is read again, and answers that don't settle throw,
+// which prints `unknown`.
+//
 // DEPENDENCY-FREE: the Overseer job installs nothing, so this imports `node:` only, like
 // every script under scripts/ (`K-SELF-8`).
 //
@@ -42,6 +48,7 @@
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { trustedSearchSync } from './lib/search.mjs';
 
 /**
  * The RA-845 cohort query. Canonical: the Overseer's prompt quotes it verbatim, with the
@@ -128,6 +135,7 @@ export function linkedFromGraphql(data) {
   });
 }
 
+// search-zero: sent only through `trustedSearchSync` in `countInterlock`, which settles its answer.
 const GRAPHQL = `query($q: String!) {
   search(type: ISSUE, first: 100, query: $q) {
     issueCount
@@ -142,11 +150,18 @@ const GRAPHQL = `query($q: String!) {
  * closed interlock.
  * @param {string} repo `owner/name`
  * @param {(args: string[]) => string} [gh] `gh`, injected for tests
+ * @param {{ sleep?: (ms: number) => void }} [io] the wait between a doubtful search's reads, injected for tests
  */
-export function countInterlock(repo, gh = (args) => execFileSync('gh', args, { encoding: 'utf8' })) {
+export function countInterlock(repo, gh = (args) => execFileSync('gh', args, { encoding: 'utf8' }), { sleep } = {}) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error(`'${repo}' is not an owner/name repository`);
-  const unlinked = unlinkedFromSearch(JSON.parse(gh(['api', '-X', 'GET', 'search/issues', '-f', `q=${unlinkedQuery(repo)}`, '-f', 'per_page=1'])));
-  const linked = linkedFromGraphql(JSON.parse(gh(['api', 'graphql', '-f', `query=${GRAPHQL}`, '-f', `q=${linkedQuery(repo)}`])));
+  const unlinked = unlinkedFromSearch(trustedSearchSync(
+    () => JSON.parse(gh(['api', '-X', 'GET', 'search/issues', '-f', `q=${unlinkedQuery(repo)}`, '-f', 'per_page=1'])),
+    { what: 'the unlinked capability issues', sleep },
+  ));
+  const linked = linkedFromGraphql(trustedSearchSync(
+    () => JSON.parse(gh(['api', 'graphql', '-f', `query=${GRAPHQL}`, '-f', `q=${linkedQuery(repo)}`])),
+    { what: 'the linked capability issues', size: (a) => a?.data?.search?.issueCount, partial: () => false, sleep },
+  ));
   return interlockCount({ unlinked, linked });
 }
 

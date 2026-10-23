@@ -34,6 +34,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { LEGACY } from './lib/protocol-spellings.mjs';
 import { SPLIT_LABEL } from './split-lineage.mjs';
+import { trustedSearchSync } from './lib/search.mjs';
 
 // Two facts of readers this script cannot import: `merge-gate.mjs` and `rebase-lane.mjs` read
 // the App register when loaded, which a checkout from before the two Apps lacks. A test holds
@@ -156,8 +157,10 @@ export function readWorld(repo, {
     '--json', 'number,headRefName,headRefOid,statusCheckRollup']).map((/** @type {any} */ pr) => ({ ...pr, comments: commentsOf(pr.number) }));
   // The window and the query are `followQueueMerges`' own.
   const since = now - FOLLOW_UP_MS;
-  const mergedPrs = json(['pr', 'list', '--repo', repo, '--state', 'merged', '--search', `merged:>=${new Date(since).toISOString()}`,
-    '--limit', '100', '--json', 'number,mergedAt'])
+  // Settled before the census counts it: search can answer nothing for a query that has matches
+  // (kanon#1322), and an empty answer would print a census with no merged pull request in it.
+  const mergedPrs = trustedSearchSync(() => json(['pr', 'list', '--repo', repo, '--state', 'merged', '--search', `merged:>=${new Date(since).toISOString()}`,
+    '--limit', '100', '--json', 'number,mergedAt']), { what: 'the merged pull requests', size: (/** @type {any} */ a) => a?.length, partial: () => false })
     .filter((/** @type {any} */ pr) => Date.parse(pr?.mergedAt) >= since)
     .map((/** @type {any} */ pr) => ({ ...pr, comments: commentsOf(pr.number) }));
   // Open and closed: the adopt arm edits whichever issue a brief names. The REST listing

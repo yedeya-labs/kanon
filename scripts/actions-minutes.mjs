@@ -41,6 +41,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { readSnapshot, resolveCaller } from './lib/lane-caller.mjs';
+import { trustedSearchSync } from './lib/search.mjs';
 
 /** GitHub returns at most this many runs for one filtered listing, whatever its total_count says. */
 const LISTING_CAP = 1000;
@@ -163,8 +164,12 @@ const listJobs = (gh, repo, id) => {
   }
 };
 
-/** How many issues or pull requests a search finds. @param {(args: string[]) => any} gh @param {string} q */
-const count = (gh, q) => Number(gh(['api', '-X', 'GET', 'search/issues', '-f', `q=${q}`, '-f', 'per_page=1'])?.total_count ?? 0);
+/**
+ * How many issues or pull requests a search finds, settled before it is printed: search can answer
+ * 0 for a query with matches, so a doubtful answer is read again (`scripts/lib/search.mjs`, kanon#1322).
+ * @param {(args: string[]) => any} gh @param {string} q
+ */
+const count = (gh, q) => trustedSearchSync(() => gh(['api', '-X', 'GET', 'search/issues', '-f', `q=${q}`, '-f', 'per_page=1']), { what: `\`${q}\`` }).total_count;
 
 /**
  * Measure each lane's runner-minutes over the `days` before `now`.

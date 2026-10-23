@@ -375,6 +375,35 @@ describe('kanon-health.mjs: reads Kanon from GitHub and prints the view', () => 
     expect(JSON.parse(out)).toMatchObject({ schema: SCHEMA, upgrade_lag: null });
   });
 
+  it('reads an empty first page again before it reports no disputes (kanon#1322)', () => {
+    const calls: string[][] = [];
+    const real = fakeGh(calls);
+    let disputeReads = 0;
+    const flaky = (args: string[]) => {
+      const q = args.find((a) => a.startsWith('q=')) ?? '';
+      if (q.includes('in:body') && disputeReads++ === 0) return { status: 0, stderr: '', stdout: page([]) };
+      return real(args);
+    };
+    const { code, out } = main([], deps(calls, { gh: flaky }));
+    expect(code).toBe(0);
+    expect(out).toContain('| `K-MERGE-7` | 1 | 0 |');
+    expect(disputeReads).toBe(3);
+  });
+
+  it('exits 3, naming the search, when its answers do not settle', () => {
+    const calls: string[][] = [];
+    const real = fakeGh(calls);
+    let disputeReads = 0;
+    const unsettled = (args: string[]) => {
+      const q = args.find((a) => a.startsWith('q=')) ?? '';
+      if (q.includes('in:body')) return disputeReads++ === 1 ? real(args) : { status: 0, stderr: '', stdout: page([]) };
+      return real(args);
+    };
+    const r = main([], deps(calls, { gh: unsettled }));
+    expect(r.code).toBe(3);
+    expect(r.out).toMatch(/the search for the disputes answered 0, 1, 0, 0/);
+  });
+
   it('exits 3 when GitHub fails, and 2 on a bad argument', () => {
     const failing = deps([], { gh: () => ({ status: 1, stdout: '', stderr: 'HTTP 502' }) });
     expect(main([], failing).code).toBe(3);

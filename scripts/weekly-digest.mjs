@@ -60,6 +60,7 @@ import { GATE_CANDIDATE_LABEL, SEVERITY_LABELS, severityOf as severityOfLabels }
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { GATE_CANDIDATE_QUERY, GATE_DECLINED_LABEL, gateCandidateDecision } from './gate-candidate-exit.mjs';
 import { declaredEnvironmentFrom } from './lib/reference-deploy.mjs';
+import { trustedSearch } from './lib/search.mjs';
 
 /**
  * Scopes that are real engineering work but have no stakeholder-facing surface.
@@ -246,6 +247,51 @@ export async function countMergedPrs({ api, repo, weekStart, weekEnd, maxPages =
     `Refusing to post: more than ${maxPages * 100} closed PRs were updated since the week began, so the merged count ` +
     'would be cut short. Run the digest closer to its week, or raise the page cap.',
   );
+}
+
+/**
+ * The issue searches the digest still sends, the milestone counts and the week's closed issues,
+ * each read through `trustedSearch` (kanon#1322), with `api` INJECTED so the re-reads are tested
+ * without a network. Search is the only way to ask for them in a handful of requests: `is:issue`
+ * leaves pull requests out of a milestone's counts, and `closed:<window>` hands every closed
+ * issue's milestone back in one answer. But search can answer 0 for a query with matches, so an
+ * answer that found nothing, or says it is incomplete, is read again before the digest states it,
+ * and answers that don't settle fail the run by name rather than post a wrong number.
+ * @param {{ api: (path: string) => Promise<any>, repo: string, sleep?: (ms: number) => Promise<void> }} io
+ */
+export function issueSearch({ api, repo, sleep }) {
+  const url = (/** @type {string} */ q, /** @type {number} */ perPage, page = 1) =>
+    `/search/issues?q=${encodeURIComponent(`repo:${repo} ${q}`)}&per_page=${perPage}${page > 1 ? `&page=${page}` : ''}`;
+  return {
+    /** A search's total. @param {string} q */
+    count: async (q) => (await trustedSearch(() => api(url(q, 1)), { what: `\`${q}\``, sleep })).total_count,
+    /**
+     * Every item a search matches, ten pages at most (the search API's 1000). The first page is
+     * settled like a count; a later page that stays empty before the total is reached fails by
+     * name, since a list cut short would post a low count. One search, ALL its items: the search
+     * API allows only 30 requests a minute, far tighter than the core limit, so the job spends a
+     * handful of searches, not one per milestone. An earlier version asked for three counts per
+     * milestone and rate-limited itself on a repo with five.
+     * @param {string} q
+     */
+    items: async (q) => {
+      /** @type {any[]} */
+      const items = [];
+      const first = await trustedSearch(() => api(url(q, 100)), { what: `\`${q}\``, sleep });
+      items.push(...first.items);
+      const total = Math.min(first.total_count, 1000);
+      for (let page = 2; items.length < total && page <= 10; page++) {
+        const r = await trustedSearch(() => api(url(q, 100, page)), {
+          what: `\`${q}\` page ${page}`, size: (a) => a?.items?.length, sleep,
+        });
+        if (!r.items.length) {
+          throw new Error(`Refusing to post: the search \`${q}\` counted ${first.total_count} but page ${page} stayed empty after ${items.length}, so the count would be cut short (kanon#1322).`);
+        }
+        items.push(...r.items);
+      }
+      return items;
+    },
+  };
 }
 
 /**
@@ -1131,26 +1177,13 @@ if (isCliEntry(import.meta.url)) {
     if (!res.ok) throw new Error(`GitHub GET ${path} → ${res.status}: ${await res.text()}`);
     return res.json();
   };
-  /** Issue counts come from search so `is:issue` can exclude PRs (AGENTS.md); merged PRs come from REST. */
-  const count = async (q) => (await api(`/search/issues?q=${encodeURIComponent(`repo:${repo} ${q}`)}&per_page=1`)).total_count;
+  /**
+   * Issue counts come from search so `is:issue` can exclude PRs (AGENTS.md), settled before they are
+   * trusted (`issueSearch`, kanon#1322); merged PRs come from REST.
+   */
+  const { count, items: searchAll } = issueSearch({ api, repo });
 
   const { weekStart, weekEnd, qualifier: window } = weekWindow(WEEK_END ? new Date(WEEK_END) : new Date());
-
-  /**
-   * One search, ALL matching items. The search API allows only 30 requests per
-   * minute — far tighter than the 5000/hr core limit — so this job is written to
-   * spend a handful of searches, not one per milestone. An earlier version asked
-   * for three counts per milestone and rate-limited itself on a repo with five.
-   */
-  const searchAll = async (q) => {
-    const items = [];
-    for (let page = 1; page <= 10; page++) {
-      const r = await api(`/search/issues?q=${encodeURIComponent(`repo:${repo} ${q}`)}&per_page=100&page=${page}`);
-      items.push(...r.items);
-      if (items.length >= r.total_count || r.items.length === 0) break;
-    }
-    return items;
-  };
 
   const [prsMerged, closedThisWeekItems, allReleases, allMilestones, gateCandidates] = await Promise.all([
     // Core REST, not search: search's total for merged PRs comes back 0 for a week with merges (kanon#1318).

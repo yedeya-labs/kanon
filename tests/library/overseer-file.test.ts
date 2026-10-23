@@ -175,6 +175,13 @@ describe('the rolling audit issue (K-SELF-11)', () => {
     expect(r.calls.filter((c) => c.args[1] === 'close').map((c) => c.args[2])).toEqual(['7']);
   });
 
+  it('reads the earlier audits from the label listing, not a search that can answer nothing (kanon#1322)', () => {
+    const r = run(report([]), { prior: [{ number: 7, title: '[pipeline] audit-summary — Overseer audit #14', state: 'OPEN' }] });
+    const list = r.calls.find((c) => c.args[0] === 'issue' && c.args[1] === 'list')!.args;
+    expect(list).toEqual(expect.arrayContaining(['--label', 'agent:overseer', '--state', 'all']));
+    expect(list).not.toContain('--search');
+  });
+
   it('starts at 1', () => expect(nextAuditNumber([])).toBe(1));
 });
 

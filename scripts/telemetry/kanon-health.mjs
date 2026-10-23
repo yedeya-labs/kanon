@@ -27,6 +27,7 @@ import { DISPUTE_FIELD, healthView, ruleDisputes, timeToFix, upgradeLag } from '
 import { isCliEntry } from '../lib/cli-entry.mjs';
 import { OWN_REFUSAL, OWN_REQUIRED, isOwn, parseRows } from './kanon-bugs.mjs';
 import { LABELS } from './kanon-findings.mjs';
+import { SearchUnsettled, trustedSearchSync } from '../lib/search.mjs';
 
 /** The JSON output's contract. A breaking change to it changes this. */
 export const SCHEMA = 'kanon-health/v1';
@@ -37,11 +38,13 @@ const USAGE = 'usage: kanon-health.mjs [--repo <owner>/<repo>] [--rows <file> --
 const PAGE = 'pageInfo { hasNextPage endCursor }';
 
 /** The disputes: each issue's state and body, which holds the form's fields. */
+// search-zero: sent only through `search` below, which settles its first page.
 export const disputesQuery = `query($q: String!, $after: String) {
   search(query: $q, type: ISSUE, first: 50, after: $after) { ${PAGE}
     nodes { ... on Issue { number state body } } } }`;
 
 /** #41's issues, each with the last close and what closed it. */
+// search-zero: sent only through `search` below, which settles its first page.
 export const bugsQuery = `query($q: String!, $after: String) {
   search(query: $q, type: ISSUE, first: 50, after: $after) { ${PAGE}
     nodes { ... on Issue { number state stateReason createdAt closedAt body labels(first: 50) { nodes { name } }
@@ -60,15 +63,15 @@ const realGh = (args) => {
 };
 
 /**
- * Every node of a search, page by page.
+ * Every node of a search, page by page. The first page is settled before an empty one is believed:
+ * GitHub search can answer nothing for a query with matches (kanon#1322), and an empty first page
+ * would print no disputes or no bugs. Answers that don't settle are a failed read (exit 3).
  * @param {Gh} gh @param {string} query @param {string} q @param {string} what
  * @returns {any[]}
  */
 function search(gh, query, q, what) {
-  const nodes = [];
-  /** @type {string | null} */
-  let after = null;
-  do {
+  /** @param {string | null} after */
+  const readPage = (after) => {
     const r = gh(['api', 'graphql', '-f', `query=${query}`, '-f', `q=${q}`, ...(after ? ['-f', `after=${after}`] : [])]);
     if (r.status !== 0) throw new ReadError(`could not search ${what}`);
     let page;
@@ -78,10 +81,21 @@ function search(gh, query, q, what) {
       page = undefined;
     }
     if (!page || !Array.isArray(page.nodes)) throw new ReadError(`could not read the search for ${what}`);
+    return page;
+  };
+  const nodes = [];
+  let page;
+  try {
+    page = trustedSearchSync(() => readPage(null), { what, size: (p) => p.nodes.length, partial: () => false });
+  } catch (e) {
+    if (e instanceof SearchUnsettled) throw new ReadError(e.message);
+    throw e;
+  }
+  for (;;) {
     nodes.push(...page.nodes.filter(Boolean));
-    after = page.pageInfo?.hasNextPage ? page.pageInfo.endCursor : null;
-  } while (after);
-  return nodes;
+    if (!page.pageInfo?.hasNextPage) return nodes;
+    page = readPage(page.pageInfo.endCursor);
+  }
 }
 
 /**

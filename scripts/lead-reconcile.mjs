@@ -64,6 +64,7 @@ import { appLogin, appPersona } from './app-register.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
 import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/deploy-declaration.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { trustedSearchSync } from './lib/search.mjs';
 import { laneCallerFile } from './lib/lane-caller.mjs';
 import { beforeApply, taxonomyLabel } from './lib/labels.mjs';
 // THE ROUTING HAS ONE HOME (`K-WORK-8`, kanon#164). Every issue this tick files takes its labels
@@ -2548,6 +2549,8 @@ export function deriveFollowUps(worlds, { run = gh, apply = APPLY, now = Date.no
     const since = new Date(now - days * 86_400_000).toISOString().slice(0, 10);
     found = json(['issue', 'list', '--repo', REPO, '--state', 'open',
       ...REVIEWER_FOLLOW_UP.flatMap((l) => ['--label', l]),
+      // search-zero: an empty answer only defers. Membership is appended, never removed, and
+      // the next tick lists the same window again (kanon#1322).
       '--search', `created:>=${since}`, '--limit', '200', '--json', 'number,state,labels,body']);
   } catch (err) {
     warn(`could not list reviewer follow-ups, so no membership was derived this tick — ${ghCause(err)}`);
@@ -2896,9 +2899,12 @@ function readWorld(project) {
   // Everything carrying the project marker in its body, so no new label taxonomy
   // and no milestone kind of the project's own: its work sits on the buckets or on
   // roadmap milestones, which may be one created for it (K-PROJ-11).
-  const found = ghJson(['issue', 'list', '--repo', REPO, '--state', 'all', '--search',
+  // SETTLED BEFORE IT GATES FILING (kanon#1322): search can answer nothing for a query that has
+  // matches, and an empty answer here re-files every issue the project already has. So an empty
+  // answer is read again, and answers that don't settle throw (`scripts/lib/search.mjs`).
+  const found = trustedSearchSync(() => ghJson(['issue', 'list', '--repo', REPO, '--state', 'all', '--search',
     `"qa:project ${project}" in:body`, '--limit', '200',
-    '--json', 'number,title,state,labels,body,closedAt']);
+    '--json', 'number,title,state,labels,body,closedAt']), { what: `project ${project}'s issues`, size: (a) => a?.length, partial: () => false });
 
   // GitHub issue search is TOKENISED full-text, not substring — a nearby number or
   // an unrelated body can match. This set gates everything (`filed.length <
