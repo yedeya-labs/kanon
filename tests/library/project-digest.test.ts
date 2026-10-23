@@ -743,10 +743,20 @@ describe('buildMessage: one Kanon notification (plan 0011 §3, step N7)', () => 
     expect(text({ projects: [] })).not.toMatch(/No narrative today/);
   });
 
-  it('says so plainly when no project is open', () => {
-    const m = build({ projects: [] });
-    expect(m.summary).toContain('No open projects');
+  it('says so plainly when no project is open: every brief has a closed tracking issue', () => {
+    const m = build({ projects: [], briefs: 2 });
+    expect(m.summary).toContain('No open projects — every brief in `docs/projects/` has a closed tracking issue.');
+    expect(m.summary).not.toContain('No projects yet');
     expect(m.sections).toBeUndefined();
+  });
+
+  it('kanon#1325: with no briefs, says no project exists yet, never that every brief is closed', () => {
+    for (const m of [build({ projects: [], briefs: 0 }), build({ projects: [] })]) {
+      expect(m.summary).toMatch(/^No projects yet\b/);
+      expect(m.summary).not.toContain('closed tracking issue');
+      expect(m.sections).toBeUndefined();
+      expect(validate(m)).toEqual({ ok: true });
+    }
   });
 
   it('is a valid project-digest message, from this run, with a section per project', () => {
@@ -1266,7 +1276,7 @@ describe('kanon#1317 — no `docs/projects/` folder is no briefs', SPAWNS, () =>
     }
   });
 
-  it('posts "No open projects" from a checkout with no folder, reading nothing from GitHub', () => {
+  it('posts "No projects yet" from a checkout with no folder, reading nothing from GitHub (kanon#1325)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'kanon-1317-'));
     try {
       mkdirSync(join(dir, 'docs/qa'), { recursive: true });
@@ -1276,7 +1286,30 @@ describe('kanon#1317 — no `docs/projects/` folder is no briefs', SPAWNS, () =>
       const r = spawnSync('node', [join(ROOT, 'scripts/project-digest.mjs')], { cwd: dir, env, encoding: 'utf8', timeout: 20_000 });
       expect(r.stderr).not.toContain('ENOENT');
       expect(r.status).toBe(0);
-      expect(r.stdout).toContain('No open projects');
+      expect(r.stdout).toContain('No projects yet');
+      expect(r.stdout).not.toContain('closed tracking issue');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('kanon#1325: posts that every brief has a closed tracking issue when the briefs it read are all closed', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kanon-1325-'));
+    try {
+      mkdirSync(join(dir, 'docs/projects'), { recursive: true });
+      writeFileSync(join(dir, 'docs/projects/7.md'), '# Seven\n');
+      // GitHub, stubbed in the digest's own process: brief 7's tracking issue is closed.
+      writeFileSync(join(dir, 'fetch-stub.mjs'), `globalThis.fetch = async (url) => {
+  if (!String(url).endsWith('/repos/o/r/issues/7')) throw new Error('unexpected read ' + url);
+  return { ok: true, json: async () => ({ number: 7, state: 'closed', labels: [] }) };
+};\n`);
+      const env: NodeJS.ProcessEnv = { ...process.env, GITHUB_TOKEN: 'unused', GITHUB_REPOSITORY: 'o/r', DRY_RUN: '1', TODAY: '2026-10-22' };
+      delete env.GITHUB_STEP_SUMMARY;
+      const r = spawnSync('node', ['--import', pathToFileURL(join(dir, 'fetch-stub.mjs')).href, join(ROOT, 'scripts/project-digest.mjs')], { cwd: dir, env, encoding: 'utf8', timeout: 20_000 });
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('No open projects — every brief in `docs/projects/` has a closed tracking issue.');
+      expect(r.stdout).not.toContain('No projects yet');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

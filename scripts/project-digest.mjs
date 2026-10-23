@@ -778,17 +778,22 @@ export const narrativeMissing = ({ narrative, projects }) =>
  * notification's preview shows, and a narrative `fit` has to cut must not take
  * the counts with it. Severity is `warning` when any project is stopped (`isStopped`).
  *
+ * TWO EMPTY STATES (kanon#1325). With no briefs in `docs/projects/` no project exists yet, and
+ * the headline says so; only when there are briefs and every one's tracking issue is closed
+ * does it say that. `briefs` is how many briefs `readBriefs` read, and defaults to the open
+ * projects' count, so a caller that does not say never claims briefs it did not read.
+ *
  * @param {{today: Date, narrative?: string|null, repository: string,
- *          projects: Parameters<typeof renderProject>[0][], runUrl?: string|null}} input
+ *          projects: Parameters<typeof renderProject>[0][], briefs?: number, runUrl?: string|null}} input
  * @returns {Record<string, any>} the message, `message-v1`
  */
-export function buildMessage({ today, narrative, projects, repository, runUrl = null }) {
+export function buildMessage({ today, narrative, projects, briefs = projects.length, repository, runUrl = null }) {
   const run = /^https:\/\/\S+$/.test(runUrl ?? '') ? runUrl : `https://github.com/${repository}/actions`;
   const n = projects.length;
   const stopped = projects.filter(isStopped).length;
   const done = projects.filter((p) => p.status === 'complete').length;
   const counts = n === 0
-    ? 'No open projects — every brief in `docs/projects/` has a closed tracking issue.'
+    ? (briefs > 0 ? 'No open projects — every brief in `docs/projects/` has a closed tracking issue.' : 'No projects yet — `docs/projects/` holds no briefs.')
     : `${n} open project${n === 1 ? '' : 's'}${stopped ? `, ${stopped} stopped` : ''}${done ? `, ${done} ready to close` : ''}.`;
   const summary = [counts];
   const said = (narrative ?? '').trim();
@@ -821,7 +826,7 @@ export const dryRunReport = (message) => [
 /**
  * The briefs in `dir`, `docs/projects/<n>.md`, by number. A repository with no such folder
  * has no briefs (kanon#1317): an adopter that has planned no project need not create one, and
- * its digest posts "No open projects". Any other read error still throws.
+ * its digest posts "No projects yet" (kanon#1325). Any other read error still throws.
  *
  * @param {string} [dir]
  * @returns {{number: number, markdown: string}[]}
@@ -999,7 +1004,7 @@ if (isCliEntry(import.meta.url)) {
       '"Say whether the model was unreachable" step.',
     );
   }
-  const message = buildMessage({ today, narrative: NARRATIVE, projects, repository: repo, runUrl });
+  const message = buildMessage({ today, narrative: NARRATIVE, projects, briefs: briefs.length, repository: repo, runUrl });
   // `fit`'s output always validates; a failure here is this script's bug, and a red run is its page.
   const verdict = validate(message);
   if (!verdict.ok) {
