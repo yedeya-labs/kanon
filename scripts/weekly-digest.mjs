@@ -1241,7 +1241,7 @@ if (isCliEntry(import.meta.url)) {
     const releases = releasesInWindow(allReleases, weekStart, weekEnd);
     const brief = narrativeBrief({ weekStart, weekEnd, releases, stats: { prsMerged, issuesClosed, releases: releases.length } });
     if (process.env.GITHUB_OUTPUT) {
-      appendFileSync(process.env.GITHUB_OUTPUT, `week-end=${weekEnd.toISOString()}\nreleases=${releases.length}\nbrief=${brief}\n`);
+      appendFileSync(process.env.GITHUB_OUTPUT, `week-end=${weekEnd.toISOString()}\nbrief=${brief}\n`);
     }
     console.log(brief);
   } else {

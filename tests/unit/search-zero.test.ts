@@ -30,8 +30,8 @@ const COMMENT = /^\s*(?:\/\/|\*|\/\*)/;
  * below fails once a file here has no unheld search left, so the entry goes with the fix.
  */
 const PENDING: Record<string, string> = {
-  // Owned by a concurrent change to the project digest; it moves to the helper after that lands.
-  'scripts/project-digest.mjs': 'kanon#1322',
+  // The project digest's searches still trust a zero; kanon#1342 holds their move to the helper.
+  'scripts/project-digest.mjs': 'kanon#1342',
 };
 
 type Site = { at: string; held: boolean };
