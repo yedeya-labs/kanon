@@ -56,6 +56,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** The taxonomy gained `lead:file-only`, which a person puts on a project's tracking issue so that the Lead files and reconciles the project's issues but dispatches none of them; `needs:human` keeps its meaning as the escalation that stops the whole tick. [#1113](https://github.com/yedeya-labs/kanon/issues/1113)
 - **2026-10-21.** Deleting GitHub's defaults is no longer prose only: `kanon init` already deleted them with the person's consent, and `kanon doctor` now reports each one a repository still has, without blocking. Kanon itself still had all seven. [#1246](https://github.com/yedeya-labs/kanon/issues/1246)
 
+## `K-WORK-14`
+
+- **2026-10-23.** No longer prose only: the filing skill's `plan` takes the issue body as a required `--body` file and refuses one with no "What must be true" heading or with a remedy under any heading but the fixed one, and the Overseer's and the telemetry Explorer's filers hold their agents' findings to the same check. Twenty-two issues carried a remedy heading of their own, and 17 of 324 reviewer follow-ups had no statement of what must be true. The Owner decided to build it. [#1247](https://github.com/yedeya-labs/kanon/issues/1247)
+
 ## `K-WORK-23`
 
 - **2026-10-21.** No longer prose only for the tracking issue: the brief guard reads issue `<n>` for each `docs/projects/<n>.md` and fails when it lacks a kind label, isn't on the bucket that matches it, or carries `project:<n>`. Kanon's one brief's tracking issue had no kind label. [#1245](https://github.com/yedeya-labs/kanon/issues/1245)

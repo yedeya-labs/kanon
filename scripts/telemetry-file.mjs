@@ -95,7 +95,7 @@ import { AggregateError, checkAggregate } from './aggregate-read.mjs';
 import { appPersona } from './app-register.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
-import { PlanRefusal, plan } from './issue-triage-defaults.mjs';
+import { PlanRefusal, bodyProblems, plan } from './issue-triage-defaults.mjs';
 import { buildRows, notWritten, readUpstream, renderSent, sendFromEnv, sentSentence } from './lib/finding-rows.mjs';
 import { scrubContext, upstreamChoice } from './overseer-file.mjs';
 import { signed } from './lib/role-marker.mjs';
@@ -287,6 +287,9 @@ export function checkFinding(f, a) {
   if (prose) return { ok: false, why: prose };
   const kind = signals.length ? 'bug' : 'spec-delta';
   if (kind === 'bug' && !SEVERITIES.includes(f.severity)) return { ok: false, why: `it rests on a failure signal, so it is a bug, and its severity is not one of ${SEVERITIES.join(', ')}` };
+  // The body's form, as the filing skill's plan command checks an agent's (`K-WORK-14`, kanon#1247).
+  const form = bodyProblems(f.body);
+  if (form.length) return { ok: false, why: `its body breaks K-WORK-14: ${form.join('; ')}` };
   return { ok: true, checked: { kind, signals, cells, signature: signatureOf(kind, signals, cells) } };
 }
 

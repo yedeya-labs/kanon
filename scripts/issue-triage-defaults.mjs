@@ -68,13 +68,20 @@
  * THE FILING SKILL (kanon#164, migration step 2): `skills/file-issue/SKILL.md` is how a filer
  * asks `plan()`. The Explorer's sweep, the code audit, verify-acs, merge-reconcile and the Reviewer file through it; the Lead's reconcile tick, which files from code, calls `plan()` directly.
  *
+ * THE BODY'S FORM (kanon#1247, `K-WORK-14`). `plan --body <file>` also reads the filer's body and
+ * refuses one with no "What must be true" heading, or with a remedy heading other than the one
+ * fixed `## Possible approach — UNVERIFIED, not acceptance criteria`. That is `bodyProblems()`,
+ * the filer's check, never `decide()`'s: the backstop still reads no title and no body
+ * (`K-AGENT-45`).
+ *
  * Exercised by tests/unit/issue-triage-defaults.test.ts. Run it locally exactly
  * as the workflow does:
  *   gh issue view <n> --json milestone,labels | node scripts/issue-triage-defaults.mjs
  * and as a filer does:
- *   node scripts/issue-triage-defaults.mjs plan --label follow-up --label agent:reviewer --label sev:high
+ *   node scripts/issue-triage-defaults.mjs plan --label follow-up --label agent:reviewer --label sev:high --body body.md
  */
 
+import { readFileSync } from 'node:fs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 
 /** Product outputs and anything without an unambiguous home. */
@@ -369,25 +376,91 @@ export function needsSeverityComment() {
   ].join('\n');
 }
 
+/** The one remedy heading `K-WORK-14` allows, exactly as written. */
+export const POSSIBLE_APPROACH_HEADING = '## Possible approach — UNVERIFIED, not acceptance criteria';
+
+/** A heading that proposes a remedy: what `K-WORK-14` wants under the one fixed heading. */
+const REMEDY_HEADING = /^(?:suggested fix|proposed fix|fix|remedy|solution|possible approach)\b/i;
+/** The section that states the constraint, the issue's acceptance criteria. */
+const MUST_BE_TRUE_HEADING = /^what must be true\b/i;
+
+/**
+ * The text of a Markdown heading line, or null. An ATX heading (`## X`) counts, and so does a
+ * line that is bold and nothing else (`**Suggested fix:**`), which reads as a heading and is how
+ * a remedy slips past one. Emphasis and a trailing colon are dropped.
+ * @param {string} line
+ * @returns {{ text: string, atx: boolean } | null}
+ */
+function headingOf(line) {
+  const atx = /^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/.exec(line);
+  const bold = atx ? null : /^ {0,3}(\*\*|__)(.+?)\1[ \t]*:?[ \t]*$/.exec(line);
+  const raw = atx ? atx[1] : bold?.[2];
+  if (raw === undefined) return null;
+  const text = raw.replace(/^[*_`\s]+|[*_`:\s]+$/g, '');
+  return { text, atx: Boolean(atx) };
+}
+
+/**
+ * What `K-WORK-14` finds wrong with an issue body's form, each by name; empty when nothing.
+ * Two checks, both of form only (whether the remedy and the constraint are really separate is
+ * the filer's judgment): the body has a heading "What must be true", and every heading that
+ * proposes a remedy (`Suggested fix`, `Proposed fix`, `Fix`, `Remedy`, `Solution`, or `Possible
+ * approach` in any other form) is exactly `POSSIBLE_APPROACH_HEADING`. Headings inside a fenced
+ * code block are quoted text, not the body's own, and are skipped. Pure.
+ * @param {string} body
+ * @returns {string[]}
+ */
+export function bodyProblems(body) {
+  const problems = [];
+  let fence = '';
+  let mustBeTrue = false;
+  for (const line of String(body ?? '').split(/\r?\n/)) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (marker) {
+      if (!fence) fence = marker;
+      else if (marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = '';
+      continue;
+    }
+    if (fence) continue;
+    const heading = headingOf(line);
+    if (!heading) continue;
+    if (heading.atx && MUST_BE_TRUE_HEADING.test(heading.text)) mustBeTrue = true;
+    if (line.trimEnd() === POSSIBLE_APPROACH_HEADING) continue;
+    if (REMEDY_HEADING.test(heading.text)) {
+      problems.push(`the heading "${line.trim()}" proposes a remedy: put it under exactly "${POSSIBLE_APPROACH_HEADING}" (K-WORK-14)`);
+    }
+  }
+  if (!mustBeTrue) {
+    problems.unshift('the body has no "What must be true" section: open it with a "## What must be true" heading over the verified constraint and its evidence (K-WORK-14)');
+  }
+  return problems;
+}
+
 /** One argument as a POSIX shell reads it back: bare when it is safe, single-quoted when not. */
 const shellQuote = (arg) => (/^[\w.:/@=+-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`);
 
 /** The flags `plan` takes, each with a value. The filing skill passes only these. */
-export const PLAN_FLAGS = ['--label', '--subject', '--explicit-milestone'];
+export const PLAN_FLAGS = ['--label', '--subject', '--explicit-milestone', '--body'];
 
-const PLAN_USAGE = 'usage: issue-triage-defaults.mjs plan --label <name>... [--subject product|pipeline] [--explicit-milestone <title>]';
+const PLAN_USAGE = 'usage: issue-triage-defaults.mjs plan --label <name>... [--subject product|pipeline] [--explicit-milestone <title>] --body <file>';
 
 /**
- * `plan --label <name>... [--subject product|pipeline] [--explicit-milestone <title>]`: one JSON
- * plan on stdout, with `ghArgs`, the arguments as one shell-quoted string. A refusal exits 1 and
- * prints only `{refused}`, so no arguments exist to file with. There is no `--milestone`: a
- * filer's own routing choice is exactly what this replaces. The filer names the subject, and only
- * a brief's milestone is explicit.
+ * `plan --label <name>... [--subject product|pipeline] [--explicit-milestone <title>] --body <file>`:
+ * one JSON plan on stdout, with `ghArgs`, the arguments as one shell-quoted string. A refusal
+ * exits 1 and prints only `{refused}`, so no arguments exist to file with. There is no
+ * `--milestone`: a filer's own routing choice is exactly what this replaces. The filer names the
+ * subject, and only a brief's milestone is explicit.
+ *
+ * `--body` is REQUIRED (kanon#1247): the file the filer will pass to `gh issue create --body-file`,
+ * read here only for `bodyProblems()`. Every agent filer asks this command, so making the body a
+ * flag it can't leave out is what holds every one of them to `K-WORK-14`. A body it can't read is
+ * a usage error, exit 2. It prints none of the body but a heading it refuses.
  */
 function planCli(argv) {
   const labels = [];
   let explicitMilestone = '';
   let subject = '';
+  let bodyFile = '';
   for (let i = 0; i < argv.length; i += 2) {
     const [flag, value] = [argv[i], argv[i + 1]];
     if (value === undefined || !PLAN_FLAGS.includes(flag)) {
@@ -395,15 +468,29 @@ function planCli(argv) {
     }
     if (flag === '--label') labels.push(value);
     else if (flag === '--subject') subject = value;
+    else if (flag === '--body') bodyFile = value;
     else explicitMilestone = value;
   }
+  if (!bodyFile) return { code: 2, out: '', err: `plan needs --body <file>, the issue body it checks (K-WORK-14)\n${PLAN_USAGE}\n` };
+  let body;
   try {
-    const p = plan(labels, { explicitMilestone, subject });
-    return { code: 0, out: JSON.stringify({ ...p, ghArgs: p.args.map(shellQuote).join(' ') }), err: '' };
+    body = readFileSync(bodyFile, 'utf8');
+  } catch (err) {
+    return { code: 2, out: '', err: `plan could not read --body ${bodyFile}: ${err.code ?? err.message}\n` };
+  }
+  const refusals = bodyProblems(body);
+  let p = null;
+  try {
+    p = plan(labels, { explicitMilestone, subject });
   } catch (err) {
     if (!(err instanceof PlanRefusal)) throw err;
-    return { code: 1, out: JSON.stringify({ refused: err.message }), err: `plan refused: ${err.message}\n` };
+    refusals.unshift(err.message);
   }
+  if (refusals.length) {
+    const refused = refusals.join('; ');
+    return { code: 1, out: JSON.stringify({ refused }), err: `plan refused: ${refused}\n` };
+  }
+  return { code: 0, out: JSON.stringify({ ...p, ghArgs: p.args.map(shellQuote).join(' ') }), err: '' };
 }
 
 /**

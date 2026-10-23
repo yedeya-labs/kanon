@@ -1045,7 +1045,7 @@ describe('the mandate skill (#853)', () => {
     for (const kind of ['**Decided**', '**Open, a business decision**', '**For the Lead to verify**']) expect(sort, kind).toContain(kind);
     const shape = /```markdown\n([\s\S]*?)```/.exec(steps(5, 6))?.[1];
     expect(shape).toBeDefined();
-    expect(shape!.trim().split('\n').map((l) => l.trim())).toEqual(['## Goal', '## Requirements', '## Decisions made', '## Decisions open', '## Constraints to verify', '## Plan and estimate', '## Not in scope']);
+    expect(shape!.trim().split('\n').map((l) => l.trim())).toEqual(['## Goal', '## What must be true', '## Decisions made', '## Decisions open', '## Constraints to verify', '## Plan and estimate', '## Not in scope']);
   });
 
   it('asks whether the project starts on merge, holds it with the file-only label, and never with the escalation label', () => {
