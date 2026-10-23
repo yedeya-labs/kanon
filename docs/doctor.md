@@ -181,7 +181,7 @@ A repository whose App needs a permission beyond Kanon's shared grant declares i
 ```
 
 - **Doctor then expects it of that repository's App, and of no other's.** An App without it is `app.permission-missing`, and the finding names the record; an App that holds it is no `app.permission-extra`. A permission held and not declared is still `app.permission-extra`.
-- **`kanon apps` and `apps-check` read the same bullet,** so the App is created with it, its register rows show it, and the installation is checked against it ([`docs/apps.md`](apps.md)).
+- **`kanon apps` and `apps-check` read the same bullet,** so the App is created with it, its register rows show it (a permission the register has no column for in the `Other` cell, `deployments: write` as `Deployments: Read & write`), and the installation is checked against it ([`docs/apps.md`](apps.md)).
 - **A declaration in another shape is malformed, and blocks** (`declaration.malformed`): outside `## Choices`, with nothing in its parentheses, naming an App Kanon doesn't have, a level other than `read` or `write`, or one App and permission twice.
 
 ### A mechanism that doesn't apply

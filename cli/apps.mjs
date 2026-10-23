@@ -763,11 +763,19 @@ const reuseApp = async ({ owner, pages, repos, key, slug, id, file, spec, specs,
   out(`2. Its installation (${inst.id}) covers ${repos.join(', ')}.`);
   const names = await storeSecrets({ owner, repos, app: key, appId, slug, pem, pages, deps, keyFile: file });
   out(`3. Stored ${names.id} and ${names.key} as Actions secrets on ${repos.map((r) => `${owner}/${r}`).join(', ')}.`);
-  deps.remove(file);
-  out(`4. Deleted ${file}.`);
-  const diff = writeAppRows({ spec, slug, register, deps });
-  out(`5. Wrote the ${spec.app}'s rows in ${register}. Commit them:`);
+  // The key file goes only once the register holds the App's rows (#1261): a register write that
+  // fails leaves the file, so the run can be repeated with it.
+  /** @type {string[]} */
+  let diff;
+  try {
+    diff = writeAppRows({ spec, slug, register, deps });
+  } catch (e) {
+    throw new Error(`${/** @type {Error} */ (e).message}. The secrets are stored; the file ${file} is kept: fix the register and run the command again.`, { cause: e });
+  }
+  out(`4. Wrote the ${spec.app}'s rows in ${register}. Commit them:`);
   for (const l of diff) out(`   ${l}`);
+  deps.remove(file);
+  out(`5. Deleted ${file}.`);
   return { slug, appId, warnings: inst.warnings };
 };
 
@@ -936,12 +944,12 @@ export const apps = async (argv, overrides = {}) => {
     for (const e of declared.errors) deps.err(`kanon apps: ${e}. Nothing was changed.`);
     return 1;
   }
-  /** @param {string} key @returns {AppSpec} */
-  const specOf = (key) => {
+  /** @param {string} key @param {boolean} [quiet] @returns {AppSpec} */
+  const specOf = (key, quiet = false) => {
     const spec = /** @type {AppSpec} */ (specs[key]);
     const extra = declared.extras[key];
     if (!extra) return spec;
-    deps.out(`The ${spec.app} also holds ${Object.entries(extra).map(([k, v]) => `${k}: ${v}`).join(', ')}, as ${recordPath} declares.`);
+    if (!quiet) deps.out(`The ${spec.app} also holds ${Object.entries(extra).map(([k, v]) => `${k}: ${v}`).join(', ')}, as ${recordPath} declares.`);
     return { ...spec, permissions: withExtras(spec.permissions, extra) };
   };
 
@@ -952,6 +960,21 @@ export const apps = async (argv, overrides = {}) => {
       deps.err(`kanon apps: --reuse ${app}:${slug} needs the App's ID: give it as --reuse ${app}:${slug}@<App ID>=<key file>. The App ID, or the Client ID, is ${idsAt(pages, slug)}. Nothing was changed.`);
     }
     return 2;
+  }
+
+  // Fail before any App exists if its register rows could not be written (#1261): every App's
+  // rows, with its merged permissions, are written once here without saving, so a register the
+  // writer refuses is refused now, not after an App exists and its key is stored.
+  try {
+    let text = deps.readFile(register);
+    const planned = [...opts.apps.map((key) => ({ key, slug: opts.names[key] ?? `${owner}-${key}`.toLowerCase() })), ...opts.reuse.map((r) => ({ key: r.app, slug: r.slug }))];
+    for (const { key, slug } of planned) {
+      const spec = specOf(key, true);
+      for (const role of appRoles(spec)) text = writeRegisterRow(text, { role, slug, permissions: spec.permissions }).text;
+    }
+  } catch (e) {
+    deps.err(`kanon apps: ${/** @type {Error} */ (e).message}. No App was created.`);
+    return 1;
   }
 
   // Fail before any App exists if a key could not be stored: an App whose key has nowhere to
