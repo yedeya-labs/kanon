@@ -107,6 +107,19 @@ describe('readCostRows reads each lane independently and reports a failure', () 
     expect(reads.get(LANES[1].key)?.rows).toHaveLength(1);
   });
 
+  it('reads the unkeyed COST#<agent> only while the repository has no row of its own, and logs that it did (kanon#1346)', () => {
+    // The repository's own partition (`#42`) is empty; the unkeyed one holds a row.
+    fakeAws(`case "$*" in *'#42"'*) echo '{"Items":[]}';; *) echo '${ROW}';; esac`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(readCostRows(LANES[0], Date.now(), fullEnv)).toMatchObject({ error: null, rows: [{ ts: '20261001T000000Z' }] });
+      expect(log.mock.calls.map((c) => String(c[0])).join('\n'))
+        .toContain(`::notice title=qa-store cost-rows::this repository has no COST#${LANES[0].telemetryAgent}#42 rows yet, so the query read the unkeyed COST#${LANES[0].telemetryAgent}`);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('a precondition skips the query and is the reason', () => {
     fakeAws(`echo '${ROW}'`);
     expect(readCostRows(LANES[0], Date.now(), { ...fullEnv, QA_AWS_REGION: '' })).toEqual({ rows: [], error: 'QA_AWS_REGION is unset' });

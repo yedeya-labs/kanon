@@ -708,8 +708,10 @@ describe('the store keys every row by repository (kanon#1346)', SPAWNS, () => {
     expect(op(OTHER, 'export', { KIND: 'audit', FROM: '20261001T000000Z' }).read('export/areas.json')).toContain('src/b.ts');
 
     // The cost rows: one repository's, under the same agent.
-    const c = JSON.parse(op(REPO, 'cost-rows', { KIND: 'implementer', FROM: '20261001T000000Z' }).read('cost-rows.json'));
-    expect(c).toEqual({ rows: [{ ts: TS, issue_number: REPO, outcome: 'ok', run_id: null }], error: null });
+    const cr = op(REPO, 'cost-rows', { KIND: 'implementer', FROM: '20261001T000000Z' });
+    expect(JSON.parse(cr.read('cost-rows.json'))).toEqual({ rows: [{ ts: TS, issue_number: REPO, outcome: 'ok', run_id: null }], error: null });
+    expect(cr.r.stdout).toContain(`cost-rows: 1 COST#implementer#${REPO} rows after 20261001T000000Z`);
+    expect(cr.r.stdout).not.toContain('::notice');
 
     // No read of either repository's lanes touched an unkeyed partition: each had rows of its own.
     const reads = calls().filter((x) => x[1] === 'query').map((x) => JSON.parse(x[x.indexOf('--expression-attribute-values') + 1]!)[':p'].S);
@@ -758,7 +760,15 @@ describe('the store keys every row by repository (kanon#1346)', SPAWNS, () => {
       expect(JSON.parse(e.read('export/reports/explorer/20261010T000000Z.json'))).toEqual({ commit: A });
       expect(e.r.stdout).toContain('::notice title=qa-store export::this repository has no COVERAGE rows of its own yet');
 
-      expect(JSON.parse(op(REPO, 'cost-rows', { KIND: 'implementer', FROM: '20261001T000000Z' }).read('cost-rows.json')).rows.map((r: J) => r.ts)).toEqual(['20261010T000000Z']);
+      const cr = op(REPO, 'cost-rows', { KIND: 'implementer', FROM: '20261001T000000Z' });
+      expect(cr.r.status, cr.r.stdout + cr.r.stderr).toBe(0);
+      expect(JSON.parse(cr.read('cost-rows.json')).rows.map((r: J) => r.ts)).toEqual(['20261010T000000Z']);
+      expect(cr.r.stdout).toContain(`::notice title=qa-store cost-rows::this repository has no COST#implementer#${REPO} rows yet, so the query read the unkeyed COST#implementer`);
+      expect(cr.r.stdout).toContain('cost-rows: 1 COST#implementer rows after 20261001T000000Z');
+      // DynamoDB refuses an empty key-condition value, and so does the fake: no query sends one.
+      for (const c of calls().filter((x) => x[1] === 'query')) {
+        expect(Object.values(JSON.parse(c[c.indexOf('--expression-attribute-values') + 1]!)).map((v: J) => v.S)).not.toContain('');
+      }
     });
 
     it('after its first row in a partition, the repository reads only its own there', () => {
@@ -774,7 +784,16 @@ describe('the store keys every row by repository (kanon#1346)', SPAWNS, () => {
       expect(JSON.parse(e.read('export/areas.json')).map((r: J) => r.area)).toEqual(['src/old.ts']);
       // An empty window is not an empty partition: no fallback when the repository has rows before it.
       expect(JSON.parse(op(REPO, 'export', { KIND: 'overseer', FROM: '20261031T000000Z' }).read('export/runs-explorer.json'))).toEqual([]);
-      expect(JSON.parse(op(REPO, 'cost-rows', { KIND: 'implementer', FROM: '20261031T000000Z' }).read('cost-rows.json')).rows).toEqual([]);
+      const cr = op(REPO, 'cost-rows', { KIND: 'implementer', FROM: '20261031T000000Z' });
+      expect(JSON.parse(cr.read('cost-rows.json'))).toEqual({ rows: [], error: null });
+      expect(cr.r.stdout).toContain(`cost-rows: 0 COST#implementer#${REPO} rows after 20261031T000000Z`);
+    });
+
+    it('the fake refuses an empty key-condition value, as DynamoDB does', () => {
+      const r = spawnSync('aws', ['dynamodb', 'query', '--table-name', 't', '--key-condition-expression', 'pk = :p AND sk > :s',
+        '--expression-attribute-values', '{":p":{"S":"COST#implementer#101"},":s":{"S":""}}'], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+      expect(r.status).toBe(254);
+      expect(r.stderr).toContain('ValidationException');
     });
 
     it('a repository whose own partition holds only the skip the gate recorded against the unkeyed baseline still reads that baseline', () => {

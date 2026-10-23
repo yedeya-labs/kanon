@@ -6,7 +6,8 @@
 //   dynamodb put-item [--condition-expression attribute_not_exists(pk)], query (the key conditions
 //   `pk = :p` and `pk = :p AND sk > :s`, last-green's filter, --no-scan-index-forward,
 //   --max-items, --projection-expression), scan; s3 cp (file → bucket, bucket → file, bucket →
-//   bucket); s3api list-objects-v2 --prefix.
+//   bucket); s3api list-objects-v2 --prefix. Like DynamoDB, it refuses a query that compares a key
+//   with an empty string, with a ValidationException.
 // Every call is appended to `<state>/calls`, one JSON array per line. No test reaches AWS.
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -36,6 +37,11 @@ if (service === 'dynamodb' && op === 'put-item') {
 } else if (service === 'dynamodb' && op === 'query') {
   const values = JSON.parse(/** @type {string} */ (opt('--expression-attribute-values')));
   const key = opt('--key-condition-expression');
+  // As DynamoDB does: a key attribute can't be an empty string, so neither can a value the key
+  // condition compares it with.
+  for (const name of String(key).match(/:[A-Za-z0-9_]+/g) ?? []) {
+    if (values[name]?.S === '') fail(`An error occurred (ValidationException) when calling the Query operation: One or more parameter values are not valid. The AttributeValue for a key attribute cannot contain an empty string value. Key: ${name}`);
+  }
   let items = table.filter((it) => it.pk.S === values[':p'].S);
   if (key === 'pk = :p AND sk > :s') items = items.filter((it) => it.sk.S > values[':s'].S);
   else if (key !== 'pk = :p') fail(`fake aws: key condition '${key}' not modelled`, 2);

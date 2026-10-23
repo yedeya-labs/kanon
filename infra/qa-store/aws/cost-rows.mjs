@@ -29,17 +29,21 @@ export const COST_PROJECTION = ['sk', 'issue_number', 'outcome', 'run_id'];
 
 /**
  * One agent's cost rows for one repository after `since` (a store stamp), and up to `to` when it
- * is given; the unkeyed rows while the repository has none of its own. Throws on any failure of a
- * query or its parse.
- * @param {{ agent: string, since: string, to?: string, table: string, region: string, repository: string }} q
- * @returns {Array<{ ts: string|null, issue_number: string|null, outcome: string|null, run_id: string|null }>}
+ * is given; the unkeyed rows while the repository has none of its own, which it logs through `log`.
+ * Returns the rows and the partition they came from. Throws on any failure of a query or its parse.
+ * @param {{ agent: string, since: string, to?: string, table: string, region: string, repository: string, log?: (line: string) => void }} q
+ * @returns {{ rows: Array<{ ts: string|null, issue_number: string|null, outcome: string|null, run_id: string|null }>, partition: string }}
  */
-export function queryCostRows({ agent, since, to = '', table, region, repository }) {
+export function readCostPartition({ agent, since, to = '', table, region, repository, log = console.log }) {
   const own = keyed(`COST#${agent}`, repository);
+  let partition = own;
   let items = costItems({ pk: own, since, table, region });
-  // An empty window is not an empty partition: read unkeyed only if the repository has no row at all.
-  if (!items.length && !costItems({ pk: own, since: '', table, region, one: true }).length) {
-    items = costItems({ pk: `COST#${agent}`, since, table, region });
+  // An empty window is not an empty partition: read unkeyed only if the repository has no row at
+  // all. The probe is `pk = :p` alone: DynamoDB refuses an empty string as a key-condition value.
+  if (!items.length && !costItems({ pk: own, table, region, one: true }).length) {
+    partition = `COST#${agent}`;
+    items = costItems({ pk: partition, since, table, region });
+    log(`::notice title=qa-store cost-rows::this repository has no ${own} rows yet, so the query read the unkeyed ${partition}, written before kanon#1346; the Owner's migration moves them under the repository's key`);
   }
   const rows = items.map((/** @type {any} */ it) => ({
     ts: it.sk?.S ?? null,
@@ -48,20 +52,29 @@ export function queryCostRows({ agent, since, to = '', table, region, repository
     run_id: it.run_id?.S ?? null,
   }));
   // The upper bound is the contract's (`query(lane, from, to)`); the sweep passes none.
-  return to ? rows.filter((/** @type {{ ts: string|null }} */ r) => r.ts !== null && r.ts <= to) : rows;
+  return { rows: to ? rows.filter((/** @type {{ ts: string|null }} */ r) => r.ts !== null && r.ts <= to) : rows, partition };
 }
 
 /**
- * One partition's cost items after `since`, projected; with `one`, at most one item.
- * @param {{ pk: string, since: string, table: string, region: string, one?: boolean }} q
+ * One agent's cost rows for one repository: `readCostPartition`'s rows. The sweep's own read calls it.
+ * @param {Parameters<typeof readCostPartition>[0]} q
+ */
+export function queryCostRows(q) {
+  return readCostPartition(q).rows;
+}
+
+/**
+ * One partition's cost items after `since`, projected; with `one`, whether it holds any item
+ * at all, by `pk = :p` alone and at most one item.
+ * @param {{ pk: string, since?: string, table: string, region: string, one?: boolean }} q
  * @returns {Array<Record<string, any>>}
  */
-function costItems({ pk, since, table, region, one = false }) {
+function costItems({ pk, since = '', table, region, one = false }) {
   const raw = execFileSync('aws', [
     'dynamodb', 'query', '--table-name', table, '--region', region,
-    '--key-condition-expression', 'pk = :p AND sk > :s',
+    '--key-condition-expression', one ? 'pk = :p' : 'pk = :p AND sk > :s',
     '--expression-attribute-values',
-    JSON.stringify({ ':p': { S: pk }, ':s': { S: since } }),
+    JSON.stringify(one ? { ':p': { S: pk } } : { ':p': { S: pk }, ':s': { S: since } }),
     // `sk` too: a row's timestamp is what pairs a run with the sweep comment that
     // dispatched it (RA-1573 review, RA-1579) — and `run_id`, which says WHO triggered it.
     //
@@ -88,12 +101,12 @@ if (isCliEntry(import.meta.url)) {
   const env = process.env;
   const out = join(env.DIR || '.', 'cost-rows.json');
   try {
-    const rows = queryCostRows({
+    const { rows, partition } = readCostPartition({
       agent: env.KIND ?? '', since: env.FROM ?? '', to: env.TO ?? '',
       table: env.QA_DYNAMO_TABLE ?? '', region: env.QA_AWS_REGION ?? '', repository: repositoryId(env),
     });
     writeFileSync(out, `${JSON.stringify({ rows, error: null })}\n`);
-    console.log(`cost-rows: ${rows.length} COST#${env.KIND} rows after ${env.FROM}`);
+    console.log(`cost-rows: ${rows.length} ${partition} rows after ${env.FROM}`);
   } catch (err) {
     writeFileSync(out, `${JSON.stringify({ rows: [], error: `the store query failed (${cause(err) || 'no stderr'})` })}\n`);
     console.log(`::warning title=qa-store cost-rows::the store query failed (${cause(err) || 'no stderr'})`);
