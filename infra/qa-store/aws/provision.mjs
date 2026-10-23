@@ -2,7 +2,7 @@
 // Provision Kanon's AWS QA store in the adopter's own account (plan 0004 §3.2, step P9;
 // `K-OBS-17`), from `template.yaml`, with nothing beyond Node, `gh` and the AWS CLI.
 //
-//   node infra/qa-store/aws/provision.mjs --repository <owner>/<repo> --region <region> \
+//   node infra/qa-store/aws/provision.mjs --repository <owner>/<repo>... --region <region> \
 //     [--subject <exact OIDC subject>]... [--profile <profile>] [--no-oidc-provider] [--dry-run]
 //
 // It checks the template first, with the same functions the unit test runs, and refuses to deploy
@@ -17,8 +17,15 @@
 // 2026-07-15 an immutable subject (`repo:<owner>@<owner id>/<repo>@<repo id>`), which a role
 // trusting `repo:<owner>/<repo>` refuses. A repository with a custom subject template is refused
 // unless `--subject` names the exact subject. `--subject` may be repeated, to trust both forms
-// while a repository migrates between them; each must still be a ref subject of the repository
-// named, for its default branch, which is read from the API even when every subject is given.
+// while a repository migrates between them; each must still be a ref subject of a repository
+// named, for that repository's default branch, which is read from the API even when every subject
+// is given.
+//
+// SEVERAL REPOSITORIES, ONE STORE (kanon#1339, the Owner's decision of 2026-10-23). `--repository`
+// may be repeated, so one store can serve several repositories, as plan 0012's E15 does for the
+// harness and its fixture. Each repository is read on its own, each subject is held to the default
+// branch of the repository it names, and each repository named must be trusted by one subject at
+// least, so a mistyped or forgotten one is refused rather than quietly left out.
 //
 // Then it deploys the stack `kanon-qa-store`, turns on the stack's termination protection, and
 // prints the outputs the adopter's store hook names. `--dry-run` reads GitHub's API and prints the
@@ -124,34 +131,75 @@ export function trustProblems(template) {
 }
 
 /**
- * The repository's default branch and the subjects the store trusts: `given` when there are any,
- * else the default branch's ref subject in the repository's own form. Both are read from GitHub's
+ * Each repository's default branch, and the subjects the store trusts: `given` when there are any,
+ * else each repository's default-branch ref subject in its own form. Both are read from GitHub's
  * API through `scripts/lib/oidc-subject.mjs`, the one reading the telemetry store's `render.mjs`
  * uses too, so the two stores can't come to trust different subjects (kanon#295). The default
- * branch is read even when every subject is given, so a `--subject` naming another branch is
+ * branches are read even when every subject is given, so a `--subject` naming another branch is
  * refused; so is a `--repository` GitHub spells differently (a rename's redirect, another case),
  * since IAM compares the subject case-sensitively.
- * @param {string} repository owner/name
+ * @param {string[]} repositories owner/name, each `--repository`
  * @param {string[]} given the `--subject` values
  * @param {(args: string[]) => string} [gh]
- * @returns {{ defaultBranch: string, subjects: string[] }}
+ * @returns {{ defaultBranches: Record<string, string>, subjects: string[] }}
  */
-export function trustedSubjects(repository, given, gh) {
-  const { defaultBranch, prefix, problem } = readRepositorySubject(repository, gh);
-  if (given.length) return { defaultBranch, subjects: given };
-  if (prefix === null) throw new Error(`${problem} (pass each with --subject)`);
-  return { defaultBranch, subjects: [`${prefix}:ref:refs/heads/${defaultBranch}`] };
+export function trustedSubjects(repositories, given, gh) {
+  /** @type {Record<string, string>} */
+  const defaultBranches = {};
+  /** @type {string[]} */
+  const subjects = [];
+  const seen = new Set();
+  for (const repository of repositories) {
+    if (seen.has(repository.toLowerCase())) throw new Error(`--repository '${repository}' is named twice`);
+    seen.add(repository.toLowerCase());
+  }
+  for (const repository of repositories) {
+    const { defaultBranch, prefix, problem } = readRepositorySubject(repository, gh);
+    defaultBranches[repository] = defaultBranch;
+    if (given.length) continue;
+    if (prefix === null) throw new Error(`${problem} (pass each with --subject)`);
+    subjects.push(`${prefix}:ref:refs/heads/${defaultBranch}`);
+  }
+  return { defaultBranches, subjects: given.length ? given : subjects };
+}
+
+/**
+ * What's wrong with subjects a store serving several repositories would trust: each must pass
+ * `subjectProblems` for one of the repositories, at that repository's own default branch, and each
+ * repository must have one subject at least. With one repository, the problems are its own.
+ * @param {string[]} subjects
+ * @param {Record<string, string>} defaultBranches owner/name to its default branch
+ * @returns {string[]}
+ */
+export function storeSubjectProblems(subjects, defaultBranches) {
+  const repositories = Object.keys(defaultBranches);
+  if (repositories.length === 0) return ['no repository to trust'];
+  if (subjects.length === 0) return ['no subject to trust'];
+  /** @type {string[]} */
+  const out = [];
+  /** @type {Set<string>} */
+  const trusted = new Set();
+  for (const s of subjects) {
+    const each = repositories.map((r) => /** @type {const} */ ([r, subjectProblems([s], r, defaultBranches[r] ?? '')]));
+    const owner = each.find(([, p]) => p.length === 0);
+    if (owner) { trusted.add(owner[0]); continue; }
+    if (repositories.length === 1) out.push(...(each[0]?.[1] ?? []));
+    else out.push(`'${s}' is a subject of none of the repositories named (${each.map(([, p]) => p.join(', ')).join('; ')})`);
+  }
+  if (out.length === 0) for (const r of repositories) if (!trusted.has(r)) out.push(`no subject of ${r}, which is named, is trusted`);
+  return out;
 }
 
 /**
  * The commands that provision the store.
- * @param {{ repository: string, subjects: string[], defaultBranch: string, region: string, profile?: string, oidcProvider?: boolean, template?: string }} o
+ * @param {{ defaultBranches: Record<string, string>, subjects: string[], region: string, profile?: string, oidcProvider?: boolean, template?: string }} o
+ *   `defaultBranches` maps each repository the store serves, owner/name, to its default branch
  * @returns {string[][]}
  */
-export function deployCommands({ repository, subjects, defaultBranch: branch, region, profile, oidcProvider = true, template = TEMPLATE_PATH }) {
-  if (!REPOSITORY.test(repository)) throw new Error(`--repository '${repository}' is not owner/name`);
+export function deployCommands({ defaultBranches, subjects, region, profile, oidcProvider = true, template = TEMPLATE_PATH }) {
+  for (const repository of Object.keys(defaultBranches)) if (!REPOSITORY.test(repository)) throw new Error(`--repository '${repository}' is not owner/name`);
   if (!REGION.test(region)) throw new Error(`--region '${region}' is not an AWS region`);
-  const problems = subjectProblems(subjects, repository, branch);
+  const problems = storeSubjectProblems(subjects, defaultBranches);
   if (problems.length) throw new Error(`refusing to trust these subjects: ${problems.join('; ')}`);
   const common = ['--region', region, ...(profile ? ['--profile', profile] : [])];
   return [
@@ -169,7 +217,7 @@ export const readTemplate = (path = TEMPLATE_PATH) => parse(readFileSync(path, '
 if (isCliEntry(import.meta.url)) {
   const { values } = parseArgs({
     options: {
-      repository: { type: 'string' },
+      repository: { type: 'string', multiple: true },
       region: { type: 'string' },
       subject: { type: 'string', multiple: true },
       profile: { type: 'string' },
@@ -178,13 +226,13 @@ if (isCliEntry(import.meta.url)) {
     },
   });
   try {
-    if (!values.repository || !values.region) throw new Error('usage: provision.mjs --repository <owner>/<repo> --region <region> [--subject <subject>]... [--profile <profile>] [--no-oidc-provider] [--dry-run]');
+    if (!values.repository?.length || !values.region) throw new Error('usage: provision.mjs --repository <owner>/<repo>... --region <region> [--subject <subject>]... [--profile <profile>] [--no-oidc-provider] [--dry-run]');
     const problems = [...lifecycleProblems(readTemplate()), ...trustProblems(readTemplate())];
     if (problems.length) throw new Error(`the template fails its checks: ${problems.join('; ')}`);
-    if (!REPOSITORY.test(values.repository)) throw new Error(`--repository '${values.repository}' is not owner/name`);
-    const { defaultBranch: branch, subjects } = trustedSubjects(values.repository, values.subject ?? []);
+    for (const r of values.repository) if (!REPOSITORY.test(r)) throw new Error(`--repository '${r}' is not owner/name`);
+    const { defaultBranches, subjects } = trustedSubjects(values.repository, values.subject ?? []);
     console.log(`trusting ${subjects.join(', ')}`);
-    const commands = deployCommands({ repository: values.repository, subjects, defaultBranch: branch, region: values.region, profile: values.profile, oidcProvider: !values['no-oidc-provider'] });
+    const commands = deployCommands({ defaultBranches, subjects, region: values.region, profile: values.profile, oidcProvider: !values['no-oidc-provider'] });
     for (const c of commands) {
       console.log(`$ ${c.join(' ')}`);
       if (!values['dry-run']) execFileSync(c[0] ?? 'aws', c.slice(1), { stdio: 'inherit' });
