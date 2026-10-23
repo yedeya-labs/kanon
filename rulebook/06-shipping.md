@@ -84,7 +84,7 @@ A `!` after the type, or a `BREAKING CHANGE` footer, marks a breaking change. `c
 
 **Enforced by.** Kanon's reusable release workflow ([`release.yml`](../docs/release.md)), called on every push to the main branch, which first runs its merge-settings guard (`K-SHIP-3`) and then release-please; and Kanon's deploy lane ([plan 0010](../docs/plans/0010-deployment-lane.md), steps D4 and D5), which a published release triggers through the deploy caller `kanon init` writes: `deploy-release.yml` gates the release and builds it once, then `deploy.yml` deploys it to each environment the adoption record declares under `## Deploy` (`K-LAYOUT-10`), in order. When to release is the project's choice, so nothing checks it; on Kanon's own record [`tests/unit/adoption-record.test.ts`](../tests/unit/adoption-record.test.ts) reads the cadence bullet's shape.
 
-**Class.** split. Releasing on every merge, and the release tool (release-please, with the changelog sections matching `K-SHIP-4`'s types), are framework. **The project supplies:** its stages, and when it releases: on every merge, on a cadence it declares, or whenever it decides.
+**Class.** split. The release tool (release-please, with the changelog sections matching `K-SHIP-4`'s types) is framework, and so is the suggestion to release on every merge. **The project supplies:** its stages, and when it releases: on every merge, on a cadence it declares, or whenever it decides.
 
 ### `K-SHIP-8` A red main never deploys, and it reaches a human
 

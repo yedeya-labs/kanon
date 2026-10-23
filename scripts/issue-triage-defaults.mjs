@@ -387,13 +387,18 @@ const MUST_BE_TRUE_HEADING = /^what must be true\b/i;
 /**
  * The text of a Markdown heading line, or null. An ATX heading (`## X`) counts, and so does a
  * line that is bold and nothing else (`**Suggested fix:**`), which reads as a heading and is how
- * a remedy slips past one. Emphasis and a trailing colon are dropped.
+ * a remedy slips past one. So does a line that opens with a bold label ending in a colon
+ * (`**Suggested fix:** add the label`, `**Fix**: retry`), the inline form of the same heading;
+ * without the colon (`**Fix** the typo`) it is a sentence, not a label. Emphasis and a trailing
+ * colon are dropped.
  * @param {string} line
  * @returns {{ text: string, atx: boolean } | null}
  */
 function headingOf(line) {
   const atx = /^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/.exec(line);
-  const bold = atx ? null : /^ {0,3}(\*\*|__)(.+?)\1[ \t]*:?[ \t]*$/.exec(line);
+  const bold = atx ? null
+    : /^ {0,3}(\*\*|__)(.+?)\1[ \t]*:?[ \t]*$/.exec(line)
+      ?? /^ {0,3}(\*\*|__)((?:(?!\1).)+?(?::\1|\1[ \t]*:))/.exec(line);
   const raw = atx ? atx[1] : bold?.[2];
   if (raw === undefined) return null;
   const text = raw.replace(/^[*_`\s]+|[*_`:\s]+$/g, '');

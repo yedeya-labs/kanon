@@ -316,7 +316,8 @@ describe('bodyProblems (K-WORK-14, kanon#1247)', () => {
   it.each([
     '## Suggested fix', '## Proposed fix', '## Fix', '## Remedy', '## Solution', '### Solution sketch',
     '## Possible approach', '## Possible approach (unverified)', '## Possible approach — unverified, not acceptance criteria',
-    '# Possible approach — UNVERIFIED, not acceptance criteria', '**Suggested fix:**', '## Fix:',
+    '# Possible approach — UNVERIFIED, not acceptance criteria', '**Suggested fix:**', '**Remedy**', '## Fix:',
+    '**Suggested fix:** Add the label.', '**Fix**: retry', '__Remedy:__ re-run it',
   ])('fails the remedy heading %j, by name', (heading) => {
     const problems = bodyProblems(`${MUST}\n${heading}\n\nAn edit.\n`);
     expect(problems).toHaveLength(1);
@@ -328,6 +329,7 @@ describe('bodyProblems (K-WORK-14, kanon#1247)', () => {
     expect(bodyProblems(`${MUST}\n\`\`\`md\n## Suggested fix\n\`\`\`\n`)).toEqual([]);
     expect(bodyProblems(`${MUST}\n~~~~\n## Fix\n~~~\n## Fix\n~~~~\n`)).toEqual([]);
     expect(bodyProblems(`${MUST}\n## Fixture layout\n## Solutions architect notes\n`)).toEqual([]);
+    expect(bodyProblems(`${MUST}\n**Fix** the typo in the README.\n**Fixture**: a temp dir.\n`)).toEqual([]);
   });
 
   it('names every problem it finds', () => {
