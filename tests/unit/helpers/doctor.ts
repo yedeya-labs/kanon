@@ -8,6 +8,7 @@ import { RESULT_MARK, resultLine } from '../../../cli/apps-check.mjs';
 import { appSecrets, appsCheckFile, callerFile, ciFile, dependabotFile, hookFile, loadRequirements } from '../../../cli/callers.mjs';
 import { doctor } from '../../../cli/doctor.mjs';
 import { registerRolesOf, rulesetBody } from '../../../cli/init.mjs';
+import { branchRules } from './branch-rules.js';
 
 /**
  * The fixtures of the `kanon doctor` tests (tests/unit/kanon-doctor*.test.ts): a committed
@@ -130,6 +131,8 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     secrets: over.secrets === undefined ? new Set(LANES.flatMap((l) => REQ.lanes[l]!.secrets)) : over.secrets,
     apps: Object.fromEntries(ids.map((id) => [`widgets-${id}`, { owner: { login: 'acme', type: 'User' }, permissions: permissionsOf(REQ, id) }])) as Record<string, { id?: number; owner: object; permissions: Record<string, string> }>,
     rulesets: [{ id: 7, ...rulesetBody(false) }] as Array<ReturnType<typeof rulesetBody> & { id: number; bypass_actors?: unknown[]; source_type?: string }>,
+    /** Ruleset ids whose GET answers 404, as for one the token can't read whole (#1262). */
+    unreadableRulesets: [] as number[],
     releases: over.releases ?? {},
     /** Kanon's brief template at each release (`rulebook/templates/brief.md`, #755); a release not here answers 404. */
     templates: over.templates ?? {},
@@ -206,7 +209,9 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     if (log) return st.appsCheck.logs[Number(log[1])] !== undefined ? ok(masked(st.appsCheck.logs[Number(log[1])]!, st.appsCheck.secrets)) : no('gh: Not Found (HTTP 404)');
     if (path === `repos/${REPO}/branches/main`) return ok('main');
     if (path.startsWith(`repos/${REPO}/rulesets?`)) return st.noRulesetsOnPlan ? no('gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)') : ok(st.rulesets.map((r) => ({ id: r.id, name: r.name, target: r.target })));
+    if (path.startsWith(`repos/${REPO}/rules/branches/`)) return ok(branchRules(st.rulesets, REPO));
     const one = /^repos\/acme\/widgets\/rulesets\/(\d+)$/.exec(path);
+    if (one && st.unreadableRulesets.includes(Number(one[1]))) return no('gh: Not Found (HTTP 404)');
     if (one) return ok(st.rulesets.find((r) => r.id === Number(one[1])));
     if (path.startsWith(`repos/${REPO}/labels?`)) return ok([[...st.labels].map((name) => ({ name }))]);
     if (path.startsWith(`repos/${REPO}/milestones?`)) return ok([[]]);

@@ -5,9 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
-import { parseAppRegister, parseOtherApps } from '../../scripts/app-register.mjs';
+import { parseAppRegister, parseOtherApps, registerFootnotes } from '../../scripts/app-register.mjs';
+import { registerRows } from '../../cli/init.mjs';
 import { appRoles, apps, buildManifest, checkoutCheck, loadApps, loadRoles, ownerPages, realDeps, remoteRepo, rotationSteps } from '../../cli/apps.mjs';
 import { readAppExtras, withExtras } from '../../scripts/lib/app-extras.mjs';
+import { branchRules } from './helpers/branch-rules.js';
 import { appsTable, grantsOf } from './helpers/roles-table.js';
 
 /**
@@ -84,8 +86,10 @@ type Scenario = {
    * for the key. `id` is the App ID or Client ID given (default the App ID, 4242); '' gives none.
    */
   reuse?: { slug: string; id?: string; keySlug?: string; keyText?: string; permissions?: Record<string, string>; notInstalled?: boolean };
+  /** Writing the App register fails, as a full disk or a read-only checkout would (#1261). */
+  registerWriteFails?: boolean;
   /** The repository's rulesets, as `gh api` answers them (#49); unset, every such read fails. */
-  rulesets?: { list: Array<{ id: number; target: string }>; full: Record<number, unknown>; putStatus?: number };
+  rulesets?: { list: Array<{ id: number; target: string; name?: string }>; full: Record<number, unknown>; putStatus?: number; unreadable?: number[] };
 };
 
 let stdout: ReturnType<typeof vi.spyOn>;
@@ -167,6 +171,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
     timeoutMs: 5000,
     sleep: () => new Promise((res) => setTimeout(res, 1)),
     writeFile: (path, text) => {
+      if (s.registerWriteFails && path.endsWith('agent-identities.md')) throw new Error(`EROFS: read-only file system, open '${path}'`);
       r.writes.push(path);
       realDeps.writeFile(path, text);
     },
@@ -180,12 +185,17 @@ const run = async (s: Scenario = {}): Promise<Run> => {
       if (args[0] === 'api' && args[1] === `users/${ORG}`) return { status: 0, stdout: JSON.stringify({ login: ORG, type: s.kind ?? 'Organization' }), stderr: '' };
       // Kanon's Apps are private, and GitHub answers 404 to a person's token for a private App (#623).
       if (args[0] === 'api' && args[1] === `apps/${s.reuse?.slug}`) return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
+      // The rules that apply to the default branch (#1262), as `gh api --paginate --slurp` reads them.
+      if (args[0] === 'api' && args[1] === '--paginate' && String(args[3]).startsWith(`repos/${ORG}/${REPO}/rules/branches/`)) {
+        return s.rulesets ? { status: 0, stdout: JSON.stringify(branchRules(Object.values(s.rulesets.full), `${ORG}/${REPO}`)), stderr: '' } : { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
+      }
       if (args[0] === 'api' && String(args[1] ?? '').startsWith(`repos/${ORG}/${REPO}`)) {
         const rs = s.rulesets;
         if (!rs) return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
         if (args[1] === `repos/${ORG}/${REPO}`) return { status: 0, stdout: JSON.stringify({ default_branch: 'main' }), stderr: '' };
         if (String(args[1]).startsWith(`repos/${ORG}/${REPO}/rulesets?`)) return { status: 0, stdout: JSON.stringify(rs.list), stderr: '' };
         const id = Number(String(args[1]).split('/').pop());
+        if (rs.unreadable?.includes(id)) return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
         if (args.length === 2) return { status: 0, stdout: JSON.stringify(rs.full[id]), stderr: '' };
       }
       if (args[0] === 'api' && args[1] === '-X' && args[2] === 'PUT') {
@@ -370,6 +380,38 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     expect(bad.output).toContain('docs/qa/adoption.md:5 is not');
     expect(bad.writes).toEqual([]);
     rmSync(bad.dir, { recursive: true, force: true });
+  });
+
+  // #1261: a permission the register has no column for is held in its Other cell, named in words,
+  // and every reader of the register reads the row back as the App's.
+  it('writes an extra permission with no register column of its own in Other, where lane-check, apps-check and doctor read it', async () => {
+    const adoption = '# Adoption record\n\n## Choices\n\n- **Extra App permission:** `judge` `deployments: write` (the deploy lane creates deployments)\n';
+    const r = await run({ adoption });
+    expect(r.status, r.output).toBe(0);
+    expect((r.manifest as { default_permissions: Record<string, string> }).default_permissions.deployments).toBe('write');
+    const text = readFileSync(join(r.dir, 'docs/qa/agent-identities.md'), 'utf8');
+    expect(text).toMatch(/^\| Reviewer \| `acme-judge` \|.*\| [^|]*Deployments: Read & write[^|]* \|$/m);
+    // lane-check's and apps-check's reader (the awk program), and doctor's, find the slug on the row.
+    expect(parseSlug(r.dir, 'Reviewer').stdout.trim()).toBe(`${ORG}-judge`);
+    expect(registerRows(text).get('Merger')).toBe(`${ORG}-judge`);
+    // lane-check reads the Other entry back as `deployments`: declared, it is the App's grant; not
+    // declared, it is broader than the grant.
+    const { extras } = readAppExtras(adoption, Object.keys(loadApps()));
+    expect(registerFootnotes(text, extras)).toEqual([]);
+    expect(registerFootnotes(text).join('\n')).toMatch(/the Reviewer row's Deployments: Read & write is broader than the Judge App's grant/);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('refuses a register it could not write before any App exists: no page, no secret (#1261)', async () => {
+    const one = '| Role | App slug |\n|---|---|\n| Lead | `acme-lead` |\n';
+    const r = await run({ register: `# Agent identities\n\n${one}\n${one}` });
+    expect(r.status).toBe(1);
+    expect(r.output).toContain('more than one table headed | Role | App slug |; fix it by hand first. No App was created.');
+    expect(r.opened).toEqual([]);
+    expect(r.manifest).toBeNull();
+    expect(r.gh.filter((c) => c.args[0] === 'secret')).toEqual([]);
+    expect(r.writes).toEqual([]);
+    rmSync(r.dir, { recursive: true, force: true });
   });
 
   it('the private key never reaches disk, stdout, stderr or an argument', async () => {
@@ -636,6 +678,16 @@ describe('one App per owner, reused across its repositories (plan 0005 §3.2)', 
     expect(() => statSync(join(r.dir, 'judge.pem'))).toThrow();
     expect(parseSlug(r.dir, 'Merger').stdout.trim()).toBe(`${ORG}-judge`);
     expect(r.output).not.toContain(KEY_BODY);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('--reuse keeps the key file when the register write fails after the secrets are stored (#1261)', async () => {
+    const r = await run({ reuse: { slug: `${ORG}-judge` }, registerWriteFails: true });
+    expect(r.status).toBe(1);
+    expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT').map((c) => c.args[2])).toEqual(['JUDGE_APP_ID', 'JUDGE_APP_PRIVATE_KEY']);
+    expect(r.removed).toEqual([]);
+    expect(readFileSync(join(r.dir, 'judge.pem'), 'utf8')).toBe(PEM);
+    expect(r.output).toContain(`The secrets are stored; the file ${join(r.dir, 'judge.pem')} is kept`);
     rmSync(r.dir, { recursive: true, force: true });
   });
 
@@ -1225,6 +1277,16 @@ describe('the Releaser\'s ruleset bypass (#49, K-MERGE-8)', () => {
     const unread = await releaser(undefined);
     expect(unread.status).toBe(0);
     expect(unread.output).toMatch(/could not read acme\/widgets .*add the App acme-releaser to the default branch's ruleset's bypass list/);
+  });
+
+  // #1262: a ruleset GitHub applies to the default branch whose GET fails was dropped, and the
+  // Owner's step with it.
+  it('counts a ruleset that applies but could not be read as a step left, with its page', async () => {
+    const org = { ...ruleset([RELEASER]), id: 11, name: 'org-main', source_type: 'Organization', source: ORG };
+    const r = await releaser({ list: [{ id: 9, target: 'branch' }, { id: 11, target: 'branch', name: 'org-main' }], full: { 9: ruleset([RELEASER]), 11: org }, unreadable: [11] });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain(`could not read the ruleset "org-main" on main (gh: Not Found (HTTP 404)). If its bypass list doesn't name the App ${ORG}-releaser, add it there, "For pull requests only": https://github.com/organizations/${ORG}/settings/rules/11`);
+    expect(r.output).toContain('Done, with 1 warning(s)');
   });
 
   it('says what to do when no ruleset covers the default branch yet', async () => {

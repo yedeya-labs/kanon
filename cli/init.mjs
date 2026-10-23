@@ -78,7 +78,7 @@ import {
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { whoami } from './gh-token.mjs';
 import { pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
-import { coveringRulesets } from './ruleset-bypass.mjs';
+import { coveringRulesets, rulesetUrl } from './ruleset-bypass.mjs';
 import { BUCKETS, milestones as runMilestones } from './milestones.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL, sends } from '../scripts/lib/upstream-findings.mjs';
@@ -842,9 +842,10 @@ export const inspect = async (deps, repo) => {
     }
   }
 
-  // The rulesets that cover the default branch, read whole: the list carries no rules. Only an
-  // `active` one enforces anything; a `disabled` or `evaluate` one is kept apart and reported.
-  const { covering, inactive } = await coveringRulesets(deps.gh, repo, rulesetList, defaultBranch);
+  // The rulesets that cover the default branch, as GitHub says (#1262), read whole: the list
+  // carries no rules. Only an `active` one enforces anything; a `disabled` or `evaluate` one is
+  // kept apart and reported, and so is one that applies but couldn't be read.
+  const { covering, inactive, unreadable } = await coveringRulesets(deps.gh, repo, rulesetList, defaultBranch);
 
   const labels = await ghJson(deps, ['api', '--paginate', '--slurp', `repos/${repo}/labels?per_page=100`]);
   if (!labels.ok) throw new Error(`could not list the labels of ${repo} (${why(labels.r)})`);
@@ -866,6 +867,7 @@ export const inspect = async (deps, repo) => {
     mergeQueue,
     covering,
     inactive,
+    unreadable,
     // GitHub leaves the merge settings out of its answer to a token that can't read the
     // repository's administration settings, such as a fine-grained token without
     // Administration: read, whatever the person's own role: then they are not known, which is
@@ -2590,6 +2592,7 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
   const ruleset =
     s.rulesets === 'no' ? ['none: the plan has no rulesets, so nothing on GitHub enforces review', 'the plan']
     : s.covering.length ? [`keep ${s.covering.map((c) => c.name).join(', ')}; Lane check once a job on ${s.defaultBranch} reports it`, 'rulesets cover the default branch']
+    : s.unreadable.length ? [`none created: ${s.unreadable.map((u) => u.name).join(', ')} could not be read, and may cover ${s.defaultBranch}`, 'a ruleset could not be read']
     : !s.hasCommits ? [`none yet: after the first commit to ${s.defaultBranch}`, 'the default branch has no commit']
     : s.admin ? [`create on ${s.defaultBranch}; Lane check once a job there reports it`, 'the token administers it']
     : [`a step for you: the token can't administer ${repo}`, "the token can't administer it"];
@@ -2886,6 +2889,7 @@ const run = async (deps, opts, req, rep) => {
     defaultBranchMergeQueue: mergesThroughQueue(s),
     defaultBranchRulesets: s.covering.map((c) => String(c.name)),
     inactiveRulesets: s.inactive.map((c) => ({ name: String(c.name), enforcement: String(c.enforcement) })),
+    unreadableRulesets: s.unreadable.map((u) => ({ id: u.id, name: u.name, why: u.why })),
     labels: [...s.labels].sort(),
     milestones: [...s.milestones].sort(),
     secrets: s.secrets ? [...s.secrets].sort() : null,
@@ -3407,7 +3411,12 @@ const run = async (deps, opts, req, rep) => {
   const requiring = reported ? `, requiring "${LANE_CHECK}"` : '';
   const rulesetCmd = [`gh api -X POST repos/${repo}/rulesets --input - <<'JSON'`, JSON.stringify(body), 'JSON'];
   if (s.inactive.length && s.rulesets !== 'no') {
-    note(`Not counted: the ruleset(s) ${s.inactive.map((c) => `"${c.name}" (${c.enforcement})`).join(', ')} on ${s.defaultBranch}, which enforce nothing.`);
+    note(`Not counted: the branch ruleset(s) ${s.inactive.map((c) => `"${c.name}" (${c.enforcement})`).join(', ')}, which enforce nothing.`);
+  }
+  const unreadable = s.rulesets === 'no' ? [] : s.unreadable;
+  const unread = unreadable.map((u) => `"${u.name}" (${u.why})`).join(', ');
+  if (unreadable.length && s.covering.length) {
+    note(`Not checked: the ruleset(s) ${unread} on ${s.defaultBranch}, which could not be read; init checked the rules of ${s.covering.map((c) => c.name).join(', ')} alone.`);
   }
   if (s.rulesets === 'no') {
     out('');
@@ -3434,6 +3443,20 @@ const run = async (deps, opts, req, rep) => {
         url: rulesPage,
       });
     }
+  } else if (unreadable.length) {
+    // A ruleset that may protect the default branch, unread (#1262): a second one is never
+    // created beside it.
+    const prose = `Init created no ruleset on ${s.defaultBranch}: the ruleset(s) ${unread} could not be read, and may already cover it. Check them, with a token that can read them or on their pages, then run kanon init again.`;
+    step({
+      id: 'ruleset.unreadable',
+      category: 'ruleset',
+      subject: s.defaultBranch,
+      prose,
+      message: `The ruleset(s) ${unread} on ${s.defaultBranch} could not be read, so init can't tell whether ${s.defaultBranch} is protected, and created no ruleset beside them (K-ADOPT-1 step 8).`,
+      text: prose,
+      commands: [],
+      url: rulesetUrl(repo, unreadable[0]),
+    });
   } else if (!s.hasCommits) {
     const prose = `Push the first commit straight to ${s.defaultBranch} (K-ADOPT-4), then run kanon init again: it creates the ruleset, which then requires a pull request.`;
     step({ id: 'ruleset.first-commit', category: 'ruleset', subject: s.defaultBranch, prose, message: `${s.defaultBranch} has no commit yet, so init created no ruleset (K-ADOPT-4).`, text: prose, commands: [] });
