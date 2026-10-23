@@ -76,6 +76,8 @@ describe('L4: the Merger\'s green zone is the Author App, marked `implementer`, 
     const carry = carryDecision({
       startHead: START, head: HEAD, slug: AUTHOR, email: EMAIL, startStatuses: [{ context: IMPLEMENTER_STATUS, state: 'success', creator: { login: `${AUTHOR}[bot]` } }],
       compare: { status: 'ahead', commits: [{ sha: HEAD, parents: [{ sha: START }], commit: { author: { email: 'a.person@example.com' } } }] },
+      // Bound to the run (#1263) as if its agent's job held `HEAD`: the chain still refuses it.
+      heads: [{ ref: 'HEAD', sha: HEAD }], base: START, fixSha: '',
     });
     expect(carry).toHaveProperty('none');
     expect(String((carry as { none: string }).none)).toContain('a person\'s push ends the chain');
@@ -126,6 +128,7 @@ describe('L4: implement-revise and the rebase lane refuse a forged PR, so neithe
     const carry = carryDecision({
       startHead: START, head: HEAD, slug: AUTHOR, email: EMAIL, startStatuses: [],
       compare: { status: 'ahead', commits: [{ sha: HEAD, parents: [{ sha: START }], commit: { author: { email: EMAIL } } }] },
+      heads: [{ ref: 'HEAD', sha: HEAD }], base: START, fixSha: '',
     });
     expect(String((carry as { none: string }).none)).toContain('the chain has no start');
     expect(verdict(authorPr({ headStatuses: [] })).rule).toBe('not-the-implementer');

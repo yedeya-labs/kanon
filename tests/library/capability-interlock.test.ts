@@ -87,6 +87,26 @@ describe('the count, on the repository the lane runs in', () => {
     expect(unlinkedQuery('acme/widgets')).toBe('repo:acme/widgets is:issue is:open label:capability -linked:pr');
   });
 
+  it('reads a zero again before it counts, since search can answer 0 for a query with matches (kanon#1322)', () => {
+    const unlinked = [0, 5, 5];
+    const linked = [0, 1, 1];
+    const gh = (args: string[]) => {
+      if (args[1] === '-X') return JSON.stringify({ total_count: unlinked.shift(), incomplete_results: false });
+      const n = linked.shift();
+      return JSON.stringify({ data: { search: { issueCount: n, nodes: n ? [
+        { number: 9, closedByPullRequestsReferences: { pageInfo: { hasNextPage: false }, nodes: [{ number: 10, state: 'CLOSED' }] } },
+      ] : [] } } });
+    };
+    expect(countInterlock('acme/widgets', gh, { sleep: () => {} })).toMatchObject({ count: 6, abandoned: [9] });
+    expect([unlinked.length, linked.length]).toEqual([0, 0]);
+  });
+
+  it('throws, so the interlock reads closed, when the reads disagree', () => {
+    const unlinked = [0, 3, 7];
+    const gh = () => JSON.stringify({ total_count: unlinked.shift(), incomplete_results: false });
+    expect(() => countInterlock('acme/widgets', gh, { sleep: () => {} })).toThrow(/counts disagree/);
+  });
+
   it('refuses a repository that is not owner/name, rather than counting somebody else\'s', () => {
     expect(() => countInterlock('', () => '{}')).toThrow(/not an owner\/name repository/);
     expect(() => countInterlock('acme', () => '{}')).toThrow(/not an owner\/name repository/);

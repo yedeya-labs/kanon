@@ -52,6 +52,16 @@ on:
         required: false
       anthropic-api-key:
         required: false
+    outputs:
+      # WHAT THE IMPLEMENTER STATUS'S `carry` BINDS TO (#1263), as ONE JSON value
+      # `{ pr, base, heads }`: the pull request, its head as this job fetched it before the
+      # agent, and the branch heads the job held after, as the JSON array text the spine's
+      # `heads` output is. One value, because the lane calls this once per matrix entry and
+      # keeps only one entry's outputs; the status job uses it only when its `pr` is the
+      # entry's own. The `resolve` job's `checked` output below says where it is built, and why.
+      checked:
+        description: "`{ pr, base, heads }` as JSON, `heads` a JSON array as text, or empty."
+        value: ${{ jobs.resolve.outputs.checked }}
 
 jobs:
   resolve:
@@ -59,6 +69,14 @@ jobs:
     timeout-minutes: 90
     env:
       PR_NUMBER: ${{ inputs.pr }}
+    outputs:
+      # Built HERE, from `inputs.pr` and `steps.base.outputs.base`, a step output written
+      # before the agent, never from a step after it (#1357): code the agent runs can rewrite
+      # `$GITHUB_PATH` and `BASH_ENV`, so a later step's `jq` or `sed` can print anything, but
+      # no step can rewrite an earlier step's output. `toJSON` quotes each value, `heads`
+      # included, so the post-agent heads text can add no key beside `pr` and `base`. Empty
+      # when either record is, which carries nothing.
+      checked: ${{ steps.base.outputs.base && steps.heads.outputs.heads && format('{{"pr":{0},"base":{1},"heads":{2}}}', toJSON(inputs.pr), toJSON(steps.base.outputs.base), toJSON(steps.heads.outputs.heads)) || '' }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
       # it is as close to the job's start as a step can be.
@@ -102,6 +120,22 @@ jobs:
           # branch comes with it, so this is a named exception to `K-AGENT-48`: `ineligible`
           # refuses a fork's head before this job starts, and only the agent runs the tree.
           fetch-depth: 0
+
+      # THE PULL REQUEST'S HEAD AS THIS JOB FETCHED IT, BEFORE THE AGENT (#1263): the checkout
+      # above brought every branch in as `refs/remotes/origin/*`, and the agent merges into this
+      # one. The implementer status's `carry` moves only when it is the head the lane's filter
+      # read, so nothing landed in between. A fixed step before the agent, so the agent cannot
+      # write it; `continue-on-error`, and a failed read leaves it empty, which carries nothing.
+      - name: Record the pull request's head as this job fetched it
+        id: base
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REF="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName --jq .headRefName)"
+          echo "base=$(git -c core.fsmonitor=false rev-parse --verify -q "refs/remotes/origin/$REF^{commit}")" >> "$GITHUB_OUTPUT"
 
       # THIS LANE CALLS THE AGENT-LANE BLOCKS DIRECTLY (RA-2659), not the reusable spine,
       # because "Record the attempt" below must run INSIDE this matrix job, between the
@@ -295,6 +329,22 @@ jobs:
           else
             echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
           fi
+
+      # THE BRANCH HEADS THE AGENT LEFT (#1263), the spine's step of the same name (#324), which
+      # says why local branches only and what the agent could rewrite. It writes the heads
+      # alone: the job's `checked` output pairs them with the pull request and the head
+      # recorded before the agent, which this step, running after the agent, never handles.
+      - name: Record the branch heads the agent left
+        id: heads
+        if: always() && steps.agent.outcome != 'skipped'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          {
+            git -c core.fsmonitor=false for-each-ref --count=100 --format='%(objectname) %(refname:strip=2)' refs/heads
+            if sha="$(git -c core.fsmonitor=false rev-parse --verify -q HEAD)"; then echo "$sha HEAD"; fi
+          } | jq -Rsc 'split("\n") | map(select(length > 0) | capture("^(?<sha>[0-9a-f]{40}) (?<ref>.+)$"))' \
+            | sed 's/^/heads=/' >> "$GITHUB_OUTPUT"
 
       # Explain a red run (`classify-agent-result.mjs --arm 'rebase lane'`) and record what
       # it cost. `always()` and `continue-on-error` for the reasons in the block's header;

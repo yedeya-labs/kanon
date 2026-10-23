@@ -92,7 +92,7 @@ import { THRESHOLD, countInterlock } from './capability-interlock.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { buildRows, levelOf, notWritten, readUpstream, renderSent, sendFromEnv, sentSentence } from './lib/finding-rows.mjs';
 import { beforeApply } from './lib/labels.mjs';
-import { plan } from './issue-triage-defaults.mjs';
+import { bodyProblems, plan } from './issue-triage-defaults.mjs';
 import { appPersona } from './app-register.mjs';
 import { signed } from './lib/role-marker.mjs';
 
@@ -240,6 +240,10 @@ export function route(findings, interlock, upstream = 'drafted') {
     // The capability anchor searches `audit-summary in:title`, so a filed issue titled so, with
     // a quoted `Watermark:` in its body, could become the anchor. It is never filed.
     if (/audit-summary/i.test(finding.title)) { held.push({ finding, why: 'its title holds `audit-summary`, which the capability anchor searches for' }); continue; }
+    // The body's form, as the filing skill's plan command checks an agent's (`K-WORK-14`,
+    // kanon#1247): the agent has finished by now, so a finding that breaks it is held, by name.
+    const form = bodyProblems(finding.body);
+    if (form.length) { held.push({ finding, why: `its body breaks K-WORK-14: ${form.join('; ')}` }); continue; }
     if (!finding.capability) { file.push(finding); continue; }
     if (interlock === null) held.push({ finding, why: 'the capability interlock could not be counted, so it is closed' });
     else if (interlock > THRESHOLD) held.push({ finding, why: `the capability interlock is closed (${interlock} open, more than ${THRESHOLD})` });
@@ -469,8 +473,11 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
   let prior;
   let audit;
   try {
+    // A listing by label, not a search (kanon#1322): search can answer nothing for a query that
+    // has matches, which would number this audit #1 and supersede no open one. The titles are
+    // matched by `AUDIT_NUMBER` below, so the label alone narrows the listing.
     prior = JSON.parse(gh(['issue', 'list', '--repo', repo, '--label', 'agent:overseer', '--state', 'all', '--limit', '200',
-      '--search', 'in:title "audit-summary"', '--json', 'number,title,state']));
+      '--json', 'number,title,state']));
     const n = nextAuditNumber(prior.map((p) => p.title));
     const body = renderAudit({ audit: report.audit, filed, held, upstream, choice, ...(level ? { level, sent } : {}) });
     audit = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', auditTitle(n), '--body-file', '-', ...routing(LABELS)], signed(body, 'Overseer', appPersona('Overseer'))));

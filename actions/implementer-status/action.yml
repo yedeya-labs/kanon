@@ -21,7 +21,7 @@ name: Implementer status
 description: >-
   Set the `kanon/role: implementer` commit status on the pull request this run opened, at a
   head its agent's job pushed (mode `open`), or carry it to a pull request's new head when the head the run started from had it
-  (mode `carry`). Never fails the caller.
+  and the run pushed the new head on it (mode `carry`). Never fails the caller.
 
 inputs:
   mode:
@@ -43,9 +43,20 @@ inputs:
     default: ""
   heads:
     description: >-
-      `open`: a JSON array of `{ ref, sha }`, the branch heads the agent's job held when the
-      agent finished (the lane spine's `heads` output). Only a pull request at one of these
-      heads is this run's (#324).
+      `open` and `carry`: a JSON array of `{ ref, sha }`, the branch heads the agent's job held
+      when the agent finished (the lane spine's `heads` output). Only a pull request at one of
+      these heads is this run's (#324), and only such a head takes a carried status (#1263).
+    required: false
+    default: ""
+  base:
+    description: >-
+      `carry`: the branch's head as the agent's job checked it out, before the agent ran (the
+      lane spine's `base` output), or the head the revise lane's fix commit was made on. It must
+      be `start-head`, or nothing carries (#1263).
+    required: false
+    default: ""
+  fix-sha:
+    description: "`carry`: the commit the revise lane's no-model fix pushed (`fix-push`'s `sha`), or empty."
     required: false
     default: ""
   pr:
@@ -89,6 +100,8 @@ runs:
         SINCE: ${{ inputs.since }}
         BRANCHES_BEFORE: ${{ inputs.branches-before }}
         HEADS: ${{ inputs.heads }}
+        BASE: ${{ inputs.base }}
+        FIX_SHA: ${{ inputs.fix-sha }}
         PR: ${{ inputs.pr }}
         START_HEAD: ${{ inputs.start-head }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

@@ -219,7 +219,7 @@ Every label the pipeline applies must be in this table. The table is the authori
 
 **Why.** A plausible remedy written in an issue gets built as written. In the reference adopter a suggested fix became a regression that passed two green reviews, because both the implementer and the reviewer treated the suggestion as the specification.
 
-**Enforced by.** Prose only.
+**Enforced by.** The filing skill's `plan` command, in [`scripts/issue-triage-defaults.mjs`](../scripts/issue-triage-defaults.mjs), takes the body file as a required `--body` and refuses, by name, a body with no "What must be true" heading, and one with a remedy heading (`Suggested fix`, `Proposed fix`, `Fix`, `Remedy`, `Solution`, or `Possible approach` in any other form) that isn't exactly the fixed one. The Overseer's filer holds a finding whose body fails the same check, and the telemetry Explorer's filer refuses one. `tests/unit/issue-triage-defaults.test.ts` fails when the check stops catching either. The issue backstop doesn't check it: it reads no issue's text (`K-AGENT-45`). Whether the remedy and the constraint are really separated, and an issue a person files, are prose only.
 
 **Class.** framework
 

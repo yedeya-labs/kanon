@@ -87,6 +87,7 @@ Code Kanon's own workflows run from this tree, on the branch they run on, with a
 - `^scripts/promote\.mjs$` `pipeline` `always` — the promotion `promote.yml` runs, which decides whether a candidate becomes the stable release adopters' Dependabot proposes, and tags it with the Releaser's token (plan 0009 S5)
 - `^scripts/metrics/(areas|detectors)\.mjs$` `pipeline` `always` — imported by the promotion: the revert detector and the `Introduced by` reader its gates read, and the code areas the detectors import
 - `^scripts/lib/reverts\.mjs$` `pipeline` `always` — imported by the promotion, through the detectors: what a revert says it reverts; the Lead's reconciler reads it too
+- `^scripts/lib/search\.mjs$` `pipeline` `always` — imported by the promotion and the metrics page's health figures: when a GitHub search's answer is trusted, which decides whether the soak finds the pin pull request (kanon#1322)
 
 The published metrics page:
 

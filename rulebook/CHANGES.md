@@ -56,6 +56,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** The taxonomy gained `lead:file-only`, which a person puts on a project's tracking issue so that the Lead files and reconciles the project's issues but dispatches none of them; `needs:human` keeps its meaning as the escalation that stops the whole tick. [#1113](https://github.com/yedeya-labs/kanon/issues/1113)
 - **2026-10-21.** Deleting GitHub's defaults is no longer prose only: `kanon init` already deleted them with the person's consent, and `kanon doctor` now reports each one a repository still has, without blocking. Kanon itself still had all seven. [#1246](https://github.com/yedeya-labs/kanon/issues/1246)
 
+## `K-WORK-14`
+
+- **2026-10-23.** No longer prose only: the filing skill's `plan` takes the issue body as a required `--body` file and refuses one with no "What must be true" heading or with a remedy under any heading but the fixed one, and the Overseer's and the telemetry Explorer's filers hold their agents' findings to the same check. Twenty-two issues carried a remedy heading of their own, and 17 of 324 reviewer follow-ups had no statement of what must be true. The Owner decided to build it. [#1247](https://github.com/yedeya-labs/kanon/issues/1247)
+
 ## `K-WORK-23`
 
 - **2026-10-21.** No longer prose only for the tracking issue: the brief guard reads issue `<n>` for each `docs/projects/<n>.md` and fails when it lacks a kind label, isn't on the bucket that matches it, or carries `project:<n>`. Kanon's one brief's tracking issue had no kind label. [#1245](https://github.com/yedeya-labs/kanon/issues/1245)
@@ -156,6 +160,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-12.** The Owner decided that a project whose releases other repositories pin may declare a release cadence, and that a project which declares none releases on every merge. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
 - **2026-10-14.** Release tags drive the deploy through the stages the project declares, not to a pre-production stage alone, and that deploy is Kanon's deploy lane: a published release runs `deploy-release.yml`, then `deploy.yml` for each environment the adoption record declares, in order. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+- **2026-10-23.** The Owner decided that Kanon doesn't dictate an adopter's release cadence: it suggests one, releasing on every merge, or on a cadence such as weekly when other repositories pin the releases, and the adopter chooses to release on every merge, on a declared cadence, or whenever it decides. A declared `Release cadence` bullet is a statement of intent, not an obligation, and an off-cadence release needs no stated reason, so the proposal that an off-cadence release pull request state its reason was closed as not planned. [#1251](https://github.com/yedeya-labs/kanon/issues/1251)
 
 ## `K-SHIP-8`
 

@@ -144,6 +144,35 @@ describe('kanon doctor, the guard K-ADOPT-6 promises: an ended bootstrap needs t
     expect(has(r, 'ruleset.approval-off')[0].message).toContain('no active ruleset covers main, so nothing requires an approving review.');
   });
 
+  // #1262: an organisation ruleset that couldn't be read may be the one that requires the
+  // approval, so the finding says so, and its fix points at that ruleset, not at kanon init.
+  const unreadOrg = { id: 8, name: 'org-main', target: 'branch', enforcement: 'active', source_type: 'Organization', source: 'acme', conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } }, rules: [{ type: 'deletion' }] };
+
+  it('names a ruleset it could not read beside the readable one that requires no approving review', async () => {
+    const files = healthyFiles();
+    files['docs/qa/adoption.md'] = record('ended 2026-10-02');
+    const g = github(0, false);
+    g.st.rulesets = [...g.st.rulesets, unreadOrg] as typeof g.st.rulesets;
+    g.st.unreadableRulesets = [8];
+    const r = await run(checkout(files), g, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.unreadable main', 'ruleset.approval-off main']);
+    expect(has(r, 'ruleset.approval-off')[0].message).toContain('the ruleset on main (Kanon: default branch) requires no approving review ("org-main" could not be read, and may require one; ruleset.unreadable).');
+  });
+
+  it('points the fix at the ruleset it could not read when no readable one covers the default branch', async () => {
+    const files = healthyFiles();
+    files['docs/qa/adoption.md'] = record('ended 2026-10-02');
+    const g = github(0, false);
+    g.st.rulesets = [unreadOrg] as typeof g.st.rulesets;
+    g.st.unreadableRulesets = [8];
+    const r = await run(checkout(files), g, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.unreadable main', 'ruleset.approval-off main']);
+    const [f] = has(r, 'ruleset.approval-off');
+    expect(f.fix.url).toBe('https://github.com/organizations/acme/settings/rules/8');
+    expect(f.fix.text).toContain('in the ruleset "org-main", on its page.');
+    expect(f.fix.text).not.toContain('kanon init');
+  });
+
   it('fails an ended bootstrap on a private repository whose plan has no rulesets', async () => {
     const files = healthyFiles();
     files['docs/qa/adoption.md'] = record('ended 2026-10-02');

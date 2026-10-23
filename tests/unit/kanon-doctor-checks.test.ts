@@ -957,3 +957,16 @@ describe('kanon doctor on the fixed caller names and job ids (#743)', () => {
     }
   });
 });
+
+// #1262: a ruleset GitHub says applies to the default branch, which the token couldn't read whole,
+// was dropped without a word, and doctor then said no ruleset covered the branch.
+describe('kanon doctor and a ruleset it could not read (#1262)', () => {
+  it("raises ruleset.unreadable with the ruleset's page, and not ruleset.missing", async () => {
+    const dir = checkout(healthyFiles());
+    const github = fakeGitHub();
+    github.st.unreadableRulesets = [7];
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.unreadable main']);
+    expect(r.json.findings[0].fix.url).toBe(`https://github.com/${REPO}/settings/rules/7`);
+  });
+});

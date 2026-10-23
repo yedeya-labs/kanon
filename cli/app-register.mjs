@@ -17,6 +17,19 @@ export const PERMISSION_COLUMNS = /** @type {const} */ ([
   ['metadata', 'Metadata'],
 ]);
 
+/**
+ * A permission's name in the register: its column's name, or, for a permission with no column
+ * (one a repository declares as an extra, `K-AGENT-3`), its key in words, `deployments` →
+ * `Deployments`, `repository_hooks` → `Repository hooks`. Such a permission goes in `Other`.
+ * @param {string} key
+ */
+export const permissionName = (key) => {
+  const column = PERMISSION_COLUMNS.find(([k]) => k === key);
+  if (column) return column[1];
+  const words = key.replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
 /** The columns a new register gets: the five K-LAYOUT-6 names, then one for anything else. */
 const NEW_HEADER = ['Role', 'App slug', 'Contents', 'Issues', 'Pull requests', 'Workflows', 'Actions', 'Other'];
 
@@ -71,17 +84,13 @@ const findTable = (lines) => {
  */
 export const writeRegisterRow = (text, { role, slug, permissions }) => {
   const known = new Map(/** @type {Array<[string, string]>} */ (PERMISSION_COLUMNS.map(([k, n]) => [n, k])));
-  const nameOf = new Map(/** @type {Array<[string, string]>} */ (PERMISSION_COLUMNS.map(([k, n]) => [k, n])));
-  for (const key of Object.keys(permissions)) {
-    if (!nameOf.has(key)) throw new Error(`no register column is known for the permission "${key}"`);
-  }
 
   /** @param {string[]} header @param {string[] | undefined} old */
   const build = (header, old) => {
     const inColumns = new Set(header.map((h) => known.get(h)).filter(Boolean));
     const other = Object.entries(permissions)
       .filter(([k]) => k !== 'metadata' && !inColumns.has(k))
-      .map(([k, v]) => `${nameOf.get(k)}: ${label(v)}`);
+      .map(([k, v]) => `${permissionName(k)}: ${label(v)}`);
     return header.map((h, i) => {
       if (h === 'Role') return role;
       if (h === 'App slug') return `\`${slug}\``;
@@ -116,7 +125,8 @@ export const writeRegisterRow = (text, { role, slug, permissions }) => {
   // A permission the role holds with no column of its own goes in `Other`. A register
   // without that column gains one, and the rows already there say `not recorded` rather
   // than claim the App holds nothing else.
-  const needsOther = Object.keys(permissions).some((k) => k !== 'metadata' && !header.includes(nameOf.get(k) ?? ''));
+  const inHeader = new Set(header.map((h) => known.get(h)).filter(Boolean));
+  const needsOther = Object.keys(permissions).some((k) => k !== 'metadata' && !inHeader.has(k));
   if (needsOther && !header.includes('Other')) {
     for (let i = table.header; i < table.end; i++) {
       const before = lines[i] ?? '';

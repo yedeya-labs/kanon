@@ -7,6 +7,9 @@ export default defineConfig({
     // Then puts a trap `gh` and `aws` first on PATH and drops their tokens, so a case that
     // forgets a stub fails at once and offline (#524, tests/unit/helpers/offline.ts).
     globalSetup: ['tests/unit/helpers/stub-bin.ts', 'tests/unit/helpers/offline.ts'],
+    // A search that answers nothing is read again after a wait (scripts/lib/search.mjs, #1322);
+    // a case's fake search answers at once, so it doesn't wait. The module's own tests pass a wait.
+    env: { KANON_SEARCH_WAIT_MS: '0' },
     // No `maxWorkers` or `pool` here, on purpose (#436): the suite is bound by the processes its
     // cases start, so fewer workers on a loaded machine don't shrink the work, they only stretch
     // it. Capped at 8 of 16 cores, a run alone took 54 s instead of 39 s, and two runs at once
@@ -27,7 +30,7 @@ export default defineConfig({
           name: 'library',
           include: ['tests/library/**/*.test.ts'],
           setupFiles: ['tests/library/helpers/in-adopter.ts'],
-          env: { TZ: 'UTC' },
+          env: { TZ: 'UTC', KANON_SEARCH_WAIT_MS: '0' },
         },
       },
     ],

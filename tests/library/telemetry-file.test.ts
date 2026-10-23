@@ -40,7 +40,7 @@ const ownRef = { source: 'own', label: 'kanon', lane: 'review', model: 'claude-o
 const crossRef = { source: 'cross_adopter', lane: 'implement', model: 'claude-opus-5-5' };
 const finding = (extra: Record<string, unknown> = {}) => ({
   title: 'The review lane stops in its agent stage on Kanon 0.32.0',
-  body: 'Runs of the review lane end without finishing, at the agent stage, on 0.32.0 only, at more than one adopter (#41).',
+  body: '## What must be true\n\nRuns of the review lane end without finishing, at the agent stage, on 0.32.0 only, at more than one adopter (#41).',
   severity: 'sev:medium', signals: [sigRef], cells: [], ...extra,
 });
 const report = (findings: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ examined: 'every cell and signal', held_back: [], findings, ...extra });
@@ -103,7 +103,7 @@ describe('checkFinding: what it rests on, exactly, from the aggregate', () => {
   });
 
   it('files a finding on cells alone as a spec delta, needing no severity', () => {
-    const r = checkFinding(finding({ title: 'The review lane\'s tail cost', body: 'Its tail is far above its median.', severity: '', signals: [], cells: [ownRef, crossRef] }), A);
+    const r = checkFinding(finding({ title: 'The review lane\'s tail cost', body: '## What must be true\n\nIts tail is far above its median.', severity: '', signals: [], cells: [ownRef, crossRef] }), A);
     expect(r.ok && r.checked.kind).toBe('spec-delta');
   });
 
@@ -119,6 +119,8 @@ describe('checkFinding: what it rests on, exactly, from the aggregate', () => {
     ['no title', { title: '' }, /no title/],
     ['no body', { body: ' ' }, /no body/],
     ['a figure in the title', { title: 'Review fails 3 times' }, /quotes a figure/],
+    ['a body with no "What must be true" section (K-WORK-14)', { body: 'Runs of the review lane end early.' }, /breaks K-WORK-14: the body has no "What must be true" section/],
+    ['a remedy under a heading of its own (K-WORK-14)', { body: '## What must be true\n\nRuns end early.\n\n## Proposed fix\n\nRetry.' }, /breaks K-WORK-14: the heading "## Proposed fix" proposes a remedy/],
   ])('refuses %s', (_what, extra, why) => {
     const r = checkFinding(finding(extra), A);
     expect(r.ok).toBe(false);
@@ -153,12 +155,12 @@ describe('fileFindings', () => {
     const [create] = gh.creates();
     expect(create!.args).toEqual(['issue', 'create', '--repo', 'o/r', '--title', finding().title, '--body-file', '-',
       ...[...LABELS.bug, 'sev:medium'].flatMap((l) => ['--label', l]), '--milestone', 'Product Backlog']);
-    expect(create!.input).toMatch(/^\*\*Explorer\*\* <!-- kanon:role=explorer -->\n\nRuns of the review lane/);
+    expect(create!.input).toMatch(/^\*\*Explorer\*\* <!-- kanon:role=explorer -->\n\n## What must be true\n\nRuns of the review lane/);
     expect(create!.input).toContain('## What the aggregate shows');
   });
 
   it('files a spec delta with its two labels and no severity', () => {
-    const { gh } = run(report([finding({ title: 'A tail cost', body: 'The tail is far above the median.', severity: 'sev:high', signals: [], cells: [ownRef] })]));
+    const { gh } = run(report([finding({ title: 'A tail cost', body: '## What must be true\n\nThe tail is far above the median.', severity: 'sev:high', signals: [], cells: [ownRef] })]));
     const labels = gh.creates()[0]!.args.filter((_, i, a) => a[i - 1] === '--label');
     expect(labels).toEqual(LABELS['spec-delta']);
     expect(gh.creates()[0]!.args.at(-1)).toBe('Product Backlog');
@@ -172,7 +174,7 @@ describe('fileFindings', () => {
   });
 
   it('refuses a finding that breaks the rules, files the others, and turns the step red', () => {
-    const { code, gh, log, summary } = run(report([finding({ body: 'It failed 12 times.' }), finding({ title: 'Another', signals: [{ ...sigRef }], cells: [crossRef] })]));
+    const { code, gh, log, summary } = run(report([finding({ body: '## What must be true\n\nIt failed 12 times.' }), finding({ title: 'Another', signals: [{ ...sigRef }], cells: [crossRef] })]));
     expect(code).toBe(1);
     expect(gh.creates()).toHaveLength(1);
     expect(log.join('\n')).toMatch(/finding 1: its prose quotes a figure.*It was not filed/);
@@ -181,7 +183,7 @@ describe('fileFindings', () => {
   });
 
   it('refuses a finding that names an adopter key (plan 0004 step 14\'s mutation)', () => {
-    const { code, gh } = run(report([finding({ body: 'Adopter 3fa9c0d1 is the one failing.' })]));
+    const { code, gh } = run(report([finding({ body: '## What must be true\n\nAdopter 3fa9c0d1 is the one failing.' })]));
     expect(code).toBe(1);
     expect(gh.creates()).toEqual([]);
   });
@@ -197,7 +199,7 @@ describe('fileFindings', () => {
   });
 
   it(`files at most ${MAX_FILED} a run, and one per signature`, () => {
-    const many = ['lead', 'triage', 'rebase', 'merge'].map((lane) => finding({ title: `The ${lane} lane`, signals: [sigRef], cells: [{ source: 'own', label: 'kanon', lane: 'review', model: 'claude-opus-5-5' }], body: `About ${lane}.` }));
+    const many = ['lead', 'triage', 'rebase', 'merge'].map((lane) => finding({ title: `The ${lane} lane`, signals: [sigRef], cells: [{ source: 'own', label: 'kanon', lane: 'review', model: 'claude-opus-5-5' }], body: `## What must be true\n\nAbout ${lane}.` }));
     const { gh, summary } = run(report([finding(), finding(), ...many]));
     // The first two share a signature, and so do the four others with each other.
     expect(gh.creates()).toHaveLength(2);
@@ -243,7 +245,7 @@ describe('parseReport', () => {
 
 describe('drafted, unless the repository declares `filed here` (kanon#471, as the Overseer, kanon#426)', () => {
   it.each([null, '', 'drafted', 'filed elsewhere'])('with UPSTREAM %j, files, comments and lists nothing, and drafts each checked finding in the summary', (upstream) => {
-    const { code, gh, summary, log } = run(report([finding(), finding({ title: 'A tail cost', body: 'The tail is far above the median.', severity: '', signals: [], cells: [ownRef] })]), fakeGh(), JSON.stringify(AGG), upstream);
+    const { code, gh, summary, log } = run(report([finding(), finding({ title: 'A tail cost', body: '## What must be true\n\nThe tail is far above the median.', severity: '', signals: [], cells: [ownRef] })]), fakeGh(), JSON.stringify(AGG), upstream);
     expect(code).toBe(0);
     expect(gh.calls).toEqual([]);
     const text = summary.join('\n');
@@ -255,7 +257,7 @@ describe('drafted, unless the repository declares `filed here` (kanon#471, as th
   });
 
   it('still refuses a finding that breaks the rules, never drafting it, and turns red', () => {
-    const { code, summary } = run(report([finding({ body: 'Adopter 3fa9c0d1 fails.' })]), fakeGh(), JSON.stringify(AGG), 'drafted');
+    const { code, summary } = run(report([finding({ body: '## What must be true\n\nAdopter 3fa9c0d1 fails.' })]), fakeGh(), JSON.stringify(AGG), 'drafted');
     expect(code).toBe(1);
     expect(summary.join('\n')).not.toContain('### Draft');
     expect(summary.join('\n')).not.toContain('3fa9c0d1');
@@ -287,7 +289,7 @@ describe('routingFor: plan()\'s routing, never a fixed bucket (K-WORK-4, K-WORK-
     if (labels.includes('spec-delta')) throw new PlanRefusal('a refusal');
     return routingFor(labels);
   };
-  const two = () => report([finding(), finding({ title: 'A tail cost', body: 'The tail is far above the median.', severity: '', signals: [], cells: [ownRef] })]);
+  const two = () => report([finding(), finding({ title: 'A tail cost', body: '## What must be true\n\nThe tail is far above the median.', severity: '', signals: [], cells: [ownRef] })]);
 
   it('files no issue for a finding plan() refuses, files the rest, and turns the step red', () => {
     const { code, gh, log } = run(two(), fakeGh(), JSON.stringify(AGG), 'filed here', refuseSpecDelta);
@@ -374,7 +376,7 @@ describe('findings sent to Kanon (plan 0006 §5, F3)', () => {
   });
 
   it('a finding on cells alone is about the cell\'s lane, at the lane\'s own release', () => {
-    const r = sending('sent', [withUpstream({ fix_category: 'other' }, { title: 'A tail cost', body: 'The tail is far above the median.', severity: '', signals: [], cells: [ownRef] })]);
+    const r = sending('sent', [withUpstream({ fix_category: 'other' }, { title: 'A tail cost', body: '## What must be true\n\nThe tail is far above the median.', severity: '', signals: [], cells: [ownRef] })]);
     expect(r.rows[0]).toMatchObject({ lane: 'review', kanon_version: '0.38.0', subject: 'lane' });
     expect(r.rows[0]).not.toHaveProperty('reason');
   });
@@ -448,7 +450,7 @@ describe('findings sent to Kanon (plan 0006 §5, F3)', () => {
   });
 
   it('sends no refused finding, and one row per signature', () => {
-    const r = sending('sent', [finding(), finding({ title: 'The same, again' }), finding({ body: 'Adopter 3fa9c0d1 fails.' })]);
+    const r = sending('sent', [finding(), finding({ title: 'The same, again' }), finding({ body: '## What must be true\n\nAdopter 3fa9c0d1 fails.' })]);
     expect(r.rows).toHaveLength(1);
     expect(r.code).toBe(1);
   });

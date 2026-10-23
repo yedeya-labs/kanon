@@ -267,9 +267,11 @@ jobs:
             A finding that fits no subject goes upstream, unfiled. When in doubt about who
             can act, say so in the body and choose the subject you can defend.
             Each finding's body leads with the evidence and the CONSTRAINT the change must
-            satisfy (K-SELF-10). Put any concrete edit under a
+            satisfy (K-SELF-10), under a `## What must be true` heading. Put any concrete edit under a
             `## Possible approach — UNVERIFIED, not acceptance criteria` heading, with a line
-            on what must be checked first. Never head it "Suggested fix". DEDUP first: search
+            on what must be checked first. Never head it "Suggested fix". The step holds,
+            unfiled, a finding whose body lacks that section or puts a remedy under any
+            other heading (K-WORK-14). DEDUP first: search
             open issues, and add no finding already tracked.
 
             WHAT TO AUDIT:
@@ -376,7 +378,9 @@ jobs:
               `Ledger delta` (watermark and dispositions). The query selects on the
               `Watermark:` LINE, whatever decorates it, and lets the ladder below judge the
               value. A null `number` means no audit has ever carried one: take the "first
-              run" branch everywhere.
+              run" branch everywhere. But GitHub search can answer nothing for a query that
+              has matches (kanon#1322), so before you take that branch run the command
+              twice more; a null on all three reads is the answer, and any `number` wins.
               SO WHEN YOU EMIT NO `Ledger delta` BLOCK, WRITE NO `Watermark:` LINE ANYWHERE IN
               THE AUDIT, in any form, with any value, under any decoration: any of them would
               make a block-less audit the anchor and orphan the real one. Write "capability
@@ -460,7 +464,8 @@ jobs:
               is none.
               A standalone capability issue is the ESCALATION, and needs ALL of: it maps to a
               named gap in this audit's findings; two consecutive capability sections carry
-              it as `pending — first sighting`; `gh search issues` finds no open match; and
+              it as `pending — first sighting`; `gh search issues` finds no open match, on
+              two reads, since a search can answer nothing for a query that has matches; and
               the interlock is clear. THE INTERLOCK IS A QUERY, NEVER YOUR JUDGEMENT: run
               `node "$KANON/scripts/capability-interlock.mjs"`. Its FIRST LINE is the count,
               and `> 6` means propose nothing. It runs

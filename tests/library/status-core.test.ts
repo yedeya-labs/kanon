@@ -342,3 +342,46 @@ describe('the project view', () => {
     expect([pv.brief.state, pv.items, pv.phase]).toEqual(['unparseable', null, 'brief-unparseable']);
   });
 });
+
+describe('the project read settles its member search before it trusts it (kanon#1322)', () => {
+  const read = (w: ReturnType<typeof adopterProject>) =>
+    readProjectWorld(PROJECT, { reader: w.reader, repo: w.repo, warn: () => {}, readBrief: () => BRIEF, explorer: null, environment: async () => null });
+  const members = (q: string) => (/qa:project 7\b/.test(q)
+    ? [11, 12].map((number, i) => ({ number, title: ['Show the price', 'Place an order once'][i], state: 'OPEN', body: marker(), closedAt: null, labels: [] }))
+    : []);
+
+  it('reads a member search that answered nothing again, and takes the members the next answer finds', async () => {
+    const saved = process.env.KANON_SEARCH_WAIT_MS;
+    process.env.KANON_SEARCH_WAIT_MS = '0';
+    try {
+      let asked = 0;
+      const w = adopterProject({ overrides: { search: (q) => (asked++ === 0 ? [] : members(q)) } });
+      const world: Any = await read(w);
+      expect(asked, 'the empty answer was read again, until two answers agree').toBe(3);
+      expect(world.all.map((i: Any) => i.number)).toEqual([11, 12]);
+      expect(phaseOf(world)).toBe('file');
+    } finally {
+      if (saved === undefined) delete process.env.KANON_SEARCH_WAIT_MS;
+      else process.env.KANON_SEARCH_WAIT_MS = saved;
+    }
+  });
+
+  it('holds the project when the label listing holds members a settled zero missed', async () => {
+    const saved = process.env.KANON_SEARCH_WAIT_MS;
+    process.env.KANON_SEARCH_WAIT_MS = '0';
+    try {
+      const w = adopterProject({
+        overrides: {
+          search: () => [],
+          graphql: { Labelled: () => ({ repository: { issues: connection([{ number: 11, body: marker() }]) } }) },
+        },
+      });
+      const world: Any = await read(w);
+      expect(world.membershipUnread).toMatch(/the member search returned 0 member\(s\), but the `project:7` label listing holds #11/);
+      expect(phaseOf(world)).toBe('membership-unread');
+    } finally {
+      if (saved === undefined) delete process.env.KANON_SEARCH_WAIT_MS;
+      else process.env.KANON_SEARCH_WAIT_MS = saved;
+    }
+  });
+});

@@ -79,6 +79,12 @@ describe('a failed read is absent, never zero', () => {
     expect(readFiled({ marker: 'x' }, throws)).toBeNull();
   });
 
+  it('reads an empty answer again before it stores 0, since search can answer nothing for a match (kanon#1322)', () => {
+    const answers = ['[]', '[{"number":1,"labels":[{"name":"sev:high"}]}]', '[{"number":1,"labels":[{"name":"sev:high"}]}]'];
+    expect(readFiled({ marker: 'x' }, () => answers.shift()!)).toMatchObject({ count: 1 });
+    expect(answers).toEqual([]);
+  });
+
   it('reads the LAST matching verdict, so a re-review supersedes', () => {
     expect(readVerdict({ pr: '1', head: 'abc', reviewer: 'x' }, () => 'APPROVED\n')).toBe('APPROVED');
   });

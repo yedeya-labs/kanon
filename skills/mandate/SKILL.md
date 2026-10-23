@@ -62,7 +62,7 @@ The skill has two parts. **The mandate** (steps 1 to 8) runs from the person's i
 
    ```markdown
    ## Goal
-   ## Requirements
+   ## What must be true
    ## Decisions made
    ## Decisions open
    ## Constraints to verify
@@ -70,7 +70,7 @@ The skill has two parts. **The mandate** (steps 1 to 8) runs from the person's i
    ## Not in scope
    ```
 
-   Under "Decisions made", one bullet per decision: what was chosen, the role and the date. Under "Decisions open", what each gates. Under "Constraints to verify", each claim step 2 measured, with its command, and each gap in the repository's rules. Under "Plan and estimate", the phases and their estimates as they stand after the answers. Cite commands and rule ids, never file-and-line coordinates, for the reason the brief doesn't (`K-PROJ-3`). Show the person the whole draft and change it until they say it is right.
+   Under "What must be true", the requirements the work must meet: the filing skill's plan command refuses a tracking issue without that heading (`K-WORK-14`). Under "Decisions made", one bullet per decision: what was chosen, the role and the date. Under "Decisions open", what each gates. Under "Constraints to verify", each claim step 2 measured, with its command, and each gap in the repository's rules. Under "Plan and estimate", the phases and their estimates as they stand after the answers. Cite commands and rule ids, never file-and-line coordinates, for the reason the brief doesn't (`K-PROJ-3`). Show the person the whole draft and change it until they say it is right.
 
 6. **Ask whether the project starts as soon as its brief merges.** Ask it before filing, because the answer is a label the filing call applies:
    - **Start on merge** (Recommended): no label. The Lead's reconcile tick, on its first run after the brief merges, files the brief's issues and dispatches the ready ones, up to the work-in-progress limit. There is no other start signal.

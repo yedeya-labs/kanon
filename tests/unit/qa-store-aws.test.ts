@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { writeStub } from './helpers/stub-bin.js';
 import { STACK_NAME, TEMPLATE_PATH, deployCommands, lifecycleProblems, readTemplate, trustProblems, trustedSubjects } from '../../infra/qa-store/aws/provision.mjs';
-import { toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
+import { PARTITIONS, toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
 import { readCostRowsFile } from '../../actions/qa-store/qa-store.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { ID_TOKEN_HOLDERS } from './helpers/store-jobs.js';
@@ -136,23 +136,81 @@ describe('the subjects: the default branch\'s ref, in the repository\'s own subj
 
   it('asks GitHub for the default branch and the prefix, through the shared reading', () => {
     const asked: string[][] = [];
-    expect(trustedSubjects('yedeya-labs/qa-store-sandbox', [], gh(asked, { full_name: 'yedeya-labs/qa-store-sandbox', default_branch: 'main' }, { use_default: true, use_immutable_subject: true, sub_claim_prefix: IMMUTABLE })))
-      .toEqual({ defaultBranch: 'main', subjects: [`${IMMUTABLE}:ref:refs/heads/main`] });
+    expect(trustedSubjects(['yedeya-labs/qa-store-sandbox'], [], gh(asked, { full_name: 'yedeya-labs/qa-store-sandbox', default_branch: 'main' }, { use_default: true, use_immutable_subject: true, sub_claim_prefix: IMMUTABLE })))
+      .toEqual({ defaultBranches: { 'yedeya-labs/qa-store-sandbox': 'main' }, subjects: [`${IMMUTABLE}:ref:refs/heads/main`] });
     expect(asked).toEqual([
       ['api', 'repos/yedeya-labs/qa-store-sandbox'],
       ['api', 'repos/yedeya-labs/qa-store-sandbox/actions/oidc/customization/sub'],
     ]);
-    expect(trustedSubjects('o/r', [], gh([], { full_name: 'o/r', default_branch: 'trunk' }, { use_default: true }))).toEqual({ defaultBranch: 'trunk', subjects: ['repo:o/r:ref:refs/heads/trunk'] });
+    expect(trustedSubjects(['o/r'], [], gh([], { full_name: 'o/r', default_branch: 'trunk' }, { use_default: true }))).toEqual({ defaultBranches: { 'o/r': 'trunk' }, subjects: ['repo:o/r:ref:refs/heads/trunk'] });
   });
 
   it('keeps the given subjects, but still reads the default branch they must name', () => {
     const given = ['repo:o/r:context:ref:refs/heads/trunk:job_workflow_ref:o/r/.github/workflows/x.yml@refs/heads/trunk'];
-    expect(trustedSubjects('o/r', given, gh([], { full_name: 'o/r', default_branch: 'trunk' }, { use_default: false }))).toEqual({ defaultBranch: 'trunk', subjects: given });
+    expect(trustedSubjects(['o/r'], given, gh([], { full_name: 'o/r', default_branch: 'trunk' }, { use_default: false }))).toEqual({ defaultBranches: { 'o/r': 'trunk' }, subjects: given });
   });
 
   it('refuses a custom subject template without --subject, and a repository GitHub spells differently', () => {
-    expect(() => trustedSubjects('o/r', [], gh([], { full_name: 'o/r', default_branch: 'main' }, { use_default: false, include_claim_keys: ['repo', 'context'] }))).toThrow(/customizes its OIDC subject.*--subject/);
-    expect(() => trustedSubjects('o/r', [], gh([], { full_name: 'O/R', default_branch: 'main' }, { use_default: true }))).toThrow(/GitHub calls o\/r 'O\/R'/);
+    expect(() => trustedSubjects(['o/r'], [], gh([], { full_name: 'o/r', default_branch: 'main' }, { use_default: false, include_claim_keys: ['repo', 'context'] }))).toThrow(/customizes its OIDC subject.*--subject/);
+    expect(() => trustedSubjects(['o/r'], [], gh([], { full_name: 'O/R', default_branch: 'main' }, { use_default: true }))).toThrow(/GitHub calls o\/r 'O\/R'/);
+  });
+
+  // Several repositories on one store (kanon#1339): plan 0012's E15 trusts the harness's and the
+  // fixture's `main`. Each repository is read on its own, and each subject is held to its own
+  // repository's default branch.
+  const two = (asked: string[][], fixtureCustomization: Record<string, unknown> = { use_default: true }) => (args: string[]) => {
+    asked.push(args);
+    const answers: Record<string, unknown> = {
+      'repos/e/harness': { full_name: 'e/harness', default_branch: 'main' },
+      'repos/e/harness/actions/oidc/customization/sub': { use_default: true, use_immutable_subject: true, sub_claim_prefix: 'repo:e@1/harness@2' },
+      'repos/e/fixture': { full_name: 'e/fixture', default_branch: 'trunk' },
+      'repos/e/fixture/actions/oidc/customization/sub': fixtureCustomization,
+    };
+    return JSON.stringify(answers[args[1]!]);
+  };
+
+  it('trusts each repository named, reading every one\'s default branch and prefix from GitHub', () => {
+    const asked: string[][] = [];
+    expect(trustedSubjects(['e/harness', 'e/fixture'], [], two(asked))).toEqual({
+      defaultBranches: { 'e/harness': 'main', 'e/fixture': 'trunk' },
+      subjects: ['repo:e@1/harness@2:ref:refs/heads/main', 'repo:e/fixture:ref:refs/heads/trunk'],
+    });
+    expect(asked.map((a) => a[1])).toEqual(['repos/e/harness', 'repos/e/harness/actions/oidc/customization/sub', 'repos/e/fixture', 'repos/e/fixture/actions/oidc/customization/sub']);
+  });
+
+  it('names the repository whose custom subject template needs --subject, and refuses a repository named twice', () => {
+    expect(() => trustedSubjects(['e/harness', 'e/fixture'], [], two([], { use_default: false, include_claim_keys: ['repo', 'context'] }))).toThrow(/e\/fixture customizes its OIDC subject.*--subject/);
+    const given = ['repo:e/fixture:context:ref:refs/heads/trunk', 'repo:e@1/harness@2:ref:refs/heads/main'];
+    expect(trustedSubjects(['e/harness', 'e/fixture'], given, two([], { use_default: false }))).toEqual({ defaultBranches: { 'e/harness': 'main', 'e/fixture': 'trunk' }, subjects: given });
+    expect(() => trustedSubjects(['e/harness', 'E/Harness'], [], two([]))).toThrow(/--repository 'E\/Harness' is named twice/);
+  });
+});
+
+describe('repositories sharing one store share its rows, and the docs say so (kanon#1346)', () => {
+  // The store keys nothing by repository: each partition a lane reads is one fixed name. So
+  // repositories on one store read each other's runs, coverage and areas as their own, which the
+  // docs must say where they let a store serve several. Keying the rows by repository turns the
+  // first test red, and the docs change with it.
+  const paragraph = (start: string) => {
+    const found = readFileSync('docs/qa-store.md', 'utf8').split('\n').filter((l) => l.startsWith(start));
+    if (found.length !== 1) throw new Error(`docs/qa-store.md has ${found.length} paragraphs starting ${JSON.stringify(start)}, not one`);
+    return found[0]!;
+  };
+
+  it('reads and writes partitions that name no repository', () => {
+    expect(Object.values(PARTITIONS).map((p) => p.pk)).toEqual(['RUN#explorer', 'RUN#audit', 'COVERAGE', 'AREAS']);
+    const gate = [...readFileSync('infra/qa-store/aws/last-green.sh', 'utf8').matchAll(/":p":\{"S":"([^"]*)"\}/g)].map((m) => m[1]);
+    expect(gate).toEqual(['RUN#explorer', 'RUN#explorer']);
+    expect(readFileSync('infra/qa-store/aws/record-skip.sh', 'utf8')).toContain('pk: {S: "RUN#explorer"}');
+  });
+
+  it('says that the store keys nothing by repository, and what sharing one store shares', () => {
+    expect(paragraph('The store\'s role trusts, for each repository it serves')).toContain('reads it as its own (below)');
+    const shared = paragraph('**Repositories on one store share its rows**');
+    expect(shared).toContain('The store keys nothing by repository');
+    for (const pk of Object.values(PARTITIONS).map((p) => p.pk)) expect(shared).toContain(`\`${pk}\``);
+    for (const what of ['one Explorer baseline', 'one coverage ledger', 'one area rotation', 'rows as its own', 'a store of its own']) expect(shared).toContain(what);
+    expect(paragraph('It needs `gh`, signed in with read access')).toContain('They then share its rows');
   });
 });
 
@@ -192,23 +250,64 @@ describe('the template\'s cost and shape', () => {
 describe('the provisioning script', SPAWNS, () => {
   it('deploys the stack, protects it from termination, and prints its outputs', () => {
     const subjects = ['repo:o/r:ref:refs/heads/main'];
-    const [deploy, protect, describe_] = deployCommands({ repository: 'o/r', subjects, defaultBranch: 'main', region: 'eu-central-1', profile: 'p' });
+    const [deploy, protect, describe_] = deployCommands({ defaultBranches: { 'o/r': 'main' }, subjects, region: 'eu-central-1', profile: 'p' });
     expect(deploy).toEqual(['aws', 'cloudformation', 'deploy', '--region', 'eu-central-1', '--profile', 'p', '--stack-name', STACK_NAME,
       '--template-file', TEMPLATE_PATH, '--parameter-overrides', 'Subjects=repo:o/r:ref:refs/heads/main', 'CreateOidcProvider=true',
       '--capabilities', 'CAPABILITY_NAMED_IAM', '--no-fail-on-empty-changeset']);
     expect(protect).toContain('--enable-termination-protection');
     expect(describe_).toContain('Stacks[0].Outputs');
-    expect(deployCommands({ repository: 'o/r', subjects, defaultBranch: 'main', region: 'us-east-2', oidcProvider: false })[0]).toContain('CreateOidcProvider=false');
-    expect(deployCommands({ repository: 'o/r', subjects: [...subjects, 'repo:o@1/r@2:ref:refs/heads/main'], defaultBranch: 'main', region: 'us-east-2' })[0])
+    expect(deployCommands({ defaultBranches: { 'o/r': 'main' }, subjects, region: 'us-east-2', oidcProvider: false })[0]).toContain('CreateOidcProvider=false');
+    expect(deployCommands({ defaultBranches: { 'o/r': 'main' }, subjects: [...subjects, 'repo:o@1/r@2:ref:refs/heads/main'], region: 'us-east-2' })[0])
       .toContain('Subjects=repo:o/r:ref:refs/heads/main,repo:o@1/r@2:ref:refs/heads/main');
   });
 
   it('refuses a repository or region it can\'t trust exactly', () => {
     const subjects = ['repo:o/r:ref:refs/heads/main'];
-    expect(() => deployCommands({ repository: 'o/*', subjects, defaultBranch: 'main', region: 'eu-central-1' })).toThrow(/owner\/name/);
-    expect(() => deployCommands({ repository: 'o/r', subjects, defaultBranch: 'main', region: 'europe' })).toThrow(/region/);
-    expect(() => deployCommands({ repository: 'o/r', subjects: ['repo:o/r:environment:kanon-qa-store'], defaultBranch: 'main', region: 'eu-central-1' })).toThrow(/refusing to trust/);
-    expect(() => deployCommands({ repository: 'o/r', subjects, defaultBranch: 'trunk', region: 'eu-central-1' })).toThrow(/not o\/r's default branch 'trunk'/);
+    expect(() => deployCommands({ defaultBranches: { 'o/*': 'main' }, subjects, region: 'eu-central-1' })).toThrow(/owner\/name/);
+    expect(() => deployCommands({ defaultBranches: { 'o/r': 'main' }, subjects, region: 'europe' })).toThrow(/region/);
+    expect(() => deployCommands({ defaultBranches: { 'o/r': 'main' }, subjects: ['repo:o/r:environment:kanon-qa-store'], region: 'eu-central-1' })).toThrow(/refusing to trust/);
+    expect(() => deployCommands({ defaultBranches: { 'o/r': 'trunk' }, subjects, region: 'eu-central-1' })).toThrow(/not o\/r's default branch 'trunk'/);
+  });
+
+  it('holds each subject to its own repository\'s default branch when the store trusts several', () => {
+    const defaultBranches = { 'e/harness': 'main', 'e/fixture': 'trunk' };
+    const subjects = ['repo:e@1/harness@2:ref:refs/heads/main', 'repo:e/fixture:ref:refs/heads/trunk'];
+    expect(deployCommands({ defaultBranches, subjects, region: 'eu-central-1' })[0]).toContain(`Subjects=${subjects.join(',')}`);
+    // The fixture's subject on the harness's default branch is a subject of neither at its own.
+    expect(() => deployCommands({ defaultBranches, subjects: [subjects[0]!, 'repo:e/fixture:ref:refs/heads/main'], region: 'eu-central-1' }))
+      .toThrow(/'repo:e\/fixture:ref:refs\/heads\/main' is a subject of none of the repositories named .*names the branch 'main', not e\/fixture's default branch 'trunk'/);
+    expect(() => deployCommands({ defaultBranches, subjects: [...subjects, 'repo:e/other:ref:refs/heads/main'], region: 'eu-central-1' }))
+      .toThrow(/'repo:e\/other:ref:refs\/heads\/main' is a subject of none of the repositories named/);
+    expect(() => deployCommands({ defaultBranches, subjects: [...subjects, 'repo:e/fixture:pull_request'], region: 'eu-central-1' })).toThrow(/refusing to trust/);
+    // A repository named and left untrusted is a slip the operator should see, not a quiet no-op.
+    expect(() => deployCommands({ defaultBranches, subjects: [subjects[0]!], region: 'eu-central-1' })).toThrow(/no subject of e\/fixture/);
+    expect(() => deployCommands({ defaultBranches: {}, subjects, region: 'eu-central-1' })).toThrow(/no repository/);
+    expect(() => deployCommands({ defaultBranches: { 'e/harness': 'main', 'e/*': 'main' }, subjects, region: 'eu-central-1' })).toThrow(/'e\/\*' is not owner\/name/);
+  });
+
+  it('takes --repository more than once, and trusts each one\'s default branch', () => {
+    const work = mkdtempSync(join(tmpdir(), 'qa-store-provision-'));
+    try {
+      writeStub(join(work, 'gh'), `#!/usr/bin/env bash
+case "$2" in
+  repos/e/harness) echo '{"full_name":"e/harness","default_branch":"main"}' ;;
+  repos/e/fixture) echo '{"full_name":"e/fixture","default_branch":"trunk"}' ;;
+  repos/e/harness/*) echo '{"use_default":true,"use_immutable_subject":true,"sub_claim_prefix":"repo:e@1/harness@2"}' ;;
+  *) echo '{"use_default":true}' ;;
+esac
+`);
+      const run = (...extra: string[]) => spawnSync(process.execPath, ['infra/qa-store/aws/provision.mjs', '--repository', 'e/harness', '--repository', 'e/fixture', '--region', 'eu-central-1', '--dry-run', ...extra],
+        { encoding: 'utf8', env: { ...process.env, PATH: `${work}:/usr/bin:/bin` } });
+      const ok = run();
+      expect(ok.status).toBe(0);
+      expect(String(ok.stdout)).toContain('Subjects=repo:e@1/harness@2:ref:refs/heads/main,repo:e/fixture:ref:refs/heads/trunk');
+      const wrong = run('--subject', 'repo:e@1/harness@2:ref:refs/heads/main', '--subject', 'repo:e/fixture:ref:refs/heads/main');
+      expect(wrong.status).toBe(1);
+      expect(String(wrong.stderr)).toMatch(/not e\/fixture's default branch 'trunk'/);
+      expect(String(wrong.stdout)).not.toMatch(/\$ aws/);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
   });
 
   // A stub `gh` answering the default branch, `trunk`, and the subject customization.

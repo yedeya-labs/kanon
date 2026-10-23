@@ -89,6 +89,8 @@ The [rulebook](../rulebook/) states each rule once, as `K-<AREA>-<n>`, with its 
 
 A rule whose "Enforced by" says *prose only* has no check yet. Those rules are Kanon's own backlog.
 
+**A count of 0 from GitHub's search is never taken on its own** ([kanon#1322](https://github.com/yedeya-labs/kanon/issues/1322)). The same query can answer 2 on one read and 0 on the next, with nothing in the answer to tell the zero is wrong. So where a listing answers the same question, Kanon's scripts read the listing (the pulls list for merged pull requests, an issue listing by label for an escalation or an audit), and where search is the only way they go through [`scripts/lib/search.mjs`](../scripts/lib/search.mjs), which reads an answer that found nothing or says it is incomplete up to four times and refuses by name when the reads disagree. `tests/unit/search-zero.test.ts` holds every search the scripts send to that module, or to a `search-zero:` comment that says why its zero can't mislead.
+
 Whether a gate moved anything is read from the rule its findings cite. [`scripts/finding-counts.mjs`](../scripts/finding-counts.mjs) counts the Reviewer's request-changes findings and follow-ups per rule id over a window, and a gate's baseline is that count before the gate was switched on, recorded in the adoption record (`K-SELF-14`).
 
 ## Where things are

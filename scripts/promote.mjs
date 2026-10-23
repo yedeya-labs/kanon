@@ -63,6 +63,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { trustedSearchSync } from './lib/search.mjs';
 import { introducedBy, revertsOf } from './metrics/detectors.mjs';
 import { renderNotice } from '../actions/agent-classify/classify-agent-result.mjs';
 
@@ -438,6 +439,9 @@ export function endToEnd(api, repo, candidate) {
   return { pass: true, evidence: `the Reporter's latest \`${E2E_CHECK}\` check run, ${latest.html_url ?? latest.id}, concluded success, linking ${where}, attempt ${attempt}, of ${HARNESS_WORKFLOW} on ${branch} for ${candidate.name}, whose \`${VERDICT_JOB}\` job succeeded` };
 }
 
+/** How many items a search answer holds; an answer with none holds 0. @param {any} answer */
+const itemCount = (answer) => (Array.isArray(answer?.items) ? answer.items.length : 0);
+
 /** This script, as the candidate's commit holds it. */
 const SELF = 'scripts/promote.mjs';
 /** What marks a commit's promotion as carrying the end-to-end gate: the check run's name, declared. */
@@ -465,8 +469,12 @@ function carriesGate(api, repo, candidate) {
 function redIssueOf(api, tag) {
   const title = redIssueTitle(tag);
   try {
+    // Settled before "no red issue" is said: search can answer nothing for a query with matches (kanon#1322).
     /** @type {any[]} */
-    const items = api(`search/issues?q=${encodeURIComponent(`repo:${HARNESS} is:issue in:title "${title}"`)}&per_page=100`)?.items ?? [];
+    const items = trustedSearchSync(
+      () => api(`search/issues?q=${encodeURIComponent(`repo:${HARNESS} is:issue in:title "${title}"`)}&per_page=100`),
+      { what: `the red issue \`${title}\``, size: itemCount },
+    )?.items ?? [];
     const hit = items.filter((i) => i?.title === title).sort((a, b) => Number(a?.state !== 'open') - Number(b?.state !== 'open'))[0];
     return hit ? `the red issue: ${hit.html_url} (${hit.state})` : `no red issue \`${title}\` in ${HARNESS}`;
   } catch (e) {
@@ -680,8 +688,13 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
     .flatMap((c) => (c.pr === null ? [] : [{ number: c.pr, sha: c.sha, mergedAt: c.date }]));
 
   const cutAt = String(candidateRelease.created_at ?? '');
+  // Settled before the soak reads no pin: search can answer nothing for a query with matches (kanon#1322),
+  // and a missing pin holds the promotion.
   /** @type {any[]} */
-  const found = api(`search/issues?q=${encodeURIComponent(`repo:${repo} is:pr is:merged in:title "${pinTitle(candidate.version)}"`)}&per_page=100`)?.items ?? [];
+  const found = trustedSearchSync(
+    () => api(`search/issues?q=${encodeURIComponent(`repo:${repo} is:pr is:merged in:title "${pinTitle(candidate.version)}"`)}&per_page=100`),
+    { what: `the pin pull request \`${pinTitle(candidate.version)}\``, size: itemCount },
+  )?.items ?? [];
   const pinPr = found
     .filter((i) => i?.title === pinTitle(candidate.version) && i?.pull_request?.merged_at)
     .sort((a, b) => Date.parse(a.pull_request.merged_at) - Date.parse(b.pull_request.merged_at))[0];
