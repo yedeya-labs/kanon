@@ -99,16 +99,16 @@ describe('the cadence is kept: a re-ask works only when the lane has not, inside
   it('the tick\'s check counts its `scope` step, over 45 minutes, and a no skips every step after it', () => {
     const steps = TICK.jobs.tick!.steps!;
     const check = steps.find((s) => s.id === 'reask')!;
-    expect(check.if).toBe("steps.gate.outputs.member == 'true' && github.event_name == 'workflow_run'");
+    expect(check.if).toBe("steps.gate.outputs.member == 'true' && steps.fork.outputs.fork == 'false' && github.event_name == 'workflow_run'");
     expect(check.env).toMatchObject({ REASK_JOB: 'tick', REASK_HOURS: '0.75', GH_TOKEN: '${{ github.token }}' });
     // The step it counts is the tick's own first piece of work, by its exact name.
     expect(steps.find((s) => s.id === 'scope')!.name).toBe(check.env!.REASK_STEP);
     // Every step that waited only on the gate now waits on the check too; the rest wait on those.
-    const gated = steps.filter((s) => s.id !== 'reask' && s.if?.includes('steps.gate.outputs.member'));
+    const gated = steps.filter((s) => s.id !== 'reask' && s.id !== 'fork' && s.if?.includes('steps.gate.outputs.member'));
     expect(gated.map((s) => s.id ?? s.uses)).toEqual(['actions/checkout@v7', 'lead', 'scope', 'briefs', 'unreviewed']);
     for (const s of gated) {
-      expect(s.if).toBe("steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'");
-      const on = (said: string) => evaluate(s.if!, { steps: { gate: { outputs: { member: 'true' } }, reask: { outputs: { due: said } } } });
+      expect(s.if).toBe("steps.gate.outputs.member == 'true' && steps.fork.outputs.fork == 'false' && steps.reask.outputs.due != 'false'");
+      const on = (said: string) => evaluate(s.if!, { steps: { gate: { outputs: { member: 'true' } }, fork: { outputs: { fork: 'false' } }, reask: { outputs: { due: said } } } });
       expect(on('')).toBe(true); // every other trigger: the check is skipped
       expect(on('true')).toBe(true);
       expect(on('false')).toBe(false);
