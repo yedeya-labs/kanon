@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // kanon#768 — the issue-opened backstop (`K-WORK-1`). Run by the `agent-issue-backstop.yml` lane
-// when an issue is opened, on the Lead's App token narrowed to Issues write.
+// when an issue is opened, and when a pull request is put on a milestone (below), on the Lead's
+// App token narrowed to Issues write.
 //
 // ── WHAT IT DECIDES ─────────────────────────────────────────────────────────
 // Nothing of its own. `decide()` in `issue-triage-defaults.mjs` is the one copy of the routing
@@ -30,7 +31,8 @@
 // saying which. A re-run finds no milestone and writes nothing.
 //
 // SAFE BY DEFAULT: without APPLY=1 it prints what it would write. The lane sets APPLY on the
-// `issues: opened` event, and on a dispatch only when `apply` is ticked.
+// `issues: opened` and `pull_request_target: milestoned` events, and on a dispatch only when
+// `apply` is ticked.
 //
 // DEPENDENCY-FREE: `node:` and `gh` only, like every script under scripts/ (`K-SELF-8`).
 //
