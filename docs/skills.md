@@ -25,7 +25,7 @@ The way to pin it is in the repository, in its `.claude/settings.json`, which Cl
 {
   "extraKnownMarketplaces": {
     "kanon": {
-      "source": { "source": "github", "repo": "yedeya-labs/kanon", "ref": "v0.42.0" }
+      "source": { "source": "github", "repo": "yedeya-labs/kanon", "ref": "v0.43.0" }
     }
   },
   "enabledPlugins": {
@@ -51,7 +51,7 @@ Without the declaration, each person installs the plugin in their own Claude Cod
 <!-- x-release-please-start-version -->
 
 ```sh
-claude plugin marketplace add yedeya-labs/kanon#v0.42.0
+claude plugin marketplace add yedeya-labs/kanon#v0.43.0
 claude plugin install kanon@kanon
 ```
 

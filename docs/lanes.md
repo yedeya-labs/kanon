@@ -275,7 +275,7 @@ permissions:
 
 jobs:
   revise:
-    uses: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@v0.43.0
     with:
       pr_number: ${{ inputs.pr_number }}
       reset: ${{ inputs.reset }}
@@ -390,7 +390,7 @@ permissions:
 
 jobs:
   review:
-    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.43.0
     with:
       pr_number: ${{ inputs.pr_number }}
     secrets:
@@ -510,12 +510,12 @@ on:
       release: { type: string, required: true }
 jobs:
   release:
-    uses: yedeya-labs/kanon/.github/workflows/deploy-release.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/deploy-release.yml@v0.43.0
     with: { environments: 'staging production' }
   deploy-1:
     name: staging
     needs: release
-    uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.43.0
     with: { environment: staging, position: 1, build: '${{ needs.release.outputs.build }}' }
     secrets:
       KANON_CHAT_DEPLOY: ${{ secrets.KANON_CHAT_DEPLOY }}
@@ -523,7 +523,7 @@ jobs:
   deploy-2:
     name: production
     needs: [release, deploy-1]
-    uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.43.0
     with: { environment: production, position: 2, build: '${{ needs.release.outputs.build }}' }
     secrets:
       KANON_CHAT_DEPLOY: ${{ secrets.KANON_CHAT_DEPLOY }}
@@ -593,7 +593,7 @@ permissions:
 
 jobs:
   red-test:
-    uses: yedeya-labs/kanon/.github/workflows/red-test.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/red-test.yml@v0.43.0
 ```
 
 <!-- x-release-please-end -->
