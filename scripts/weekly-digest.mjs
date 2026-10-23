@@ -60,6 +60,7 @@ import { GATE_CANDIDATE_LABEL, SEVERITY_LABELS, severityOf as severityOfLabels }
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { GATE_CANDIDATE_QUERY, GATE_DECLINED_LABEL, gateCandidateDecision } from './gate-candidate-exit.mjs';
 import { declaredEnvironmentFrom } from './lib/reference-deploy.mjs';
+import { trustedSearch } from './lib/search.mjs';
 
 /**
  * Scopes that are real engineering work but have no stakeholder-facing surface.
@@ -246,6 +247,51 @@ export async function countMergedPrs({ api, repo, weekStart, weekEnd, maxPages =
     `Refusing to post: more than ${maxPages * 100} closed PRs were updated since the week began, so the merged count ` +
     'would be cut short. Run the digest closer to its week, or raise the page cap.',
   );
+}
+
+/**
+ * The issue searches the digest still sends, the milestone counts and the week's closed issues,
+ * each read through `trustedSearch` (kanon#1322), with `api` INJECTED so the re-reads are tested
+ * without a network. Search is the only way to ask for them in a handful of requests: `is:issue`
+ * leaves pull requests out of a milestone's counts, and `closed:<window>` hands every closed
+ * issue's milestone back in one answer. But search can answer 0 for a query with matches, so an
+ * answer that found nothing, or says it is incomplete, is read again before the digest states it,
+ * and answers that don't settle fail the run by name rather than post a wrong number.
+ * @param {{ api: (path: string) => Promise<any>, repo: string, sleep?: (ms: number) => Promise<void> }} io
+ */
+export function issueSearch({ api, repo, sleep }) {
+  const url = (/** @type {string} */ q, /** @type {number} */ perPage, page = 1) =>
+    `/search/issues?q=${encodeURIComponent(`repo:${repo} ${q}`)}&per_page=${perPage}${page > 1 ? `&page=${page}` : ''}`;
+  return {
+    /** A search's total. @param {string} q */
+    count: async (q) => (await trustedSearch(() => api(url(q, 1)), { what: `\`${q}\``, sleep })).total_count,
+    /**
+     * Every item a search matches, ten pages at most (the search API's 1000). The first page is
+     * settled like a count; a later page that stays empty before the total is reached fails by
+     * name, since a list cut short would post a low count. One search, ALL its items: the search
+     * API allows only 30 requests a minute, far tighter than the core limit, so the job spends a
+     * handful of searches, not one per milestone. An earlier version asked for three counts per
+     * milestone and rate-limited itself on a repo with five.
+     * @param {string} q
+     */
+    items: async (q) => {
+      /** @type {any[]} */
+      const items = [];
+      const first = await trustedSearch(() => api(url(q, 100)), { what: `\`${q}\``, sleep });
+      items.push(...first.items);
+      const total = Math.min(first.total_count, 1000);
+      for (let page = 2; items.length < total && page <= 10; page++) {
+        const r = await trustedSearch(() => api(url(q, 100, page)), {
+          what: `\`${q}\` page ${page}`, size: (a) => a?.items?.length, sleep,
+        });
+        if (!r.items.length) {
+          throw new Error(`Refusing to post: the search \`${q}\` counted ${first.total_count} but page ${page} stayed empty after ${items.length}, so the count would be cut short (kanon#1322).`);
+        }
+        items.push(...r.items);
+      }
+      return items;
+    },
+  };
 }
 
 /**
@@ -962,7 +1008,7 @@ const chars = (s) => [...s].length;
  * @param {string} body
  */
 export function sectionsOf(heading, body) {
-  if (!body) return [];
+  if (!body || !body.trim()) return [];
   const bodies = [];
   let lines = [];
   let used = 0;
@@ -979,6 +1025,48 @@ export function sectionsOf(heading, body) {
   bodies.push(lines.join('\n'));
   return bodies.map((b, i) => ({ ...(heading ? { heading: i === 0 ? heading : `${heading}, continued` } : {}), body: b }));
 }
+
+/**
+ * The week's releases: published, neither draft nor pre-release, in the half-open window
+ * [weekStart, weekEnd), the same boundary as the search qualifier, so Delivered and Progress
+ * describe the same seven days.
+ * @param {any[]} allReleases @param {Date} weekStart @param {Date} weekEnd
+ */
+export function releasesInWindow(allReleases, weekStart, weekEnd) {
+  return allReleases.filter(
+    (r) => !r.draft && !r.prerelease && new Date(r.published_at) >= weekStart && new Date(r.published_at) < weekEnd,
+  );
+}
+
+/**
+ * What the narrative's model is told about the week (kanon#1326), one line for the lane's
+ * prompt: the window the counts cover, the counts the digest prints under the narrative, and
+ * the tags of the releases published in it, which are the narrative's ONLY source. A model
+ * told "the last 7 days" on a back-dated run, and left to find its own material, described a
+ * week's commits as its output under a stats line of "0 PRs merged · 0 issues closed · 0
+ * releases". A tag that isn't a plain tag name is left out rather than written into a prompt.
+ * @param {{ weekStart: Date, weekEnd: Date, releases: Array<{ tag_name?: string }>,
+ *   stats: { prsMerged: number, issuesClosed: number, releases: number } }} week
+ */
+export function narrativeBrief({ weekStart, weekEnd, releases, stats }) {
+  const tags = releases.map((r) => String(r.tag_name ?? '')).filter((t) => /^[\w.+/-]{1,100}$/.test(t));
+  return [
+    `The week runs from ${iso(weekStart)} to ${iso(weekEnd)}.`,
+    `The digest prints these counts for it, under your sentences: ${renderStats(stats)}.`,
+    tags.length
+      ? `The releases published in it, the only material you may describe: ${tags.join(', ')}.`
+      : 'No release was published in it, so there is nothing for you to describe.',
+  ].join(' ');
+}
+
+/**
+ * The narrative, when the week holds something it can be about (kanon#1326). The narrative
+ * summarises the week's releases, so in a week with none it has no source the digest can
+ * show: whatever it says would be a claim the counts beneath it don't support (`K-PRIN-14`).
+ * It is dropped, and the summary falls back to the burndown or the counts (`headline`).
+ * @param {string | undefined} narrative @param {{ releases?: number } | undefined} stats
+ */
+export const sourcedNarrative = (narrative, stats) => ((stats?.releases ?? 0) > 0 ? narrative : '');
 
 /** The line that ends a body this script cut. */
 const CUT = '… _truncated_';
@@ -1005,7 +1093,8 @@ export function headline(milestones, stats) {
  * The narrative is screened HERE rather than at the call site so the guarantee
  * is fail-closed: no caller can assemble a message that skipped the check. A
  * narrative that passes is the message's `summary` (the line a notification
- * preview shows), through `prose`; without one, the burndown is (`headline`).
+ * preview shows), through `prose`; without one, the burndown is (`headline`). A week
+ * with no release has no narrative (`sourcedNarrative`) and no releases link.
  * `gateCandidates` is optional in the type for the same reason: omitting it
  * renders the section as UNREADABLE (see `renderGateCandidates`), never drops it.
  *
@@ -1025,7 +1114,7 @@ export function headline(milestones, stats) {
  * @returns {Record<string, any>} the message, which `validate` accepts
  */
 export function buildMessage({ weekStart, narrative, milestones, grouped, stats, gateCandidates, environment, repo, runUrl, server = 'https://github.com' }) {
-  const { narrative: screened } = sanitiseNarrative(narrative, { environment });
+  const { narrative: screened } = sanitiseNarrative(sourcedNarrative(narrative, stats), { environment });
   const numbers = renderStats(stats);
   const head = [
     ...sectionsOf('Complete', renderCompletions(milestones)),
@@ -1040,7 +1129,8 @@ export function buildMessage({ weekStart, narrative, milestones, grouped, stats,
     title: `Week of ${formatWeek(weekStart)}`,
     summary: screened ? prose(screened) : headline(milestones, stats),
     sections,
-    links: [{ label: 'Releases', url: `${server}/${repo}/releases` }],
+    // The releases link only in a week that has a release: no link to nothing (kanon#1326).
+    links: (stats?.releases ?? 0) > 0 ? [{ label: 'Releases', url: `${server}/${repo}/releases` }] : [],
     source: { repository: repo, lane: 'weekly-digest', run_url: runUrl },
   });
   let delivered = renderDelivered(grouped);
@@ -1131,120 +1221,128 @@ if (isCliEntry(import.meta.url)) {
     if (!res.ok) throw new Error(`GitHub GET ${path} → ${res.status}: ${await res.text()}`);
     return res.json();
   };
-  /** Issue counts come from search so `is:issue` can exclude PRs (AGENTS.md); merged PRs come from REST. */
-  const count = async (q) => (await api(`/search/issues?q=${encodeURIComponent(`repo:${repo} ${q}`)}&per_page=1`)).total_count;
+  /**
+   * Issue counts come from search so `is:issue` can exclude PRs (AGENTS.md), settled before they are
+   * trusted (`issueSearch`, kanon#1322); merged PRs come from REST.
+   */
+  const { count, items: searchAll } = issueSearch({ api, repo });
 
   const { weekStart, weekEnd, qualifier: window } = weekWindow(WEEK_END ? new Date(WEEK_END) : new Date());
 
-  /**
-   * One search, ALL matching items. The search API allows only 30 requests per
-   * minute — far tighter than the 5000/hr core limit — so this job is written to
-   * spend a handful of searches, not one per milestone. An earlier version asked
-   * for three counts per milestone and rate-limited itself on a repo with five.
-   */
-  const searchAll = async (q) => {
-    const items = [];
-    for (let page = 1; page <= 10; page++) {
-      const r = await api(`/search/issues?q=${encodeURIComponent(`repo:${repo} ${q}`)}&per_page=100&page=${page}`);
-      items.push(...r.items);
-      if (items.length >= r.total_count || r.items.length === 0) break;
+  if (process.argv.includes('--brief')) {
+    // THE NARRATIVE'S BRIEF (kanon#1326), for the lane's step before the model: the window,
+    // pinned as `week-end` so the message step reads the same seven days, the counts the
+    // digest prints, and the week's release tags. Reads only; writes the step's outputs.
+    const [prsMerged, issuesClosed, allReleases] = await Promise.all([
+      countMergedPrs({ api, repo, weekStart, weekEnd }),
+      count(`is:issue is:closed closed:${window}`),
+      api('/repos/' + repo + '/releases?per_page=100'),
+    ]);
+    const releases = releasesInWindow(allReleases, weekStart, weekEnd);
+    const brief = narrativeBrief({ weekStart, weekEnd, releases, stats: { prsMerged, issuesClosed, releases: releases.length } });
+    if (process.env.GITHUB_OUTPUT) {
+      appendFileSync(process.env.GITHUB_OUTPUT, `week-end=${weekEnd.toISOString()}\nbrief=${brief}\n`);
     }
-    return items;
-  };
+    console.log(brief);
+  } else {
+    const [prsMerged, closedThisWeekItems, allReleases, allMilestones, gateCandidates] = await Promise.all([
+      // Core REST, not search: search's total for merged PRs comes back 0 for a week with merges (kanon#1318).
+      countMergedPrs({ api, repo, weekStart, weekEnd }),
+      // Fetching the ITEMS rather than a count gives every milestone's
+      // closed-this-week figure from a single request, since each item carries its
+      // own milestone. That is the whole reason this is one search and not five.
+      searchAll(`is:issue is:closed closed:${window}`),
+      api('/repos/' + repo + '/releases?per_page=100'),
+      api('/repos/' + repo + '/milestones?state=all&per_page=100'),
+      // Core REST, never throws — an unreadable list is rendered as such (RA-2399).
+      // `now`, not `weekEnd`: the list is read LIVE, so a back-dated WEEK_END run
+      // still shows today's queue, and its ages must be measured from today.
+      readGateCandidates({ api, repo, now: new Date() }),
+    ]);
+    // The name the project gives its reference environment, from the adoption record on the
+    // default branch (`environmentRules`). It never throws: a record that is missing, declares
+    // none or can't be read leaves the generic words, which every project has (kanon#54).
+    const environment = declaredEnvironmentFrom(repo);
 
-  const [prsMerged, closedThisWeekItems, allReleases, allMilestones, gateCandidates] = await Promise.all([
-    // Core REST, not search: search's total for merged PRs comes back 0 for a week with merges (kanon#1318).
-    countMergedPrs({ api, repo, weekStart, weekEnd }),
-    // Fetching the ITEMS rather than a count gives every milestone's
-    // closed-this-week figure from a single request, since each item carries its
-    // own milestone. That is the whole reason this is one search and not five.
-    searchAll(`is:issue is:closed closed:${window}`),
-    api('/repos/' + repo + '/releases?per_page=100'),
-    api('/repos/' + repo + '/milestones?state=all&per_page=100'),
-    // Core REST, never throws — an unreadable list is rendered as such (RA-2399).
-    // `now`, not `weekEnd`: the list is read LIVE, so a back-dated WEEK_END run
-    // still shows today's queue, and its ages must be measured from today.
-    readGateCandidates({ api, repo, now: new Date() }),
-  ]);
-  // The name the project gives its reference environment, from the adoption record on the
-  // default branch (`environmentRules`). It never throws: a record that is missing, declares
-  // none or can't be read leaves the generic words, which every project has (kanon#54).
-  const environment = declaredEnvironmentFrom(repo);
+    if (!gateCandidates.ok) {
+      console.warn(
+        `::warning title=gate candidates unreadable::The digest posts saying so. ${JSON.stringify(gateCandidates.reason)}`,
+      );
+    }
 
-  if (!gateCandidates.ok) {
-    console.warn(
-      `::warning title=gate candidates unreadable::The digest posts saying so. ${JSON.stringify(gateCandidates.reason)}`,
+    const issuesClosed = closedThisWeekItems.length;
+    const closedByMilestone = closedCountsByMilestone(closedThisWeekItems);
+
+    // Half-open [weekStart, weekEnd) — matches the search qualifier's effective
+    // range, so Delivered and Progress describe the same seven days.
+    const releases = releasesInWindow(allReleases, weekStart, weekEnd);
+
+    // Delivered work: every bullet from this week's releases, grouped by scope.
+    const bullets = releases.flatMap((r) =>
+      Object.values(parseSections(r.body || '')).flat(),
     );
+    const grouped = groupByArea(bullets);
+
+    const { milestones, crossChecked } = await collectMilestones(allMilestones, {
+      closedByMilestone, weekStart, weekEnd, count,
+    });
+
+    // Before rendering anything: refuse to post a number we can tell is wrong.
+    assertGuardRan(crossChecked, allMilestones.filter(restPopulated).length);
+    if (releasedWithoutMerges({ prsMerged, releases: releases.length })) {
+      console.warn(
+        `::warning title=release without a merged PR::${releases.length} release(s) this week and no PR merged in it. ` +
+        'The digest posts and says so: the release came from commits pushed straight to the branch, or from merges before the week.',
+      );
+    }
+
+    /**
+     * `buildMessage` screens the narrative itself (fail-closed), so this call is
+     * purely for the SIGNAL: a rejection that left no trace would be
+     * indistinguishable from the model being down, and a persistently bad prompt
+     * would produce a prose-less digest every week with nobody the wiser.
+     *
+     * A `::warning::` annotation shows on the run summary page even when the run
+     * is GREEN — which this one still is, deliberately (§12: prose is the one
+     * best-effort component; the numbers are not). Its limit is worth naming:
+     * nobody watches a green run's annotations weekly, so this is a trace to find
+     * when asking "why is there no prose?", not a detector that will page anyone.
+     */
+    const { violations } = sanitiseNarrative(NARRATIVE, { environment });
+    if (violations.length) {
+      const tripped = violations.map((v) => `${v.rule}: "${v.match}" — ${v.why}`).join('; ');
+      console.warn(
+        `::warning title=digest narrative rejected::The model's narrative broke the digest's editorial rules and was ` +
+        `dropped; the numbers still post. Tripped ${tripped}. Rejected text: ${JSON.stringify(NARRATIVE)}`,
+      );
+    }
+    if ((NARRATIVE ?? '').trim() && !sourcedNarrative(NARRATIVE, { releases: releases.length })) {
+      console.warn(
+        '::warning title=digest narrative dropped::No release was published in the week, so the narrative had no source ' +
+        `the digest shows, and it was dropped; the counts lead instead (kanon#1326). Dropped text: ${JSON.stringify(NARRATIVE)}`,
+      );
+    }
+
+    const message = buildMessage({
+      weekStart,
+      narrative: NARRATIVE,
+      milestones,
+      grouped,
+      stats: { prsMerged, issuesClosed, releases: releases.length },
+      gateCandidates,
+      environment,
+      repo,
+      runUrl,
+      server,
+    });
+
+    console.log(`Window ${window}.`);
+    process.exitCode = emit({
+      message,
+      env: process.env,
+      io: { writeFile: (p, t) => writeFileSync(p, t), appendFile: (p, t) => appendFileSync(p, t) },
+      out: console,
+    });
   }
-
-  const issuesClosed = closedThisWeekItems.length;
-  const closedByMilestone = closedCountsByMilestone(closedThisWeekItems);
-
-  // Half-open [weekStart, weekEnd) — matches the search qualifier's effective
-  // range, so Delivered and Progress describe the same seven days.
-  const releases = allReleases.filter(
-    (r) => !r.draft && !r.prerelease && new Date(r.published_at) >= weekStart && new Date(r.published_at) < weekEnd,
-  );
-
-  // Delivered work: every bullet from this week's releases, grouped by scope.
-  const bullets = releases.flatMap((r) =>
-    Object.values(parseSections(r.body || '')).flat(),
-  );
-  const grouped = groupByArea(bullets);
-
-  const { milestones, crossChecked } = await collectMilestones(allMilestones, {
-    closedByMilestone, weekStart, weekEnd, count,
-  });
-
-  // Before rendering anything: refuse to post a number we can tell is wrong.
-  assertGuardRan(crossChecked, allMilestones.filter(restPopulated).length);
-  if (releasedWithoutMerges({ prsMerged, releases: releases.length })) {
-    console.warn(
-      `::warning title=release without a merged PR::${releases.length} release(s) this week and no PR merged in it. ` +
-      'The digest posts and says so: the release came from commits pushed straight to the branch, or from merges before the week.',
-    );
-  }
-
-  /**
-   * `buildMessage` screens the narrative itself (fail-closed), so this call is
-   * purely for the SIGNAL: a rejection that left no trace would be
-   * indistinguishable from the model being down, and a persistently bad prompt
-   * would produce a prose-less digest every week with nobody the wiser.
-   *
-   * A `::warning::` annotation shows on the run summary page even when the run
-   * is GREEN — which this one still is, deliberately (§12: prose is the one
-   * best-effort component; the numbers are not). Its limit is worth naming:
-   * nobody watches a green run's annotations weekly, so this is a trace to find
-   * when asking "why is there no prose?", not a detector that will page anyone.
-   */
-  const { violations } = sanitiseNarrative(NARRATIVE, { environment });
-  if (violations.length) {
-    const tripped = violations.map((v) => `${v.rule}: "${v.match}" — ${v.why}`).join('; ');
-    console.warn(
-      `::warning title=digest narrative rejected::The model's narrative broke the digest's editorial rules and was ` +
-      `dropped; the numbers still post. Tripped ${tripped}. Rejected text: ${JSON.stringify(NARRATIVE)}`,
-    );
-  }
-
-  const message = buildMessage({
-    weekStart,
-    narrative: NARRATIVE,
-    milestones,
-    grouped,
-    stats: { prsMerged, issuesClosed, releases: releases.length },
-    gateCandidates,
-    environment,
-    repo,
-    runUrl,
-    server,
-  });
-
-  console.log(`Window ${window}.`);
-  process.exitCode = emit({
-    message,
-    env: process.env,
-    io: { writeFile: (p, t) => writeFileSync(p, t), appendFile: (p, t) => appendFileSync(p, t) },
-    out: console,
-  });
 }
 /* c8 ignore stop */

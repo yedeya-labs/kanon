@@ -12,6 +12,7 @@ const { SPLIT_LABEL } = await import('../../scripts/split-lineage.mjs');
 const { itemSatisfied, satisfiedTitles, classifyDeploy, readDeploy: kanonReadDeploy, closingMergeShas, isReviewBlocked, awaitingReview, dependencyCycles, needsVerification, verificationCaveat, declaresMembership, findDeployRun, nextActions, reachesPhase6, renderCloseAction, renderCloseComment, ownFailureCaveat, DEPLOY_PHASE, reconcileAll, report, retro, parseProposed, phaseOf, readBudget, reviewRecovery, chargeable, reviseRecovery, reviseRunsFor, startedAfter, standingChangesRequest, projectReviews, execute, qaIssueOf, hold, renderHoldComment, applyDecision, repoLabels, ghCause, redactSecrets, isTransient, holdMarker, occupiesSlot, isParkedOnHuman, linkedPrsRead, laneStateOf, adoptedProvenance, HUMAN_ACTION, carriedOut, inDecomposition, isProjectWork, SPEC_FINDING, FINDING_ANCHOR, openGatingWork, blockedOf, labelMirror, mirrorLabels, mirrorCap, projectLabel, qaIssueTitle, isQaIssueTitle } = await import('../../scripts/lead-reconcile.mjs');
 const { qaRoundBudget, heldClearsRead, QA_ROUND_CAP } = await import('../../scripts/lead-reconcile.mjs');
 const { FILE_ONLY, trackingControls } = await import('../../scripts/lead-reconcile.mjs');
+const { membershipUnread } = await import('../../scripts/lead-reconcile.mjs');
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ROOT } from './helpers/adopter.js';
 import { workflowText } from '../unit/helpers/called-workflow.js';
@@ -6064,5 +6065,49 @@ describe('retrying a run that died of its cause (RA-2519)', () => {
     } as unknown as Parameters<typeof reconcileAll>[1]);
     expect(decisions[0].actions.find((a) => a.kind === 'revise-churn')?.retry).toMatchObject({ runId: 9, classification: 'api_error' });
     expect(chargeable(decisions[0].actions)).toBe(0);
+  });
+});
+
+describe('never files on a member search that answered zero (kanon#1322)', () => {
+  // 2026-10-22, run 39800173092: the member search read "0 → 0" for project 902, whose
+  // eighteen members existed, and the tick went to `file`. Six ticks did it: 36 duplicates.
+  const marker = (n: number | string) => `Body.\n\n<!-- qa:project ${n} -->`;
+  const titles = ['first item', 'second item'];
+  const members = titles.map((title, i) => ({ number: 1276 + i, title, body: marker(952) }));
+
+  it('holds the project, filing nothing, when the label listing holds members the search missed', () => {
+    const searched = worldFrom(BRIEF(titles), []);
+    const why = membershipUnread({ briefMerged: true, project: '952', all: searched.all as Array<{ number: number }>, labelled: members });
+    expect(why).toMatch(/the member search returned 0 member\(s\), but the `project:952` label listing holds #1276, #1277/);
+    const held = { ...searched, labelled: members, membershipUnread: why };
+    expect(phaseOf(held)).toBe('membership-unread');
+    const decided = nextActions(held);
+    expect(decided.actions).toEqual([]);
+    expect(decided.stopped).toMatch(/^nothing filed or dispatched: the member search returned 0/);
+    // The control: the same world with the check passing files both items, so the hold is what stops it.
+    expect(nextActions(searched).actions.filter((a: { kind: string }) => a.kind === 'file')).toHaveLength(2);
+  });
+
+  it('holds when a partial answer missed one member, and passes when the search saw every one', () => {
+    expect(membershipUnread({ briefMerged: true, project: '952', all: [{ number: 1276 }], labelled: members })).toMatch(/holds #1277,/);
+    expect(membershipUnread({ briefMerged: true, project: '952', all: [{ number: 1276 }, { number: 1277 }], labelled: members })).toBeNull();
+  });
+
+  it('passes a first tick, before anything was filed, and a labelled issue that no longer declares membership', () => {
+    expect(membershipUnread({ briefMerged: true, project: '952', all: [], labelled: [] })).toBeNull();
+    // The mirror removes the label from it; it is no evidence about the search.
+    expect(membershipUnread({ briefMerged: true, project: '952', all: [], labelled: [{ number: 5, body: 'moved on' }, { number: 6, body: marker(953) }] })).toBeNull();
+    expect(membershipUnread({ briefMerged: false, project: '952', all: [], labelled: undefined })).toBeNull();
+  });
+
+  it("holds when the search found nothing and the label's holders couldn't be read", () => {
+    expect(membershipUnread({ briefMerged: true, project: '952', all: [], labelled: undefined })).toMatch(/couldn't be read, so whether this project's items were already filed is unknown/);
+    expect(membershipUnread({ briefMerged: true, project: '952', all: [{ number: 1 }], labelled: undefined })).toBeNull();
+  });
+
+  it('readWorld hands the check the label listing and the searched members', () => {
+    const src = readFileSync(join(ROOT, 'scripts/lead-reconcile.mjs'), 'utf8');
+    expect(src).toMatch(/membershipUnread\(\{ briefMerged, project, all, labelled \}\)/);
+    expect(src).toMatch(/membershipUnread: membershipUnreadWhy \};/);
   });
 });

@@ -208,6 +208,19 @@ describe('the gates (plan 0009 §2)', () => {
     expect(moved.gates[0]!.evidence).toBe(`review.yml pins v0.40.0, not ${CANDIDATE}`);
   });
 
+  it('reads an empty pin search again before the soak holds for no pin (kanon#1322)', () => {
+    const now = at(4 * DAY);
+    const gh = github(now);
+    let pinReads = 0;
+    const api: typeof gh.api = (path, opts) => {
+      if (path === pinSearch && pinReads++ === 0) return { total_count: 0, incomplete_results: false, items: [] };
+      return gh.api(path, opts);
+    };
+    const outcome = check(ENV, { api, now, workflows: WORKFLOWS });
+    expect(verdicts(outcome).soak).toBe('pass');
+    expect(pinReads).toBe(3);
+  });
+
   it('a candidate with a merged revert of its pull request is held (MUTATION: the revert gate removed turns this red)', () => {
     const revert = { [page(`repos/${REPO}/compare/${SHA}...main`)]: { commits: [commit(LATER, `Revert "feat: a (#101)" (#112)\n\nReverts ${REPO}#101`, '2026-10-20T10:00:00Z')] }, [page(`repos/${REPO}/pulls/112/commits`)]: [] };
     const { outcome } = run(4 * DAY, { over: revert });

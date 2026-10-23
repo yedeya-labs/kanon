@@ -64,6 +64,7 @@ import { appLogin, appPersona } from './app-register.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
 import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/deploy-declaration.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { trustedSearchSync } from './lib/search.mjs';
 import { laneCallerFile } from './lib/lane-caller.mjs';
 import { beforeApply, taxonomyLabel } from './lib/labels.mjs';
 // THE ROUTING HAS ONE HOME (`K-WORK-8`, kanon#164). Every issue this tick files takes its labels
@@ -522,6 +523,36 @@ export function mirrorLabels(world, plan, { run = gh } = {}) {
   return true;
 }
 
+/**
+ * WHETHER THE MEMBER SEARCH CAN BE BELIEVED, checked against a read that isn't a search
+ * (kanon#1322). The member set comes from an issue search (`"qa:project <n>" in:body`), and
+ * GitHub search can answer nothing for a query that has matches. On 2026-10-22 it answered 0
+ * for a project whose eighteen members existed, six ticks running, and each tick went to
+ * `file` and filed the brief's items again: 36 duplicates, which no tick can take back.
+ *
+ * The `project:<n>` label listing is that other read: a listing by label, not a search, of
+ * the issues the label mirror tagged. Every one of them whose body declares membership must
+ * be in the search's member set; one that is missing proves the search under-read, and a
+ * search that under-read can't decide what is left to file. And when the label's holders
+ * couldn't be read, a search that found no member is unverifiable, so it can't decide either.
+ * A first tick, before anything was filed, reads an empty label listing and passes.
+ *
+ * @param {{ briefMerged: boolean, project: string | number, all: Array<{ number: number }>,
+ *   labelled: Array<{ number: number, body?: string | null }> | undefined }} read
+ * @returns {string | null} why the member set can't be trusted, or null when it can
+ */
+export function membershipUnread({ briefMerged, project, all, labelled }) {
+  if (!briefMerged) return null;
+  if (labelled === undefined) {
+    return all.length ? null
+      : `the member search found no issue and the \`${projectLabel(project)}\` label's holders couldn't be read, so whether this project's items were already filed is unknown`;
+  }
+  const seen = new Set(all.map((i) => i.number));
+  const missed = labelled.filter((i) => declaresMembership(i.body, project) && !seen.has(i.number)).map((i) => `#${i.number}`);
+  if (!missed.length) return null;
+  return `the member search returned ${all.length} member(s), but the \`${projectLabel(project)}\` label listing holds ${missed.join(', ')}, which declare membership and which the search missed: GitHub search can answer nothing for a query that has matches (kanon#1322), so filing now could file an item that already exists`;
+}
+
 export function phaseOf(world) {
   const { briefMerged, proposed, filed, open, blocked, projectHeld } = world;
   // FIRST, above even the brief gate. A held project is one where a previous tick
@@ -543,6 +574,9 @@ export function phaseOf(world) {
   // "Took less than is there" — not specifically sub-headings, which was only the
   // first way it happened.
   if (proposed.residue?.length) return 'brief-partially-parsed';
+  // NEVER ACT ON A MEMBER SEARCH THAT UNDER-READ (kanon#1322, `membershipUnread`): it would
+  // file items that already exist, which is unamendable, or read open members as done.
+  if (world.membershipUnread) return 'membership-unread';
   if (blocked.length) return 'blocked';             // a human owes an answer
   // By TITLE, not by count. Comparing counts let one hand-filed member issue
   // the brief never named suppress filing a real one — `2 >= 2` skipped the file
@@ -807,6 +841,13 @@ function nextActionsCore(world, {
     return {
       phase, actions: [],
       stopped: `held: the tracking issue carries \`${HELD}\`, so a previous tick escalated something no tick can fix. Remove the label once it is resolved and the next tick resumes`,
+    };
+  }
+
+  if (phase === 'membership-unread') {
+    return {
+      phase, actions: [],
+      stopped: `nothing filed or dispatched: ${world.membershipUnread}. The next tick reads both again`,
     };
   }
 
@@ -2548,6 +2589,8 @@ export function deriveFollowUps(worlds, { run = gh, apply = APPLY, now = Date.no
     const since = new Date(now - days * 86_400_000).toISOString().slice(0, 10);
     found = json(['issue', 'list', '--repo', REPO, '--state', 'open',
       ...REVIEWER_FOLLOW_UP.flatMap((l) => ['--label', l]),
+      // search-zero: an empty answer only defers. Membership is appended, never removed, and
+      // the next tick lists the same window again (kanon#1322).
       '--search', `created:>=${since}`, '--limit', '200', '--json', 'number,state,labels,body']);
   } catch (err) {
     warn(`could not list reviewer follow-ups, so no membership was derived this tick — ${ghCause(err)}`);
@@ -2896,9 +2939,12 @@ function readWorld(project) {
   // Everything carrying the project marker in its body, so no new label taxonomy
   // and no milestone kind of the project's own: its work sits on the buckets or on
   // roadmap milestones, which may be one created for it (K-PROJ-11).
-  const found = ghJson(['issue', 'list', '--repo', REPO, '--state', 'all', '--search',
+  // SETTLED BEFORE IT GATES FILING (kanon#1322): search can answer nothing for a query that has
+  // matches, and an empty answer here re-files every issue the project already has. So an empty
+  // answer is read again, and answers that don't settle throw (`scripts/lib/search.mjs`).
+  const found = trustedSearchSync(() => ghJson(['issue', 'list', '--repo', REPO, '--state', 'all', '--search',
     `"qa:project ${project}" in:body`, '--limit', '200',
-    '--json', 'number,title,state,labels,body,closedAt']);
+    '--json', 'number,title,state,labels,body,closedAt']), { what: `project ${project}'s issues`, size: (a) => a?.length, partial: () => false });
 
   // GitHub issue search is TOKENISED full-text, not substring — a nearby number or
   // an unrelated body can match. This set gates everything (`filed.length <
@@ -3139,10 +3185,13 @@ function readWorld(project) {
     labelled = undefined;
   }
 
+  const membershipUnreadWhy = membershipUnread({ briefMerged, project, all, labelled });
+  if (membershipUnreadWhy) warn(`project #${project}: ${membershipUnreadWhy}`);
+
   // The environment's name for the report, at any phase (kanon#219). Read softly: only the deploy
   // phase, through `readDeploy`, may fail on a missing or malformed record (`K-PROJ-11`).
   const environment = deploy?.environment ?? declaredEnvironment();
-  return { project, briefMerged, briefPath, proposed, filed, open, blocked, unmilestoned, all, deploy, environment, qaIssue, trackingClosed, trackingReopened, projectHeld, fileOnly, searchHits: found.length, searchTitles: found.map((i) => i.title), knownLabels, labelled };
+  return { project, briefMerged, briefPath, proposed, filed, open, blocked, unmilestoned, all, deploy, environment, qaIssue, trackingClosed, trackingReopened, projectHeld, fileOnly, searchHits: found.length, searchTitles: found.map((i) => i.title), knownLabels, labelled, membershipUnread: membershipUnreadWhy };
 }
 
 // ---------------------------------------------------------------------------

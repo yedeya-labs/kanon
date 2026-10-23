@@ -1971,6 +1971,8 @@ export const FOLLOW_UP_MS = 24 * 60 * 60 * 1000;
  */
 export function followQueueMerges(repo, { run = gh, verify = verifyClosed, now = Date.now(), say = (m) => console.log(`  ${m}`) } = {}) {
   const since = now - FOLLOW_UP_MS;
+  // search-zero: an empty answer only defers. Each run re-reads the last day's queue merges, so a
+  // merge this run doesn't list is checked by a later one inside the window (kanon#1322).
   const listed = JSON.parse(run(['pr', 'list', '--repo', repo, '--state', 'merged', '--search', `merged:>=${new Date(since).toISOString()}`,
     '--limit', '100', '--json', 'number,headRefOid,mergedAt,mergedBy,closingIssuesReferences']));
   if (!Array.isArray(listed)) throw new Error(`the merged PRs could not be listed: ${JSON.stringify(listed).slice(0, 200)}`);

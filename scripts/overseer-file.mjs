@@ -469,8 +469,11 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
   let prior;
   let audit;
   try {
+    // A listing by label, not a search (kanon#1322): search can answer nothing for a query that
+    // has matches, which would number this audit #1 and supersede no open one. The titles are
+    // matched by `AUDIT_NUMBER` below, so the label alone narrows the listing.
     prior = JSON.parse(gh(['issue', 'list', '--repo', repo, '--label', 'agent:overseer', '--state', 'all', '--limit', '200',
-      '--search', 'in:title "audit-summary"', '--json', 'number,title,state']));
+      '--json', 'number,title,state']));
     const n = nextAuditNumber(prior.map((p) => p.title));
     const body = renderAudit({ audit: report.audit, filed, held, upstream, choice, ...(level ? { level, sent } : {}) });
     audit = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', auditTitle(n), '--body-file', '-', ...routing(LABELS)], signed(body, 'Overseer', appPersona('Overseer'))));

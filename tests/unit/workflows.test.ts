@@ -407,7 +407,8 @@ describe("K-SHIP-7 Kanon's release caller", () => {
         const r = spawnSync('bash', ['-c', String(read?.run)], {
           cwd: fileURLToPath(new URL('../..', import.meta.url)),
           encoding: 'utf8',
-          env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: 'acme/widgets', TAG: 'candidate-v0.40.0', GITHUB_OUTPUT: out, GH_TOKEN: 't' },
+          // The red-issue search answers nothing here, which is read again: no wait between reads (#1322).
+          env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: 'acme/widgets', TAG: 'candidate-v0.40.0', GITHUB_OUTPUT: out, GH_TOKEN: 't', KANON_SEARCH_WAIT_MS: '0' },
         });
         return { status: r.status, err: r.stderr, stdout: r.stdout, out: readFileSync(out, 'utf8') };
       } finally {

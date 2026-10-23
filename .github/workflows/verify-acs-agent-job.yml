@@ -271,9 +271,11 @@ jobs:
             That marker is how the reconciler counts verification rounds. It must be
             present even when everything passed and even when you filed nothing —
             without it the two-round bound never binds and you are dispatched again
-            every hour, forever (RA-1088). Find the QA issue with:
+            every hour, forever (RA-1088). Find the QA issue with this listing, which reads
+            the open `qa:verify` issues themselves rather than a search, since a search can
+            answer nothing for a query that has matches (kanon#1322):
               gh issue list --repo ${{ github.repository }} --label qa:verify --state open \
-                --search "\"qa:project ${{ inputs.project }}\"" --json number,body \
+                --limit 500 --json number,body \
                 --jq "[.[] | select(.body | test(\"<!-- qa:project ${{ inputs.project }} -->\"))] | .[0].number // empty"
 
             CLOSE THAT ISSUE ONLY IF EVERY CRITERION PASSED. A `failed`,

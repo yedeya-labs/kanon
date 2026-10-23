@@ -215,6 +215,21 @@ jobs:
           echo "audience=$audience" >> "$GITHUB_OUTPUT"
           echo "Written for: $audience" >> "$GITHUB_STEP_SUMMARY"
 
+      # THE WEEK THE NARRATIVE MAY DESCRIBE (kanon#1326). The window, its counts and its release
+      # tags, read before the model so the model is told them, and the window pinned as
+      # `week-end` so the message step below reads the same seven days. A narrative left to find
+      # its own material described a week's commits under a stats line of "0 PRs merged · 0
+      # issues closed · 0 releases". Reads only, with the workflow token.
+      - name: Read the week the narrative describes
+        id: week
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          WEEK_END: ${{ inputs.week_end }}
+        run: |
+          set -euo pipefail
+          node "$KANON/scripts/weekly-digest.mjs" --brief
+
       # BEST-EFFORT, and the only best-effort step here. The numbers below are deterministic;
       # this writes the one or two sentences of plain-language framing that turn "180
       # commits" into something a reader outside the work can act on. If it fails, times out
@@ -233,10 +248,19 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ github.token }}
           prompt: |
-            Read the GitHub releases published in the last 7 days for this repo
-            (`gh release list --limit 40` then `gh release view <tag>`) and write
-            **one or two sentences** summarising what the week's work was FOR, in
-            plain language, to `narrative.txt` in the repo root.
+            ${{ steps.week.outputs.brief }}
+
+            Read those releases (`gh release view <tag>` for each tag named
+            above) and write **one or two sentences** summarising what the
+            week's work was FOR, in plain language, to `narrative.txt` in the
+            repo root.
+
+            THE RELEASES NAMED ABOVE ARE YOUR ONLY SOURCE. Do not read commits,
+            branches, pull requests, issues or workflow runs, and describe
+            nothing that isn't in those releases' notes: the digest prints the
+            counts above under your sentences, and a claim they don't support
+            misleads the reader. If no release is named, write an empty
+            `narrative.txt` and stop; the digest then leads with its counts.
 
             The reader is ${{ steps.audience.outputs.audience }}. They want to
             know what the week bought them.
@@ -322,7 +346,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          WEEK_END: ${{ inputs.week_end }}
+          # The window the narrative was told about, pinned by the step above (kanon#1326).
+          WEEK_END: ${{ steps.week.outputs.week-end }}
           DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
           MESSAGE_PATH: ${{ runner.temp }}/kanon-notify-message/message.json
         run: |
