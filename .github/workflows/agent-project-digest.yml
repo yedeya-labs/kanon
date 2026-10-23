@@ -98,11 +98,13 @@ concurrency:
 permissions:
   contents: read
   issues: read
-  # REQUIRED, and its absence is SILENT: the search API scopes results to what the token can
-  # see, so `is:pr` returns an empty set rather than a 403 without it. The weekly digest
-  # learned this by reporting "0 PRs merged" in a week with 25 releases; here it would
-  # silently reclassify every building issue as a stall, which is the one classification
-  # this digest must not get wrong.
+  # REQUIRED, by two core REST readers, neither of them search. `openPullsOf` lists the open
+  # pull requests (`GET /repos/{repo}/pulls?state=open`, kanon#1342) the first time a
+  # dispatched member needs its closing PR; without this it fails with a 403 or 404 and stops
+  # the job, so no building issue is quietly reported as a stall. The mergeability read
+  # (`GET /repos/{repo}/pulls/{n}`) is the other: it runs only after the listing succeeds, and
+  # a failed read leaves the member `building`, never `conflicting`. The member search
+  # (`is:issue … in:body`) does not use this grant.
   pull-requests: read
 
 jobs:
