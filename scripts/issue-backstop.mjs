@@ -30,7 +30,8 @@
 // saying which. A re-run finds no milestone and writes nothing.
 //
 // SAFE BY DEFAULT: without APPLY=1 it prints what it would write. The lane sets APPLY on the
-// `issues: opened` event, and on a dispatch only when `apply` is ticked.
+// `issues: opened` and `pull_request_target: milestoned` events, and on a dispatch only when
+// `apply` is ticked.
 //
 // DEPENDENCY-FREE: `node:` and `gh` only, like every script under scripts/ (`K-SELF-8`).
 //
