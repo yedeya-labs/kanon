@@ -210,6 +210,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-SELF-14`
 
 - **2026-10-21.** The Owner decided that a review finding's class is the rule id it cites, in place of the six named classes, which almost no review recorded and nothing read; findings and follow-ups are counted per rule id by `scripts/finding-counts.mjs`, and a gate's baseline is recorded in its mechanism row. The count was backfilled for the four gates switched on that day. [#1253](https://github.com/yedeya-labs/kanon/issues/1253)
+- **2026-10-23.** The weekly count is no longer by hand: before its agent, the Overseer's lane counts the last whole week for each rule a mechanism row records a baseline for, and its audit pastes that count beside the baseline. [#1274](https://github.com/yedeya-labs/kanon/issues/1274)
 
 ## `K-ADOPT-1`
 

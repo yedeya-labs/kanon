@@ -301,6 +301,22 @@ describe('what the agent is told', () => {
     expect(byId('trend').run).toContain('This is not a quiet week.');
   });
 
+  // `K-SELF-14` (#1274): the week's finding count beside each gate's baseline, counted by a step
+  // before the agent on its read-only token, never by the model, and never turning the job red.
+  it('counts the week beside the gates\' baselines before the agent, and has the agent paste it verbatim', () => {
+    const s = byId('finding-counts');
+    expect(at((x) => x.id === 'app-token')).toBeLessThan(at((x) => x.id === 'finding-counts'));
+    expect(at((x) => x.id === 'finding-counts')).toBeLessThan(at((x) => x.id === 'agent'));
+    expect(s.run).toContain('node "$KANON/scripts/finding-counts.mjs" --baselines docs/qa/adoption.md > qa-store-export/finding-counts.md');
+    expect(s.run).toContain('"$GITHUB_STEP_SUMMARY"');
+    expect(s.env?.GH_TOKEN).toBe('${{ steps.app-token.outputs.token }}');
+    expect(s.env?.KANON).toBe('${{ steps.kanon.outputs.path }}');
+    expect(s['continue-on-error']).toBe(true);
+    expect((s as Step & { 'timeout-minutes'?: number })['timeout-minutes']).toBe(10);
+    expect(flat).toContain("in `qa-store-export/finding-counts.md`. Paste it VERBATIM under a `## Findings beside the gates' baselines` heading; do not recount it.");
+    expect(flat).toContain('its first line is not `finding-counts: ok`, say the counts are UNAVAILABLE and why');
+  });
+
   // Plan 0006 F2a (§4.1): one skill for every lane that writes to Kanon, read from Kanon's tree
   // at the lane's release, so the two lanes' evidence can't drift apart.
   it('sends the agent to the upstream-finding skill before it writes an upstream finding\'s evidence', () => {

@@ -144,7 +144,7 @@ This chapter governs how a Kanon pipeline keeps itself honest: the guards that c
 
 **Why.** A gate switched on before its baseline exists has an effect nobody can measure. A list of finding classes kept beside the rules is a second taxonomy: reviewers leave it blank, nothing reads it, and a class says nothing about which gate would remove it. The rule a finding cites is already on most findings, and it names the rule a gate serves.
 
-**Enforced by.** The count is `scripts/finding-counts.mjs`, which reads the Reviewer's reviews and follow-ups through the GitHub API and prints the findings, pull requests and follow-ups per rule id for a window (`tests/unit/finding-counts.test.ts`). Running it before a gate and recording the baseline is prose only.
+**Enforced by.** The count is `scripts/finding-counts.mjs`, which reads the Reviewer's reviews and follow-ups through the GitHub API and prints the findings, pull requests and follow-ups per rule id for a window (`tests/unit/finding-counts.test.ts`). The Overseer's lane runs it each week with `--baselines`, which counts the last whole week for each rule the adoption record's mechanism rows record a baseline for and prints it beside that baseline, and its audit pastes the result (`tests/unit/overseer-lane.test.ts`). Running it before a gate and recording the baseline is prose only.
 
 **Class.** framework
 

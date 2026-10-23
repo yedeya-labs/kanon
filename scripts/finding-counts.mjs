@@ -65,11 +65,25 @@
 //   [--until YYYY-MM-DD] [--rules K-A-1,K-B-2] [--reviewer <login>]... [--json]
 // The window defaults to the seven days before today (UTC). `--rules` limits the table to those
 // ids and lists each of them, a zero included. `--json` prints the counts and each week's.
+//
+//   GITHUB_REPOSITORY=owner/repo node scripts/finding-counts.mjs --baselines docs/qa/adoption.md
+//     [--until YYYY-MM-DD] [--reviewer <login>]...
+// THE WEEKLY COUNT BESIDE THE BASELINES (#1274), which the Overseer's lane runs before its agent
+// and its audit pastes. It reads the adoption record's mechanism rows that say "baseline
+// (`K-SELF-14`)", takes each rule id there written as `K-X-N` followed by its figures
+// (findings/pull requests/follow-ups, one window or several joined by "and"), counts those rules
+// over the last whole week, Monday to Monday UTC, that ends on or before `--until` (default
+// today), and prints a table of gate, rule, baseline as recorded and the week's figures. No row
+// records a baseline:
+// it says so and reads nothing from GitHub. Its first line is `finding-counts: ok ...`, or
+// `finding-counts: UNAVAILABLE — <why>` with exit 1, on stdout either way, for the audit to quote.
 // Exit 0 with the counts, 1 when `gh` fails, a listing can't be read to its end, or an empty first
 // page isn't confirmed empty by GraphQL, 2 on a usage error. Node built-ins only.
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { mechanismRows } from './lib/mechanisms.mjs';
 import { markedRole } from './lib/role-marker.mjs';
 
 const DAY = 86_400_000;
@@ -352,11 +366,63 @@ export const renderTable = (r) => {
   return lines.join('\n');
 };
 
+/** Where a mechanism row's baseline starts, as `K-SELF-14` has it recorded. */
+const BASELINE_AT = /baseline \(`K-SELF-14`\)/i;
+/** A rule id in a code span and the findings/pull requests/follow-ups recorded for it, one window or several joined by "and". */
+const FIGURES = /`(K-[A-Z]+-\d+)`\s+(\d+\/\d+\/\d+(?:\s+and\s+\d+\/\d+\/\d+)*)/g;
+
+/**
+ * The gates an adoption record records a baseline for (the header above): each mechanism row
+ * that says "baseline (`K-SELF-14`)", named by its text up to the first comma or full stop, with
+ * each rule id after that and the figures recorded for it, as written.
+ * @param {string} record the adoption record's markdown
+ * @returns {Array<{ gate: string, line: number, rules: Array<{ rule: string, baseline: string }> }>}
+ */
+export const recordedBaselines = (record) => mechanismRows(record).flatMap((row) => {
+  const at = row.mechanism.search(BASELINE_AT);
+  if (at === -1) return [];
+  const rules = [...row.mechanism.slice(at).matchAll(FIGURES)].map((m) => ({ rule: m[1] ?? '', baseline: (m[2] ?? '').replace(/\s+/g, ' ') }));
+  return [{ gate: row.mechanism.split(/,\s|\.\s/)[0]?.trim() ?? '', line: row.line, rules }];
+});
+
+/**
+ * The week's counts beside each gate's recorded baseline, for the Overseer's audit to paste
+ * verbatim. The first line says whether it is whole: `finding-counts: ok ...`.
+ * @param {{ record: string, recordPath: string, report: Report | null, since: string, until: string }} input
+ *   `report` is the window's count over the baselines' rules, `null` when no row records one
+ */
+export const renderBaselines = ({ record, recordPath, report, since, until }) => {
+  const gates = recordedBaselines(record);
+  const lines = [`finding-counts: ok since=${since} until=${until} gates=${gates.length}`, ''];
+  if (gates.length === 0) {
+    lines.push(`No mechanism row of \`${recordPath}\` records a baseline (\`K-SELF-14\`), so there is no gate to compare.`);
+    return lines.join('\n');
+  }
+  const week = new Map((report?.rows ?? []).map((r) => [r.rule, r]));
+  lines.push(
+    `The Reviewer's findings / pull requests / follow-ups per rule (\`K-SELF-14\`): each gate's baseline as its row of \`${recordPath}\` records it (the row says which windows), and the seven days from ${since} to ${until} (exclusive).`,
+    '',
+    '| Gate | Rule | Baseline as recorded | This week |',
+    '|---|---|---|---|',
+  );
+  /** @type {string[]} */
+  const bare = [];
+  for (const g of gates) {
+    if (g.rules.length === 0) bare.push(`Line ${g.line} of \`${recordPath}\` says it records a baseline, but names no rule with figures as \`K-X-N\` findings/pull requests/follow-ups, so it has no row above.`);
+    for (const { rule, baseline } of g.rules) {
+      const r = week.get(rule);
+      lines.push(`| ${g.gate} | \`${rule}\` | ${baseline} | ${r ? `${r.findings}/${r.pullRequests}/${r.followUps}` : '0/0/0'} |`);
+    }
+  }
+  if (bare.length) lines.push('', ...bare);
+  return lines.join('\n');
+};
+
 /**
  * Parse the arguments.
  * @param {string[]} argv
  * @param {string} today YYYY-MM-DD
- * @returns {{ since: string, until: string, rules: string[] | null, logins: string[], json: boolean } | { error: string }}
+ * @returns {{ since: string, until: string, rules: string[] | null, logins: string[], json: boolean, baselines: string | null } | { error: string }}
  */
 export const parseArgs = (argv, today) => {
   let until = today;
@@ -367,11 +433,17 @@ export const parseArgs = (argv, today) => {
   /** @type {string[]} */
   const logins = [];
   let json = false;
+  /** @type {string | null} */
+  let baselines = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const v = argv[i + 1];
     if (a === '--json') json = true;
-    else if (a === '--since' || a === '--until') {
+    else if (a === '--baselines') {
+      if (!v || v.startsWith('--')) return { error: '--baselines takes the adoption record\'s path, such as docs/qa/adoption.md' };
+      baselines = v;
+      i++;
+    } else if (a === '--since' || a === '--until') {
       if (!v || !DATE.test(v) || Number.isNaN(Date.parse(`${v}T00:00:00Z`))) return { error: `${a} takes a date, YYYY-MM-DD` };
       if (a === '--since') since = v;
       else until = v;
@@ -387,9 +459,14 @@ export const parseArgs = (argv, today) => {
       i++;
     } else return { error: `unknown argument ${a}` };
   }
+  if (baselines) {
+    // The week is a whole one, Monday to Monday, UTC, the same length as the baselines' week.
+    if (since || rules || json) return { error: '--baselines takes no --since, --rules or --json: the window is the last whole week, and the rules are the record\'s' };
+    until = weekOf(`${until}T00:00:00Z`);
+  }
   since ??= new Date(Date.parse(`${until}T00:00:00Z`) - 7 * DAY).toISOString().slice(0, 10);
   if (since >= until) return { error: `--since (${since}) must be before --until (${until})` };
-  return { since, until, rules, logins, json };
+  return { since, until, rules, logins, json, baselines };
 };
 
 if (isCliEntry(import.meta.url)) {
@@ -401,6 +478,19 @@ if (isCliEntry(import.meta.url)) {
   }
   /** @param {string[]} a */
   const gh = (a) => execFileSync('gh', a, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+  if (args.baselines) {
+    // For the Overseer's audit, pasted verbatim: a failure is said on stdout, as its first line.
+    try {
+      const record = readFileSync(args.baselines, 'utf8');
+      const rules = [...new Set(recordedBaselines(record).flatMap((g) => g.rules.map((r) => r.rule)))];
+      const report = rules.length ? count({ repo, gh, since: args.since, until: args.until, logins: args.logins, rules }) : null;
+      console.log(renderBaselines({ record, recordPath: args.baselines, report, since: args.since, until: args.until }));
+    } catch (e) {
+      console.log(`finding-counts: UNAVAILABLE — ${/** @type {Error} */ (e).message}`);
+      process.exit(1);
+    }
+    process.exit(0);
+  }
   try {
     const r = count({ repo, gh, since: args.since, until: args.until, logins: args.logins, rules: args.rules });
     console.log(args.json ? JSON.stringify(r, null, 2) : renderTable(r));

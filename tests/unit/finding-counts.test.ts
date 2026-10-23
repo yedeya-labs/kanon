@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { count, findingRules, isReviewers, parseArgs, parsePage, renderTable, tally, weekOf } from '../../scripts/finding-counts.mjs';
+import { count, findingRules, isReviewers, parseArgs, parsePage, recordedBaselines, renderBaselines, renderTable, tally, weekOf } from '../../scripts/finding-counts.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { writeStub } from './helpers/stub-bin.js';
 
@@ -388,13 +388,75 @@ describe('where a listing ends, and an empty page (K-SELF-14)', () => {
 
 describe('the arguments (K-SELF-14)', () => {
   it('defaults to the seven days before today, and refuses a malformed date, rule id, or an empty window', () => {
-    expect(parseArgs([], '2026-10-21')).toEqual({ since: '2026-10-14', until: '2026-10-21', rules: null, logins: [], json: false });
+    expect(parseArgs([], '2026-10-21')).toEqual({ since: '2026-10-14', until: '2026-10-21', rules: null, logins: [], json: false, baselines: null });
     expect(parseArgs(['--since', '2026-09-30', '--until', '2026-10-21', '--rules', 'K-PRIN-4,K-MERGE-13', '--reviewer', 'a[bot]', '--json'], '2026-10-22'))
-      .toEqual({ since: '2026-09-30', until: '2026-10-21', rules: ['K-PRIN-4', 'K-MERGE-13'], logins: ['a[bot]'], json: true });
+      .toEqual({ since: '2026-09-30', until: '2026-10-21', rules: ['K-PRIN-4', 'K-MERGE-13'], logins: ['a[bot]'], json: true, baselines: null });
     expect(parseArgs(['--since', '2026-10-1'], '2026-10-21')).toHaveProperty('error');
     expect(parseArgs(['--rules', 'PRIN-4'], '2026-10-21')).toHaveProperty('error');
     expect(parseArgs(['--since', '2026-10-21'], '2026-10-21')).toHaveProperty('error');
     expect(parseArgs(['--bogus'], '2026-10-21')).toHaveProperty('error');
+  });
+
+  it('with --baselines, counts the last whole week, Monday to Monday, and takes no window or rules of its own (#1274)', () => {
+    // 2026-10-21 is a Wednesday, so the last whole week is the one that ended on Monday the 19th.
+    expect(parseArgs(['--baselines', 'docs/qa/adoption.md'], '2026-10-21')).toEqual({ since: '2026-10-12', until: '2026-10-19', rules: null, logins: [], json: false, baselines: 'docs/qa/adoption.md' });
+    // On a Monday, the week that ends that day.
+    expect(parseArgs(['--baselines', 'a.md', '--until', '2026-10-19', '--reviewer', 'r[bot]'], '2026-10-23')).toMatchObject({ since: '2026-10-12', until: '2026-10-19', logins: ['r[bot]'] });
+    for (const extra of [['--since', '2026-10-01'], ['--rules', 'K-PRIN-4'], ['--json']]) {
+      expect(parseArgs(['--baselines', 'a.md', ...extra], '2026-10-21'), extra.join(' ')).toHaveProperty('error');
+    }
+    expect(parseArgs(['--baselines'], '2026-10-21')).toHaveProperty('error');
+  });
+});
+
+/** An adoption record whose mechanism table records baselines for two gates, and not for a third. */
+const RECORD = [
+  '# Adoption record',
+  '',
+  '## Mechanisms',
+  '',
+  '| Mechanism | Rules | Status |',
+  '|---|---|---|',
+  '| The red-test check on pull requests, called by `x.yml`, and held by `K-MERGE-4`, whose own count was `K-MERGE-4` 9/9/9. Its baseline (`K-SELF-14`), findings / pull requests / follow-ups from 2026-09-30 and over the seven days from 2026-10-14: `K-PRIN-4` 0/0/0 and 0/0/0, `K-MERGE-13` 1/1/3 and 0/0/0. Measured with `finding-counts.mjs --rules K-PRIN-4,K-MERGE-13` | `K-PRIN-4`, `K-MERGE-13` | installed 2026-10-21 |',
+  '| The label guard. Its baseline (`K-SELF-14`): `K-WORK-5` 3/3/0 | `K-WORK-5` | installed 2026-10-21 |',
+  '| The finding count, which cites `K-SELF-14` and `K-PRIN-8` 1/1/1 but records no baseline | `K-SELF-14` | not yet installed |',
+  '| A gate whose baseline (`K-SELF-14`) is written in words only | `K-SPEC-2` | installed 2026-10-21 |',
+  '',
+].join('\n');
+
+describe('the week beside the gates\' baselines (K-SELF-14, #1274)', () => {
+  it('reads each row that records a baseline, its gate, and each rule\'s figures as written after the baseline, never an id before it', () => {
+    expect(recordedBaselines(RECORD)).toEqual([
+      { gate: 'The red-test check on pull requests', line: 7, rules: [{ rule: 'K-PRIN-4', baseline: '0/0/0 and 0/0/0' }, { rule: 'K-MERGE-13', baseline: '1/1/3 and 0/0/0' }] },
+      { gate: 'The label guard', line: 8, rules: [{ rule: 'K-WORK-5', baseline: '3/3/0' }] },
+      { gate: 'A gate whose baseline (`K-SELF-14`) is written in words only', line: 10, rules: [] },
+    ]);
+    expect(recordedBaselines('# Adoption record\n\nNo table.\n')).toEqual([]);
+  });
+
+  it('prints each rule\'s baseline beside the week\'s figures, a rule the week never cited at 0/0/0, and names a row it could read no figures from', () => {
+    const report = { repo: 'o/r', since: '2026-10-12', until: '2026-10-19', reviews: 1, followUpIssues: 1, weeks: [], rows: [{ rule: 'K-MERGE-13', findings: 2, pullRequests: 1, followUps: 1 }] };
+    const out = renderBaselines({ record: RECORD, recordPath: 'docs/qa/adoption.md', report, since: '2026-10-12', until: '2026-10-19' });
+    expect(out.split('\n')[0]).toBe('finding-counts: ok since=2026-10-12 until=2026-10-19 gates=3');
+    expect(out).toContain('| Gate | Rule | Baseline as recorded | This week |');
+    expect(out).toContain('| The red-test check on pull requests | `K-MERGE-13` | 1/1/3 and 0/0/0 | 2/1/1 |');
+    expect(out).toContain('| The red-test check on pull requests | `K-PRIN-4` | 0/0/0 and 0/0/0 | 0/0/0 |');
+    expect(out).toContain('| The label guard | `K-WORK-5` | 3/3/0 | 0/0/0 |');
+    expect(out).toContain('Line 10 of `docs/qa/adoption.md` says it records a baseline, but names no rule with figures');
+    expect(out).not.toContain('K-PRIN-8');
+    expect(out).not.toContain('K-MERGE-4`');
+  });
+
+  it('says there is no gate to compare when no row records a baseline', () => {
+    const out = renderBaselines({ record: '# Adoption record\n', recordPath: 'docs/qa/adoption.md', report: null, since: '2026-10-12', until: '2026-10-19' });
+    expect(out).toBe('finding-counts: ok since=2026-10-12 until=2026-10-19 gates=0\n\nNo mechanism row of `docs/qa/adoption.md` records a baseline (`K-SELF-14`), so there is no gate to compare.');
+  });
+
+  it('reads the baselines Kanon\'s own record holds', () => {
+    const gates = recordedBaselines(readFileSync(join(ROOT, 'docs/qa/adoption.md'), 'utf8'));
+    expect(gates.map((g) => g.gate)).toEqual(expect.arrayContaining(['The label guard']));
+    expect(gates.length).toBeGreaterThanOrEqual(4);
+    for (const g of gates) expect(g.rules.length, g.gate).toBeGreaterThan(0);
   });
 });
 
@@ -416,6 +478,7 @@ describe('the command, against fixtures through a stub `gh` (K-SELF-14)', SPAWNS
   // GraphQL counts 3 pull requests wherever it is asked, so an empty first page of the pull
   // request listing disagrees with it.
   writeStub(join(bin, 'gh'), `#!/usr/bin/env bash
+printf '%s\\n' "$3" >> "${dir}/calls.log"
 f="${dir}/$(printf %s "$3" | tr -c 'A-Za-z0-9' '_')"
 if [ "$2" = graphql ]; then printf '{"data":{"repository":{"pullRequests":{"totalCount":3}}}}'
 elif [ -f "$f.empty-once" ]; then rm "$f.empty-once"; printf 'HTTP/2.0 200 OK\\r\\n\\r\\n[]'
@@ -448,6 +511,39 @@ elif [ -f "$f.http" ]; then cat "$f.http"; else printf 'HTTP/2.0 200 OK\\r\\n\\r
     expect(r.status).toBe(1);
     expect(r.stdout).toBe('');
     expect(r.stderr).toContain('finding-counts: https://api.github.com/repositories/2/pulls?state=all&page=2 came back empty on each of 5 reads');
+  });
+
+  it('with --baselines, prints the last whole week beside each recorded baseline, and reads nothing from GitHub when no row records one (#1274)', () => {
+    // The week of 2026-10-12: the review on #4 (K-PRIN-4, K-WORK-5) and follow-up #20 (K-PRIN-4).
+    put('repos/o/r/issues?labels=follow-up,agent:reviewer&state=all&since=2026-10-12T00:00:00Z&per_page=100&page=1', FIXTURE.issues);
+    const record = join(dir, 'adoption.md');
+    writeFileSync(record, RECORD);
+    const r = run('o/r', '--baselines', record, '--until', '2026-10-21');
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(r.stdout.split('\n')[0]).toBe('finding-counts: ok since=2026-10-12 until=2026-10-19 gates=3');
+    expect(r.stdout).toContain('| The red-test check on pull requests | `K-PRIN-4` | 0/0/0 and 0/0/0 | 1/1/1 |');
+    expect(r.stdout).toContain('| The label guard | `K-WORK-5` | 3/3/0 | 1/1/0 |');
+
+    const none = join(dir, 'none.md');
+    writeFileSync(none, '# Adoption record\n');
+    const log = join(dir, 'calls.log');
+    rmSync(log, { force: true });
+    const quiet = run('o/r', '--baselines', none);
+    expect(quiet.status).toBe(0);
+    expect(quiet.stdout).toContain('gates=0');
+    expect(existsSync(log)).toBe(false);
+  });
+
+  it('with --baselines, says UNAVAILABLE on stdout and exits 1 when the record or a listing can\'t be read', () => {
+    const missing = run('o/r', '--baselines', join(dir, 'no-such.md'));
+    expect(missing.status).toBe(1);
+    expect(missing.stdout).toMatch(/^finding-counts: UNAVAILABLE — .*no-such\.md/);
+    const record = join(dir, 'adoption.md');
+    writeFileSync(record, RECORD);
+    const red = run('o/x', '--baselines', record, '--until', '2026-10-21');
+    expect(red.status).toBe(1);
+    expect(red.stdout).toMatch(/^finding-counts: UNAVAILABLE — https:\/\/api\.github\.com\/repositories\/2\/pulls\?state=all&page=2 came back empty/);
   });
 
   it('exits 1 and prints no count when a first page stays empty but GraphQL counts the listing (#1323)', () => {
