@@ -180,14 +180,46 @@ const ISSUES = 'repos/o/r/issues?labels=follow-up,agent:reviewer&state=all&since
 /** A next page's URL as GitHub's Link header gives it for the issues listing: absolute, with a cursor. */
 const ISSUES_2 = 'https://api.github.com/repositories/1/issues?labels=follow-up%2Cagent%3Areviewer&state=all&per_page=100&page=2&after=Y3Vyc29y';
 
+/** The `-f`/`-F` fields of a `gh api graphql` call, by name, the query included. */
+const fields = (args: string[]) => {
+  const out: Record<string, string> = {};
+  for (let i = 2; i < args.length; i += 2) {
+    const [k = '', ...v] = (args[i + 1] ?? '').split('=');
+    out[`${args[i] === '-F' ? '#' : ''}${k}`] = v.join('=');
+  }
+  return out;
+};
+
+/** GraphQL's answers over FIXTURE: the pull requests and each one's reviews counted, the issues by label. */
+const gqlFixture = (f: Record<string, string>): unknown => {
+  const query = f.query ?? '';
+  if (query.includes('pullRequests{totalCount}')) return { data: { repository: { pullRequests: { totalCount: FIXTURE.pulls.length } } } };
+  if (query.includes('reviews{totalCount}')) return { data: { repository: { pullRequest: { reviews: { totalCount: (FIXTURE.reviews[Number(f['#number'])] ?? []).length } } } } };
+  if (query.includes('issues(')) {
+    const nodes = FIXTURE.issues.filter((i) => !i.pull_request && i.labels.some((l) => l.name === f.label)).map((i) => ({ labels: { nodes: i.labels } }));
+    return { data: { repository: { issues: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } };
+  }
+  throw new Error(`unexpected query ${query}`);
+};
+
 /**
  * A fake `gh api --include` over FIXTURE, one page of each listing and no next page, recording
- * what it was asked. `answer` may answer a path first, with the page `gh` prints.
+ * what it was asked. `answer` may answer a path first, with the page `gh` prints; `gql` may
+ * answer a `gh api graphql` call first, given its fields.
  */
-const fakeGh = (answer: (path: string, read: number) => string | undefined = () => undefined) => {
+const fakeGh = (
+  answer: (path: string, read: number) => string | undefined = () => undefined,
+  gql: (f: Record<string, string>) => unknown = () => undefined,
+) => {
   const calls: string[] = [];
   const sleeps: number[] = [];
+  const queries: Array<Record<string, string>> = [];
   const gh = (args: string[]): string => {
+    if (args[0] === 'api' && args[1] === 'graphql') {
+      const f = fields(args);
+      queries.push(f);
+      return JSON.stringify(gql(f) ?? gqlFixture(f));
+    }
     if (args[0] !== 'api' || args[1] !== '--include') throw new Error(`unexpected gh ${args.join(' ')}`);
     const path = args[2] ?? '';
     calls.push(path);
@@ -200,7 +232,7 @@ const fakeGh = (answer: (path: string, read: number) => string | undefined = () 
     throw new Error(`unexpected gh ${args.join(' ')}`);
   };
   const sleep = (ms: number) => { sleeps.push(ms); };
-  return { gh, sleep, calls, sleeps };
+  return { gh, sleep, calls, sleeps, queries };
 };
 
 /** A second follow-up in the window, which only a next page of the issues listing holds. */
@@ -208,8 +240,9 @@ const LATER = { number: 30, created_at: '2026-10-17T00:00:00Z', labels: [{ name:
 
 describe('counting a repository\'s window (K-SELF-14)', () => {
   it('counts the Reviewer\'s request-changes reviews and follow-ups in [since, until), and reads no pull request older than the window', () => {
-    const { gh, sleep, calls, sleeps } = fakeGh();
+    const { gh, sleep, calls, sleeps, queries } = fakeGh();
     const r = count({ repo: 'o/r', gh, sleep, since: '2026-10-14', until: '2026-10-21' });
+    expect(queries).toEqual([]);
     expect(r).toMatchObject({ since: '2026-10-14', until: '2026-10-21', reviews: 2, followUpIssues: 1 });
     expect(r.rows).toEqual([
       { rule: 'K-PRIN-4', findings: 2, pullRequests: 2, followUps: 1 },
@@ -294,13 +327,62 @@ describe('where a listing ends, and an empty page (K-SELF-14)', () => {
     expect(sleeps).toEqual([200, 400, 800, 1600]);
   });
 
-  it('takes a first page that is empty on every read as an empty listing, such as a pull request with no reviews', () => {
+  it('takes a first page that is empty on every read as an empty listing only when GraphQL counts it empty too, such as a pull request with no reviews', () => {
     const NONE = 'repos/o/r/pulls/4/reviews?per_page=100&page=1';
-    const { gh, sleep, calls, sleeps } = fakeGh((path) => (path === NONE ? http([]) : undefined));
+    const { gh, sleep, calls, sleeps, queries } = fakeGh(
+      (path) => (path === NONE ? http([]) : undefined),
+      (f) => (f['#number'] === '4' ? { data: { repository: { pullRequest: { reviews: { totalCount: 0 } } } } } : undefined),
+    );
     const r = count({ ...window, gh, sleep });
     expect(calls.filter((c) => c === NONE)).toHaveLength(5);
     expect(sleeps).toEqual([200, 400, 800, 1600]);
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatchObject({ owner: 'o', name: 'r', '#number': '4' });
     expect(r.reviews).toBe(1);
+  });
+
+  it('asks GraphQL only about a first page that stays empty, never about one a read returns', () => {
+    const { gh, sleep, queries } = fakeGh((path, read) => (path === ISSUES && read === 1 ? http([]) : undefined));
+    count({ ...window, gh, sleep });
+    expect(queries).toEqual([]);
+  });
+
+  it('fails, naming the page, when a first page stays empty on every read but GraphQL counts reviews on it (#1323)', () => {
+    const SOME = 'repos/o/r/pulls/4/reviews?per_page=100&page=1';
+    const { gh, sleep } = fakeGh((path) => (path === SOME ? http([]) : undefined));
+    expect(() => count({ ...window, gh, sleep })).toThrow(`${SOME} came back empty on each of 5 reads, but GitHub's GraphQL API counts 1 in that listing`);
+  });
+
+  it('fails when the follow-ups listing stays empty but GraphQL finds an issue with both labels, and not for one with a single label (#1323)', () => {
+    // The incident's listing (#1288): its first page answered `[]` where there were follow-ups.
+    const empty = (path: string) => (path === ISSUES ? http([]) : undefined);
+    const full = fakeGh(empty);
+    expect(() => count({ ...window, gh: full.gh, sleep: full.sleep })).toThrow(`${ISSUES} came back empty on each of 5 reads, but GitHub's GraphQL API counts 2 in that listing`);
+    expect(full.queries.at(-1)).toMatchObject({ label: 'agent:reviewer', since: '2026-10-14T00:00:00Z' });
+    // An issue labelled `agent:reviewer` alone, on a second GraphQL page: GraphQL's label filter
+    // matches any label, the REST listing all of them, so it is no follow-up and the listing is empty.
+    const pagesSeen: Array<string | undefined> = [];
+    const single = fakeGh(empty, (f) => {
+      if (!(f.query ?? '').includes('issues(')) return undefined;
+      pagesSeen.push(f.after);
+      return f.after === 'c1'
+        ? { data: { repository: { issues: { nodes: [{ labels: { nodes: [{ name: 'agent:reviewer' }] } }], pageInfo: { hasNextPage: false, endCursor: null } } } } }
+        : { data: { repository: { issues: { nodes: [], pageInfo: { hasNextPage: true, endCursor: 'c1' } } } } };
+    });
+    expect(count({ ...window, gh: single.gh, sleep: single.sleep }).followUpIssues).toBe(0);
+    expect(pagesSeen).toEqual([undefined, 'c1']);
+  });
+
+  it('fails when GraphQL gives no count for a first page that stays empty, rather than take the listing as empty (#1323)', () => {
+    const PULLS = 'repos/o/r/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1';
+    // An error beside a count that looks whole: the count isn't trusted.
+    const { gh, sleep } = fakeGh(
+      (path) => (path === PULLS ? http([]) : undefined),
+      () => ({ data: { repository: { pullRequests: { totalCount: 0 } } }, errors: [{ message: 'Something went wrong' }] }),
+    );
+    expect(() => count({ ...window, gh, sleep })).toThrow(/GraphQL API answered .*Something went wrong/);
+    const blank = fakeGh((path) => (path === PULLS ? http([]) : undefined), () => ({ data: { repository: {} } }));
+    expect(() => count({ ...window, gh: blank.gh, sleep: blank.sleep })).toThrow(`${PULLS} came back empty on each of 5 reads, and GitHub's GraphQL API gave no count`);
   });
 });
 
@@ -331,9 +413,12 @@ describe('the command, against fixtures through a stub `gh` (K-SELF-14)', SPAWNS
   put('repos/o/x/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1', FIXTURE.pulls.slice(0, 1), 'https://api.github.com/repositories/2/pulls?state=all&page=2');
   const bin = join(dir, 'bin');
   spawnSync('mkdir', [bin]);
+  // GraphQL counts 3 pull requests wherever it is asked, so an empty first page of the pull
+  // request listing disagrees with it.
   writeStub(join(bin, 'gh'), `#!/usr/bin/env bash
 f="${dir}/$(printf %s "$3" | tr -c 'A-Za-z0-9' '_')"
-if [ -f "$f.empty-once" ]; then rm "$f.empty-once"; printf 'HTTP/2.0 200 OK\\r\\n\\r\\n[]'
+if [ "$2" = graphql ]; then printf '{"data":{"repository":{"pullRequests":{"totalCount":3}}}}'
+elif [ -f "$f.empty-once" ]; then rm "$f.empty-once"; printf 'HTTP/2.0 200 OK\\r\\n\\r\\n[]'
 elif [ -f "$f.http" ]; then cat "$f.http"; else printf 'HTTP/2.0 200 OK\\r\\n\\r\\n[]'; fi
 `);
   const run = (repo: string, ...args: string[]) => spawnSync('node', [join(ROOT, 'scripts', 'finding-counts.mjs'), ...args], {
@@ -363,5 +448,12 @@ elif [ -f "$f.http" ]; then cat "$f.http"; else printf 'HTTP/2.0 200 OK\\r\\n\\r
     expect(r.status).toBe(1);
     expect(r.stdout).toBe('');
     expect(r.stderr).toContain('finding-counts: https://api.github.com/repositories/2/pulls?state=all&page=2 came back empty on each of 5 reads');
+  });
+
+  it('exits 1 and prints no count when a first page stays empty but GraphQL counts the listing (#1323)', () => {
+    const r = run('o/y', '--since', '2026-10-14', '--until', '2026-10-21');
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toContain("finding-counts: repos/o/y/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1 came back empty on each of 5 reads, but GitHub's GraphQL API counts 3 in that listing");
   });
 });
