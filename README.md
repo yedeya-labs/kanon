@@ -42,7 +42,7 @@ The [rulebook](rulebook/) has 226 rules, each with its reason. 171 name what enf
 ## Read on
 
 - [Architecture](docs/architecture.md): Apps, lanes, gates and data, on one page.
-- [Installing](docs/install.md), [lanes](docs/lanes.md), [`kanon doctor`](docs/doctor.md), [what sharing sends](docs/sharing.md).
+- [Installing](docs/install.md), [lanes](docs/lanes.md), [`kanon doctor`](docs/doctor.md), [`kanon status`](docs/status.md), [what sharing sends](docs/sharing.md).
 - [Rulebook](rulebook/) and [decisions](docs/decisions/), the [roadmap](ROADMAP.md).
 
 ## Contributing

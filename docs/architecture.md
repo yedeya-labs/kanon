@@ -102,7 +102,7 @@ Whether a gate moved anything is read from the rule its findings cite. [`scripts
 | [`.github/workflows/`](../.github/workflows/) | The lanes, the shared lane workflow they call, the release workflow, and Kanon's own CI. |
 | [`actions/`](../actions/) | The checks and the building blocks of a lane, each a versioned composite action. |
 | [`scripts/`](../scripts/) | The library the lanes run. |
-| [`cli/`](../cli/) | The `kanon` command: `init`, `doctor`, `apps`, `milestones`, `metrics`. |
+| [`cli/`](../cli/) | The `kanon` command: `init`, `doctor`, `apps`, `milestones`, `metrics`, [`status`](status.md). |
 | [`skills/`](../skills/) | The Claude Code skills: `/kanon:adopt`, `/kanon:doctor`, `/kanon:upgrade`, `/kanon:mandate`, which starts a project for the Lead and carries its brief's pull request, and the lanes' skills, `file-issue` and `upstream-finding`, which an agent reads by its path. |
 | [`infra/`](../infra/) | The QA store's and the telemetry store's cloud templates. |
 | [`tests/`](../tests/) | Kanon's own tests, run on every pull request. |

@@ -89,3 +89,5 @@ The pull request that installs the review lane leaves the repository in bootstra
 **How review starts,** once that pull request has merged: add `review:please` to a pull request when it opens, without waiting for its CI. The review lane waits for CI itself, and reviews a labelled pull request once CI has finished on its head ([lanes.md](lanes.md#your-first-lane-the-reviewer)). The pull request that installs the lane is never reviewed by it.
 
 **[`kanon doctor`](doctor.md) reminds you.** Once the Judge App is installed and the review lane is on the default branch, it reports `ruleset.bootstrap-can-end` while the ruleset requires no approval, with the command that requires it. Once the adoption record says bootstrap ended, it fails a ruleset that stops requiring an approving review (`ruleset.approval-off`): bootstrap never returns.
+
+**[`kanon status`](status.md) shows where things stand,** read live and writing nothing: `kanon status --project <n>` gives a project's phase, its items, their pull requests and what holds each.
