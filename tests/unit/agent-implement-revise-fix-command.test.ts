@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { writeStub } from './helpers/stub-bin.js';
+import { runWorkflowStep } from './helpers/workflow-step.js';
+import { serveFake } from './helpers/fake-git-data-api.mjs';
 import { REGISTER_FIXTURE } from './helpers/register.js';
 import { SPAWNS } from './helpers/spawns.js';
 import { FIX_COMMANDS_MARKER, HANDBACK } from '../../scripts/lib/protocol-spellings.mjs';
@@ -139,7 +141,8 @@ describe("a hand-back whose failed checks all have a fix command runs it before 
         if (r.status !== 0) throw new Error(`git ${a.join(' ')}: ${r.stderr}`);
         return r.stdout.trim();
       };
-      const remote = join(root, 'remote.git');
+      // At `<server>/<owner>/<name>`, where `fix-push` fetches the handed-back head from.
+      const remote = join(root, 'example-org', 'example-repo');
       const work = join(root, 'work');
       sh(root, 'init', '-q', '--bare', remote);
       sh(root, 'clone', '-q', remote, work);
@@ -157,6 +160,7 @@ describe("a hand-back whose failed checks all have a fix command runs it before 
       sh(work, 'checkout', '-q', '-b', 'fix/1-thing');
       w('src/x.ts', `${(moved ? ['new-a', 'new-b', ...body] : [...body, 'new-a']).join('\n')}\n`);
       sh(work, 'commit', '-qam', 'the pull request');
+      sh(work, 'push', '-q', 'origin', 'HEAD:refs/heads/fix/1-thing');
       const head = sh(work, 'rev-parse', 'HEAD');
       const temp = join(root, 'runner-temp');
       mkdirSync(temp);
@@ -165,11 +169,15 @@ describe("a hand-back whose failed checks all have a fix command runs it before 
         env: { KANON: process.cwd(), RUNNER_TEMP: temp, CHECKS: 'citation-shift', BASE_REF: 'main', HEAD_SHA: head, ...env },
       });
       const change = () => JSON.parse(readFileSync(join(temp, 'kanon-revise-fix/change.json'), 'utf8')) as { files: { path: string; mode: string; content: string }[] };
-      return { root, work, head, temp, run, change, sh };
+      return { root, remote, work, head, temp, run, change, sh };
     };
 
-    /** A `gh` that answers the git data API with fixed shas and records each call and its stdin. */
-    const pushWith = (c: { root: string; head: string; temp: string }, { record = '| Delegate | Email | Delegated on |\n|---|---|---|\n| Dee Legate | dee@example.org | 2026-10-01 |\n' } = {}) => {
+    /**
+     * The push and the round, against a `gh` that answers the delegation record and records the
+     * round's comment, and a recording double of the Git Data API over the remote, served from a
+     * process of its own (tests/unit/helpers/fake-git-data-api.mjs).
+     */
+    const pushWith = async (c: { root: string; remote: string; head: string; temp: string }, { refused = false, record = '| Delegate | Email | Delegated on |\n|---|---|---|\n| Dee Legate | dee@example.org | 2026-10-01 |\n' } = {}) => {
       const bin = join(c.root, 'bin');
       mkdirSync(bin, { recursive: true });
       writeFileSync(join(c.root, 'record'), record);
@@ -178,22 +186,26 @@ input=""; case "$*" in *"--input -"*) input="$(cat)" ;; esac
 printf '%s\\t%s\\n' "$*" "$input" >> "${c.root}/gh-calls"
 case "$*" in
   *"/contents/docs/qa/sign-off-delegation.md"*) cat "${c.root}/record" ;;
-  *"/git/commits/${c.head}"*) printf '{"tree":{"sha":"tree-of-head"}}' ;;
-  *"/git/blobs"*) printf '{"sha":"blob-1"}' ;;
-  *"/git/trees"*) printf '{"sha":"tree-2"}' ;;
-  *"-X POST repos/example-org/example-repo/git/commits"*) printf '{"sha":"c0ffee0000000000000000000000000000000001"}' ;;
-  *"/git/refs/heads/"*) printf '{"object":{"sha":"c0ffee0000000000000000000000000000000001"}}' ;;
 esac
 `);
-      const env = {
-        PATH: `${bin}:${process.env.PATH}`, KANON: process.cwd(), RUNNER_TEMP: c.temp,
-        GH_TOKEN: 'x', REPO: 'example-org/example-repo', BRANCH: 'fix/1-thing', PR: '1057',
-        CHECKS: 'citation-shift', HEAD_SHA: c.head, RUN_URL: 'https://example.invalid/run/1',
-        HEADER: '**Implementer** <!-- kanon:role=implementer -->',
-      };
-      const push = runStepOrThrow(pushStep, { env });
-      const round = runStepOrThrow(roundStep, { env: { ...env, SHA: push.outputs.sha ?? '' } });
-      return { push, round, calls: readFileSync(join(c.root, 'gh-calls'), 'utf8') };
+      const served = join(c.root, 'served');
+      mkdirSync(served);
+      const api = await serveFake({ remote: c.remote, repo: 'example-org/example-repo', appLogin: 'example-author[bot]', dir: served });
+      try {
+        const env = {
+          PATH: `${bin}:${process.env.PATH}`, KANON: process.cwd(), RUNNER_TEMP: c.temp,
+          GH_TOKEN: 'x', REPO: 'example-org/example-repo', BRANCH: 'fix/1-thing', PR: '1057',
+          SERVER_URL: `file://${c.root}`, GITHUB_API_URL: api.url, APP_LOGIN: 'example-author[bot]',
+          CHECKS: 'citation-shift', HEAD_SHA: c.head, RUN_URL: 'https://example.invalid/run/1',
+          HEADER: '**Implementer** <!-- kanon:role=implementer -->',
+        };
+        if (refused) return { refusal: runWorkflowStep(pushStep, { env }) };
+        const push = runStepOrThrow(pushStep, { env });
+        const round = runStepOrThrow(roundStep, { env: { ...env, SHA: push.outputs.sha ?? '' } });
+        return { push, round, calls: readFileSync(join(c.root, 'gh-calls'), 'utf8'), api: api.calls() as { method: string; path: string; body?: Record<string, unknown> }[] };
+      } finally {
+        api.stop();
+      }
     };
 
     it("an only-citation-shift failure: runs Kanon's command, which re-points the cite", () => {
@@ -206,20 +218,45 @@ esac
       expect(Buffer.from(file!.content, 'base64').toString()).toContain('`src/x.ts:12`');
     });
 
-    it('and pushes it on the handed-back head, signed off, and records one round', () => {
+    it('[LANE-12] and pushes it through the verified-commit helper on the handed-back head, signed off, and records one round', async () => {
       const c = checkout();
       c.run();
-      const { push, calls } = pushWith(c);
+      const { push, calls, api } = await pushWith(c) as Required<Awaited<ReturnType<typeof pushWith>>>;
       expect(push.outputs.pushed).toBe('true');
-      // On top of the handed-back head, and the branch moves only if it is still there.
-      expect(calls).toContain(`"parents":["${c.head}"]`);
-      expect(calls).toMatch(/-X PATCH repos\/example-org\/example-repo\/git\/refs\/heads\/fix\/1-thing --input -\t\{"sha":"c0ffee0+1","force":false\}/);
-      expect(calls).toContain('Signed-off-by: Dee Legate <dee@example.org>');
-      expect(calls).toContain('chore(revise): run the fix command of citation-shift');
+      // GitHub created the commit, on top of the handed-back head, with no author or committer,
+      // and it was read back verified before the branch moved, only if it was still there.
+      const created = api.filter((x) => x.method === 'POST' && x.path === 'repos/example-org/example-repo/git/commits');
+      expect(created).toHaveLength(1);
+      expect(Object.keys(created[0]!.body!).sort()).toEqual(['message', 'parents', 'tree']);
+      expect(created[0]!.body!.parents).toEqual([c.head]);
+      expect(created[0]!.body!.message).toContain('chore(revise): run the fix command of citation-shift');
+      expect(created[0]!.body!.message).toContain('Signed-off-by: Dee Legate <dee@example.org>');
+      const readBack = api.findIndex((x) => x.method === 'GET' && x.path === `repos/example-org/example-repo/commits/${push.outputs.sha}`);
+      const moved = api.findIndex((x) => x.method === 'PATCH');
+      expect(readBack).toBeGreaterThan(-1);
+      expect(readBack).toBeLessThan(moved);
+      expect(api[moved]).toMatchObject({ path: 'repos/example-org/example-repo/git/refs/heads/fix/1-thing', body: { sha: push.outputs.sha, force: false } });
+      // Its outputs name the commit GitHub created, now the branch's head, and the head it is on.
+      expect(c.sh(c.remote, 'rev-parse', 'refs/heads/fix/1-thing')).toBe(push.outputs.sha);
+      expect(c.sh(c.remote, 'log', '-1', '--format=%an', push.outputs.sha!)).toBe('example-author[bot]');
+      expect(push.outputs.base).toBe(c.head);
+      // The fix itself: the cite the command re-pointed.
+      expect(c.sh(c.remote, 'show', `${push.outputs.sha}:docs/a.md`)).toContain('`src/x.ts:12`');
       // One marker by the Implementer's token: the hand-back counts as one revise round.
       expect(calls).toContain('pr comment 1057 --repo example-org/example-repo');
       expect(calls.match(/<!-- qa:implement-revise -->/g)).toHaveLength(1);
       expect(calls).toContain('**Implementer** <!-- kanon:role=implementer -->');
+    });
+
+    it('[LANE-12] a branch that moved since the hand-back: the helper refuses it, and creates nothing', async () => {
+      const c = checkout();
+      c.run();
+      c.sh(c.work, 'commit', '-q', '--allow-empty', '-m', 'someone else');
+      c.sh(c.work, 'push', '-q', 'origin', 'HEAD:refs/heads/fix/1-thing');
+      const { refusal } = await pushWith(c, { refused: true });
+      expect(refusal!.status).not.toBe(0);
+      expect(refusal!.output).toMatch(/fix\/1-thing is at [0-9a-f]{7}, not [0-9a-f]{7}/);
+      expect(c.sh(c.remote, 'rev-parse', 'refs/heads/fix/1-thing')).toBe(c.sh(c.work, 'rev-parse', 'HEAD'));
     });
 
     it('a command that changes nothing: nothing to push, so the model runs', () => {

@@ -10,23 +10,28 @@
 //
 // TWO JOBS, BECAUSE OF `K-AGENT-49`. A job that checks out the pull request's branch holds no App
 // key, so `run` works on a checkout with the workflow's read token and pushes nothing. `push` runs
-// in a job with the Implementer's token and no checkout: it commits the files over the API, on top
-// of the head the Merger handed back, and moves the branch only if it is still there. The commit is
-// the App's, and carries the delegate's sign-off from the default branch's record, as an agent's
-// commit does (`K-AGENT-44`).
+// in a job with the Implementer's token and no checkout: it commits the files in an object store
+// that holds only the head the Merger handed back, and the verified-commit helper
+// (`lib/verified-commits.mjs`) creates that commit over the API and moves the branch only if it
+// is still there. The commit is verified as the App's, and carries the delegate's sign-off from
+// the default branch's record, as an agent's commit does (`K-AGENT-44`).
 //
 // Usage: node scripts/revise-fix.mjs run --checks <key>[,<key>]... --base <commit> --out <file>
-//        node scripts/revise-fix.mjs push --change <file> --branch <name> --head <sha> --message <text>
+//        node scripts/revise-fix.mjs push --change <file> --git-dir <store> --branch <name> --head <sha>
+//          --app-login <slug>[bot] --message <text>
 // `run` writes `changed=true|false` and `why=<reason>` to `$GITHUB_OUTPUT`, and `push` writes
-// `pushed=true`, `sha=<commit>` and `base=<its parent, the --head>`. `KANON` is the Kanon tree whose commands run; it defaults to
-// the one this file is in. `push` reads `GH_TOKEN` and `REPO`.
+// `pushed=true`, `sha=<the commit GitHub created>` and `base=<the head it is on, the --head>`.
+// `KANON` is the Kanon tree whose commands run; it defaults to the one this file is in. `push`
+// reads `GH_TOKEN`, `REPO` and `GITHUB_API_URL`.
 
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commandsFor } from './lib/fix-commands.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { githubRequest, pushVerified } from './lib/verified-commits.mjs';
 import { DELEGATION_PATH, parseDelegation } from '../actions/dco/dco.mjs';
 
 /**
@@ -124,24 +129,34 @@ export function signOff(gh, /** @type {string} */ repo) {
 }
 
 /**
- * Commit `change` on top of `head` over the API, and move `branch` to it only if it is still at
- * `head`: the ref update isn't forced, so a branch that moved refuses it. The commit's author and
- * committer are the token's App.
+ * Commit `change` on top of `head` in the object store `gitDir`, which holds `head`, and push it
+ * through the verified-commit helper (`[LANE-12]`): GitHub creates the commit with the token's
+ * App as its author, the helper reads it back verified as `appLogin`'s, and only then moves
+ * `branch`, and only if it is still at `head`.
  *
- * @param {{change: Change, repo: string, branch: string, head: string, message: string,
- *          gh: (args: string[], input?: unknown) => string}} opts
- * @returns {string} the new commit
+ * @param {{change: Change, gitDir: string, repo: string, branch: string, head: string, message: string,
+ *          appLogin: string, request: import('./lib/verified-commits.mjs').Request,
+ *          log?: (line: string) => void}} opts
+ * @returns {Promise<{sha: string, base: string}>} the commit GitHub created, and the head it is on
  */
-export function pushChange({ change, repo, branch, head, message, gh }) {
+export async function pushChange({ change, gitDir, repo, branch, head, message, appLogin, request, log }) {
   if (!change.files.length) throw new Error('nothing to push');
-  const post = (/** @type {string} */ path, /** @type {unknown} */ body, method = 'POST') =>
-    JSON.parse(gh(['api', '-X', method, `repos/${repo}/${path}`, '--input', '-'], body));
-  const baseTree = JSON.parse(gh(['api', `repos/${repo}/git/commits/${head}`])).tree.sha;
-  const tree = change.files.map((f) => ({ path: f.path, mode: f.mode, type: 'blob', sha: post('git/blobs', { content: f.content, encoding: 'base64' }).sha }));
-  const treeSha = post('git/trees', { base_tree: baseTree, tree }).sha;
-  const sha = post('git/commits', { message, tree: treeSha, parents: [head] }).sha;
-  post(`git/refs/heads/${branch}`, { sha, force: false }, 'PATCH');
-  return sha;
+  const dir = mkdtempSync(join(tmpdir(), 'kanon-revise-index-'));
+  // The local commit's author and committer never reach GitHub, which sends neither (`[LANE-8]`).
+  const env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index'), GIT_AUTHOR_NAME: 'kanon', GIT_AUTHOR_EMAIL: 'kanon@invalid', GIT_COMMITTER_NAME: 'kanon', GIT_COMMITTER_EMAIL: 'kanon@invalid' };
+  const git = (/** @type {string[]} */ a, /** @type {Buffer|string} */ input = '') =>
+    execFileSync('git', ['--git-dir', gitDir, ...a], { input, env, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+  let tip;
+  try {
+    git(['read-tree', head]);
+    const info = change.files.map((f) => `${f.mode} ${git(['hash-object', '-w', '--stdin'], Buffer.from(f.content, 'base64'))}\t${f.path}\0`).join('');
+    git(['update-index', '-z', '--index-info'], info);
+    tip = git(['commit-tree', git(['write-tree']), '-p', head, '-F', '-'], message);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const r = await pushVerified({ gitDir, tip, branch, head, appLogin, repo, request, ...(log ? { log } : {}) });
+  return { sha: r.head, base: r.base };
 }
 
 if (isCliEntry(import.meta.url)) {
@@ -174,9 +189,12 @@ if (isCliEntry(import.meta.url)) {
     const trailer = signOff(gh, repo);
     const message = trailer ? `${arg('--message').trimEnd()}\n\n${trailer}\n` : `${arg('--message').trimEnd()}\n`;
     const change = /** @type {Change} */ (JSON.parse(readFileSync(arg('--change'), 'utf8')));
-    const sha = pushChange({ change, repo, branch: arg('--branch'), head: arg('--head'), message, gh });
+    const request = githubRequest({ token: process.env.GH_TOKEN ?? '', api: process.env.GITHUB_API_URL || undefined });
+    const { sha, base } = await pushChange({
+      change, gitDir: arg('--git-dir'), repo, branch: arg('--branch'), head: arg('--head'), message, appLogin: arg('--app-login'), request, log: console.log,
+    });
     console.log(`pushed ${sha} to ${arg('--branch')}`);
-    output({ pushed: 'true', sha, base: arg('--head') });
+    output({ pushed: 'true', sha, base });
   } else {
     console.error('usage: revise-fix.mjs run|push …');
     process.exitCode = 2;
