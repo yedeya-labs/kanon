@@ -14,6 +14,7 @@ import { readDeploy } from '../../scripts/lead-reconcile.mjs';
 import { EXIT, FINDINGS, UNWAIVABLE } from '../../cli/doctor.mjs';
 import { checkout, fakeGitHub, HEALTHY_DEPLOY, healthyFiles, ids, run } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
+import { fakeReads } from '../library/helpers/fake-reader.js';
 
 /**
  * Plan 0010 step D2: the adoption record's `## Deploy` section, read by one parser,
@@ -126,19 +127,20 @@ describe('the reference deploy (K-PROJ-11), in `## Deploy`', () => {
     }
   });
 
-  it("the reconciler finds the fixture's reference deploy in `## Deploy`, and takes its job as the deploy", () => {
+  it("the reconciler finds the fixture's reference deploy in `## Deploy`, and takes its job as the deploy", async () => {
     const text = readFileSync(join(FIXTURE, ADOPTION_RECORD), 'utf8');
     const gh = (args: string[]) => (args[1] === 'repos/o/r' ? 'main\n' : text);
     const declared = readReferenceDeployFrom('o/r', gh);
     expect(declared).toEqual({ environment: 'preview', workflow: 'deploy-preview.yml', job: 'ship' });
-    const json = (args: string[]) => {
-      if (args[0] === 'issue') return { closedByPullRequestsReferences: [{ number: 9 }] };
-      if (args[0] === 'pr') return { state: 'MERGED', mergeCommit: { oid: 'a'.repeat(40) } };
-      if (args[0] === 'api') return [{ tag: 'v1.0.0' }];
-      if (args[1] === 'list') return [{ displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u' }];
-      return { jobs: [{ name: 'ship', conclusion: 'success' }] };
-    };
-    const d = readDeploy([{ number: 1, state: 'CLOSED' }], { json, text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'), declared: () => declared });
+    const { reader, repo } = fakeReads({
+      closedBy: { 1: [9] },
+      prs: { 9: { state: 'MERGED', mergeCommit: { oid: 'a'.repeat(40) } } },
+      releases: ['v1.0.0'],
+      runs: [{ displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u' }],
+      jobs: { 1: [{ name: 'ship', conclusion: 'success' }] },
+      compare: () => 'behind',
+    });
+    const d = await readDeploy([{ number: 1, state: 'CLOSED' }], { reader, repo, declared: () => declared });
     expect(d).toMatchObject({ state: 'deployed', environment: 'preview', workflow: 'deploy-preview.yml', job: 'ship' });
   });
 });

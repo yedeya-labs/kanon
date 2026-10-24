@@ -228,12 +228,12 @@ describe('feedComment', () => {
 });
 
 describe('parkedRead (shared with the reconciler)', () => {
-  it('reads an agent:implement issue with no PR and a stale agent stop as parked, one with a PR as not', () => {
+  it('reads an agent:implement issue with no PR and a stale agent stop as parked, one with a PR as not', async () => {
     const lane = () => ({ state: 'awaiting-human', lastAt: '2026-10-01T00:00:00Z' });
-    expect(parkedRead(1, { labels: ['agent:implement'], state: 'OPEN' }, { prs: () => ({ prs: [], ok: true }), lane }).parkedOnHuman).toBe(true);
-    expect(parkedRead(1, { labels: ['agent:implement'], state: 'OPEN' }, { prs: () => ({ prs: [{}], ok: true }), lane }).parkedOnHuman).toBe(false);
+    expect((await parkedRead(1, { labels: ['agent:implement'], state: 'OPEN' }, { prs: () => ({ prs: [], ok: true }), lane })).parkedOnHuman).toBe(true);
+    expect((await parkedRead(1, { labels: ['agent:implement'], state: 'OPEN' }, { prs: () => ({ prs: [{}], ok: true }), lane })).parkedOnHuman).toBe(false);
     // An unreadable PR list keeps the slot (fail closed).
-    expect(parkedRead(1, { labels: ['agent:implement'], state: 'OPEN' }, { prs: () => ({ prs: [], ok: false }), lane }).parkedOnHuman).toBe(false);
+    expect((await parkedRead(1, { labels: ['agent:implement'], state: 'OPEN' }, { prs: () => ({ prs: [], ok: false }), lane })).parkedOnHuman).toBe(false);
   });
 });
 
@@ -241,9 +241,27 @@ describe('run', () => {
   type Fake = { implement?: Item[]; followUps?: Item[]; comments?: Record<number, { body: string; login?: string; at?: string }[]>; prs?: Record<number, number[]>; failLabel?: boolean; listFails?: boolean };
   const fake = (f: Fake = {}) => {
     const calls: string[][] = [];
-    const gh = (args: string[]): string => {
+    const gh = (args: string[], input?: string): string => {
       calls.push(args);
       const a = args.join(' ');
+      // The linked-PR read goes through `ghReader`: a GraphQL query on standard input, named by
+      // its operation, answered as `{ data }`.
+      if (args.join(' ') === 'api graphql --input -') {
+        const { query, variables } = JSON.parse(input ?? '{}') as { query: string; variables: { number: number } };
+        const op = /query (\w+)/.exec(query)?.[1];
+        const n = Number(variables.number);
+        if (op === 'ClosedBy') {
+          const nodes = (f.prs?.[n] ?? []).map((number) => ({ number }));
+          return JSON.stringify({ data: { repository: { issue: { closedByPullRequestsReferences: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } } });
+        }
+        if (op === 'PullRequest') {
+          return JSON.stringify({ data: { repository: { pullRequest: {
+            number: n, state: 'OPEN', headRefOid: 'a', mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
+            commits: { nodes: [] }, reviews: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          } } } });
+        }
+        throw new Error(`unexpected GraphQL ${op ?? query}`);
+      }
       if (args[0] === 'api' && /issues\?state=open&labels=agent%3Aimplement/.test(a)) {
         if (f.listFails) throw new Error('HTTP 502');
         return JSON.stringify(f.implement ?? []);
@@ -254,10 +272,6 @@ describe('run', () => {
         return '[]';
       }
       if (args[0] === 'api' && args.includes('POST') && /\/comments$/.test(args[3] ?? '')) return '{}';
-      if (args[0] === 'issue' && args[1] === 'view' && args.includes('closedByPullRequestsReferences')) {
-        return JSON.stringify({ closedByPullRequestsReferences: (f.prs?.[Number(args[2])] ?? []).map((number) => ({ number })) });
-      }
-      if (args[0] === 'pr' && args[1] === 'view') return JSON.stringify({ number: Number(args[2]), state: 'OPEN', headRefOid: 'a', reviews: [], commits: [], mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
       if (args[0] === 'issue' && args[1] === 'view' && args.includes('comments')) {
         const n = Number(args[2]);
         return JSON.stringify({ comments: (f.comments?.[n] ?? []).map((c) => ({ author: { login: c.login ?? 'someone' }, createdAt: c.at ?? '2026-01-01T00:00:00Z', body: c.body })) });
@@ -270,18 +284,18 @@ describe('run', () => {
   const env = (feed: string) => ({ QA_BACKLOG_FEED: feed, QA_BACKLOG_MILESTONES: '' });
   const medium = followUp(20, 'sev:medium', '2026-10-01T00:00:00Z');
 
-  it('with the valve closed, reads nothing, writes nothing, and says the valve is closed', () => {
+  it('with the valve closed, reads nothing, writes nothing, and says the valve is closed', async () => {
     const f = fake({ followUps: [medium] });
     let text = '';
-    const r = run({ repo: 'o/r', apply: true, gh: f.gh, env: env('0'), summary: (t: string) => { text = t; } });
+    const r = await run({ repo: 'o/r', apply: true, gh: f.gh, env: env('0'), summary: (t: string) => { text = t; } });
     expect(f.calls).toEqual([]);
     expect(r.plan?.why).toBe('closed');
     expect(text).toContain('valve is closed');
   });
 
-  it('with apply, labels the chosen issue agent:implement and posts the marker, and nothing else', () => {
+  it('with apply, labels the chosen issue agent:implement and posts the marker, and nothing else', async () => {
     const f = fake({ followUps: [medium] });
-    const r = run({ repo: 'o/r', apply: true, gh: f.gh, env: env('1'), summary: () => {}, tick: 'https://x/runs/1' });
+    const r = await run({ repo: 'o/r', apply: true, gh: f.gh, env: env('1'), summary: () => {}, tick: 'https://x/runs/1' });
     expect(r.fed).toEqual([20]);
     const w = f.writes();
     expect(w).toHaveLength(2);
@@ -291,50 +305,50 @@ describe('run', () => {
     expect(w[1]!.join(' ')).toContain(FEED_MARKER);
   });
 
-  it('without apply, writes nothing (a manual dispatch is a dry run)', () => {
+  it('without apply, writes nothing (a manual dispatch is a dry run)', async () => {
     const f = fake({ followUps: [medium] });
-    const r = run({ repo: 'o/r', apply: false, gh: f.gh, env: env('1'), summary: () => {} });
+    const r = await run({ repo: 'o/r', apply: false, gh: f.gh, env: env('1'), summary: () => {} });
     expect(r.plan?.chosen.map((c) => c.number)).toEqual([20]);
     expect(f.writes()).toEqual([]);
   });
 
-  it('counts a fed issue with an open PR as in flight, and feeds nothing', () => {
+  it('counts a fed issue with an open PR as in flight, and feeds nothing', async () => {
     const fedIssue = { ...followUp(99, 'sev:low', '2026-09-01T00:00:00Z', { more: ['agent:implement'] }) };
     const f = fake({ implement: [fedIssue], followUps: [medium, fedIssue], comments: { 99: [{ body: FEED_MARKER }] }, prs: { 99: [500] } });
-    const r = run({ repo: 'o/r', apply: true, gh: f.gh, env: env('1'), summary: () => {} });
+    const r = await run({ repo: 'o/r', apply: true, gh: f.gh, env: env('1'), summary: () => {} });
     expect(r.plan?.why).toBe('fed-in-flight');
     expect(f.writes()).toEqual([]);
   });
 
-  it('a fed issue whose Implementer stopped and went quiet is parked, so it frees the feeder (the first-bail bug)', () => {
+  it('a fed issue whose Implementer stopped and went quiet is parked, so it frees the feeder (the first-bail bug)', async () => {
     const fedIssue = followUp(99, 'sev:low', '2026-09-01T00:00:00Z', { more: ['agent:implement'] });
     const thread = [
       { login: SWEEP_LOGIN, body: feedComment({ number: 99, title: 't', severity: 'sev:low', reason: 'r' }), at: '2026-01-01T00:00:00Z' },
       { login: AGENT_LOGIN, body: '**Implementer** <!-- kanon:role=implementer -->\n\nStopping: the acceptance needs a vendor portal.', at: '2026-01-02T00:00:00Z' },
     ];
     const f = fake({ implement: [fedIssue], followUps: [medium, fedIssue], comments: { 99: thread } });
-    const r = run({ repo: 'o/r', apply: false, gh: f.gh, env: env('1'), summary: () => {} });
+    const r = await run({ repo: 'o/r', apply: false, gh: f.gh, env: env('1'), summary: () => {} });
     expect(r.plan?.inUse).toEqual([]);
     expect(r.plan?.chosen.map((c) => c.number)).toEqual([20]);
     // Mutation: the stop is fresh (inside the sweep's 48 hours), so the run may still be going,
     // and the fed issue holds its slot.
     const fresh = [thread[0]!, { ...thread[1]!, at: new Date().toISOString() }];
     const g = fake({ implement: [fedIssue], followUps: [medium, fedIssue], comments: { 99: fresh } });
-    expect(run({ repo: 'o/r', apply: false, gh: g.gh, env: env('1'), summary: () => {} }).plan?.why).toBe('fed-in-flight');
+    expect((await run({ repo: 'o/r', apply: false, gh: g.gh, env: env('1'), summary: () => {} })).plan?.why).toBe('fed-in-flight');
   });
 
-  it('an unreadable slot list feeds nothing and never throws', () => {
+  it('an unreadable slot list feeds nothing and never throws', async () => {
     const f = fake({ followUps: [medium], listFails: true });
     let text = '';
-    expect(() => run({ repo: 'o/r', apply: true, gh: f.gh, env: env('1'), summary: (t: string) => { text = t; } })).not.toThrow();
+    await expect(run({ repo: 'o/r', apply: true, gh: f.gh, env: env('1'), summary: (t: string) => { text = t; } })).resolves.toBeDefined();
     expect(f.writes()).toEqual([]);
     expect(text).toContain('could not');
   });
 
-  it('a failed label write posts no marker, and says so', () => {
+  it('a failed label write posts no marker, and says so', async () => {
     const f = fake({ followUps: [medium], failLabel: true });
     let text = '';
-    const r = run({ repo: 'o/r', apply: true, gh: f.gh, env: env('1'), summary: (t: string) => { text = t; } });
+    const r = await run({ repo: 'o/r', apply: true, gh: f.gh, env: env('1'), summary: (t: string) => { text = t; } });
     expect(r.fed).toEqual([]);
     expect(f.writes().filter((c) => c.join(' ').includes('/comments'))).toEqual([]);
     expect(text).toContain('FAILED');
