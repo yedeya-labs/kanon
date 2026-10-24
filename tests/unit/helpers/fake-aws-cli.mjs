@@ -3,11 +3,14 @@
 // a state directory, so a test can run several store operations, from several repositories,
 // against one store and read what each one sees. A stub `aws` on PATH runs it as
 // `node fake-aws-cli.mjs <state dir> "$@"`. It answers only the calls the AWS store's scripts make:
-//   dynamodb put-item [--condition-expression attribute_not_exists(pk)], query (the key conditions
-//   `pk = :p` and `pk = :p AND sk > :s`, last-green's filter, --no-scan-index-forward,
+//   dynamodb put-item [--condition-expression attribute_not_exists(pk)], update-item (the
+//   migration's mark, `SET migratedTo = :id` on a row that is there and unmarked), query (the key
+//   conditions `pk = :p` and `pk = :p AND sk > :s`, last-green's filter, the fallback's
+//   `attribute_not_exists(migratedTo)` alone or after last-green's, --no-scan-index-forward,
 //   --max-items, --projection-expression), scan; s3 cp (file → bucket, bucket → file, bucket →
-//   bucket); s3api list-objects-v2 --prefix. Like DynamoDB, it refuses a query that compares a key
-//   with an empty string, with a ValidationException.
+//   bucket); s3api list-objects-v2 --prefix, get-object-tagging and put-object-tagging (kept in
+//   `tags.json`). Like DynamoDB, it refuses a query that compares a key with an empty string, with
+//   a ValidationException.
 // Every call is appended to `<state>/calls`, one JSON array per line. No test reaches AWS.
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -23,6 +26,8 @@ const save = (/** @type {string} */ f, /** @type {unknown} */ v) => writeFileSyn
 const table = load('table.json', []);
 /** @type {Record<string, string>} */
 const bucket = load('bucket.json', {});
+/** @type {Record<string, Array<{ Key: string, Value: string }>>} */
+const tags = load('tags.json', {});
 const fail = (/** @type {string} */ msg, code = 254) => { process.stderr.write(`${msg}\n`); process.exit(code); };
 
 const [service, op] = args;
@@ -33,6 +38,16 @@ if (service === 'dynamodb' && op === 'put-item') {
     fail('An error occurred (ConditionalCheckFailedException) when calling the PutItem operation: The conditional request failed');
   }
   if (at >= 0) table[at] = item; else table.push(item);
+  save('table.json', table);
+} else if (service === 'dynamodb' && op === 'update-item') {
+  const key = JSON.parse(/** @type {string} */ (opt('--key')));
+  if (opt('--update-expression') !== 'SET migratedTo = :id'
+    || opt('--condition-expression') !== 'attribute_exists(pk) AND attribute_not_exists(migratedTo)') {
+    fail(`fake aws: update-item '${opt('--update-expression')}' if '${opt('--condition-expression')}' not modelled`, 2);
+  }
+  const it = table.find((x) => x.pk.S === key.pk.S && x.sk.S === key.sk.S);
+  if (!it || it.migratedTo) fail('An error occurred (ConditionalCheckFailedException) when calling the UpdateItem operation: The conditional request failed');
+  /** @type {Record<string, any>} */ (it).migratedTo = JSON.parse(/** @type {string} */ (opt('--expression-attribute-values')))[':id'];
   save('table.json', table);
 } else if (service === 'dynamodb' && op === 'query') {
   const values = JSON.parse(/** @type {string} */ (opt('--expression-attribute-values')));
@@ -48,7 +63,11 @@ if (service === 'dynamodb' && op === 'put-item') {
   items.sort((a, b) => a.sk.S.localeCompare(b.sk.S));
   if (args.includes('--no-scan-index-forward')) items.reverse();
   const filter = opt('--filter-expression');
-  if (filter === '#f = :zero AND #t = :all') items = items.filter((it) => it.failed?.N === '0' && it.tier?.S === 'all');
+  const green = (/** @type {Record<string, any>} */ it) => it.failed?.N === '0' && it.tier?.S === 'all';
+  const unmarked = (/** @type {Record<string, any>} */ it) => !('migratedTo' in it);
+  if (filter === '#f = :zero AND #t = :all') items = items.filter(green);
+  else if (filter === '#f = :zero AND #t = :all AND attribute_not_exists(migratedTo)') items = items.filter((it) => green(it) && unmarked(it));
+  else if (filter === 'attribute_not_exists(migratedTo)') items = items.filter(unmarked);
   else if (filter) fail(`fake aws: filter '${filter}' not modelled`, 2);
   const max = opt('--max-items');
   if (max) items = items.slice(0, Number(max));
@@ -73,6 +92,15 @@ if (service === 'dynamodb' && op === 'put-item') {
   const prefix = opt('--prefix') ?? '';
   const keys = Object.keys(bucket).filter((k) => k.startsWith(prefix)).sort();
   process.stdout.write(keys.length ? JSON.stringify({ Contents: keys.map((Key) => ({ Key })) }) : '');
+} else if (service === 's3api' && op === 'get-object-tagging') {
+  const key = String(opt('--key'));
+  if (!(key in bucket)) fail('An error occurred (NoSuchKey) when calling the GetObjectTagging operation: The specified key does not exist.');
+  process.stdout.write(JSON.stringify({ TagSet: tags[key] ?? [] }));
+} else if (service === 's3api' && op === 'put-object-tagging') {
+  const key = String(opt('--key'));
+  if (!(key in bucket)) fail('An error occurred (NoSuchKey) when calling the PutObjectTagging operation: The specified key does not exist.');
+  tags[key] = JSON.parse(/** @type {string} */ (opt('--tagging'))).TagSet;
+  save('tags.json', tags);
 } else {
   fail(`fake aws: ${args.join(' ')} not modelled`, 2);
 }

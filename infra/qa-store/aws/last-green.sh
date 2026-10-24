@@ -18,6 +18,10 @@
 # wrote against an unkeyed baseline), the gate reads the unkeyed `RUN#explorer` written before
 # kanon#1346 instead, with the same queries, as it did then. The repository's first sweep ends
 # that, and the Owner's migration copies the unkeyed history under the repository's key.
+# THE FALLBACK SKIPS WHAT THE MIGRATION MARKED (kanon#1377, `keys.mjs`): both reads of the unkeyed
+# partition add `attribute_not_exists(migratedTo)` to their server-side filter, so once a store's
+# history is migrated to one repository, a repository added later finds no baseline there and
+# sweeps; a store not yet migrated reads its unkeyed history as before.
 #
 # Env: QA_DYNAMO_TABLE, QA_AWS_REGION, DIR, GITHUB_REPOSITORY_ID (the runner's).
 set -euo pipefail
@@ -61,11 +65,14 @@ unkeyed="RUN#explorer"
 # otherwise be spliced into the JSON and break the parse.
 query_err="$(mktemp)"
 for pk in "$own" "$unkeyed"; do
+# The unkeyed partition's reads skip the rows the migration marked; this repository's own has none.
+unmarked=""
+[ "$pk" = "$unkeyed" ] && unmarked=" AND attribute_not_exists(migratedTo)"
 values="$(jq -nc --arg p "$pk" '{":p":{"S":$p},":zero":{"N":"0"},":all":{"S":"all"}}')"
 if ! items="$(aws dynamodb query --region "$QA_AWS_REGION" --table-name "$QA_DYNAMO_TABLE" \
   --no-scan-index-forward --max-items 1 \
   --key-condition-expression 'pk = :p' \
-  --filter-expression '#f = :zero AND #t = :all' \
+  --filter-expression "#f = :zero AND #t = :all$unmarked" \
   --expression-attribute-names '{"#f":"failed","#t":"tier"}' \
   --expression-attribute-values "$values" \
   --output json 2>"$query_err")"; then
@@ -91,6 +98,8 @@ fi
 # made only on this branch, never on the skip/changed paths.
 #   - no row at all                → a fresh store: quiet `ok`. In this
 #     repository's own partition, it is instead the cue to read the unkeyed one.
+#     In the unkeyed one this read skips marked rows too, so a partition the
+#     migration marked whole is empty here, not drift.
 #   - a RED full-tier sweep (`failed` a non-zero number, `tier` "all") → a red
 #     streak. Quiet `ok`, deliberately — the gate is behaving correctly, and an
 #     outage already has its own signal (the bugs the sweep files); a daily
@@ -108,6 +117,7 @@ fi
 if ! newest="$(aws dynamodb query --region "$QA_AWS_REGION" --table-name "$QA_DYNAMO_TABLE" \
   --no-scan-index-forward --max-items 1 \
   --key-condition-expression 'pk = :p' \
+  ${unmarked:+--filter-expression "attribute_not_exists(migratedTo)"} \
   --expression-attribute-values "$(jq -nc --arg p "$pk" '{":p":{"S":$p}}')" \
   --output json 2>"$query_err")"; then
   run_sweep degraded "the baseline query matched no green full-tier sweep, and the follow-up read of the partition failed, so an empty store cannot be told from a broken filter — running the full sweep. $(tr '\n' ' ' < "$query_err")"

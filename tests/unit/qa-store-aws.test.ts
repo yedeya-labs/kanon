@@ -7,7 +7,7 @@ import { parse } from 'yaml';
 import { writeStub } from './helpers/stub-bin.js';
 import { STACK_NAME, TEMPLATE_PATH, deployCommands, lifecycleProblems, readTemplate, trustProblems, trustedSubjects } from '../../infra/qa-store/aws/provision.mjs';
 import { PARTITIONS, toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
-import { REPORTS_ROOT, UNKEYED_PARTITIONS } from '../../infra/qa-store/aws/keys.mjs';
+import { MIGRATED_TAG, REPORTS_ROOT, UNKEYED_PARTITIONS, UNMARKED } from '../../infra/qa-store/aws/keys.mjs';
 import { readCostRowsFile } from '../../actions/qa-store/qa-store.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { ID_TOKEN_HOLDERS } from './helpers/store-jobs.js';
@@ -214,7 +214,7 @@ describe('repositories sharing one store read only their own rows, and the docs 
     expect(own).toContain('keyed by the repository\'s id');
     expect(own).toContain('(#rows-by-repository)');
     expect(own).toContain('the role still lets every repository it trusts reach every row');
-    expect(own).toContain('keeps its unkeyed rows until the account owner migrates them');
+    expect(own).toContain('falls back to its unkeyed rows until the account owner migrates them, which marks them so that no lane reads them again');
     expect(readFileSync('docs/qa-store.md', 'utf8')).not.toContain('share its rows');
     expect(paragraph('It needs `gh`, signed in with read access')).toContain('then read and write only its own rows');
   });
@@ -445,7 +445,9 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
     it('a failed query, filter drift and a non-SHA are degraded: exit 1 with the gate\'s warning, and no commit', () => {
       aws('echo "AccessDenied" >&2; exit 254');
       expect(run('last-green')).toMatchObject({ status: 1, stdout: expect.stringContaining('::warning title=Explorer change-gate degraded::the baseline query failed') });
-      aws(`case "$*" in *filter-expression*) echo '{"Items":[]}';; *) echo '{"Items":[{"skipped":{"BOOL":true}}]}';; esac`);
+      // The baseline query is the one filtered on `failed` and `tier`: the newest-row read of the
+      // unkeyed partition filters too, on the migration's mark (kanon#1377), and still sees drift.
+      aws(`case "$*" in *'#f = :zero'*) echo '{"Items":[]}';; *) echo '{"Items":[{"skipped":{"BOOL":true}}]}';; esac`);
       expect(run('last-green')).toMatchObject({ status: 1, stdout: expect.stringContaining('The filter has likely drifted') });
       aws(`echo '{"Items":[{"commit":{"S":"not-a-sha"}}]}'`);
       expect(run('last-green')).toMatchObject({ status: 1, stdout: expect.stringContaining('non-sha value') });
@@ -805,6 +807,53 @@ describe('the store keys every row by repository (kanon#1346)', SPAWNS, () => {
     });
   });
 
+  // kanon#1377: a row the migration marked is another repository's history now; the fallback
+  // reads only the unmarked ones, so a store not yet migrated still reads its history.
+  describe('the fallback skips the unkeyed rows the migration marked, and still reads the unmarked', () => {
+    const marked = (it: Item): Item => ({ ...it, migratedTo: { S: OTHER } });
+    const STORE: Item[] = [
+      unkeyedSweep(A, '20261010T000000Z'),
+      marked(unkeyedSweep(B, '20261012T000000Z')),
+      { pk: { S: 'COVERAGE' }, sk: { S: '/old' }, last_status: { S: 'passed' } },
+      marked({ pk: { S: 'COVERAGE' }, sk: { S: '/marked' }, last_status: { S: 'passed' } }),
+      { pk: { S: 'COST#implementer' }, sk: { S: '20261010T000000Z' }, outcome: { S: 'ok' } },
+      marked({ pk: { S: 'COST#implementer' }, sk: { S: '20261012T000000Z' }, outcome: { S: 'ok' } }),
+    ];
+    const OBJECTS = { 'explorer/20261010T000000Z.json': JSON.stringify({ commit: A }), 'explorer/20261012T000000Z.json': JSON.stringify({ commit: B }) };
+
+    it('the gate reads the newest unmarked green sweep, not a newer marked one', () => {
+      seed(STORE, OBJECTS);
+      const g = op(REPO, 'last-green');
+      expect(g.r.status, g.r.stdout).toBe(0);
+      expect(g.read('last-green')).toBe(`${A}\n`);
+    });
+
+    it('the gate finds a wholly marked partition empty, a quiet ok, not filter drift', () => {
+      seed(STORE.filter((i) => 'migratedTo' in i));
+      const g = op(REPO, 'last-green');
+      expect(g.r.status, g.r.stdout).toBe(0);
+      expect(g.read('last-green')).toBe('');
+      expect(g.r.stdout).toContain('no sweep in the store yet');
+    });
+
+    it('the export reads the unmarked rows and their reports, none of the marked', () => {
+      seed(STORE, OBJECTS);
+      const e = op(REPO, 'export', { KIND: 'overseer', FROM: '20261001T000000Z' });
+      expect(e.r.status, e.r.stdout + e.r.stderr).toBe(0);
+      expect(JSON.parse(e.read('export/runs-explorer.json')).map((r: J) => r.commit)).toEqual([A]);
+      expect(JSON.parse(e.read('export/coverage.json'))).toEqual([{ route: '/old', last_status: 'passed' }]);
+      expect(JSON.parse(e.read('export/reports/explorer/20261010T000000Z.json'))).toEqual({ commit: A });
+      expect(existsSync(join(e.dir, 'export/reports/explorer/20261012T000000Z.json'))).toBe(false);
+    });
+
+    it('cost-rows reads the unmarked rows, none of the marked', () => {
+      seed(STORE);
+      const cr = op(REPO, 'cost-rows', { KIND: 'implementer', FROM: '20261001T000000Z' });
+      expect(cr.r.status, cr.r.stdout + cr.r.stderr).toBe(0);
+      expect(JSON.parse(cr.read('cost-rows.json')).rows.map((r: J) => r.ts)).toEqual(['20261010T000000Z']);
+    });
+  });
+
   it('the docs name every keyed partition, the raw reports\' root, the fallback and the migration\'s command', () => {
     const doc = readFileSync('docs/qa-store.md', 'utf8');
     const section = doc.slice(doc.indexOf('### Rows by repository'), doc.indexOf('### Provision a store'));
@@ -812,6 +861,13 @@ describe('the store keys every row by repository (kanon#1346)', SPAWNS, () => {
     expect(section).toContain(`\`${REPORTS_ROOT}/<id>/<kind>/<ts>.json\``);
     expect(section).toContain('no row of its own');
     expect(doc).toContain('node infra/qa-store/aws/migrate-to-repository-keys.mjs --repository <owner>/<repo> --region <region> --bucket <BucketName>');
+    // kanon#1377: the mark, its filter and the reports' tag, named where the fallback is, and the
+    // bash gate's inline filter held to `keys.mjs`.
+    expect(UNMARKED).toBe('attribute_not_exists(migratedTo)');
+    expect(section).toContain(`\`${UNMARKED}\``);
+    expect(section).toContain('**The fallback skips what the migration marked**');
+    expect(doc).toContain(`\`${MIGRATED_TAG}\``);
+    expect(readFileSync('infra/qa-store/aws/last-green.sh', 'utf8')).toContain(`AND ${UNMARKED}"`);
   });
 
   describe('the migration (migrate-to-repository-keys.mjs, the Owner runs it)', () => {
@@ -840,10 +896,81 @@ describe('the store keys every row by repository (kanon#1346)', SPAWNS, () => {
       expect(r.stdout).toContain(`RUN#explorer → RUN#explorer#${REPO}: would copy 1 row(s); 0 already there.`);
       expect(r.stdout).toContain(`COST#implementer → COST#implementer#${REPO}: would copy 1 row(s)`);
       expect(r.stdout).toContain(`Raw reports → repository/${REPO}/: would copy 2; 0 already there.`);
-      expect(r.stdout).toContain('Dry run: nothing written. Re-run with --apply to copy 3 row(s) and 2 report(s).');
+      expect(r.stdout).toContain('Dry run: nothing written. Re-run with --apply to copy 3 row(s) and 2 report(s), and mark 4 row(s) and 2 report(s).');
       expect(calls().filter((c) => c[1] === 'put-item' || c[1] === 'cp')).toEqual([]);
       expect(table()).toEqual(STORE);
       expect(bucket()).toEqual(OBJECTS);
+    });
+
+    // kanon#1377, the Owner's decision of 2026-10-23: mark, never delete.
+    it('a dry run lists what it would mark, and marks nothing', () => {
+      seed(STORE, OBJECTS);
+      const r = migrate();
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain(`COVERAGE → COVERAGE#${REPO}: would copy 1 row(s); 1 already there. would mark 2 unkeyed row(s) migratedTo=${REPO}.`);
+      expect(r.stdout).toContain(`RUN#explorer → RUN#explorer#${REPO}: would copy 1 row(s); 0 already there. would mark 1 unkeyed row(s) migratedTo=${REPO}.`);
+      expect(r.stdout).toContain(`would mark 2 unkeyed report(s) with the tag kanon-migrated-to=${REPO}.`);
+      expect(calls().filter((c) => c[1] === 'update-item' || c[1] === 'put-object-tagging')).toEqual([]);
+      expect(table().filter((i) => 'migratedTo' in i)).toEqual([]);
+      expect(existsSync(join(state, 'tags.json'))).toBe(false);
+    });
+
+    it('--apply marks every unkeyed row and report it copied, deletes none, and leaves the copies unmarked', () => {
+      seed(STORE, OBJECTS);
+      writeFileSync(join(state, 'tags.json'), JSON.stringify({ 'explorer/20261010T000000Z.json': [{ Key: 'team', Value: 'qa' }] }));
+      const r = migrate('--apply');
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain(`Marked 4 unkeyed row(s) and 2 unkeyed report(s) as migrated to ${REPO}. Nothing was deleted.`);
+      const after = table();
+      // Every original is still there, unkeyed ones marked with the repository they went to.
+      for (const it of STORE) {
+        const now = after.find((i) => i.pk!.S === it.pk!.S && i.sk!.S === it.sk!.S)!;
+        expect(now).toEqual(/#\d+$/.test(String(it.pk!.S)) ? it : { ...it, migratedTo: { S: REPO } });
+      }
+      expect(after).toHaveLength(STORE.length + 3);
+      expect(after.filter((i) => /#\d+$/.test(String(i.pk!.S)) && 'migratedTo' in i)).toEqual([]);
+      for (const mark of calls().filter((c) => c[1] === 'update-item')) {
+        expect(mark).toEqual(expect.arrayContaining(['--condition-expression', 'attribute_exists(pk) AND attribute_not_exists(migratedTo)']));
+      }
+      // Every report is still there, the unkeyed ones tagged, their other tags kept.
+      expect(Object.keys(bucket())).toEqual(expect.arrayContaining(Object.keys(OBJECTS)));
+      const tags = JSON.parse(readFileSync(join(state, 'tags.json'), 'utf8'));
+      expect(tags['explorer/20261010T000000Z.json']).toEqual([{ Key: 'team', Value: 'qa' }, { Key: 'kanon-migrated-to', Value: REPO }]);
+      expect(tags['telemetry/implementer/20261010T000000Z.json']).toEqual([{ Key: 'kanon-migrated-to', Value: REPO }]);
+      expect(Object.keys(tags).filter((k) => k.startsWith(`${REPORTS_ROOT}/`))).toEqual([]);
+      expect(calls().filter((c) => /delete/.test(c[1]!) || c[0] === 's3' && c[1] === 'rm')).toEqual([]);
+
+      // A second run marks nothing more, and recopies a copy that has gone, without the mark.
+      writeFileSync(join(state, 'table.json'), JSON.stringify(table().filter((i) => !(i.pk!.S === `COVERAGE#${REPO}` && i.sk!.S === '/old'))));
+      const again = migrate('--apply');
+      expect(again.stdout).toContain(`Copied 1 row(s) and 0 report(s)`);
+      expect(again.stdout).toContain(`Marked 0 unkeyed row(s) and 0 unkeyed report(s) as migrated to ${REPO}`);
+      expect(table().find((i) => i.pk!.S === `COVERAGE#${REPO}` && i.sk!.S === '/old')).toEqual({ pk: { S: `COVERAGE#${REPO}` }, sk: { S: '/old' }, last_status: { S: 'passed' } });
+      // One for another repository copies and marks none of it.
+      writeStub(join(bin, 'gh'), `#!/usr/bin/env bash\necho '{"id":${OTHER},"full_name":"o/other"}'\n`);
+      const other = migrate('--apply');
+      expect(other.stdout).toContain(`COVERAGE → COVERAGE#${OTHER}: copying 0 row(s); 0 already there. marking 0 unkeyed row(s) migratedTo=${OTHER}. 2 row(s) already marked as migrated to another repository, left alone.`);
+      expect(other.stdout).toContain('2 already tagged as migrated to another repository, left alone.');
+      expect(table()).toHaveLength(STORE.length + 3);
+      expect(table().filter((i) => i.migratedTo?.S === OTHER)).toEqual([]);
+    });
+
+    it('after the migration, a repository added to the store later reads none of the marked history, and the migrated one reads it as its own', () => {
+      seed(STORE, OBJECTS);
+      expect(migrate('--apply').status).toBe(0);
+      const g = op(OTHER, 'last-green');
+      expect(g.r.status, g.r.stdout).toBe(0);
+      expect(g.read('last-green')).toBe('');
+      expect(g.r.stdout).toContain('no sweep in the store yet');
+      const e = op(OTHER, 'export', { KIND: 'overseer', FROM: '20261001T000000Z' });
+      expect(e.r.status, e.r.stdout + e.r.stderr).toBe(0);
+      expect(JSON.parse(e.read('export/runs-explorer.json'))).toEqual([]);
+      // Its own row only: none of the unkeyed `/a` and `/old`.
+      expect(JSON.parse(e.read('export/coverage.json')).map((r: J) => r.route)).toEqual(['/b']);
+      expect(existsSync(join(e.dir, 'export/reports/explorer/20261010T000000Z.json'))).toBe(false);
+      const cr = op(OTHER, 'cost-rows', { KIND: 'implementer', FROM: '20261001T000000Z' });
+      expect(JSON.parse(cr.read('cost-rows.json'))).toEqual({ rows: [], error: null });
+      expect(op(REPO, 'last-green').read('last-green')).toBe(`${A}\n`);
     });
 
     it('--apply copies under the repository\'s keys, keeps what is there, deletes nothing, and a second run copies nothing', () => {
@@ -852,7 +979,8 @@ describe('the store keys every row by repository (kanon#1346)', SPAWNS, () => {
       expect(r.status, r.stderr).toBe(0);
       expect(r.stdout).toContain('Copied 3 row(s) and 2 report(s)');
       const after = table();
-      expect(after).toEqual(expect.arrayContaining(STORE));
+      // The originals stay, the unkeyed ones marked (kanon#1377).
+      expect(after).toEqual(expect.arrayContaining(STORE.map((it) => (/#\d+$/.test(String(it.pk!.S)) ? it : { ...it, migratedTo: { S: REPO } }))));
       expect(after).toHaveLength(STORE.length + 3);
       const own = (pk: string, sk: string) => after.find((i) => i.pk!.S === pk && i.sk!.S === sk);
       expect(own(`COVERAGE#${REPO}`, '/a')!.last_status).toEqual({ S: 'passed' });

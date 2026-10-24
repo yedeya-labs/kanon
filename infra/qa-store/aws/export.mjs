@@ -19,7 +19,10 @@
 // `<kind>/<ts>.json`. While this repository's own partition holds no row at all, the export reads
 // the unkeyed one, and those rows' reports at their unkeyed keys, as it did before, and says so
 // with a notice. Its first row in that partition ends the fallback; the Owner's migration copies
-// the unkeyed history under its key first, so the export loses nothing.
+// the unkeyed history under its key first, so the export loses nothing. The fallback reads only
+// the unkeyed rows the migration hasn't marked (`UNMARKED`, kanon#1377): once a store's history
+// is migrated to one repository, another repository's export reads none of it, nor the reports
+// those rows name.
 //
 // A ROW IS ITS ATTRIBUTES, UNMARSHALLED, AND ABSENT STAYS ABSENT. `S` is a string, `N` a number
 // and `BOOL` a boolean; the sort key is renamed for what it is (`ts`, `route`, `area`) and `pk`
@@ -38,7 +41,7 @@ import { join } from 'node:path';
 
 import { EXPORT_FILES, EXPORT_REPORTS } from '../../../actions/qa-store/qa-store.mjs';
 import { isCliEntry } from '../../../scripts/lib/cli-entry.mjs';
-import { keyed, reportKey, repositoryId } from './keys.mjs';
+import { UNMARKED, keyed, reportKey, repositoryId } from './keys.mjs';
 
 /**
  * A DynamoDB attribute value as plain JSON.
@@ -86,16 +89,18 @@ export const KINDS = /** @type {Record<string, Array<keyof typeof PARTITIONS>>} 
 
 /**
  * The partition's items, newest first for a windowed one. The CLI follows every page, unless
- * `one` asks only whether the partition holds any row.
- * @param {{ table: string, region: string, pk: string, from?: string, one?: boolean }} q
+ * `one` asks only whether the partition holds any row. With `unmarked`, only the rows the
+ * migration hasn't marked, filtered server-side.
+ * @param {{ table: string, region: string, pk: string, from?: string, one?: boolean, unmarked?: boolean }} q
  * @returns {Array<Record<string, any>>}
  */
-export function queryPartition({ table, region, pk, from, one = false }) {
+export function queryPartition({ table, region, pk, from, one = false, unmarked = false }) {
   const values = from ? { ':p': { S: pk }, ':s': { S: from } } : { ':p': { S: pk } };
   const raw = execFileSync('aws', [
     'dynamodb', 'query', '--table-name', table, '--region', region,
     '--key-condition-expression', from ? 'pk = :p AND sk > :s' : 'pk = :p',
     '--expression-attribute-values', JSON.stringify(values),
+    ...(unmarked ? ['--filter-expression', UNMARKED] : []),
     ...(from ? ['--no-scan-index-forward'] : []),
     ...(one ? ['--max-items', '1'] : []),
     '--output', 'json',
@@ -120,7 +125,8 @@ export function copyReport({ bucket, region, key, to }) {
 }
 
 /**
- * This repository's items of a partition, or the unkeyed partition's while it has none of its own.
+ * This repository's items of a partition, or the unkeyed partition's while it has none of its own:
+ * those the migration hasn't marked, since a marked row is another repository's history now.
  * @param {{ table: string, region: string, pk: string, repository: string, from?: string }} q
  * @returns {{ items: Array<Record<string, any>>, unkeyed: boolean }}
  */
@@ -129,7 +135,7 @@ export function readPartition({ table, region, pk, repository, from }) {
   if (own.length) return { items: own, unkeyed: false };
   // An empty window is not an empty partition: ask whether the repository has any row at all.
   if (from && queryPartition({ table, region, pk: keyed(pk, repository), one: true }).length) return { items: [], unkeyed: false };
-  return { items: queryPartition({ table, region, pk, from }), unkeyed: true };
+  return { items: queryPartition({ table, region, pk, from, unmarked: true }), unkeyed: true };
 }
 
 /**

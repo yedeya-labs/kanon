@@ -18,9 +18,28 @@
 // reads the unkeyed one instead, as every reader did before. The first row the repository writes
 // to a partition ends that partition's fallback; the migration copies the unkeyed history under
 // the repository's key, so nothing is lost once it has run.
+//
+// A MIGRATED UNKEYED ROW IS MARKED, NEVER DELETED, AND NO FALLBACK READS IT (kanon#1377, the Owner's
+// decision of 2026-10-23). The migration sets `migratedTo` (the repository id it was copied to) on
+// every unkeyed row it copies, and tags every unkeyed raw report `kanon-migrated-to`. Each reader's
+// fallback filters the unkeyed partition server-side with `attribute_not_exists(migratedTo)`, so a
+// repository added to the store after the migration never reads another repository's history as
+// its own, while a store not yet migrated still reads its history through the fallback. A raw
+// report is reached only through its row (the export copies `<kind>/<ts>.json` for each unkeyed
+// row it read), so a marked row's report is never read either, and no reader needs its tag: the
+// tag is the operator's record, and the role needs no tagging grant.
 
 /** The partitions written before kanon#1346, with no repository in their key. */
 export const UNKEYED_PARTITIONS = /** @type {const} */ (['RUN#explorer', 'RUN#audit', 'COVERAGE', 'AREAS']);
+
+/** The attribute the migration sets on an unkeyed row it copied: the repository id it went to. */
+export const MIGRATED_TO = 'migratedTo';
+
+/** The filter every fallback read of an unkeyed partition applies: rows the migration hasn't marked. */
+export const UNMARKED = `attribute_not_exists(${MIGRATED_TO})`;
+
+/** The S3 tag the migration puts on an unkeyed raw report it copied: the repository id it went to. */
+export const MIGRATED_TAG = 'kanon-migrated-to';
 
 /** Where a repository's raw reports live in the bucket, ahead of `<kind>/<ts>.json`. */
 export const REPORTS_ROOT = 'repository';

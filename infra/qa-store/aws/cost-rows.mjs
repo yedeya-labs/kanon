@@ -14,6 +14,8 @@
 // THIS REPOSITORY'S ROWS (kanon#1346, `keys.mjs`): the partition is `COST#<agent>#<repository id>`.
 // While it holds no row at all, the query reads the unkeyed `COST#<agent>` written before
 // kanon#1346 instead, as it did then; the repository's first row, or the Owner's migration, ends that.
+// The fallback reads only the unkeyed rows the migration hasn't marked (`UNMARKED`, kanon#1377), so
+// a repository added after the migration never counts another repository's cost rows as its own.
 //
 // Env: QA_DYNAMO_TABLE, QA_AWS_REGION, KIND (the telemetry agent), FROM (exclusive), TO
 // (inclusive, optional), DIR, GITHUB_REPOSITORY_ID (the runner's).
@@ -22,7 +24,7 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isCliEntry } from '../../../scripts/lib/cli-entry.mjs';
-import { keyed, repositoryId } from './keys.mjs';
+import { UNMARKED, keyed, repositoryId } from './keys.mjs';
 
 /** Exactly the attributes the sweep reads (`dispatch-sweep.mjs`'s `COST_PROJECTION`). */
 export const COST_PROJECTION = ['sk', 'issue_number', 'outcome', 'run_id'];
@@ -42,7 +44,7 @@ export function readCostPartition({ agent, since, to = '', table, region, reposi
   // all. The probe is `pk = :p` alone: DynamoDB refuses an empty string as a key-condition value.
   if (!items.length && !costItems({ pk: own, table, region, one: true }).length) {
     partition = `COST#${agent}`;
-    items = costItems({ pk: partition, since, table, region });
+    items = costItems({ pk: partition, since, table, region, unmarked: true });
     log(`::notice title=qa-store cost-rows::this repository has no ${own} rows yet, so the query read the unkeyed ${partition}, written before kanon#1346; the Owner's migration moves them under the repository's key`);
   }
   const rows = items.map((/** @type {any} */ it) => ({
@@ -65,16 +67,18 @@ export function queryCostRows(q) {
 
 /**
  * One partition's cost items after `since`, projected; with `one`, whether it holds any item
- * at all, by `pk = :p` alone and at most one item.
- * @param {{ pk: string, since?: string, table: string, region: string, one?: boolean }} q
+ * at all, by `pk = :p` alone and at most one item. With `unmarked`, only the rows the migration
+ * hasn't marked, filtered server-side: the filter may name an attribute the projection leaves out.
+ * @param {{ pk: string, since?: string, table: string, region: string, one?: boolean, unmarked?: boolean }} q
  * @returns {Array<Record<string, any>>}
  */
-function costItems({ pk, since = '', table, region, one = false }) {
+function costItems({ pk, since = '', table, region, one = false, unmarked = false }) {
   const raw = execFileSync('aws', [
     'dynamodb', 'query', '--table-name', table, '--region', region,
     '--key-condition-expression', one ? 'pk = :p' : 'pk = :p AND sk > :s',
     '--expression-attribute-values',
     JSON.stringify(one ? { ':p': { S: pk } } : { ':p': { S: pk }, ':s': { S: since } }),
+    ...(unmarked ? ['--filter-expression', UNMARKED] : []),
     // `sk` too: a row's timestamp is what pairs a run with the sweep comment that
     // dispatched it (RA-1573 review, RA-1579) — and `run_id`, which says WHO triggered it.
     //
