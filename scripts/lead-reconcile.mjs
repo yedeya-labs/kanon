@@ -47,7 +47,7 @@ import { CONFLICT_JSON, CONFLICT_WHY, ConflictFieldsUnread, blocksChurn, conflic
 // bail decides; a bail never clears a bail; `updatedAt` is not the wait); those are
 // for a human reading the thread. Writing a second detector here that DID read prose
 // would be free to disagree with the one that decides re-dispatches.
-import { STALE_HOURS, botLogins, classify as classifyLane, makeCommentsReader } from './dispatch-sweep.mjs';
+import { STALE_HOURS, botLogins, classify as classifyLane, commentRows } from './dispatch-sweep.mjs';
 // `qa:needs-split` (RA-1781): an item whose implementer run hit its cap, awaiting the Lead's
 // split PR. Never dispatched; does not park the project — see `split-lineage.mjs`.
 import { SPLIT_LABEL, SPLIT_WORKFLOW, splitBranches } from './split-lineage.mjs';
@@ -62,9 +62,15 @@ import {
 } from './project-closure.mjs';
 import { appLogin, appPersona } from './app-register.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
-import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/deploy-declaration.mjs';
+import { declaredEnvironmentAt, referenceDeployAt } from './lib/deploy-declaration.mjs';
+import { defaultBranchReader } from './lib/declarations.mjs';
+// EVERY READ OF THE PROJECT GOES THROUGH ONE INJECTED READER (project #1327, `[STAT-1]`): a
+// REST `GET`, its pages, or a GraphQL query, and nothing else. The tick passes `ghReader()`,
+// the App's token through `gh api`; the status core passes whatever reader its caller holds
+// and reads the same world, so a status answer can't disagree with what this tick does.
+import { allNodes, ghReader, ownerAndName, requireComplete } from './status/reader.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
-import { trustedSearchSync } from './lib/search.mjs';
+import { trustedSearch } from './lib/search.mjs';
 import { laneCallerFile } from './lib/lane-caller.mjs';
 import { beforeApply, taxonomyLabel } from './lib/labels.mjs';
 // THE ROUTING HAS ONE HOME (`K-WORK-8`, kanon#164). Every issue this tick files takes its labels
@@ -134,7 +140,7 @@ export const WIP_DEFAULT = Number(process.env.QA_LEAD_WIP || 3);
 export const GLOBAL_WIP_DEFAULT = Number(process.env.QA_LEAD_GLOBAL_WIP || WIP_DEFAULT);
 
 const IMPLEMENT = 'agent:implement';
-const NEEDS_INFO = 'qa:needs-info';
+export const NEEDS_INFO = 'qa:needs-info';
 /**
  * A HUMAN OWES THIS ONE ITEM AN ACTION, AND THE REST OF THE PROJECT PROCEEDS (RA-1301).
  *
@@ -192,8 +198,8 @@ const REVISE = 'agent:revise';
 // file does not: `needs:human` on the tracking issue is visible in `gh issue list` and
 // on the board, which is RA-963's actual constraint — "a project that cannot make
 // progress must become visible without someone reading Actions annotations".
-const HELD = 'needs:human';
-const HELD_MARKER = '<!-- qa:lead-held -->';
+export const HELD = 'needs:human';
+export const HELD_MARKER = '<!-- qa:lead-held -->';
 /**
  * FILE, BUT DO NOT DISPATCH (kanon#1113). A person's routing choice for one project, on its
  * tracking issue beside `needs:human` and read from the same label list.
@@ -223,8 +229,10 @@ export const trackingControls = (names) => ({
 // one, which is the mistake RA-1066 absorbed three documents into.
 const RETRO_MARKER = '<!-- qa:lead-retro -->';
 /** The Explorer's login — the register's `Explorer` row (RA-2701). Exported so the login it
- *  compares is observable without reading this file's source. */
-export const EXPLORER_LOGIN = appLogin('Explorer');
+ *  compares is observable without reading this file's source. Read on call, not when the module
+ *  loads, as `botLogins()` is (kanon#1316): the status core imports this file with no checkout
+ *  and passes the login it read from the default branch (project #1327). */
+export const explorerLogin = () => appLogin('Explorer');
 const QA_MARKER = '<!-- qa:verified -->';
 
 /** A secret must never reach a public issue comment (RA-1284).
@@ -309,6 +317,144 @@ function gh(args) {
 /** @param {string[]} args @param {{run?: (a: string[]) => string}} [io] */
 const ghJson = (args, { run = gh } = {}) => JSON.parse(run(args));
 const warn = (m) => console.log(`::warning title=lead-reconcile::${m}`);
+
+// ── THE PROJECT READ'S QUERIES (project #1327) ─────────────────────────────────
+//
+// Each is the GraphQL query `gh` itself sends for the `gh issue`/`gh pr` command this file
+// used to run (`GH_DEBUG=api` prints them), asking only the fields read here, so every answer
+// keeps the shape the code below was written against: `OPEN`/`CLOSED`/`MERGED` states, a
+// review's `commit.oid`, a comment's `author.login`. Every list is read to its end; one that
+// can't be is a failed read (`allNodes`, `[STAT-3]`).
+
+/** @template T @typedef {T | Promise<T>} MaybePromise */
+
+/** The reads one project read takes: the reader, the repository, and where a tolerated failure
+ *  is said. Defaults are the tick's own: `gh api` with the App's token, on this repository. */
+const tickReads = () => ({ reader: ghReader(), repo: REPO, warn });
+
+// search-zero: settled where it is read: `readProjectWorld` sends it through `trustedSearch`
+// (kanon#1322), and `membershipUnread` checks its members against the label listing.
+const Q_SEARCH = `query Members($q: String!, $after: String) {
+  search(type: ISSUE_ADVANCED, query: $q, first: 100, after: $after) {
+    issueCount
+    nodes { ... on Issue { number title state body closedAt labels(first: 100) { nodes { name } totalCount } } }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+const Q_ISSUE = `query Issue($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) { state labels(first: 100) { nodes { name } totalCount } }
+  }
+}`;
+const Q_COMMENTS = `query Comments($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      comments(first: 100, after: $after) { nodes { author { login } body createdAt } pageInfo { hasNextPage endCursor } totalCount }
+    }
+  }
+}`;
+const Q_CLOSED_BY = `query ClosedBy($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      closedByPullRequestsReferences(first: 100, after: $after) { nodes { number } pageInfo { hasNextPage endCursor } }
+    }
+  }
+}`;
+// `commits(last: 1)` is the head commit. `gh pr view --json commits` read the first 100 and the
+// tick took the last of them, which is the head only up to 100 commits. The mergeability fields
+// are `CONFLICT_JSON`'s, so `conflictState` reads what it was written against (RA-1722).
+const Q_PR = `query PullRequest($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number state headRefOid ${CONFLICT_JSON.split(',').join(' ')}
+      commits(last: 1) { nodes { commit { committedDate } } }
+      reviews(first: 100, after: $after) {
+        nodes { state body submittedAt author { login } commit { oid } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+const Q_PR_MERGE = `query PullRequestMerge($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { state mergeCommit { oid } title body }
+  }
+}`;
+const Q_PRS_ON_BRANCH = `query PullRequestsOn($owner: String!, $name: String!, $head: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(headRefName: $head, states: [OPEN, CLOSED, MERGED], first: 100, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
+      nodes { number state createdAt }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+// `gh issue list --label` lists the repository's issues rather than searching, so a label applied
+// a moment ago is listed before the search index has it.
+const Q_LABELLED = `query Labelled($owner: String!, $name: String!, $label: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issues(labels: [$label], states: [OPEN, CLOSED], first: 100, after: $after) {
+      nodes { number body } pageInfo { hasNextPage endCursor } totalCount
+    }
+  }
+}`;
+const Q_LABELS = `query Labels($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    labels(first: 100, after: $after) { nodes { name } pageInfo { hasNextPage endCursor } totalCount }
+  }
+}`;
+
+/** An issue's label names, as `gh --json labels` gave them; more than one page is a failed read,
+ *  told to the reader it came through. */
+const labelNames = (issue, reader) => {
+  const nodes = issue?.labels?.nodes ?? [];
+  requireComplete(`the labels of #${issue?.number ?? '?'}`, nodes.length, issue?.labels?.totalCount, reader);
+  return nodes.map((l) => l.name);
+};
+
+/** Every issue a search finds, in `gh issue list --json`'s shape. */
+const searchIssues = (reader, q) =>
+  allNodes(reader, Q_SEARCH, { q }, (d) => d?.search);
+
+/** One issue's state and labels. Throws when it can't be read. */
+async function issueRead(number, { reader, repo }) {
+  const issue = (await reader.graphql(Q_ISSUE, { ...ownerAndName(repo), number: Number(number) }))?.repository?.issue;
+  if (!issue) throw new Error(`#${number} could not be read`);
+  return { state: issue.state, labels: labelNames({ ...issue, number }, reader) };
+}
+
+/** Every comment on an issue, oldest first, in `gh issue view --json comments`'s shape. */
+export const issueComments = (number, { reader, repo }) =>
+  allNodes(reader, Q_COMMENTS, { ...ownerAndName(repo), number: Number(number) }, (d) => d?.repository?.issue?.comments);
+
+/** The numbers of the pull requests GitHub says close this issue (`closedByPullRequestsReferences`). */
+const closingPrNumbers = async (number, { reader, repo }) =>
+  (await allNodes(reader, Q_CLOSED_BY, { ...ownerAndName(repo), number: Number(number) }, (d) => d?.repository?.issue?.closedByPullRequestsReferences))
+    .map((r) => r.number);
+
+/** A pull request's merge: its state, merge commit, title and body. */
+async function prMergeRead(number, { reader, repo }) {
+  const pr = (await reader.graphql(Q_PR_MERGE, { ...ownerAndName(repo), number: Number(number) }))?.repository?.pullRequest;
+  if (!pr) throw new Error(`pull request #${number} could not be read`);
+  return pr;
+}
+
+/**
+ * A pull request as `gh pr view --json state,headRefOid,reviews,commits,number,mergeable,mergeStateStatus`
+ * gave it: `commits` holds the head commit only, and `reviews` every review, page by page.
+ */
+async function pullRequestRead(number, { reader, repo }) {
+  /** @type {any} */
+  let first;
+  const reviews = await allNodes(reader, Q_PR, { ...ownerAndName(repo), number: Number(number) }, (d) => {
+    first ??= d?.repository?.pullRequest;
+    return d?.repository?.pullRequest?.reviews;
+  });
+  return { ...first, commits: (first.commits?.nodes ?? []).map((c) => c.commit), reviews };
+}
+
+/** An issue's timeline events, every page, as the REST API gives them. */
+const issueEvents = async (number, { reader, repo }) =>
+  (await reader.pages(`repos/${repo}/issues/${number}/events?per_page=100`)).flat();
 
 /** Append to the job summary, when there is one.
  *
@@ -1372,11 +1518,11 @@ function nextActionsCore(world, {
 // EVERY label the brief names and deadlocks the project on an API hiccup — was
 // unreachable from a test: the function was module-private and talks to `gh`. What was
 // tested was `parseProposed`'s behaviour GIVEN `undefined`, never that this produces it.
-export function repoLabels({ json = ghJson } = {}) {
+export async function repoLabels({ reader, repo, warn: say = warn } = tickReads()) {
   try {
-    return new Set(json(['label', 'list', '--repo', REPO, '--limit', '500', '--json', 'name']).map((l) => l.name));
+    return new Set((await allNodes(reader, Q_LABELS, ownerAndName(repo), (d) => d?.repository?.labels)).map((l) => l.name));
   } catch {
-    warn('could not read the repo label list — validating the brief\'s labels by shape only');
+    say('could not read the repo label list — validating the brief\'s labels by shape only');
     return undefined;
   }
 }
@@ -1413,10 +1559,10 @@ export function repoLabels({ json = ghJson } = {}) {
  * derivation could not produce." Phase 4 reproduced it at four times the size.
  *
  * @param {object[]} issues
- * @param {{json?: (args: string[]) => any}} [io]
+ * @param {{reader?: object, repo?: string}} [io]
  */
-export function closingMergeShas(issues, io = {}) {
-  return closingMergesByIssue(issues, io).flatMap((i) => i.shas);
+export async function closingMergeShas(issues, io = tickReads()) {
+  return (await closingMergesByIssue(issues, io)).flatMap((i) => i.shas);
 }
 
 /**
@@ -1429,36 +1575,36 @@ export function closingMergeShas(issues, io = {}) {
  * re-land can be told from a different part of the same issue (kanon#280).
  *
  * @param {object[]} issues
- * @param {{json?: (args: string[]) => any}} [io]
- * @returns {{issue: number, shas: string[], prs: {number: number, sha: string, text: string}[]}[]}
+ * @param {{reader?: object, repo?: string}} [io]
+ * @returns {Promise<{issue: number, shas: string[], prs: {number: number, sha: string, text: string}[]}[]>}
  */
-export function closingMergesByIssue(issues, { json = ghJson } = {}) {
+export async function closingMergesByIssue(issues, io = tickReads()) {
   // `closedByPullRequestsReferences` is GitHub's OWN join, the same reasoning as
   // RA-912's use of `closingIssuesReferences`: a `#N` regex over bodies cannot tell a
   // mention from a closure, and this field cannot drift from what GitHub did.
   // It reports the PR number but not its merge commit, so the PR is read too.
-  return issues.flatMap((i) => {
-    if (i.state !== 'CLOSED') return [];
+  const out = [];
+  for (const i of issues) {
+    if (i.state !== 'CLOSED') continue;
     let refs = [];
     try {
-      refs = json(['issue', 'view', String(i.number), '--repo', REPO, '--json', 'closedByPullRequestsReferences'])
-        .closedByPullRequestsReferences ?? [];
+      refs = await closingPrNumbers(i.number, io);
     } catch {
-      return [];
+      continue;
     }
     // The title and body come back on the same read, for `relandedReverts` (kanon#280).
-    const prs = refs.flatMap((r) => {
+    const prs = [];
+    for (const number of refs) {
       try {
-        const pr = json(['pr', 'view', String(r.number), '--repo', REPO, '--json', 'state,mergeCommit,title,body']);
-        return pr.state === 'MERGED' && pr.mergeCommit?.oid
-          ? [{ number: r.number, sha: pr.mergeCommit.oid, text: `${pr.title ?? ''}\n${pr.body ?? ''}` }]
-          : [];
+        const pr = await prMergeRead(number, io);
+        if (pr.state === 'MERGED' && pr.mergeCommit?.oid) prs.push({ number, sha: pr.mergeCommit.oid, text: `${pr.title ?? ''}\n${pr.body ?? ''}` });
       } catch {
-        return [];
+        // An unreadable pull request is no merge, as before.
       }
-    });
-    return prs.length ? [{ issue: i.number, shas: prs.map((p) => p.sha), prs }] : [];
-  });
+    }
+    if (prs.length) out.push({ issue: i.number, shas: prs.map((p) => p.sha), prs });
+  }
+  return out;
 }
 
 
@@ -1563,16 +1709,19 @@ export function revertedMerges(shas, commits) {
  * @param {{issue: number, shas: string[], prs?: {number: number, sha: string, text: string}[]}[]} byIssue
  *   from `closingMergesByIssue`
  * @param {Map<string, Set<string>>} after each closing merge's reverts in its range to the tag
+ * @param {string} [repo] the repository a full `<repo>#N` reference must name: the one the
+ *   read was given, which the status view sets to a project that need not be
+ *   `GITHUB_REPOSITORY` (project #1327)
  * @returns {{sha: string, by: string}[]}
  */
-export function relandedReverts(reverted, byIssue, after) {
+export function relandedReverts(reverted, byIssue, after, repo = REPO) {
   const undone = new Set(reverted.map((r) => r.sha));
   return reverted.filter((r) => !byIssue.some((i) => {
     if (!i.shas.includes(r.sha)) return false;
     const pr = (sha) => (i.prs ?? []).find((p) => p.sha === sha);
     const target = { pr: pr(r.sha)?.number ?? null, sha: r.sha, by: r.by };
     return i.shas.some((n) => n !== r.sha && !undone.has(n) && after.has(n) && !after.get(n).has(r.by)
-      && namesReverted(pr(n)?.text ?? '', target, REPO));
+      && namesReverted(pr(n)?.text ?? '', target, repo));
   }));
 }
 
@@ -1686,8 +1835,25 @@ export function classifyDeploy({ shas, tag, run, deployJob }) {
 export const DEPLOY_RUN_WINDOW = 200;
 
 /**
+ * The deploy workflow's latest `DEPLOY_RUN_WINDOW` runs, newest first, in the shape
+ * `gh run list --json databaseId,displayTitle,status,conclusion,url` gave them: page by page
+ * of 100, and no further than the window, as `--limit` read them.
+ * @param {string} workflow the workflow's file name
+ */
+export async function deployRuns(workflow, { reader, repo }) {
+  const runs = [];
+  for (let page = 1; runs.length < DEPLOY_RUN_WINDOW; page++) {
+    const got = (await reader.get(`repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/runs?per_page=100&page=${page}`))?.workflow_runs;
+    if (!Array.isArray(got)) throw new Error(`the runs of ${workflow} came back without a run list`);
+    runs.push(...got.map((r) => ({ databaseId: r.id, displayTitle: r.display_title, status: r.status, conclusion: r.conclusion, url: r.html_url })));
+    if (got.length < 100) break;
+  }
+  return runs.slice(0, DEPLOY_RUN_WINDOW);
+}
+
+/**
  * Phase 4's deploy state, derived rather than stored. See `closingMergeShas` for why
- * this takes an `io` seam.
+ * this takes an `io` seam: the reader every read goes through, and the repository.
  *
  * WHICH WORKFLOW, AND WHICH JOB, THE ADOPTION RECORD SAYS (plan 0004 P6, `K-PROJ-11`).
  * `declared` reads the reference environment's deploy from the record's `## Deploy` section
@@ -1699,52 +1865,56 @@ export const DEPLOY_RUN_WINDOW = 200;
  * `job`, so the messages name what was looked for.
  *
  * @param {object[]} issues
- * @param {{json?: (args: string[]) => any, text?: (args: string[]) => string,
- *   declared?: () => import('./lib/deploy-declaration.mjs').ReferenceDeploy}} [io]
+ * @param {{reader?: import('./status/reader.mjs').Reader, repo?: string,
+ *   declared?: () => import('./lib/deploy-declaration.mjs').ReferenceDeploy | Promise<import('./lib/deploy-declaration.mjs').ReferenceDeploy>}} [io]
  */
-export function readDeploy(issues, { json = ghJson, text = gh, declared = () => readReferenceDeployFrom(REPO) } = {}) {
-  const byIssue = closingMergesByIssue(issues, { json });
+export async function readDeploy(issues, io = {}) {
+  const { reader, repo } = { ...tickReads(), ...io };
+  const declared = io.declared ?? (async () => referenceDeployAt(await defaultBranchReader(reader, repo)));
+  const byIssue = await closingMergesByIssue(issues, { reader, repo });
   const shas = byIssue.flatMap((i) => i.shas);
   if (!shas.length) return classifyDeploy({ shas, tag: null, run: null, deployJob: null });
-  const deploy = declared();
+  const deploy = await declared();
   const named = (d) => ({ ...d, environment: deploy.environment, workflow: deploy.workflow, job: deploy.job });
 
-  const releases = json(['api', `repos/${REPO}/releases?per_page=30`, '--jq',
-    '[.[] | {tag: .tag_name}]']);
+  const releases = (await reader.get(`repos/${repo}/releases?per_page=30`)).map((r) => ({ tag: r.tag_name }));
   // Oldest-first: the walk STARTS at the earliest release containing every merge and
   // continues past negative evidence (RA-1258/RA-1268/RA-1271; own failure carried, RA-1372).
-  const containsAll = (tag) => shas.every((sha) => {
-    try {
-      const st = text(['api', `repos/${REPO}/compare/${tag}...${sha}`, '--jq', '.status']).trim();
-      return st === 'behind' || st === 'identical';   // ANCESTRY, never timestamps
-    } catch {
-      return false;                                    // unreadable is NOT containment
+  const containsAll = async (tag) => {
+    for (const sha of shas) {
+      try {
+        const st = (await reader.get(`repos/${repo}/compare/${tag}...${sha}`))?.status;
+        if (st !== 'behind' && st !== 'identical') return false;   // ANCESTRY, never timestamps
+      } catch {
+        return false;                                               // unreadable is NOT containment
+      }
     }
-  });
+    return true;
+  };
   // 200, not 30 (RA-1190). On the reference adopter every `main` CI completion starts a
   // run of its deploy workflow, including each feature merge's, whose gate is skipped at once. Those runs are
   // free, but they fill the window: at ~16 merges and ~11 releases a day, 30 runs was
   // about a day, and this walk reads up to 30 releases back.
-  const runs = json(['run', 'list', '--repo', REPO, '--workflow', deploy.workflow,
-    '--limit', String(DEPLOY_RUN_WINDOW), '--json', 'databaseId,displayTitle,status,conclusion,url']);
+  const runs = await deployRuns(deploy.workflow, { reader, repo });
 
   // The release commit's SHA, for runs titled by it (see findDeployRun). Asked only when
   // the tag title found nothing. Unreadable means null, which reads as run-not-found:
   // a transient state, never a false `deployed`.
-  const tagSha = (tag) => {
+  const tagSha = async (tag) => {
     try {
-      return json(['api', `repos/${REPO}/commits/${tag}`, '--jq', '{sha: .sha}'])?.sha ?? null;
+      return (await reader.get(`repos/${repo}/commits/${tag}`))?.sha ?? null;
     } catch {
       return null;
     }
   };
 
-  const classifyTag = (tag) => {
-    const run = findDeployRun(runs, tag) ?? findDeployRun(runs, tag, tagSha(tag));
+  const classifyTag = async (tag) => {
+    const run = findDeployRun(runs, tag) ?? findDeployRun(runs, tag, await tagSha(tag));
     let deployJob;
     if (run?.status === 'completed' && run.conclusion === 'success') {
       try {
-        const jobs = json(['run', 'view', String(run.databaseId), '--repo', REPO, '--json', 'jobs']).jobs;
+        const pages = await reader.pages(`repos/${repo}/actions/runs/${run.databaseId}/jobs?per_page=100`);
+        const jobs = Array.isArray(pages) && pages.every((p) => Array.isArray(p?.jobs)) ? pages.flatMap((p) => p.jobs) : undefined;
         // `undefined` when the answer is unusable, `null` when it is usable and says
         // there is no deploy job (RA-1369). `?? null` collapsed both, which is what made
         // a permanent state wear a transient one's name.
@@ -1834,45 +2004,52 @@ export function readDeploy(issues, { json = ghJson, text = gh, declared = () => 
 
   // PRESENCE, NOT ONLY ANCESTRY (kanon#161), asked only of a release that would be credited.
   // One paginated `compare` per closing merge, from the merge to the tag: the commits the
-  // tag holds after it, filtered by `--jq` to the ones whose message names a revert. A
+  // tag holds after it, filtered to the ones whose message names a revert. A
   // pull request a revert names is resolved to its merge commit, which costs a call only
   // when a revert exists. Unreadable is never "no reverts".
   //
   // The prefilter is a SUPERSET of what `revertTargets` parses, with no anchor and no flag
-  // but `i`: `gh --jq` is gojq, whose `m` flag means `(?s)`, not `(?m)`, so a `^Reverts`
-  // there matched only at the start of the whole message and dropped every PR-named revert,
-  // whose `Reverts …#N` line is in the body (kanon#262 review). `revertTargets` does the
-  // anchored parse.
+  // but `i`. It was written for `gh --jq`, which is gojq, whose `m` flag means `(?s)`, not
+  // `(?m)`, so a `^Reverts` there matched only at the start of the whole message and dropped
+  // every PR-named revert, whose `Reverts …#N` line is in the body (kanon#262 review). It now
+  // runs here, over the pages the reader returns (project #1327), and reads the same in both.
+  // `revertTargets` does the anchored parse.
   //
   // A revert answered by a LATER merged pull request closing the same issue does not hold
   // the project (kanon#264): `relandedReverts` reads that from the same ranges, so it adds
   // no call. Before it, work re-landed that way waited for a human on every tick.
-  const REVERT_JQ = `.commits[] | select(.commit.message | test("${REVERT_PREFILTER}"; "i")) | {sha: .sha, message: .commit.message} | @json`;
+  const NAMES_A_REVERT = new RegExp(REVERT_PREFILTER, 'i');
   const prMerge = new Map();
-  const mergeOf = (n) => {
-    if (!prMerge.has(n)) prMerge.set(n, json(['pr', 'view', String(n), '--repo', REPO, '--json', 'mergeCommit'])?.mergeCommit?.oid ?? null);
+  const mergeOf = async (n) => {
+    if (!prMerge.has(n)) prMerge.set(n, (await prMergeRead(n, { reader, repo })).mergeCommit?.oid ?? null);
     return prMerge.get(n);
   };
-  const presence = (tag, d) => {
+  const presence = async (tag, d) => {
     let reverted;
     try {
       const reverts = new Map();
       // Which reverts each merge's range holds, for `relandedReverts` (kanon#264).
       const after = new Map();
       for (const sha of shas) {
-        const out = text(['api', '--paginate', `repos/${REPO}/compare/${sha}...${tag}?per_page=100`, '--jq', REVERT_JQ]);
+        const pages = await reader.pages(`repos/${repo}/compare/${sha}...${tag}?per_page=100`);
         const seen = new Set();
         after.set(sha, seen);
-        for (const line of out.split('\n').filter((l) => l.trim())) {
-          const c = JSON.parse(line);
-          if (typeof c?.sha !== 'string' || typeof c?.message !== 'string') throw new Error(`not a commit: ${line}`);
-          seen.add(c.sha);
-          if (reverts.has(c.sha)) continue;
-          const t = revertTargets(c.message, REPO);
-          reverts.set(c.sha, { sha: c.sha, targets: [...t.shas, ...t.prs.map(mergeOf).filter(Boolean)] });
+        for (const page of pages) {
+          if (!Array.isArray(page?.commits)) throw new Error(`not a comparison: ${JSON.stringify(page).slice(0, 120)}`);
+          for (const commit of page.commits) {
+            const c = { sha: commit?.sha, message: commit?.commit?.message };
+            if (typeof c.sha !== 'string' || typeof c.message !== 'string') throw new Error(`not a commit: ${JSON.stringify(commit).slice(0, 120)}`);
+            if (!NAMES_A_REVERT.test(c.message)) continue;
+            seen.add(c.sha);
+            if (reverts.has(c.sha)) continue;
+            const t = revertTargets(c.message, repo);
+            const merges = [];
+            for (const n of t.prs) merges.push(await mergeOf(n));
+            reverts.set(c.sha, { sha: c.sha, targets: [...t.shas, ...merges.filter(Boolean)] });
+          }
         }
       }
-      reverted = relandedReverts(revertedMerges(shas, [...reverts.values()]), byIssue, after);
+      reverted = relandedReverts(revertedMerges(shas, [...reverts.values()]), byIssue, after, repo);
     } catch {
       return { state: 'history-unreadable', tag, url: d.url };
     }
@@ -1889,10 +2066,10 @@ export function readDeploy(issues, { json = ghJson, text = gh, declared = () => 
   let examined = 0;
   let ownFailure = null;
   for (const r of [...releases].reverse()) {
-    if (!containsAll(r.tag)) continue;
+    if (!(await containsAll(r.tag))) continue;
     examined++;
-    const classified = classifyTag(r.tag);
-    const d = classified.state === 'deployed' ? presence(r.tag, classified) : classified;
+    const classified = await classifyTag(r.tag);
+    const d = classified.state === 'deployed' ? await presence(r.tag, classified) : classified;
     if (!CONTINUE_PAST.has(d.state)) {
       // THE PROJECT'S OWN FAILURE IS CARRIED, NOT DISCARDED (RA-1372). This used to
       // `return` on a first-candidate `failed`, which was the last member of the
@@ -2372,14 +2549,17 @@ export const SPLIT_STALL_HOURS = splitStallHours(process.env.QA_LEAD_SPLIT_STALL
  * `readWorld`, only for an OPEN member carrying the label, so the decision stays pure
  * and an ordinary tick pays nothing. INJECTABLE for the unit tier.
  */
-export function splitEvidenceRead(issue, { text = gh, json = ghJson } = {}) {
+export async function splitEvidenceRead(issue, io = tickReads()) {
   try {
-    const labeledAt = text(['api', '--paginate', `repos/${REPO}/issues/${issue}/events`, '--jq',
-      `.[] | select(.event == "labeled" and .label.name == "${SPLIT_LABEL}") | .created_at`])
-      .split('\n').map((l) => l.trim()).filter(Boolean);
+    const labeledAt = (await issueEvents(issue, io))
+      .filter((e) => e?.event === 'labeled' && e?.label?.name === SPLIT_LABEL)
+      .map((e) => e.created_at)
+      .filter(Boolean);
     // Every spelling of the branch (#53): a split opened before the rename is still a split.
-    const prs = splitBranches(issue).flatMap((head) => json(['pr', 'list', '--repo', REPO, '--state', 'all', '--head', head,
-      '--json', 'number,state,createdAt']) ?? []);
+    const prs = [];
+    for (const head of splitBranches(issue)) {
+      prs.push(...await allNodes(io.reader, Q_PRS_ON_BRANCH, { ...ownerAndName(io.repo), head }, (d) => d?.repository?.pullRequests));
+    }
     return { labeledAt, prs };
   } catch {
     return null;
@@ -2675,20 +2855,19 @@ export function projectReviews(reviews) {
  * reachable by no test. Mutating `ok: false` to `ok: true` passed a full green tier
  * before this was added — the exact shape RA-2106 was filed about, one level up.
  */
-export function linkedPrsRead(issueNumber, { json = ghJson } = {}) {
+export async function linkedPrsRead(issueNumber, io = tickReads()) {
+  const { reader, repo, warn: say = warn } = io;
   try {
-    const refs = json(['issue', 'view', String(issueNumber), '--repo', REPO, '--json', 'closedByPullRequestsReferences'])
-      .closedByPullRequestsReferences ?? [];
-    const prs = refs.map((r) => {
-      const pr = json(['pr', 'view', String(r.number), '--repo', REPO, '--json',
-        `state,headRefOid,reviews,commits,number,${CONFLICT_JSON}`]);
-      return {
+    const prs = [];
+    for (const number of await closingPrNumbers(issueNumber, { reader, repo })) {
+      const pr = await pullRequestRead(number, { reader, repo });
+      prs.push({
         number: pr.number,
         state: pr.state,
         headSha: pr.headRefOid,
         // THE ONE CALL SITE IN THIS FILE, and it is deliberately the READ (RA-1722).
         // `conflictState` throws when the object carries neither mergeability field,
-        // so trimming the `--json` list above reds this tick with a message naming the
+        // so trimming the query's fields (`Q_PR`) reds this tick with a message naming the
         // fix — rather than answering "not conflicting" for every PR in the project
         // and silently restoring the 25-no-op-churn behaviour. Consumers downstream
         // read this boolean, so none of them has to remember to ask.
@@ -2697,8 +2876,8 @@ export function linkedPrsRead(issueNumber, { json = ghJson } = {}) {
         // (RA-1081). `commits` is newest-last, so the last one is the head.
         headPushedAt: pr.commits?.at(-1)?.committedDate ?? null,
         reviews: projectReviews(pr.reviews),
-      };
-    });
+      });
+    }
     return { prs, ok: true };
   } catch (err) {
     // A TRIMMED `--json` LIST IS NOT A BAD DAY. Everything else here degrades to
@@ -2707,7 +2886,7 @@ export function linkedPrsRead(issueNumber, { json = ghJson } = {}) {
     // otherwise report itself hourly as a transient read failure while the conflict
     // detector answered "clear" for every PR in the project (RA-1722).
     if (err instanceof ConflictFieldsUnread) throw err;
-    warn(`could not read #${issueNumber}'s linked PRs: ${err.message}`);
+    say(`could not read #${issueNumber}'s linked PRs: ${err.message}`);
     return { prs: [], ok: false };
   }
 }
@@ -2719,18 +2898,19 @@ export function linkedPrsRead(issueNumber, { json = ghJson } = {}) {
  * round, the lesson RA-1079 learned the hard way.
  * @param {Array<{author?: {login?: string}, body?: string}>} comments
  */
-export function explorerQaComments(comments, explorer = EXPLORER_LOGIN) {
-  return (comments ?? []).filter((c) =>
-    asRole('Explorer', { login: c.author?.login, expected: explorer, body: c.body })
+export function explorerQaComments(comments, explorer = explorerLogin()) {
+  // A register with no Explorer row names no login, and no comment is the Explorer's then.
+  return (comments ?? []).filter((c) => explorer != null
+    && asRole('Explorer', { login: c.author?.login, expected: explorer, body: c.body })
     && (c.body ?? '').includes(QA_MARKER));
 }
 
 /** How many times the Explorer has verified this project, and when he last did.
  *  Counted from HIS OWN marker comments (`explorerQaComments`). */
-function readQaRounds(qaNumber) {
+async function readQaRounds(qaNumber, io, explorer = explorerLogin()) {
   try {
-    const comments = ghJson(['issue', 'view', String(qaNumber), '--repo', REPO, '--json', 'comments']).comments ?? [];
-    const mine = explorerQaComments(comments);
+    const comments = await issueComments(qaNumber, io);
+    const mine = explorerQaComments(comments, explorer);
     return { rounds: mine.length, roundsAt: mine.map((c) => c.createdAt), lastVerifiedAt: mine.at(-1)?.createdAt ?? null, readable: true };
   } catch {
     // ITS OWN STATE. The first version returned `lastVerifiedAt: new Date(0)` with a
@@ -2748,13 +2928,14 @@ function readQaRounds(qaNumber) {
  *  `qaRoundBudget`. A bot's removal is not a human's decision. An unreadable event list
  *  is no clears at all, which keeps the hold — the direction that cannot run the Explorer
  *  without a human. INJECTABLE for the unit tier. */
-export function heldClearsRead(project, { text = gh } = {}) {
+export async function heldClearsRead(project, io = tickReads()) {
   try {
-    return text(['api', '--paginate', `repos/${REPO}/issues/${project}/events`, '--jq',
-      `.[] | select(.event == "unlabeled" and .label.name == "${HELD}" and .actor.type == "User") | .created_at`])
-      .split('\n').map((l) => l.trim()).filter(Boolean);
+    return (await issueEvents(project, io))
+      .filter((e) => e?.event === 'unlabeled' && e?.label?.name === HELD && e?.actor?.type === 'User')
+      .map((e) => e.created_at)
+      .filter(Boolean);
   } catch (err) {
-    warn(`could not read #${project}'s label events, so whether a human cleared its \`${HELD}\` is UNKNOWN — keeping the QA round bound: ${err.message}`);
+    (io.warn ?? warn)(`could not read #${project}'s label events, so whether a human cleared its \`${HELD}\` is UNKNOWN — keeping the QA round bound: ${err.message}`);
     return [];
   }
 }
@@ -2807,24 +2988,28 @@ export function qaIssueOf(all, project) {
  * slot. The opposite default would free a slot on a `gh` blip and dispatch beyond
  * the cap — the cap's whole justification is quota, so erring toward holding is the
  * safe direction.
+ *
+ * @param {number} number
+ * @param {{ labels?: string[], comments?: (n: number) => MaybePromise<Array<{ login: string, createdAt?: string, body: string }>>,
+ *   classify?: typeof classifyLane, reader?: import('./status/reader.mjs').Reader, repo?: string, warn?: (msg: string) => void }} [o]
+ *   the comments, or what they're read through: by default the tick's own
  */
-export function laneStateOf(number, { labels = [], comments = commentsFor, classify = classifyLane } = {}) {
+export async function laneStateOf(number, { labels = [], comments, classify = classifyLane, ...io } = {}) {
+  const reads = { ...tickReads(), ...io };
+  const read = comments ?? (async (/** @type {number} */ n) => commentRows(await issueComments(n, reads)));
   try {
     // The REAL labels, not `[]` (RA-2103 review). `classify` reads them only through
     // `terminalVerdict`, and since kanon#170 the implement lane declares one
     // (`qa:needs-info`, which `isParkedOnHuman` also reads first) — so `[]` would now
     // misreport a human-parked issue's lane state.
-    const v = classify({ number, labels }, comments(number), false);
+    const v = classify({ number, labels }, await read(number), false);
     // `lastAt` is the conversation's last word — what the RA-2112 gate ages.
     return { state: v.state, lastAt: v.last?.createdAt ?? null };
   } catch (err) {
-    warn(`could not read #${number}'s comments, so whether it is parked on a human is UNKNOWN — counting it against WIP: ${err.message}`);
+    reads.warn(`could not read #${number}'s comments, so whether it is parked on a human is UNKNOWN — counting it against WIP: ${err.message}`);
     return { state: null, lastAt: null };
   }
 }
-
-/** Cached across a tick, so two projects naming the same issue read it once. */
-const commentsFor = makeCommentsReader();
 
 /**
  * Is this issue parked on a human? The DECISION, separated from its inputs (RA-2106).
@@ -2903,13 +3088,18 @@ const PARKED_LANE_STATES = new Set(['awaiting-human', 'human-held']);
  *
  * @param {number} number
  * @param {{ labels: string[], state: string }} issue  label names, and `OPEN` or `CLOSED`
- * @param {{ prs?: (n: number) => { prs: object[], ok: boolean }, lane?: (n: number, o: { labels: string[] }) => { state: string|null, lastAt: string|null } }} [io]
+ * @param {{ prs?: (n: number) => MaybePromise<{ prs: object[], ok: boolean }>,
+ *   lane?: (n: number, o: { labels: string[] }) => MaybePromise<{ state: string|null, lastAt: string|null }>,
+ *   reader?: import('./status/reader.mjs').Reader, repo?: string, warn?: (msg: string) => void, classify?: typeof classifyLane }} [io]
+ *   the two reads, or what they read through: by default the tick's own
  */
-export function parkedRead(number, { labels, state }, { prs = linkedPrsRead, lane = laneStateOf } = {}) {
-  const prRead = labels.includes(IMPLEMENT) && state === 'OPEN' ? prs(number) : { prs: [], ok: true };
+export async function parkedRead(number, { labels, state }, { prs, lane, ...io } = {}) {
+  const readPrs = prs ?? ((/** @type {number} */ n) => linkedPrsRead(n, { ...tickReads(), ...io }));
+  const readLane = lane ?? ((/** @type {number} */ n, /** @type {{ labels: string[] }} */ o) => laneStateOf(n, { ...o, ...io }));
+  const prRead = labels.includes(IMPLEMENT) && state === 'OPEN' ? await readPrs(number) : { prs: [], ok: true };
   const needsLane = prRead.ok && prRead.prs.length === 0
     && labels.includes(IMPLEMENT) && state === 'OPEN' && !labels.includes(NEEDS_INFO);
-  const l = needsLane ? lane(number, { labels }) : { state: null, lastAt: null };
+  const l = needsLane ? await readLane(number, { labels }) : { state: null, lastAt: null };
   const parkedOnHuman = isParkedOnHuman({
     labels,
     state,
@@ -2922,19 +3112,59 @@ export function parkedRead(number, { labels, state }, { prs = linkedPrsRead, lan
 }
 
 /** The declared environment's name, read once per tick: every project names the same one. */
+/** @type {Promise<string | null> | undefined} */
 let declaredEnvironmentRead;
-const declaredEnvironment = () => {
-  if (declaredEnvironmentRead === undefined) declaredEnvironmentRead = declaredEnvironmentFrom(REPO);
-  return declaredEnvironmentRead;
-};
+const declaredEnvironment = () => (declaredEnvironmentRead ??= defaultBranchReader(ghReader(), REPO).then(declaredEnvironmentAt, () => null));
 
+/** The tick's project read: the brief from the checkout, as the Lead has always read it, and every
+ *  other read through `gh api` with the App's token. */
 function readWorld(project) {
   const briefPath = `docs/projects/${project}.md`;
-  const briefMerged = existsSync(briefPath);
+  return readProjectWorld(project, {
+    ...tickReads(),
+    readBrief: () => (existsSync(briefPath) ? readFileSync(briefPath, 'utf8') : null),
+    environment: declaredEnvironment,
+  });
+}
+
+/**
+ * @typedef {object} ProjectReads what one project read reads through, and how
+ * @property {import('./status/reader.mjs').Reader} reader every GitHub read
+ * @property {string} repo `owner/name`
+ * @property {(msg: string) => void} [warn] where a tolerated failure is said
+ * @property {() => string | null | Promise<string | null>} readBrief the brief's text, `null` when
+ *   it isn't merged
+ * @property {() => Promise<string | null>} [environment] the declared environment's name, for the report
+ * @property {() => Promise<import('./lib/deploy-declaration.mjs').ReferenceDeploy>} [declared] the
+ *   reference deploy, for the deploy phase; default: the adoption record on the default branch
+ * @property {typeof classifyLane} [classify] the lane classifier, with its logins
+ * @property {string | null} [explorer] the Explorer App's login
+ */
+
+/**
+ * ONE PROJECT'S WORLD, over an injected reader (project #1327). The tick reads it through
+ * `readWorld`, with `gh`; the status core reads it through the reader its caller passes, with
+ * the brief and the declarations from the default branch, so the phase it reports is the phase
+ * `phaseOf` derives from the same reads (`[STAT-4]`). Exported for that; not a second copy.
+ *
+ * Every read here keeps its own failure rule: a tolerated failure is said through `warn` and
+ * read as the direction that holds. A caller that must not tolerate one watches the reader
+ * (`watched`, `[STAT-3]`).
+ * @param {string | number} project
+ * @param {ProjectReads} io
+ */
+export async function readProjectWorld(project, io) {
+  const { reader, repo, readBrief, classify = classifyLane } = io;
+  const explorer = io.explorer === undefined ? explorerLogin() : io.explorer;
+  const say = io.warn ?? warn;
+  const reads = { reader, repo, warn: say };
+  const briefPath = `docs/projects/${project}.md`;
+  const brief = await readBrief();
+  const briefMerged = brief !== null;
   // Kept on the world: the `project:<n>` mirror asks whether its label exists (RA-1783).
   // Only with a brief, as before: a project awaiting one has nothing to parse or mirror.
-  const knownLabels = briefMerged ? repoLabels() : undefined;
-  const proposed = briefMerged ? parseProposed(readFileSync(briefPath, 'utf8'), { knownLabels }) : [];
+  const knownLabels = briefMerged ? await repoLabels(reads) : undefined;
+  const proposed = briefMerged ? parseProposed(brief, { knownLabels }) : [];
 
   // Everything carrying the project marker in its body, so no new label taxonomy
   // and no milestone kind of the project's own: its work sits on the buckets or on
@@ -2942,9 +3172,9 @@ function readWorld(project) {
   // SETTLED BEFORE IT GATES FILING (kanon#1322): search can answer nothing for a query that has
   // matches, and an empty answer here re-files every issue the project already has. So an empty
   // answer is read again, and answers that don't settle throw (`scripts/lib/search.mjs`).
-  const found = trustedSearchSync(() => ghJson(['issue', 'list', '--repo', REPO, '--state', 'all', '--search',
-    `"qa:project ${project}" in:body`, '--limit', '200',
-    '--json', 'number,title,state,labels,body,closedAt']), { what: `project ${project}'s issues`, size: (a) => a?.length, partial: () => false });
+  const found = (await trustedSearch(() => searchIssues(reader, `( "qa:project ${project}" in:body ) repo:${repo} type:issue`),
+    { what: `project ${project}'s issues`, size: (a) => a?.length, partial: () => false }))
+    .map((i) => ({ ...i, labels: labelNames(i, reader).map((name) => ({ name })) }));
 
   // GitHub issue search is TOKENISED full-text, not substring — a nearby number or
   // an unrelated body can match. This set gates everything (`filed.length <
@@ -2956,9 +3186,10 @@ function readWorld(project) {
   // documents that discussed this mechanism were absorbed by it. This set gates
   // everything: a false positive silently suppresses filing a real issue, and a
   // false negative RE-FILES issues that already exist, which is unamendable.
-  const all = found
-    .filter((i) => declaresMembership(i.body, project))
-    .map((i) => {
+  const members = found.filter((i) => declaresMembership(i.body, project));
+  const all = [];
+  for (const i of members) {
+    all.push(await (async () => {
       // BY TITLE OR BY ADOPTION (RA-1213 review). An adopted issue keeps its OWN
       // title, which by construction never matches the brief's item title — if it
       // did, the file phase's dedup would have suppressed filing and no adoption
@@ -2986,7 +3217,7 @@ function readWorld(project) {
       // on the exhausted-budget path, and a counter that fetched would make that
       // re-derivation cost a request per call. `parkedRead` is the read, shared with the
       // backlog feeder (kanon#609), which counts the same slots.
-      const { prRead, parkedOnHuman } = parkedRead(i.number, { labels, state: i.state });
+      const { prRead, parkedOnHuman } = await parkedRead(i.number, { labels, state: i.state }, { ...reads, classify });
       const prs = prRead.prs;
       return {
         ...i,
@@ -3005,11 +3236,12 @@ function readWorld(project) {
         prs,
         reviewBlocked: isReviewBlocked(prs),
         // RA-2406 — only an OPEN member parked on a split pays for this read.
-        split: labels.includes(SPLIT_LABEL) && i.state === 'OPEN' ? splitEvidenceRead(i.number) : undefined,
+        split: labels.includes(SPLIT_LABEL) && i.state === 'OPEN' ? await splitEvidenceRead(i.number, reads) : undefined,
         key: fromBrief?.key,
         dependsOnKeys: fromBrief?.dependsOnKeys ?? [],
       };
-    });
+    })());
+  }
 
   // Resolve "Issue A" to the number of the issue actually filed for it. Done here
   // rather than in the parser because it needs the filed set — and a dependency on
@@ -3088,7 +3320,7 @@ function readWorld(project) {
   // are waited for on the reference environment: a carried-out follow-up's release is not the project's.
   const openWork = openGatingWork(open, proposed);
   const deploy = briefMerged && parsedFully && nothingLeftToFile && all.length && !openWork.length && !blocked.length
-    ? readDeploy(all.filter((i) => gatesClosure(i, proposed)))
+    ? await readDeploy(all.filter((i) => gatesClosure(i, proposed)), { ...reads, ...(io.declared ? { declared: io.declared } : {}) })
     : undefined;
   // Read for EVERY state that can reach phase 6, not just `deployed`. Gating on
   // `deployed` alone left `nothing-to-deploy` with `trackingClosed: undefined`
@@ -3096,7 +3328,7 @@ function readWorld(project) {
   // re-closed with a fresh retro each hour — the close was not idempotent, which
   // is the one property the derived-state design is supposed to give for free.
   const trackingClosed = reachesPhase6(deploy?.state)
-    ? ghJson(['issue', 'view', String(project), '--repo', REPO, '--json', 'state']).state === 'CLOSED'
+    ? (await issueRead(project, reads)).state === 'CLOSED'
     : undefined;
 
   // PAID ONLY WHERE IT IS READ (RA-1103). `readQaRounds` is a full `gh issue view
@@ -3116,7 +3348,7 @@ function readWorld(project) {
   // STATE, and RA-1095 now depends on that: a closed QA issue with `rounds === 0` is
   // how the retro knows nobody verified anything. A gate on `qa.state === 'OPEN'`
   // would have removed exactly that evidence and reinstated the false claim.
-  const qaRounds = qa && reachesPhase6(deploy?.state) ? readQaRounds(qa.number) : {};
+  const qaRounds = qa && reachesPhase6(deploy?.state) ? await readQaRounds(qa.number, reads, explorer) : {};
   const qaIssue = qa
     ? {
         number: qa.number,
@@ -3128,7 +3360,7 @@ function readWorld(project) {
         // other cap here: no bookkeeping, and it survives a re-run.
         ...qaRounds,
         // Paid only once the bound is reached, which is the only time it is read (kanon#186).
-        ...(qaRounds.readable && qaRounds.rounds >= QA_ROUND_CAP ? { clearedAt: heldClearsRead(project) } : {}),
+        ...(qaRounds.readable && qaRounds.rounds >= QA_ROUND_CAP ? { clearedAt: await heldClearsRead(project, reads) } : {}),
       }
     : null;
   // WAS IT CLOSED BY THIS TICK, AND REOPENED SINCE? (RA-1062)
@@ -3143,16 +3375,14 @@ function readWorld(project) {
   //
   // Derived, like everything else: our own retro marker is on the issue and the issue
   // is open, so a close already happened and someone undid it.
-  const trackingReopened = (() => {
+  const trackingReopened = await (async () => {
     if (trackingClosed !== false) return false;
     try {
-      const seen = gh(['issue', 'view', String(project), '--repo', REPO, '--json', 'comments',
-        '--jq', '[.comments[].body] | join("\n")']);
-      return seen.includes(RETRO_MARKER);
+      return (await issueComments(project, reads)).some((c) => (c.body ?? '').includes(RETRO_MARKER));
     } catch {
       // Unreadable comments must not read as "never closed" — that resumes a project
       // a human may have stopped. Treat it as reopened and say nothing further.
-      warn(`could not read #${project}'s comments, so whether a human reopened it is UNKNOWN — holding`);
+      say(`could not read #${project}'s comments, so whether a human reopened it is UNKNOWN — holding`);
       return true;
     }
   })();
@@ -3166,11 +3396,10 @@ function readWorld(project) {
   let projectHeld;
   let fileOnly = false;
   try {
-    ({ projectHeld, fileOnly } = trackingControls((ghJson(['issue', 'view', String(project), '--repo', REPO, '--json', 'labels'])
-      .labels ?? []).map((l) => l.name)));
+    ({ projectHeld, fileOnly } = trackingControls((await issueRead(project, reads)).labels));
   } catch {
     projectHeld = true;
-    warn(`could not read #${project}'s labels, so whether this project is held is UNKNOWN — holding rather than acting`);
+    say(`could not read #${project}'s labels, so whether this project is held is UNKNOWN — holding rather than acting`);
   }
 
   // THE LABEL'S HOLDERS, read separately from the marker's (RA-1783). The body search
@@ -3179,18 +3408,19 @@ function readWorld(project) {
   // failed read, so the mirror removes nothing it could not see.
   let labelled;
   if (briefMerged) try {
-    labelled = ghJson(['issue', 'list', '--repo', REPO, '--state', 'all', '--label', projectLabel(project),
-      '--limit', '200', '--json', 'number,body']);
+    labelled = await allNodes(reader, Q_LABELLED, { ...ownerAndName(repo), label: projectLabel(project) }, (d) => d?.repository?.issues);
   } catch {
     labelled = undefined;
   }
 
   const membershipUnreadWhy = membershipUnread({ briefMerged, project, all, labelled });
-  if (membershipUnreadWhy) warn(`project #${project}: ${membershipUnreadWhy}`);
+  if (membershipUnreadWhy) say(`project #${project}: ${membershipUnreadWhy}`);
 
   // The environment's name for the report, at any phase (kanon#219). Read softly: only the deploy
   // phase, through `readDeploy`, may fail on a missing or malformed record (`K-PROJ-11`).
-  const environment = deploy?.environment ?? declaredEnvironment();
+  const environment = deploy?.environment ?? (io.environment
+    ? await io.environment()
+    : await defaultBranchReader(reader, repo).then(declaredEnvironmentAt, () => null));
   return { project, briefMerged, briefPath, proposed, filed, open, blocked, unmilestoned, all, deploy, environment, qaIssue, trackingClosed, trackingReopened, projectHeld, fileOnly, searchHits: found.length, searchTitles: found.map((i) => i.title), knownLabels, labelled, membershipUnread: membershipUnreadWhy };
 }
 
@@ -4078,7 +4308,7 @@ const inFlightCount = (world) => world.open.filter((i) => occupiesSlot(i) && isP
  * ONE PROJECT'S FAILURE MUST NOT STRAND THE REST, which is the whole point: a throw
  * while reconciling RA-1015 is what used to take RA-1291 and RA-1292 down with it.
  */
-export function reconcileAll(projects, {
+export async function reconcileAll(projects, {
   read = readWorld,
   onDecision = applyDecision,
   budget = readBudget(process.env.QA_LEAD_TICK_BUDGET),
@@ -4121,7 +4351,7 @@ export function reconcileAll(projects, {
 
   for (const project of projects) {
     try {
-      const world = read(project);
+      const world = await read(project);
       // The global cap is spent on what is ALREADY in flight before this project may
       // add more, so an early project cannot hold slots it is not using.
       const wip = Math.max(0, Math.min(wipPerProject, globalLeft));
@@ -4208,7 +4438,7 @@ export function reconcileAll(projects, {
   return { decisions, failures, budgetLeft, globalLeft, allocations, worlds };
 }
 
-function main() {
+async function main() {
   // The sweep's classifier compares every App's login. Read them first, so a missing row
   // stops the tick by name before any project is read (kanon#1316).
   botLogins();
@@ -4219,7 +4449,7 @@ function main() {
   const raw = arg('project');
   if (!raw) throw new Error('--project <tracking-issue>[,<n>...] is required');
   const projects = String(raw).split(',').map((p) => p.trim()).filter(Boolean);
-  const { decisions, failures, worlds } = reconcileAll(projects, { evidenceOf: makeRetryEvidenceReader({ json: ghJson }) });
+  const { decisions, failures, worlds } = await reconcileAll(projects, { evidenceOf: makeRetryEvidenceReader({ json: ghJson }) });
   // AFTER every project (RA-2412): "exactly one project" is a question about all of them,
   // so it runs only when this tick read ALL of them — a failed read, or a manual
   // dispatch narrowed to one project, would turn a two-project PR into a one-project
@@ -4247,4 +4477,4 @@ function main() {
 }
 
 const IS_CLI = isCliEntry(import.meta.url);
-if (IS_CLI) main();
+if (IS_CLI) await main();

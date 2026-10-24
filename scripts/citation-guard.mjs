@@ -799,7 +799,7 @@ export const isOracleSpec = (path) => path.startsWith('docs/qa/specs/');
  * Until #387 such a citation was range-checked only and counted in the all-clear, and a run in
  * which EVERY citation was like that failed as "anchor-checked NONE", a broken guard. That
  * failed Kanon's own `main` (kanon#377) over one table row, "Today it prints
- * `lead-reconcile.mjs:1378`": the failure said the guard was broken, when what it had found
+ * `lead-reconcile.mjs:1524`": the failure said the guard was broken, when what it had found
  * was a stale coordinate, and it named no file and no line. A range check proves only that the
  * line exists, which stays true however far the code slides, so the coordinate is now a
  * finding like any other, and whether the guard itself works is `selfCheck`'s question.

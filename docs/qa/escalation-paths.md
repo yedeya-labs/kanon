@@ -34,6 +34,7 @@ The hosted stores' trust and code:
 - `^infra/telemetry/(template\.yaml|render\.mjs)$` `infra` `always` — the telemetry store's template and its renderer, which write each adopter's writer and reader roles and the subject each trusts
 - `^infra/telemetry/function/` `infra` `always` — the ingest function, the only code that writes the telemetry table and maps a signed role to the one key it may write, and the aggregate function, which publishes only what at least three adopters contribute to
 - `^infra/qa-store/aws/(template\.yaml|provision\.mjs)$` `infra` `always` — the QA store's template and its provisioner, which set the role and the exact subjects it trusts
+- `^infra/status/` `infra` `always` — the hosted status server: what it reads with the token a person signs in with, and the status App's sign-in that issues it (project #1327)
 
 The library scripts that decide a verdict, gate a lane, mint or narrow what a token can do, or scrub what leaves a repository:
 
@@ -60,6 +61,7 @@ The library scripts that decide a verdict, gate a lane, mint or narrow what a to
 - `^scripts/lib/telemetry-token\.mjs$` `auth` `always` — the telemetry store's token client (plan 0008 §2.1): which URL a GitHub OIDC token minted for the store's audience is sent to, and its mask; the collector, the Overseer's read, the Explorer's and the metrics page's import it
 - `^scripts/telemetry/jev\.mjs$` `pipeline` `always` — the decision whether a private upstream finding becomes a public issue
 - `^scripts/lib/verified-commits\.mjs$` `pipeline` `always` — the verified-commit helper: which commits GitHub creates, and signs, as an Author lane's App, and when it moves a branch to them (`[LANE-6]` to `[LANE-11]`)
+- `^scripts/status/` `pipeline` `always` — the status core: the reads a person's token makes, which must stay reads, behind the hosted server and the `kanon status` command (project #1327)
 
 Code Kanon's own workflows run from this tree, on the branch they run on, with a credential. Kanon's lanes run the library at the release their callers pin, but five workflows don't, so each entry file and every local file it imports, directly or through another, is the Owner's; the scripts above already cover the rest of their imports (`lane-gate.mjs`, `caller-pin.mjs`, `app-register.mjs`, `declarations.mjs`, `spec-lib.mjs`, `escalation-paths.mjs`, `production-promotion.mjs`, `protocol-spellings.mjs`, `aggregate-mask.mjs`), and `actions/`, `infra/telemetry/function/` and `.github/` cover theirs:
 

@@ -430,8 +430,35 @@ export function readReferenceDeployFrom(repo, run) {
   try {
     text = read(ADOPTION_RECORD);
   } catch (e) {
-    throw fail(`${ADOPTION_RECORD} couldn't be read from \`${branch}\`: ${/** @type {Error} */ (e).message}`);
+    throw unreadableOn(branch, e);
   }
+  return referenceDeployOn(text, branch);
+}
+
+/**
+ * The same read over an injected reader's default-branch files (`defaultBranchReader` in
+ * `declarations.mjs`), for the reconciler's project read and the status core that shares it
+ * (project #1327, `[STAT-2]`). Throws as `readReferenceDeployFrom` does.
+ * @param {import('./declarations.mjs').BranchFiles} files
+ * @returns {Promise<ReferenceDeploy>}
+ */
+export async function referenceDeployAt(files) {
+  let text;
+  try {
+    text = await files.read(ADOPTION_RECORD);
+  } catch (e) {
+    throw unreadableOn(files.branch, e);
+  }
+  return referenceDeployOn(text, files.branch);
+}
+
+/**
+ * The record's reference deploy, from its text on `branch`: `null` text is a record that
+ * isn't there. One rule for both default-branch reads above.
+ * @param {string | null} text @param {string} branch
+ * @returns {ReferenceDeploy}
+ */
+function referenceDeployOn(text, branch) {
   if (text === null) {
     throw new DeclarationError(
       `${ADOPTION_RECORD} doesn't exist on \`${branch}\`, so it declares no reference environment, and no project can close (K-PROJ-11, K-LAYOUT-10)`,
@@ -439,6 +466,9 @@ export function readReferenceDeployFrom(repo, run) {
   }
   return requireReferenceDeploy(parseReferenceDeploy(text), ` on \`${branch}\``);
 }
+
+/** The record couldn't be read from `branch`. @param {string} branch @param {unknown} e */
+const unreadableOn = (branch, e) => fail(`${ADOPTION_RECORD} couldn't be read from \`${branch}\`: ${/** @type {Error} */ (e).message}`);
 
 /**
  * The declared reference environment's NAME, for a message, from the record on the default
@@ -453,6 +483,19 @@ export function readReferenceDeployFrom(repo, run) {
 export function declaredEnvironmentFrom(repo, run) {
   try {
     return readReferenceDeployFrom(repo, run).environment;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The same name, from an injected reader's default-branch files, as `referenceDeployAt` reads it.
+ * @param {import('./declarations.mjs').BranchFiles} files
+ * @returns {Promise<string | null>}
+ */
+export async function declaredEnvironmentAt(files) {
+  try {
+    return (await referenceDeployAt(files)).environment;
   } catch {
     return null;
   }

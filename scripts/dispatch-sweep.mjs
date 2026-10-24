@@ -138,7 +138,16 @@ export function listedRegister(path = APP_REGISTER) {
  * @returns {Set<string>}
  */
 export function listedBotLogins(path = APP_REGISTER) {
-  const register = listedRegister(path);
+  return registerBotLogins(listedRegister(path));
+}
+
+/**
+ * The bot logins a register's rows name, and GitHub's own bots: `listedBotLogins` over a register
+ * already read, for a caller that reads it from the default branch (the status core, project #1327).
+ * @param {Map<string, string>} register role → login
+ * @returns {Set<string>}
+ */
+export function registerBotLogins(register) {
   return new Set([...BOT_ROLES.flatMap((role) => (register.get(role) ? [register.get(role)] : [])), ...GITHUB_BOTS]);
 }
 
@@ -655,15 +664,23 @@ export function makeCommentsReader({ json = ghJson, onPayload = () => {} } = {})
     if (cache.has(number)) return cache.get(number);
     const payload = json(['issue', 'view', String(number), '--repo', REPO, '--json', 'comments']);
     onPayload(payload);
-    const { comments } = payload;
-    const out = (comments ?? []).map((c) => ({
-      login: norm(c.author?.login),
-      createdAt: c.createdAt,
-      body: c.body || '',
-    }));
+    const out = commentRows(payload.comments);
     cache.set(number, out);
     return out;
   };
+}
+
+/**
+ * Comments as `classify` reads them, from `gh issue view --json comments`'s shape, which the
+ * GraphQL `comments` connection shares: the author's login without `[bot]`, when, and the body.
+ * @param {Array<{ author?: { login?: string } | null, createdAt?: string, body?: string }> | null | undefined} comments
+ */
+export function commentRows(comments) {
+  return (comments ?? []).map((c) => ({
+    login: norm(c.author?.login),
+    createdAt: c.createdAt,
+    body: c.body || '',
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -723,12 +740,14 @@ export function classify(issue, comments, hasPr, opts = {}) {
     // test — keeps its exact meaning (RA-1336).
     lane = LANES[0],
     // WHICH LOGINS ARE APPS (kanon#1316). Defaults to `isBot`, every role's row required.
-    // Only the project digest, which reports and never acts, passes a predicate over the
-    // rows its register has (`listedBotLogins`).
+    // Only the project digest and the status view (`scripts/status/project.mjs`), which
+    // report and never act, pass a predicate over the rows their register has
+    // (`listedBotLogins`, `registerBotLogins`).
     isBot: bot = isBot,
     // WHOSE COMMENTS ARE THE IMPLEMENTER'S AND THE SWEEP'S (kanon#1321). Default: the register's
-    // rows, each required, read here rather than at load. Only the project digest passes them,
-    // from the rows its register has; null for a role with no row matches no comment's author.
+    // rows, each required, read here rather than at load. Only the project digest and the status
+    // view pass them, from the rows their register has; null for a role with no row matches no
+    // comment's author.
     agent = lane.agent,
     sweep = sweepLogin(),
   } = opts;

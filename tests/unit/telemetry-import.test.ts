@@ -50,6 +50,12 @@ describe('§7 step 2: the transform', () => {
     expect(validate(row, { imported: true })).toEqual({ ok: true });
   });
 
+  it('drops the QA store migration\'s mark on an unkeyed row (kanon#1377), so a marked row imports as it did', () => {
+    const row = rowOf({ migratedTo: '101' });
+    expect(row).not.toHaveProperty('migratedTo');
+    expect(validate(row, { imported: true })).toEqual({ ok: true });
+  });
+
   it('leaves kanon_version absent (decision 17), so only the importer path accepts the row', () => {
     const row = rowOf();
     expect(row).not.toHaveProperty('kanon_version');

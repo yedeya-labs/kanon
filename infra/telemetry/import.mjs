@@ -66,8 +66,11 @@ export const REASON_TEMPLATES = Object.freeze([
 const DERIVED = Object.freeze({ ok: 'none', failed: 'did_not_finish', 'not-reached': 'no_result_file' });
 const DERIVED_EXHAUSTED = Object.freeze({ max_turns: 'turn_cap', budget_exhausted: 'budget_cap' });
 
-/** Version-1 attributes that are not carried (§7 step 2), or are mapped to other fields. */
-const DROPPED = new Set(['pk', 'sk', 'agent', 'workflow', 'commit', 'reason', 'outcome_label', 'severities']);
+/**
+ * Version-1 attributes that are not carried (§7 step 2), or are mapped to other fields. `migratedTo`
+ * is the QA store migration's mark on an unkeyed row (kanon#1377), not a run's field.
+ */
+const DROPPED = new Set(['pk', 'sk', 'agent', 'workflow', 'commit', 'reason', 'outcome_label', 'severities', 'migratedTo']);
 /** Stored as DynamoDB strings in version 1, integers in version 2. */
 const TO_INTEGER = new Set(['run_id', 'run_attempt', 'api_error_status']);
 const SORT_KEY = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;

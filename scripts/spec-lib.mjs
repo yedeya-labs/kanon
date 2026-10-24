@@ -255,7 +255,14 @@ function corpusKey(dir) {
 export function idPattern(flags = 'g', dir = SPEC_DIR) {
   const key = corpusKey(dir);
   if (!patternSource.has(key)) patternSource.set(key, Object.values(loadPrefixes(dir)).join('|'));
-  return new RegExp(`\\[(${patternSource.get(key)})-(\\d+)\\]`, flags);
+  return idPatternOf(/** @type {string} */ (patternSource.get(key)).split('|'), flags);
+}
+
+/** The same pattern over prefixes already read, for a caller that reads the specs from
+ *  somewhere other than a directory (the status core, project #1327).
+ *  @param {string[]} prefixes @param {string} [flags] */
+export function idPatternOf(prefixes, flags = 'g') {
+  return new RegExp(`\\[(${prefixes.join('|')})-(\\d+)\\]`, flags);
 }
 
 export function specFiles(dir = SPEC_DIR) {
@@ -264,7 +271,16 @@ export function specFiles(dir = SPEC_DIR) {
 
 /** Every invariant declaration in one file, in document order. */
 export function parseSpec(file, dir = SPEC_DIR) {
-  const lines = readLines(file, dir);
+  return parseSpecLines(file, readLines(file, dir));
+}
+
+/** The same, over a spec's text, for a caller that reads it from somewhere other than a
+ *  directory (the status core reads the default branch, project #1327).
+ *  @param {string} file the spec's name, for messages @param {string} text */
+export const parseSpecText = (file, text) => parseSpecLines(file, text.split('\n'));
+
+/** @param {string} file @param {string[]} lines */
+function parseSpecLines(file, lines) {
   const { prefix, problems } = declaredPrefix(lines, file);
   if (!prefix) throw new Error(problems.join('\n'));
   const firstSection = lines.findIndex((l) => /^## /.test(l));

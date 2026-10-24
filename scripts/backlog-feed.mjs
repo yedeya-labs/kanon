@@ -47,6 +47,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { appPersona } from './app-register.mjs';
 import { makeCommentsReader } from './dispatch-sweep.mjs';
+import { ghReader } from './status/reader.mjs';
 import {
   DEFAULT_MILESTONE, GATE_CANDIDATE_LABEL, isReviewerFollowUp, severityOf,
 } from './issue-triage-defaults.mjs';
@@ -306,16 +307,18 @@ export function readOpen(repo, labels, gh, maxPages = 10) {
  * reconciler counts one, and whether this feeder fed it. An unreadable thread counts as fed,
  * failing closed: the feeder waits rather than double-feeding.
  * @param {string} repo
- * @param {{ gh: (args: string[]) => string, commentsOf: (n: number) => Comment[] }} io
- * @returns {Slot[]}
+ * @param {{ gh: (args: string[], input?: string) => string, commentsOf: (n: number) => Comment[] }} io
+ * @returns {Promise<Slot[]>}
  */
-export function readSlots(repo, { gh, commentsOf }) {
-  const json = (/** @type {string[]} */ args) => JSON.parse(gh(args));
-  return readOpen(repo, [IMPLEMENT], gh).map((i) => {
+export async function readSlots(repo, { gh, commentsOf }) {
+  const reader = ghReader({ run: gh });
+  /** @type {Slot[]} */
+  const slots = [];
+  for (const i of readOpen(repo, [IMPLEMENT], gh)) {
     const labels = (i.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name) ?? '');
-    const { parkedOnHuman } = parkedRead(i.number, { labels, state: 'OPEN' }, {
-      prs: (/** @type {number} */ n) => linkedPrsRead(n, { json }),
-      lane: (/** @type {number} */ n, /** @type {{ labels: string[] }} */ o) => laneStateOf(n, /** @type {any} */ ({ ...o, comments: commentsOf })),
+    const { parkedOnHuman } = await parkedRead(i.number, { labels, state: 'OPEN' }, {
+      prs: (/** @type {number} */ n) => linkedPrsRead(n, { reader, repo, warn }),
+      lane: (/** @type {number} */ n, /** @type {{ labels: string[] }} */ o) => laneStateOf(n, /** @type {any} */ ({ ...o, comments: commentsOf, reader, repo, warn })),
     });
     let fed = true;
     try {
@@ -323,15 +326,16 @@ export function readSlots(repo, { gh, commentsOf }) {
     } catch (e) {
       warn(`#${i.number}: its comments could not be read, so it counts as backlog-fed in flight: ${firstLine(e)}`);
     }
-    return { number: i.number, occupies: occupiesSlot({ labels, parkedOnHuman }), fed };
-  });
+    slots.push({ number: i.number, occupies: occupiesSlot({ labels, parkedOnHuman }), fed });
+  }
+  return slots;
 }
 
 /**
- * Read, select, and (with `apply`) feed. Never throws.
- * @param {{ repo: string, apply: boolean, gh: (args: string[]) => string, env?: Record<string, string | undefined>, summary?: (text: string) => void, tick?: string | null, globalWip?: number, persona?: string | null }} io
+ * Read, select, and (with `apply`) feed. Never rejects.
+ * @param {{ repo: string, apply: boolean, gh: (args: string[], input?: string) => string, env?: Record<string, string | undefined>, summary?: (text: string) => void, tick?: string | null, globalWip?: number, persona?: string | null }} io
  */
-export function run({ repo, apply, gh, env = process.env, summary = () => {}, tick = null, globalWip = GLOBAL_WIP_DEFAULT, persona = null }) {
+export async function run({ repo, apply, gh, env = process.env, summary = () => {}, tick = null, globalWip = GLOBAL_WIP_DEFAULT, persona = null }) {
   const valve = feedValve(env.QA_BACKLOG_FEED);
   const milestones = feedMilestones(env.QA_BACKLOG_MILESTONES);
   if (valve.note) warn(valve.note);
@@ -348,7 +352,7 @@ export function run({ repo, apply, gh, env = process.env, summary = () => {}, ti
   let slots;
   let issues;
   try {
-    slots = readSlots(repo, { gh, commentsOf });
+    slots = await readSlots(repo, { gh, commentsOf });
     issues = readOpen(repo, ['follow-up', 'agent:reviewer'], gh);
   } catch (e) {
     warn(`could not read the implementer slots or the reviewer follow-ups, so nothing was fed this tick: ${firstLine(e)}`);
@@ -380,21 +384,22 @@ export function run({ repo, apply, gh, env = process.env, summary = () => {}, ti
   return { plan, fed, failed };
 }
 
-function main() {
+async function main() {
   const repo = process.env.GITHUB_REPOSITORY;
   if (!repo) {
     warn('GITHUB_REPOSITORY is not set; nothing to read');
     return;
   }
   const apply = process.argv.includes('--apply') || process.env.APPLY === '1';
-  const gh = (/** @type {string[]} */ args) => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const gh = (/** @type {string[]} */ args, /** @type {string | undefined} */ input) =>
+    execFileSync('gh', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], ...(input === undefined ? {} : { input }) });
   const summary = (/** @type {string} */ text) => {
     console.log(text);
     if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, text);
   };
   const { GITHUB_SERVER_URL: server, GITHUB_RUN_ID: runId } = process.env;
   const tick = server && runId ? `${server}/${repo}/actions/runs/${runId}` : null;
-  run({ repo, apply, gh, summary, tick, persona: appPersona('Lead') });
+  await run({ repo, apply, gh, summary, tick, persona: appPersona('Lead') });
 }
 
-if (isCliEntry(import.meta.url)) main();
+if (isCliEntry(import.meta.url)) await main();
