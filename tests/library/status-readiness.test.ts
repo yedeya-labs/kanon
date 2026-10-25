@@ -338,4 +338,14 @@ describe("any other pull request is a person's to merge", () => {
     expect((await view(personPr({ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }))).v.readiness.ready).toBe(true);
     expect((await view(personPr({ mergeStateStatus: 'BLOCKED', labels: ['blocked'] }))).v.readiness.ready).toBe(true);
   });
+
+  it("[STAT-14] reads the Reviewer's latest verdict on the head, in either order, as the view's review field does", async () => {
+    const changedThenApproved = (await view(personPr({ reviews: [approval(1, HEAD, 'CHANGES_REQUESTED'), approval(2, HEAD)] }))).v;
+    expect(changedThenApproved.review).toMatchObject({ state: 'APPROVED', current: true });
+    expect(changedThenApproved.readiness).toMatchObject({ by: 'person', ready: true, lacks: [] });
+    const approvedThenChanged = (await view(personPr({ reviews: [approval(1, HEAD), approval(2, HEAD, 'CHANGES_REQUESTED')] }))).v;
+    expect(approvedThenChanged.review).toMatchObject({ state: 'CHANGES_REQUESTED', current: true });
+    expect(approvedThenChanged.readiness).toMatchObject({ by: 'person', ready: false, lacks: ['approval'] });
+    expect(approvedThenChanged.readiness.why).toMatch(/requested changes/);
+  });
 });
