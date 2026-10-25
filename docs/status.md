@@ -5,23 +5,24 @@
 ```sh
 kanon status --project 1327
 kanon status --project 1327 --json
-kanon status --repo owner/name --project 12
+kanon status --pr 1391
+kanon status --repo owner/name --project 12 --pr 40
 ```
 
 | Option | Meaning |
 |---|---|
 | `--project <n>` | The project view of tracking issue `<n>`. |
-| `--pr <n>` | The pull-request readiness view. It isn't in this release yet: the command says so and exits 2. |
+| `--pr <n>` | The pull-request readiness view of pull request `<n>` ([below](#the-pull-request-readiness-view)). |
 | `--repo <owner>/<repo>` | The repository. The default is the origin remote of the checkout you run it from. |
 | `--json` | Print one JSON document instead of prose ([below](#the-json-output)). |
 
-Each view you ask for is one section of the answer. The project view is the one there is so far. The pull-request readiness, lane-health, release and needs-the-Owner views each add their own section as they are built.
+Each view you ask for is one section of the answer, and you can ask for both at once. The project and pull-request readiness views are the ones there are so far. The lane-health, release and needs-the-Owner views each add their own section as they are built.
 
 ## What it reads
 
 It reads with your own `gh` credential, as [`kanon doctor`](doctor.md) does. `gh` takes its token from `GH_TOKEN`, then `GITHUB_TOKEN`, then its stored login. The command says on standard error which one it used and whose it is, and stops when GitHub refuses it. It reads only what that token can read, and asks GitHub only REST `GET`s and GraphQL queries.
 
-It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record and the stack document. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used only to find the repository when you don't pass `--repo`.
+It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record, the escalation file, the exemptions file and the stack document. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used to find the repository when you don't pass `--repo`, and for one more thing with `--pr`: that view runs the merge gate's own verdict function, and loading it reads the App register from the directory you run in, as each lane does in its checkout. So run `--pr` from a checkout of a repository that runs Kanon. The logins the view judges by are still the default branch's register's.
 
 **An incomplete read is no answer.** A read that GitHub refused, that wasn't found, that hit the rate limit or that came back cut short makes that view's answer an error. The error names each read and why it failed, with the time the rate limit resets when that is the cause. A view never answers in part.
 
@@ -39,12 +40,33 @@ For a tracking issue, `--project` reads its brief, `docs/projects/<n>.md`, on th
 
 A tracking issue with no brief, or a brief whose decomposition doesn't parse, is reported as that. It is never reported as a project with no items.
 
+## The pull-request readiness view
+
+For a pull request, `--pr` reads it as the Merger would on its next sweep, through the same reads the merge gate makes, and gives:
+
+- **its checks**, partitioned as the merge gate partitions them: the ones that count (the Reviewer's and the Merger's own runs don't), and of those, the ones still running, cancelled with nothing re-run, and failed;
+- **the Reviewer's latest verdict**, the commit that verdict read, and whether it is current, which it is only when that commit is the head;
+- **the acceptance criteria of the issues it closes**, each with its status in the spec layer;
+- **the merge gate's verdict** for it, `merge`, `wait`, `recover`, `escalate`, `release` or `skip`, with the rule that decided it and its reason;
+- **for a brief**, each open decision in it, read at its head as the brief guard reads it;
+- **whether it is ready to merge, and by whom.**
+
+Whether it is ready is never the view's own judgement:
+
+- **The Implementer's pull request** is the Merger's. It is ready when the merge gate answers `merge`. It is ready for a person's merge when the gate escalates it for an escalation path alone: the gate, asked again with the declared paths lifted, answers `merge`. Any other answer isn't ready, and the gate's rule is what it lacks.
+- **Any other pull request** is a person's to merge, never the Merger's. That is one the gate skips as not provably the Implementer's: a person's, a Lead's brief, a dependency bump, the release pull request. It is ready when three things hold, and the view names each one it lacks:
+  - `checks`: the gate's check partition finds at least one check that counts, and none running, cancelled or failed;
+  - `approval`: the Reviewer's verdict on its head, as the review-recovery lane reads it, is an approval;
+  - `decisions`, for a brief only: the brief guard finds no open decision in it. A brief the default branch's `docs/qa/exemptions.md` lists as pre-standard isn't checked.
+
+  Nothing else is asked of it: a person merging it reads the rest on GitHub.
+
 ## Exit codes
 
 | Code | Status | Meaning |
 |---|---|---|
 | 0 | `ok` | Every view asked for was answered. |
-| 2 | `error` | A usage error: an unknown or malformed flag, no view named, or `--pr`, whose view isn't in this release yet. |
+| 2 | `error` | A usage error: an unknown or malformed flag, or no view named. |
 | 3 | `error` | It couldn't run: no repository to read, or a token GitHub refuses. |
 | 4 | `incomplete` | A view's reads didn't complete, so that view has no answer. |
 
@@ -110,6 +132,54 @@ A path names a field inside its parent: `project.items[].key` is the `key` of ea
 | `project.items[].stops[].reason` | string | `dependency`, `qa:needs-info`, `qa:needs-split`, `blocked`, `qa:human-action`, `lead-hold` or `held`. |
 | `project.items[].stops[].detail` | string | A sentence naming the issue, the label or the dependency. |
 | `project.notes` | array | What the reconciler warned of while it read, as sentences. |
+| `pr` | object | The pull-request readiness view, when `--pr` asked for it: the fields below, or, when its reads didn't complete, only `error` and `reads`. |
+| `pr.error` | string | Why the view has no answer, naming each read that failed. |
+| `pr.reads` | array | Each read that failed, as `project.reads` gives one. |
+| `pr.reads[].read` | string | What was read. |
+| `pr.reads[].why` | string | Why it failed. |
+| `pr.reads[].status` | number or null | The HTTP status, when there is one. |
+| `pr.reads[].resetAt` | string or null | When the exhausted rate limit resets, when that is the cause. |
+| `pr.number` | number | The pull request. |
+| `pr.title` | string | Its title. |
+| `pr.url` | string | Its link. |
+| `pr.state` | string | `OPEN`, `CLOSED` or `MERGED`. |
+| `pr.draft` | boolean | True when it is a draft. |
+| `pr.author` | string | Who opened it, as the merge gate reads the login: an App's as `app/<slug>`. |
+| `pr.head` | string | Its head commit. |
+| `pr.branch` | string | The default branch the declarations were read from. |
+| `pr.checks` | object | Its checks, partitioned as the merge gate partitions them. |
+| `pr.checks.relevant` | array | The checks that count, after the gate leaves out its own pipeline's runs. |
+| `pr.checks.relevant[].name` | string | The check's name. |
+| `pr.checks.relevant[].workflow` | string or null | The workflow it ran in, or null for a commit status or another App's check. |
+| `pr.checks.relevant[].status` | string | `COMPLETED`, `IN_PROGRESS`, `QUEUED`, `PENDING` or the like. |
+| `pr.checks.relevant[].conclusion` | string or null | `SUCCESS`, `FAILURE`, `CANCELLED` or the like; null until it completes. |
+| `pr.checks.pending` | array | The names of the checks still running. |
+| `pr.checks.cancelled` | array | The names of those cancelled that nothing re-ran. |
+| `pr.checks.failed` | array | The names of those that failed. |
+| `pr.review` | object or null | The Reviewer's latest verdict, or null when it has given none. |
+| `pr.review.state` | string | `APPROVED` or `CHANGES_REQUESTED`. |
+| `pr.review.commit` | string | The commit the verdict read: the one its stamp names, or the one GitHub filed it under when it carries no stamp. |
+| `pr.review.current` | boolean | True only when that commit is the head. |
+| `pr.closes` | array | The issues in this repository it closes. |
+| `pr.closes[].number` | number | The issue. |
+| `pr.closes[].acs` | array | The acceptance-criterion ids the issue cites. |
+| `pr.closes[].acs[].id` | string | The id, such as `STAT-6`. |
+| `pr.closes[].acs[].declared` | boolean | True when the issue declares it as a criterion, false when it only mentions it. |
+| `pr.closes[].acs[].clause` | string or null | The clause's status in the spec layer, or null when the spec layer has no such id. |
+| `pr.verdict` | object | The merge gate's verdict. |
+| `pr.verdict.action` | string | `merge`, `wait`, `recover`, `escalate`, `release` or `skip`. |
+| `pr.verdict.rule` | string | The rule that decided it, such as `green-zone`, `checks-pending` or `not-the-implementer`. |
+| `pr.verdict.why` | string | The gate's reason, as a sentence. |
+| `pr.decisions` | array or null | For a pull request that adds or changes a brief, each open decision in it; null for any other. |
+| `pr.decisions[].brief` | string | The brief, `docs/projects/<n>.md`. |
+| `pr.decisions[].n` | number | The decision's number. |
+| `pr.decisions[].headline` | string | Its headline. |
+| `pr.decisions[].marker` | string | The open mark its headline carries, such as `⛔` or `PROPOSED`. |
+| `pr.readiness` | object | Whether it is ready to merge, and by whom. |
+| `pr.readiness.by` | string | `merger` when it is the Merger's to merge, `person` when it is a person's. |
+| `pr.readiness.ready` | boolean | True when it is ready for that merge. |
+| `pr.readiness.lacks` | array | What it lacks: for a person's pull request, `checks`, `approval` or `decisions`; for the Implementer's, the merge gate's rule that stops it. Empty when it is ready. |
+| `pr.readiness.why` | string | A sentence saying why. |
 
 On a usage error or when it can't run, the document is the error document, `{ "schema", "kanon", "status": "error", "exitCode", "error" }`.
 

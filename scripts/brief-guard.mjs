@@ -487,6 +487,22 @@ export const decisionsIn = (body) => {
   return out;
 };
 
+/**
+ * The open decisions in one decisions section's body, as `{ n, headline, line, marker }`: the
+ * brief guard's open-decision read, in one place for `checkBrief` and for the status core's
+ * readiness view, which asks it of a brief pull request (project #1327, `[STAT-14]`). It holds
+ * both rules the guard applies: an answered mark wins over an open one in the same headline
+ * (`ANSWERED_DECISION`), and a pre-standard brief isn't checked, so it has none (`isPreStandard`;
+ * the caller says which, since the status core reads the exemptions from the default branch
+ * rather than from a checkout).
+ * @param {string} body the section's body, under its heading
+ * @param {boolean} preStandard whether the brief is exempt as pre-standard
+ * @returns {{ n: number, headline: string, line: number, marker: string }[]}
+ */
+export const openDecisions = (body, preStandard) => (preStandard ? [] : decisionsIn(body)
+  .filter((d) => OPEN_DECISION.test(d.headline) && !ANSWERED_DECISION.test(d.headline))
+  .map((d) => ({ ...d, marker: (OPEN_DECISION.exec(d.headline) ?? [''])[0] })));
+
 export const briefSections = (markdown) => {
   const heads = [...markdown.matchAll(/^##\s+(.*)$/gm)];
   return heads.map((h, i) => ({
@@ -971,13 +987,11 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
               'after the number is read as prose. (A numbered list inside a ``` fence is ignored.)',
           });
         }
-        for (const d of runs('open-decision') ? decisionsIn(sec.body) : []) {
-          if (!OPEN_DECISION.test(d.headline) || ANSWERED_DECISION.test(d.headline)) continue;
-          const marker = (OPEN_DECISION.exec(d.headline) ?? [''])[0];
+        for (const d of openDecisions(sec.body, !runs('open-decision'))) {
           findings.push({
             at: at(sec.line + d.line),
             problem:
-              `decision ${d.n} is still open — its headline carries \`${marker}\`. A brief ` +
+              `decision ${d.n} is still open — its headline carries \`${d.marker}\`. A brief ` +
               'merges once and is filed from within the minute (RA-1019: 51 seconds), so an ' +
               'unanswered question becomes an amendment to issues that already exist. Get ' +
               'the answer and record it, or split the decision so the answered half can ' +

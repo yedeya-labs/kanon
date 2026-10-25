@@ -138,11 +138,14 @@ export function ciSettledFor(sha, { json = ghJson } = {}) {
  * COMMENTED IS NOT A VERDICT — the RA-1081 rule, and the same one `merge-gate.mjs` and
  * the workflow's own reconcile step apply. A `COMMENT` is invisible to everything
  * downstream (RA-378), so a head carrying only one is a head with no review.
+ *
+ * `reviewer` is the register's `Reviewer` login, read from the working tree by default; the status
+ * core passes the one it read from the default branch (project #1327, `[STAT-2]`, `[STAT-14]`).
  */
-export function verdictOnHead(pr) {
+export function verdictOnHead(pr, { reviewer = REVIEWER_LOGIN } = {}) {
   return (pr.reviews ?? []).find((r) =>
     // The Reviewer's login and, from L4, its role marker (plan 0005 §3.3).
-    asRole('Reviewer', { login: normaliseLogin(r.author?.login), expected: REVIEWER_LOGIN, body: r.body })
+    asRole('Reviewer', { login: normaliseLogin(r.author?.login), expected: reviewer, body: r.body })
     && (r.state === 'APPROVED' || r.state === 'CHANGES_REQUESTED')
     && (readTrailer(r).reviewedSha ?? r.commit?.oid) === pr.headRefOid) ?? null;
 }
