@@ -780,6 +780,16 @@ describe('the tick workflow', () => {
     expect(reconcileStep.if).toBe("steps.scope.outputs.project != ''");
   });
 
+  it('reads its briefs from the default branch, never a closed pull request\'s test merge (kanon#1400)', () => {
+    // Without a `ref`, a `pull_request: closed` checks out `refs/pull/<n>/merge`. For a pull
+    // request closed WITHOUT merging, that holds its unmerged brief, which `scope` then lists as
+    // a project and the reconcile applies (`K-PROJ-1`). A merged close lands on the default
+    // branch either way, so naming it costs the cascade nothing.
+    const checkouts = wf.jobs.tick.steps.filter((s: { uses?: string }) => /^actions\/checkout@/.test(String(s.uses ?? '')));
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0].with?.ref).toBe('${{ github.event.repository.default_branch }}');
+  });
+
   it('uses the App token, without which the cascade cannot fire', () => {
     // Events raised by the default GITHUB_TOKEN never trigger another workflow, so
     // labelling with it would start nothing.

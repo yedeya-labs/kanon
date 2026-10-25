@@ -205,8 +205,16 @@ jobs:
 
       # The brief is read from the checkout (`docs/projects/<n>.md`, `K-PROJ-2`). Nothing in it
       # runs: this lane installs nothing and never calls the project-setup hook.
+      #
+      # THE DEFAULT BRANCH, NAMED (kanon#1400), as the Merger's checkout is. Without a `ref` a
+      # `pull_request: closed` checks out `refs/pull/<n>/merge`, and for a pull request closed
+      # WITHOUT merging that is its test merge: a rejected brief there is listed by `scope` as a
+      # project, and the tick applies it, though only a merged brief is approved (`K-PROJ-1`). A
+      # merged close's merge is on the default branch already, so the cascade reads it here.
       - uses: actions/checkout@v7
         if: steps.gate.outputs.member == 'true' && steps.fork.outputs.fork == 'false' && steps.reask.outputs.due != 'false'
+        with:
+          ref: ${{ github.event.repository.default_branch }}
 
       # THE LEAD'S LOGIN COMES FROM THE APP REGISTER (plan 0004 P5), not from this file:
       # Kanon cannot write an adopter's logins. Read from the default branch over the API, as
