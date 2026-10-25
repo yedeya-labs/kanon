@@ -10,7 +10,7 @@ const { IMPLEMENTER_STATUS, headerLine, markerPhase, setMarkerPhase } = await im
 const { mergeVerdict, holdOn, readPr, ESCALATION_HEADER } = await import('../../scripts/merge-gate.mjs');
 const { mergerMarker } = await import('../../scripts/lib/protocol-spellings.mjs');
 const { classify, isSweepComment, MARKER } = await import('../../scripts/dispatch-sweep.mjs');
-const { explorerQaComments } = await import('../../scripts/lead-reconcile.mjs');
+const { explorerQaComments, retroPosted, holdSaid, holdMarker } = await import('../../scripts/lead-reconcile.mjs');
 const { briefPrs } = await import('../../scripts/brief-revise-recovery.mjs');
 const { ineligible } = await import('../../scripts/rebase-lane.mjs');
 const { reviewerVerdicts } = await import('../../scripts/incremental-review.mjs');
@@ -120,6 +120,15 @@ const READERS: Record<string, Reader> = {
     role: 'Explorer',
     read: (body) => explorerQaComments([{ author: { login: appLogin('Explorer') }, body: `${body}\n<!-- qa:verified -->` }]).length,
   },
+  // kanon#1399: two control signals the reconciler read from any commenter.
+  'lead-reconcile: the Lead\'s retro, which reads an open tracking issue as reopened (retroPosted)': {
+    role: 'Lead',
+    read: (body) => retroPosted([{ author: { login: appLogin('Lead') }, body: `${body}\n<!-- qa:lead-retro -->` }]),
+  },
+  'lead-reconcile: the Lead\'s hold comment, which says a hold once (holdSaid)': {
+    role: 'Lead',
+    read: (body) => holdSaid([{ author: { login: appLogin('Lead') }, body: `${body}\n${holdMarker(['why'])}` }], ['why']),
+  },
   'brief-revise-recovery: the Lead\'s brief PRs (briefPrs)': {
     role: 'Lead',
     read: (body) => briefPrs([{ state: 'OPEN', author: { login: `app/${appLogin('Lead')}` }, body, files: [{ path: 'docs/projects/p.md' }] }]).length,
@@ -160,8 +169,8 @@ describe('plan 0005 L4: each reader of §3.3 requires the role marker beside the
   });
 
   it('covers every reader §3.3 names that has a body to carry a marker', () => {
-    // §3.3's ten, and the #312 readers.
-    expect(Object.keys(READERS)).toHaveLength(13);
+    // §3.3's ten, the #312 readers, and kanon#1399's two.
+    expect(Object.keys(READERS)).toHaveLength(15);
   });
 });
 

@@ -104,6 +104,7 @@ async function view(project, { reader, repo, failures }) {
       ...opts,
     }),
     explorer: register.get('Explorer') ?? null,
+    lead: register.get('Lead') ?? null,
   });
   const phase = phaseOf(world);
   /** @type {string[] | undefined} */

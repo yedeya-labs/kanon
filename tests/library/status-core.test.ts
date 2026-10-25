@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ROOT } from './helpers/adopter.js';
+import { ADOPTER, ROOT } from './helpers/adopter.js';
 import { connection } from './helpers/fake-reader.js';
 import { BRIEF, PROJECT, adopterFiles, adopterProject, laneCaller, laneFleet, marker, repoWorld } from './helpers/status-world.js';
 
@@ -17,6 +17,7 @@ const { laneHealthView } = await import('../../scripts/status/lanes.mjs');
 const { ReadError, ghReader, watched } = await import('../../scripts/status/reader.mjs');
 const { readProjectWorld, phaseOf, HELD, HELD_MARKER } = await import('../../scripts/lead-reconcile.mjs');
 const { openGatingWork } = await import('../../scripts/project-closure.mjs');
+const { headerLine } = await import('../../scripts/lib/role-marker.mjs');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -259,6 +260,51 @@ describe('the project view', () => {
     const prose = repoWorld({ files: { ...files, [`docs/projects/${PROJECT}.md`]: '# Project 7\n\nJust prose.\n' } });
     const pv: Any = await projectView({ reader: prose.reader, repo: prose.repo, project: PROJECT });
     expect([pv.brief.state, pv.items, pv.phase]).toEqual(['unparseable', null, 'brief-unparseable']);
+  });
+});
+
+describe('a retro counts as a close only when the Lead posted it (kanon#1399)', () => {
+  // `trackingReopened` stops every later tick, so the marker it reads is a control signal: a
+  // comment anyone can post must not carry it (`scripts/lib/role-marker.mjs`, `asRole`).
+  const LEAD = 'example-lead';
+  const retro = '## The Lead — project retro, #7\n<!-- qa:lead-retro -->';
+  const at = '2026-10-01T00:00:00Z';
+  // Every item filed and closed, with nothing merged: the read reaches the terminal deploy
+  // states, the only ones in which it reads the tracking issue's comments. What `phaseOf` does
+  // with `trackingReopened` is held by the RA-1062 tests.
+  const done = ['Show the price', 'Place an order once', 'Take payment'].map((title, i) => ({ number: 11 + i, title, state: 'CLOSED', closedAt: at }));
+  const reopened = async (trackingComments: Array<Record<string, unknown>>) => {
+    const w = adopterProject({ issues: done, prs: {}, trackingComments });
+    const world: Any = await readProjectWorld(PROJECT, { reader: w.reader, repo: w.repo, warn: () => {}, readBrief: () => BRIEF, explorer: null, lead: LEAD, environment: async () => null });
+    return world.trackingReopened;
+  };
+
+  it('reads the Lead\'s own retro on an open tracking issue as a close a human undid', async () => {
+    expect(await reopened([{ author: { login: LEAD }, body: `${headerLine('Lead')}\n\n${retro}`, createdAt: at }])).toBe(true);
+  });
+
+  it('does not read the marker from anyone else, or from the Lead\'s login without its role marker', async () => {
+    expect(await reopened([{ author: { login: 'stranger' }, body: `${headerLine('Lead')}\n\n${retro}`, createdAt: at }]), 'a stranger').toBe(false);
+    expect(await reopened([{ author: { login: LEAD }, body: `${headerLine('Implementer')}\n\n${retro}`, createdAt: at }]), 'another role of the App').toBe(false);
+    expect(await reopened([{ author: { login: LEAD }, body: retro, createdAt: at }]), 'no role marker').toBe(false);
+  });
+
+  it('`kanon status` reads the retro by the Lead the default branch\'s register names', async () => {
+    // A register naming another Lead than the checkout's (this tier runs inside the fixture
+    // adopter, whose register names `example-lead`), so a view that compared the checkout's
+    // login, or Kanon's, would not see the retro.
+    const files = adopterFiles(ADOPTER, { [`docs/projects/${PROJECT}.md`]: BRIEF });
+    const register = 'docs/qa/agent-identities.md';
+    files[register] = files[register]!.replace('`example-lead`', '`shop-lead`');
+    expect(files[register]).toContain('`shop-lead`');
+    const qa = { number: 14, title: 'QA: verify project 7', state: 'CLOSED', closedAt: at, labels: ['qa:verify'] };
+    const phase = async (login: string) => {
+      const w = adopterProject({ files, issues: [...done, qa], prs: {}, trackingComments: [{ author: { login }, body: `${headerLine('Lead')}\n\n${retro}`, createdAt: at }] });
+      return ((await projectView({ reader: w.reader, repo: w.repo, project: PROJECT })) as Any).phase;
+    };
+    expect(await phase('shop-lead')).toBe('reopened');
+    expect(await phase(LEAD), 'the checkout\'s Lead is not this project\'s').toBe('close');
+    expect(await phase('stranger'), 'a stranger\'s retro closes nothing').toBe('close');
   });
 });
 
