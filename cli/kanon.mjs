@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // The `kanon` command: `kanon init` (cli/init.mjs), `kanon doctor` (cli/doctor.mjs), `kanon apps`
-// (cli/apps.mjs), `kanon milestones` (cli/milestones.mjs) and `kanon metrics` (cli/metrics.mjs). Each calls GitHub through the
-// caller's own `gh`, and says first which token it uses and whose it is (cli/gh-token.mjs).
+// (cli/apps.mjs), `kanon milestones` (cli/milestones.mjs), `kanon metrics` (cli/metrics.mjs) and `kanon status`
+// (cli/status.mjs). Each calls GitHub through the caller's own `gh`, and says first which token it uses and whose it
+// is (cli/gh-token.mjs).
 import { apps } from './apps.mjs';
 import { doctor } from './doctor.mjs';
 import { init } from './init.mjs';
 import { metrics } from './metrics.mjs';
 import { milestones } from './milestones.mjs';
+import { status } from './status.mjs';
 
 const HELP = `Usage: kanon <command> [options]
 
@@ -23,7 +25,9 @@ Commands:
   milestones   create the two bucket milestones when missing (kanon milestones --help)
   metrics      dry-run: derive the work-item rows of the pull requests closed since a date,
                read-only, and print counts only; report: the three headline indicators by
-               band, from exported telemetry rows (kanon metrics --help)`;
+               band, from exported telemetry rows (kanon metrics --help)
+  status       where the repository stands, read live from GitHub: a project's items, what
+               holds each, and its phase; writes nothing; --json for scripts (kanon status --help)`;
 
 const [command, ...rest] = process.argv.slice(2);
 if (command === 'init') process.exitCode = await init(rest);
@@ -31,6 +35,7 @@ else if (command === 'doctor') process.exitCode = await doctor(rest);
 else if (command === 'apps') process.exitCode = await apps(rest);
 else if (command === 'milestones') process.exitCode = await milestones(rest);
 else if (command === 'metrics') process.exitCode = await metrics(rest);
+else if (command === 'status') process.exitCode = await status(rest);
 else if (command === undefined || command === '-h' || command === '--help') console.log(HELP);
 else {
   console.error(`kanon: unknown command "${command}"\n\n${HELP}`);

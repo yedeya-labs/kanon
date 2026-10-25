@@ -1,0 +1,250 @@
+// `kanon status` (project #1327, Issue B): where a repository that runs Kanon stands, read live
+// from GitHub and printed, with nothing written anywhere (docs/status.md).
+//
+// A SURFACE, NOT A SECOND CORE. Every answer is a view of the status core (`scripts/status/`),
+// read through a `gh`-backed reader with the person's own credential, as `kanon doctor` reads.
+// This file parses the flags, finds the repository, says whose token it reads with, and prints:
+// one `kanon-status/v1` document with `--json` (docs/cli-json.md), or the same result as prose
+// (`[STAT-11]`). The document is built first and the prose is printed from it, so the two can't
+// give a different result or exit code.
+//
+// ONE SECTION PER VIEW ASKED FOR. `--project <n>` asks for the project view. A later view adds
+// its own section within v1, which docs/cli-json.md allows. A view whose reads didn't complete
+// answers with an error naming each read (`[STAT-3]`), never a partial answer, and the command
+// exits 4.
+import { spawn, spawnSync } from 'node:child_process';
+import { IncompleteRead, projectView } from '../scripts/status/project.mjs';
+import { ReadError, ghReader } from '../scripts/status/reader.mjs';
+import { remoteRepo } from './apps.mjs';
+import { kanonRelease } from './callers.mjs';
+import { whoami } from './gh-token.mjs';
+
+/** The JSON output's contract (docs/status.md). A breaking change to it changes this. */
+export const SCHEMA = 'kanon-status/v1';
+
+/** The exit codes, as docs/status.md documents them. */
+export const EXIT = /** @type {const} */ ({ ok: 0, usage: 2, error: 3, incomplete: 4 });
+
+export const USAGE = `Usage: kanon status --project <n> [options]
+
+Reads where a repository that runs Kanon stands, live from GitHub, and prints it. Writes
+nothing, anywhere (docs/status.md).
+
+Options:
+  --project <n>          the project view: tracking issue <n>'s brief, its items with their
+                         issues, pull requests, criteria and what holds each, and the phase the
+                         Lead's reconciler is in
+  --pr <n>               the pull-request readiness view (not in this release yet)
+  --repo <owner>/<repo>  the repository (default: this checkout's origin remote)
+  --json                 print one JSON document (docs/status.md) instead of prose
+  -h, --help             this text
+
+Exit codes: 0 answered; 2 usage error; 3 could not run; 4 a view's reads didn't complete, so
+it has no answer (docs/status.md).
+
+Needs \`gh\` and a token that can read the repository. gh takes its token from GH_TOKEN, then
+GITHUB_TOKEN, then its stored login; the command says on standard error which one it used and
+whose it is.`;
+
+/**
+ * @typedef {{ status: number | null, stdout: string, stderr: string }} GhResult
+ * @typedef {{
+ *   git: (args: string[]) => GhResult,
+ *   gh: (args: string[]) => Promise<GhResult>,
+ *   reader: () => import('../scripts/status/reader.mjs').Reader,
+ *   env: Record<string, string | undefined>,
+ *   out: (line: string) => void,
+ *   err: (line: string) => void,
+ *   release: () => string,
+ *   now: () => Date,
+ * }} Deps
+ */
+
+/** @type {Deps} */
+export const realDeps = {
+  git: (args) => {
+    const r = spawnSync('git', args, { encoding: 'utf8' });
+    return { status: r.status, stdout: r.stdout ?? '', stderr: r.error ? String(r.error.message) : (r.stderr ?? '') };
+  },
+  gh: (args) =>
+    new Promise((done) => {
+      const child = spawn('gh', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => (stdout += d));
+      child.stderr.on('data', (d) => (stderr += d));
+      child.on('error', (e) => done({ status: null, stdout, stderr: String(e.message) }));
+      child.on('close', (status) => done({ status, stdout, stderr }));
+    }),
+  reader: () => ghReader(),
+  env: process.env,
+  out: (line) => process.stdout.write(`${line}\n`),
+  err: (line) => process.stderr.write(`${line}\n`),
+  release: kanonRelease,
+  now: () => new Date(),
+};
+
+/** A positive issue or pull-request number; throws naming the flag. @param {string} flag @param {string} v */
+const number = (flag, v) => {
+  if (!/^[1-9]\d*$/.test(v)) throw new Error(`${flag} takes an issue or pull-request number, not "${v}"`);
+  return Number(v);
+};
+
+/**
+ * Parses `kanon status`'s arguments. Throws with a message naming the problem.
+ * @param {string[]} argv
+ */
+export const parseArgs = (argv) => {
+  /** @type {{ repo: string, project: number | null, pr: number | null, json: boolean, help: boolean }} */
+  const opts = { repo: '', project: null, pr: null, json: false, help: false };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] ?? '';
+    const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
+    const value = () => {
+      const v = inline ?? argv[++i];
+      if (v === undefined || v === '') throw new Error(`${flag} needs a value`);
+      if (inline === undefined && v.startsWith('-')) throw new Error(`${flag} needs a value, not the flag "${v}"`);
+      return v;
+    };
+    if (flag === '-h' || flag === '--help') opts.help = true;
+    else if (flag === '--repo') opts.repo = value();
+    else if (flag === '--project') opts.project = number(flag, value());
+    else if (flag === '--pr') opts.pr = number(flag, value());
+    else if (flag === '--json') opts.json = true;
+    else throw new Error(`unknown argument "${arg}"`);
+  }
+  if (opts.help && opts.json) throw new Error('--help and --json contradict each other; give one');
+  if (opts.help) return opts;
+  if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
+  // The readiness view is the core's next one (project #1327, Issue C); until it is there, the
+  // flag says so rather than answering with no section.
+  if (opts.pr !== null) throw new Error(`--pr ${opts.pr}: the pull-request readiness view isn't in this release yet; --project is the view there is`);
+  if (opts.project === null) throw new Error('name a view to read: --project <n>');
+  return opts;
+};
+
+/** @param {Deps} deps @param {number} exitCode @param {string} error */
+const errorDocument = (deps, exitCode, error) => ({ schema: SCHEMA, kanon: deps.release(), status: 'error', exitCode, error });
+
+/** Stops the command with a message: it can't run. */
+class StatusError extends Error {}
+
+/**
+ * A view's answer, or the error that stands in for it when its reads didn't complete
+ * (`[STAT-3]`): each read named, why it failed, its HTTP status and the rate limit's reset.
+ * @param {() => Promise<object>} read
+ */
+async function section(read) {
+  try {
+    return await read();
+  } catch (e) {
+    if (!(e instanceof IncompleteRead || e instanceof ReadError)) throw e;
+    /** @type {ReadError[]} */
+    const reads = e instanceof IncompleteRead ? /** @type {ReadError[]} */ (e.reads) : [e];
+    return {
+      error: e.message,
+      reads: reads.map((r) => ({ read: r.read, why: r.why, status: r.status, resetAt: r.resetAt })),
+    };
+  }
+}
+
+/**
+ * The document `kanon status` prints, or throws `StatusError` when it can't run.
+ * @param {Deps} deps @param {ReturnType<typeof parseArgs>} opts
+ */
+async function document(deps, opts) {
+  let repo = opts.repo;
+  if (!repo) {
+    const origin = deps.git(['remote', 'get-url', 'origin']);
+    repo = (origin.status === 0 && remoteRepo(origin.stdout)) || '';
+    if (!repo) throw new StatusError('this directory is not a checkout with an origin remote on GitHub; pass --repo <owner>/<repo>');
+  }
+  const who = await whoami(deps.gh, deps.env);
+  deps.err(who.line);
+  if (who.refusal) throw new StatusError(who.refusal.join(' '));
+  const readAt = deps.now().toISOString();
+  const reader = deps.reader();
+  /** @type {Record<string, object>} */
+  const views = {};
+  if (opts.project !== null) {
+    const project = opts.project;
+    views.project = await section(() => projectView({ reader, repo, project }));
+  }
+  const incomplete = Object.values(views).some((v) => 'error' in v);
+  const exitCode = incomplete ? EXIT.incomplete : EXIT.ok;
+  return { schema: SCHEMA, kanon: deps.release(), status: incomplete ? 'incomplete' : 'ok', exitCode, repo, readAt, ...views };
+}
+
+/**
+ * `kanon status`. Returns the exit code (`EXIT`).
+ * @param {string[]} argv @param {Partial<Deps>} [overrides]
+ */
+export const status = async (argv, overrides = {}) => {
+  const deps = { ...realDeps, ...overrides };
+  const wantsJson = argv.includes('--json');
+  /** @type {ReturnType<typeof parseArgs>} */
+  let opts;
+  try {
+    opts = parseArgs(argv);
+  } catch (e) {
+    const message = /** @type {Error} */ (e).message;
+    if (wantsJson) deps.out(JSON.stringify(errorDocument(deps, EXIT.usage, message), null, 2));
+    else {
+      deps.err(`kanon status: ${message}`);
+      deps.err(USAGE);
+    }
+    return EXIT.usage;
+  }
+  if (opts.help) {
+    deps.out(USAGE);
+    return EXIT.ok;
+  }
+  /** @type {Awaited<ReturnType<typeof document>>} */
+  let doc;
+  try {
+    doc = await document(deps, opts);
+  } catch (e) {
+    const message = e instanceof StatusError ? e.message : `stopped on an unexpected error: ${/** @type {Error} */ (e).message}`;
+    if (opts.json) deps.out(JSON.stringify(errorDocument(deps, EXIT.error, message), null, 2));
+    else deps.err(`kanon status: ${message}`);
+    return EXIT.error;
+  }
+  if (opts.json) deps.out(JSON.stringify(doc, null, 2));
+  else for (const line of prose(doc)) deps.out(line);
+  return doc.exitCode;
+};
+
+/**
+ * The document as a person reads it: the same result, in the order the document holds it.
+ * @param {Awaited<ReturnType<typeof document>>} doc
+ * @returns {string[]}
+ */
+export function prose(doc) {
+  const lines = [`${doc.repo}, read at ${doc.readAt}`];
+  if ('project' in doc) lines.push('', ...projectProse(/** @type {any} */ (doc.project)));
+  return lines;
+}
+
+/** @param {any} p the project section */
+function projectProse(p) {
+  if ('error' in p) return [`The project view has no answer: ${p.error}`];
+  const lines = [`Project #${p.project}: phase ${p.phase} (brief ${p.brief.path} on ${p.branch})`];
+  if (p.brief.state === 'missing') lines.push(`  No brief at ${p.brief.path} on ${p.branch}.`);
+  if (p.brief.state === 'unparseable') {
+    lines.push(`  The brief's decomposition doesn't parse${p.brief.residue.length ? `: ${p.brief.residue.join(' / ')}` : '.'}`);
+  }
+  if (p.gating.length) lines.push(`  Gating work: ${p.gating.map((/** @type {number} */ n) => `#${n}`).join(', ')}`);
+  if (p.hold) lines.push(`  Held: \`${p.hold.label}\`, ${p.hold.by === 'lead' ? "the Lead's hold" : "a person's"}`);
+  if (p.environment) lines.push(`  Reference environment: ${p.environment}`);
+  for (const i of p.items ?? []) {
+    const prs = [i.prs.open.length ? `open ${i.prs.open.map((/** @type {number} */ n) => `#${n}`).join(', ')}` : '', i.prs.merged.length ? `merged ${i.prs.merged.map((/** @type {number} */ n) => `#${n}`).join(', ')}` : ''].filter(Boolean);
+    lines.push(`  ${i.key}  ${i.title}: ${i.issue ? `#${i.issue.number} ${i.issue.state.toLowerCase()}` : 'not filed'}${prs.length ? `; ${prs.join('; ')}` : ''}`);
+    for (const d of i.dependsOn) lines.push(`       depends on ${d.key}${d.issue ? ` (#${d.issue}, ${String(d.state).toLowerCase()})` : ', not filed'}`);
+    for (const a of i.acs) {
+      lines.push(`       ${a.id} ${a.clause ?? 'not in the spec layer'}, ${a.tested ? `tested by ${a.tests.join(', ')}` : 'no test cites it'}`);
+    }
+    for (const s of i.stops) lines.push(`       can't proceed: ${s.reason}, ${s.detail}`);
+  }
+  for (const n of p.notes) lines.push(`  Note: ${n}`);
+  return lines;
+}
