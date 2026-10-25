@@ -14,7 +14,8 @@
 // `check`'s own, and `scripts/promote.mjs` is run as it is, unchanged. `check` never writes, and
 // the bridge refuses any method but `GET` (`[STAT-1]`).
 
-import { MessageChannel, Worker } from 'node:worker_threads';
+import { MessageChannel, Worker, receiveMessageOnPort } from 'node:worker_threads';
+import { ApiError } from '../promote.mjs';
 import { ReadError } from './reader.mjs';
 
 /** A line that runs the promotion's check, outside a comment. */
@@ -85,6 +86,24 @@ export async function promotionCheck({ reader, repo, branch, workflows, now }) {
     await worker.terminate();
   }
 }
+
+/**
+ * The worker's side of the bridge: the synchronous `api` the promotion's check reads through. It
+ * posts each read on `port` and blocks on `signal` until this thread's answer is back. It refuses
+ * any method but `GET` before it asks anything (`[STAT-1]`).
+ * @param {{ signal: Int32Array, port: import('node:worker_threads').MessagePort }} bridge
+ * @returns {import('../promote.mjs').Api}
+ */
+export const bridgeApi = ({ signal, port }) => (path, { method = 'GET', raw = false } = {}) => {
+  if (method !== 'GET') throw new Error(`the status core writes nothing, and the promotion's check asked to ${method} ${path}`);
+  Atomics.store(signal, 0, 0);
+  port.postMessage({ path, raw });
+  Atomics.wait(signal, 0, 0);
+  const answer = /** @type {{ body?: unknown, error?: { message: string, status: number | null } } | undefined} */ (receiveMessageOnPort(port)?.message);
+  if (!answer) throw new Error(`no answer came back for ${path}`);
+  if (answer.error) throw new ApiError(answer.error.message, answer.error.status);
+  return answer.body;
+};
 
 /**
  * One read `check` asked, through the reader: the parsed body, or, for a raw read of the contents

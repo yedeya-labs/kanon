@@ -4,6 +4,7 @@
  * deploy read finds it, and, where the default branch runs Kanon's promotion workflow, each gate's
  * verdict and evidence from the promotion's own read-only check.
  */
+import { MessageChannel } from 'node:worker_threads';
 import { describe, expect, it } from 'vitest';
 import { FakeHttpError } from './helpers/fake-reader.js';
 import { JOBS, PIN, PROMOTION_NOW, PROMOTION_ROUTES, PULLS, RELEASES, RUNS, SHA, WORKFLOWS, chain, file, job, page, promoting, run } from './helpers/release-world.js';
@@ -12,6 +13,7 @@ import { CHAIN_DEPLOY, RELEASE_NOW, adopterFiles, adoptionWith, releaseWorld } f
 const { releaseView } = await import('../../scripts/status/release.mjs');
 const { IncompleteRead } = await import('../../scripts/status/project.mjs');
 const { ReadError } = await import('../../scripts/status/reader.mjs');
+const { bridgeApi } = await import('../../scripts/status/promotion.mjs');
 const { ApiError, check } = await import('../../scripts/promote.mjs');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -128,6 +130,27 @@ describe('the release view', () => {
     expect(view.promotion.gates).toHaveLength(5);
     expect(w.seen).toContain('GET repos/acme/shop/git/matching-refs/tags/candidate-v');
     for (const s of w.seen) expect(s, s).toMatch(/^(GET|PAGES|GraphQL) /);
+  });
+
+  it('[STAT-1] the bridge the promotion\'s check reads through refuses any method but GET before it asks anything', () => {
+    const signal = new Int32Array(new SharedArrayBuffer(4));
+    const { port1, port2 } = new MessageChannel();
+    const asked: unknown[] = [];
+    // Stand in for the other thread: record what is asked, and wake the wait at once.
+    port2.postMessage = (m: unknown) => { asked.push(m); Atomics.store(signal, 0, 1); };
+    const api = bridgeApi({ signal, port: port2 });
+    try {
+      for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) {
+        expect(() => api('repos/acme/shop/git/refs', { method }), method).toThrow(`the status core writes nothing, and the promotion's check asked to ${method} repos/acme/shop/git/refs`);
+      }
+      expect(asked, 'nothing was asked').toEqual([]);
+      // A GET is asked, and its answer is the read's.
+      port1.postMessage({ body: { sha: 'abc' } });
+      expect(api('repos/acme/shop/commits/v2.1.0')).toEqual({ sha: 'abc' });
+      expect(asked).toEqual([{ path: 'repos/acme/shop/commits/v2.1.0', raw: false }]);
+    } finally {
+      port1.close();
+    }
   });
 
   it('[STAT-3] a read the release view or the promotion\'s check can\'t complete is an error naming it, never a partial answer', async () => {
