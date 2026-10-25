@@ -694,8 +694,8 @@ jobs:
   # TWO JOBS, BECAUSE A JOB THAT CHECKS OUT THE PULL REQUEST HOLDS NO KEY (`K-AGENT-49`).
   # `fix-command` checks the branch out with the workflow's read token, runs the commands, and
   # hands the rewritten files to `fix-push` as an artifact. `fix-push` mints the Implementer's
-  # token, checks nothing out, and commits them over the API on top of the handed-back head, moving
-  # the branch only if it is still there. Neither runs the project's code: no project-setup hook,
+  # token, checks nothing out, and commits them through the verified-commit helper on top of the
+  # handed-back head, moving the branch only if it is still there. Neither runs the project's code: no project-setup hook,
   # no install, only Kanon's scripts on Kanon's Node. The push dismisses the approval, so the
   # Reviewer reviews the new head before anything merges, as after any revise, and it leaves the
   # round marker as the Implementer, so the hand-back counts as one round, as the model's would.
@@ -746,7 +746,7 @@ jobs:
     outputs:
       pushed: ${{ steps.push.outputs.pushed }}
       # What the implementer status's `carry` binds to on this path (#1263), where `revise` is
-      # skipped: the commit this job pushed, and the head it made it on (its one parent).
+      # skipped: the commit GitHub created for this job, and the head it made it on (its one parent).
       sha: ${{ steps.push.outputs.sha }}
       base: ${{ steps.push.outputs.base }}
     steps:
@@ -766,19 +766,29 @@ jobs:
         with:
           name: kanon-revise-fix
           path: ${{ runner.temp }}/kanon-revise-fix
+      # Through the verified-commit helper (`[LANE-12]`): the commit is made in a bare object store
+      # holding only the handed-back head, which is fetched, never checked out, and GitHub creates
+      # it with this job's token, so it is verified as the App's before the branch moves.
       - name: Commit and push the fix
         id: push
         env:
           GH_TOKEN: ${{ steps.fix-token.outputs.token }}
           REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          APP_LOGIN: ${{ steps.fix-token.outputs.app-slug }}[bot]
           BRANCH: ${{ needs.filter.outputs.branch }}
           CHECKS: ${{ needs.filter.outputs.fix }}
           HEAD_SHA: ${{ needs.filter.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          store="$RUNNER_TEMP/kanon-revise-store"
+          git init -q --bare "$store"
+          # The token goes in this one request's header, and is never written to the store's config.
+          git --git-dir "$store" -c "http.extraHeader=Authorization: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')" \
+            fetch -q --depth=1 --no-tags "$SERVER_URL/$REPO" "$HEAD_SHA"
           node "$KANON/scripts/revise-fix.mjs" push --change "$RUNNER_TEMP/kanon-revise-fix/change.json" \
-            --branch "$BRANCH" --head "$HEAD_SHA" \
+            --git-dir "$store" --branch "$BRANCH" --head "$HEAD_SHA" --app-login "$APP_LOGIN" \
             --message "$(printf 'chore(revise): run the fix command of %s\n\nThe Merger handed back %s, and every check that failed on it has a fix command Kanon knows (kanon#1173): %s' "${CHECKS//,/, }" "${HEAD_SHA:0:7}" "$RUN_URL")"
       - name: Record the round
         env:

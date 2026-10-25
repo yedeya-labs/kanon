@@ -268,7 +268,7 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
       expect(jobs['fix-push']!.outputs).toMatchObject({ sha: '${{ steps.push.outputs.sha }}', base: '${{ steps.push.outputs.base }}' });
       const push = jobs['fix-push']!.steps!.find((s) => s.id === 'push')!;
       expect(push.run).toMatch(/revise-fix\.mjs" push .*--head "\$HEAD_SHA"/s);
-      expect(readFileSync('scripts/revise-fix.mjs', 'utf8')).toContain("output({ pushed: 'true', sha, base: arg('--head') })");
+      expect(readFileSync('scripts/revise-fix.mjs', 'utf8')).toContain("output({ pushed: 'true', sha, base })");
       // The spine passes both up from the agent's job, and the job sets them.
       expect(called('agent-lane.yml').on.workflow_call.outputs).toMatchObject({ heads: { value: '${{ jobs.run.outputs.heads }}' }, base: { value: '${{ jobs.run.outputs.base }}' } });
       const spine = called('lane-agent-job.yml');
