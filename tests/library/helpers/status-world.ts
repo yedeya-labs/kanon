@@ -6,6 +6,7 @@
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { NO_VERDICT_STEP, RETRY_STEPS } from '../../../scripts/lane-retry.mjs';
 import { ADOPTER } from './adopter.js';
 import { FakeHttpError, connection, fakeReader, type FakeWorld } from './fake-reader.js';
 
@@ -191,3 +192,108 @@ export function releaseWorld({
   const { reader, seen } = fakeReader(world);
   return { reader, repo, seen };
 }
+
+/** A workflow run, in the REST shape the lane-health view reads. */
+export type LaneRun = { id: number; conclusion: string | null; run_attempt?: number; created_at?: string; html_url?: string };
+
+/** A lane caller's workflow: one job that calls the Kanon lane `lane` at a release. */
+export const laneCaller = (lane: string, name = lane) =>
+  `name: ${name}\non:\n  workflow_dispatch:\npermissions:\n  contents: read\njobs:\n  ${lane}:\n    uses: yedeya-labs/kanon/.github/workflows/agent-${lane}.yml@v0.42.0\n`;
+
+/**
+ * A repository's default-branch workflows and their runs, as the lane-health view reads them:
+ * `workflows` under `.github/workflows/`, each workflow's runs newest first, each run's jobs, and
+ * each earlier attempt of a re-run run (`<run>/<attempt>` → its conclusion).
+ */
+export function laneWorld({
+  repo = 'acme/shop', branch = 'main', workflows, runs = {}, jobs = {}, attempts = {}, overrides = {} as Partial<FakeWorld>,
+}: {
+  repo?: string; branch?: string; workflows: Record<string, string>; runs?: Record<string, LaneRun[]>;
+  jobs?: Record<number, Array<Record<string, unknown>> | undefined>; attempts?: Record<string, string>; overrides?: Partial<FakeWorld>;
+}) {
+  const files = Object.fromEntries(Object.entries(workflows).map(([f, text]) => [`.github/workflows/${f}`, text]));
+  const queries: string[] = [];
+  const world: FakeWorld = {
+    branch,
+    files,
+    jobs,
+    get: (path) => {
+      if (path === `repos/${repo}/contents/.github/workflows?ref=${branch}`) {
+        return Object.keys(workflows).map((name) => ({ name, path: `.github/workflows/${name}`, type: 'file' }));
+      }
+      let m: RegExpExecArray | null;
+      if ((m = new RegExp(`^repos/${repo}/actions/workflows/([^/]+)/runs\\?per_page=(\\d+)$`).exec(path))) {
+        const all = runs[decodeURIComponent(m[1]!)] ?? [];
+        return { total_count: all.length, workflow_runs: all.slice(0, Number(m[2])).map((r) => ({ run_attempt: 1, created_at: '2026-10-24T00:00:00Z', html_url: `https://example.test/runs/${r.id}`, ...r })) };
+      }
+      if ((m = new RegExp(`^repos/${repo}/actions/runs/(\\d+)/attempts/(\\d+)$`).exec(path))) {
+        const conclusion = attempts[`${m[1]}/${m[2]}`];
+        if (conclusion === undefined) return undefined;
+        return { id: Number(m[1]), run_attempt: Number(m[2]), conclusion, created_at: '2026-10-23T00:00:00Z', html_url: `https://example.test/runs/${m[1]}/attempts/${m[2]}` };
+      }
+      return undefined;
+    },
+    ...overrides,
+  };
+  const { reader: inner, seen } = fakeReader(world);
+  const reader = {
+    get: inner.get,
+    pages: inner.pages,
+    graphql: (query: string, variables?: Record<string, unknown>) => {
+      queries.push(query);
+      return inner.graphql(query, variables);
+    },
+  };
+  return { reader, repo, seen, queries };
+}
+
+/** A job that failed, and the breadcrumb step it ran, if any. */
+export const failedJob = (name: string, breadcrumb?: string) => ({
+  name,
+  conclusion: 'failure',
+  steps: [
+    { name: 'Run the agent', conclusion: 'failure' },
+    ...(breadcrumb ? [{ name: breadcrumb, conclusion: 'success' }] : []),
+    // A breadcrumb that didn't run is the step saying "not this class".
+    { name: RETRY_STEPS.api_error === breadcrumb ? RETRY_STEPS.unreachable : RETRY_STEPS.api_error, conclusion: 'skipped' },
+  ],
+});
+export const fail = (id: number, extra: Partial<LaneRun> = {}): LaneRun => ({ id, conclusion: 'failure', ...extra });
+export const ok = (id: number, extra: Partial<LaneRun> = {}): LaneRun => ({ id, conclusion: 'success', ...extra });
+
+/** Five callers, each a different answer, beside two workflows the lane check doesn't read. */
+export const laneFleet = () => laneWorld({
+  workflows: {
+    'review.yml': laneCaller('review'),
+    'implement.yml': laneCaller('implement'),
+    'rebase.yml': laneCaller('rebase'),
+    'merge.yml': laneCaller('merge'),
+    'triage.yml': laneCaller('triage'),
+    'ci.yml': 'name: CI\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n',
+    // The spine is no lane, so a workflow that calls only it is no lane caller.
+    'spine.yml': 'name: spine\non: [push]\njobs:\n  x:\n    uses: yedeya-labs/kanon/.github/workflows/agent-lane.yml@v0.42.0\n',
+    'README.md': 'not a workflow',
+  },
+  runs: {
+    // Red on every run, and every failure is one the classifier recorded: flaky, not red.
+    'review.yml': [fail(101), fail(102), fail(103), { id: 104, conclusion: 'cancelled' }],
+    // Red on every run, and none recorded: red.
+    'implement.yml': [fail(201), { id: 202, conclusion: 'timed_out' }, fail(203)],
+    // A matrix run with one capped job and one that genuinely failed, and a run a re-run fixed.
+    'rebase.yml': [fail(301), ok(302, { run_attempt: 2 }), ok(303), ok(304)],
+    // Green, and its one failure an attempt a re-run fixed: flaky.
+    'merge.yml': [ok(401, { run_attempt: 3 }), ok(402), ok(403)],
+    // Too few decisive runs to judge.
+    'triage.yml': [ok(501), { id: 502, conclusion: null }],
+  },
+  jobs: {
+    101: [failedJob('review / review', RETRY_STEPS.unreachable), { name: 'review / notify', conclusion: 'skipped', steps: [] }],
+    102: [failedJob('review / review', RETRY_STEPS.api_error)],
+    103: [failedJob('review / review', NO_VERDICT_STEP)],
+    201: [failedJob('implement / implement')],
+    202: [{ ...failedJob('implement / implement'), conclusion: 'timed_out' }],
+    203: [],
+    301: [failedJob('rebase / resolve (12)', RETRY_STEPS.unreachable), failedJob('rebase / resolve (13)')],
+  },
+  attempts: { '302/1': 'failure', '401/2': 'startup_failure', '401/1': 'cancelled' },
+});

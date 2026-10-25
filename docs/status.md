@@ -7,23 +7,26 @@ kanon status --project 1327
 kanon status --project 1327 --json
 kanon status --repo owner/name --project 12
 kanon status --release --json
+kanon status --lanes
+kanon status --repo owner/name --project 12 --lanes --json
 ```
 
 | Option | Meaning |
 |---|---|
 | `--project <n>` | The project view of tracking issue `<n>`. |
 | `--release` | The release view: what is about to ship, what shipped, where it is deployed, and the promotion's gates. |
+| `--lanes` | The lane-health view. |
 | `--pr <n>` | The pull-request readiness view. It isn't in this release yet: the command says so and exits 2. |
 | `--repo <owner>/<repo>` | The repository. The default is the origin remote of the checkout you run it from. |
 | `--json` | Print one JSON document instead of prose ([below](#the-json-output)). |
 
-Each view you ask for is one section of the answer, and you may ask for more than one at once. The project and release views are the ones there are so far. The pull-request readiness, lane-health and needs-the-Owner views each add their own section as they are built.
+Each view you ask for is one section of the answer, and you may ask for more than one at once. The project, release and lane-health views are the ones there are so far. The pull-request readiness and needs-the-Owner views each add their own section as they are built.
 
 ## What it reads
 
 It reads with your own `gh` credential, as [`kanon doctor`](doctor.md) does. `gh` takes its token from `GH_TOKEN`, then `GITHUB_TOKEN`, then its stored login. The command says on standard error which one it used and whose it is, and stops when GitHub refuses it. It reads only what that token can read, and asks GitHub only REST `GET`s and GraphQL queries.
 
-It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record, the stack document and, for the release view, the workflow files. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used only to find the repository when you don't pass `--repo`.
+It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record, the stack document and the workflows. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used only to find the repository when you don't pass `--repo`.
 
 **An incomplete read is no answer.** A read that GitHub refused, that wasn't found, that hit the rate limit or that came back cut short makes that view's answer an error. The error names each read and why it failed, with the time the rate limit resets when that is the cause. A view never answers in part.
 
@@ -49,13 +52,24 @@ A tracking issue with no brief, or a brief whose decomposition doesn't parse, is
 - **the latest release**, GitHub's `latest`, and **the latest pre-release**, the newest published one, with how many hours ago it was published;
 - **each environment** the adoption record's `## Deploy` declares, with **its last deploy**: the release, its outcome and the run. That is the `Environments` list, or, where the record declares only a reference deploy, the reference environment. The deploy is found as the Lead's reconciler finds a release's deploy: among the reference deploy workflow's latest 200 runs, the run titled with the release's tag or with its commit, and in that run the environment's deploy job, by its exact name. The view reads the 30 newest releases, as the reconciler does, newest first, and an environment's last deploy is the newest one whose job ran there. Its outcome is `deployed` when the job succeeded, `failed` when it concluded otherwise, and `deploying` while it hasn't finished, waiting for an approval included. A job that was skipped deployed nothing there, so the view reads on, as it does past a release whose tag isn't in the repository, such as a draft's. The record names the reference environment's job. Every other environment has the job the deploy caller `kanon init` writes gives it, the reference job with that environment's name in its place, such as `production / deploy` beside `staging / deploy`. Where the reference job isn't named that way, the other environments have no job the view can read, and it says so;
 - **the promotion's gates**, where the default branch runs Kanon's promotion workflow, a workflow that runs `scripts/promote.mjs check`: the decision that check would take now, why, the candidate, and each gate's verdict and evidence. They come from the promotion's own read-only check, run over the same reads: the check of the Kanon release you run, while the workflow runs the default branch's `scripts/promote.mjs`. So they match what its next run reports whenever that release's `promote.mjs` is the default branch's; a gate the default branch has added or changed since that release reads differently until you run the release that has it. A state the promotion refuses to act on is reported as `refused`, with the check's reason. On the repository of any other project, there is no promotion to report.
+## The lane-health view
+
+`--lanes` reads the workflows in `.github/workflows/` on the default branch, and lists each lane caller among them: each workflow with a job that calls one of Kanon's lanes, the lane callers [the lane check](../actions/lane-check/README.md) holds to the lane rules. For each it gives:
+
+- **its state** over its recent runs, as the project digest's daily health check (`scripts/workflow-health.mjs`) judges it, with that check's own window and minimum: `red` when every run that ended in success or failure failed, `ok` when one succeeded, and `quiet` when too few runs ended either way to judge. A cancelled or skipped run counts neither way;
+- **each failed run**, and each failed attempt of a run that a re-run then fixed, classed:
+  - `infra` when the agent classifier recorded on the run that the model was unreachable or that its API failed mid-run, or the review lane recorded that its agent posted no verdict, each by the step the lane runs to say so, as the retry lanes read it; or when a later attempt of the same run succeeded. A run counts as `infra` only when every job of it that failed recorded one of those, so a matrix run with one capped job and one real failure is `real`;
+  - `real` otherwise;
+- **its health**: `flaky` when it has failures and every one is `infra`, whatever its state, and its state otherwise. A lane red only on `infra` failures is `flaky`, not `red`.
+
+It has no flake classifier of its own: the classes are the agent classifier's and a re-run's outcome.
 
 ## Exit codes
 
 | Code | Status | Meaning |
 |---|---|---|
 | 0 | `ok` | Every view asked for was answered. |
-| 2 | `error` | A usage error: an unknown or malformed flag, no view named (`--project <n>` or `--release`), or `--pr`, whose view isn't in this release yet. |
+| 2 | `error` | A usage error: an unknown or malformed flag, no view named (`--project <n>`, `--release` or `--lanes`), or `--pr`, whose view isn't in this release yet. |
 | 3 | `error` | It couldn't run: no repository to read, or a token GitHub refuses. |
 | 4 | `incomplete` | A view's reads didn't complete, so that view has no answer. |
 
@@ -164,6 +178,30 @@ A path names a field inside its parent: `project.items[].key` is the `key` of ea
 | `release.promotion.gates[].skipped` | boolean | True when the check skipped it. |
 | `release.promotion.gates[].pass` | boolean | True when it passes. |
 | `release.promotion.gates[].evidence` | string | The evidence the check gives for its verdict. |
+| `lanes` | object | The lane-health view, when `--lanes` asked for it: the fields below, or, when its reads didn't complete, only `error` and `reads`. |
+| `lanes.error` | string | Why the view has no answer, naming each read that failed. |
+| `lanes.reads` | array | Each read that failed. |
+| `lanes.reads[].read` | string | What was read, such as `GET repos/o/r/actions/runs/1/jobs?per_page=100`. |
+| `lanes.reads[].why` | string | Why it failed, as GitHub or `gh` said it. |
+| `lanes.reads[].status` | number or null | The HTTP status, when there is one. |
+| `lanes.reads[].resetAt` | string or null | When the exhausted rate limit resets, ISO 8601, when that is the cause. |
+| `lanes.branch` | string | The default branch the workflows were read from. |
+| `lanes.window` | number | How many of each lane's most recent runs were read, the workflow-health check's window. |
+| `lanes.minDecisive` | number | How many runs must end in success or failure before a lane can be `red`, the workflow-health check's minimum. |
+| `lanes.callers` | array | Each lane caller, by file name. |
+| `lanes.callers[].file` | string | Its file name in `.github/workflows/`. |
+| `lanes.callers[].status` | string | The workflow-health check's verdict over its recent runs: `ok`, `red` or `quiet`. |
+| `lanes.callers[].decisive` | number | The runs that verdict counted, those that ended in success or failure. |
+| `lanes.callers[].failed` | number | Of those, the ones that failed. |
+| `lanes.callers[].health` | string | `flaky` when it has failures and every one is `infra`; its `status` otherwise. |
+| `lanes.callers[].failures` | array | Each failed run, and each failed attempt of a run a later attempt fixed, newest first. |
+| `lanes.callers[].failures[].run` | number | The run's id. |
+| `lanes.callers[].failures[].attempt` | number | The attempt that failed. |
+| `lanes.callers[].failures[].url` | string or null | The run's, or the attempt's, page on GitHub. |
+| `lanes.callers[].failures[].createdAt` | string or null | When it started, ISO 8601. |
+| `lanes.callers[].failures[].conclusion` | string | `failure`, `timed_out` or `startup_failure`. |
+| `lanes.callers[].failures[].class` | string | `infra` or `real`. |
+| `lanes.callers[].failures[].reason` | string or null | Why it is `infra`: `unreachable`, `api_error`, `no_verdict` or `rerun-succeeded`; null when it is `real`. |
 
 On a usage error or when it can't run, the document is the error document, `{ "schema", "kanon", "status": "error", "exitCode", "error" }`.
 

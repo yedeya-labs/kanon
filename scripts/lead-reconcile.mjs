@@ -1583,24 +1583,20 @@ export async function closingMergesByIssue(issues, io = tickReads()) {
   // RA-912's use of `closingIssuesReferences`: a `#N` regex over bodies cannot tell a
   // mention from a closure, and this field cannot drift from what GitHub did.
   // It reports the PR number but not its merge commit, so the PR is read too.
+  //
+  // AN UNREADABLE READ THROWS (kanon#1398). Caught, it read as "no merge": with every read
+  // failing the state was `nothing-to-deploy` and the project closed saying nothing was
+  // deployed; with one failing, the release was checked for the other merges only. A
+  // transient failure fails the tick (`K-AGENT-32`), and `reconcileAll` reports the project.
   const out = [];
   for (const i of issues) {
     if (i.state !== 'CLOSED') continue;
-    let refs = [];
-    try {
-      refs = await closingPrNumbers(i.number, io);
-    } catch {
-      continue;
-    }
+    const refs = await closingPrNumbers(i.number, io);
     // The title and body come back on the same read, for `relandedReverts` (kanon#280).
     const prs = [];
     for (const number of refs) {
-      try {
-        const pr = await prMergeRead(number, io);
-        if (pr.state === 'MERGED' && pr.mergeCommit?.oid) prs.push({ number, sha: pr.mergeCommit.oid, text: `${pr.title ?? ''}\n${pr.body ?? ''}` });
-      } catch {
-        // An unreadable pull request is no merge, as before.
-      }
+      const pr = await prMergeRead(number, io);
+      if (pr.state === 'MERGED' && pr.mergeCommit?.oid) prs.push({ number, sha: pr.mergeCommit.oid, text: `${pr.title ?? ''}\n${pr.body ?? ''}` });
     }
     if (prs.length) out.push({ issue: i.number, shas: prs.map((p) => p.sha), prs });
   }
@@ -2342,6 +2338,9 @@ export function reviseRunsFor(sha, since, { json = ghJson, churnedAfter = /** @t
  * nor a marker, so it re-delivers the SAME round rather than spending another one.
  */
 export function reviseRecovery(world, { runsFor = reviseRunsFor, now = Date.now(), hours = AWAITING_REVIEW_HOURS, evidenceOf = NO_RETRY_EVIDENCE, retryHours = RETRY_COOL_DOWN_HOURS } = {}) {
+  // A re-delivery starts a paid agent run; a human who held the project stopped those
+  // (`K-AGENT-32`, kanon#1397), as `splitRecovery` already declines.
+  if (world?.projectHeld) return { churn: [], noted: [] };
   // EVERY in-flight member, carried out or not (RA-1783): this re-delivers an event that
   // never arrived, which is a stall wherever it happens — it dispatches nothing new.
   const inFlight = (world?.open ?? []).filter((i) => (i.labels ?? []).includes(IMPLEMENT));
@@ -2449,6 +2448,9 @@ export function reviseRecovery(world, { runsFor = reviseRunsFor, now = Date.now(
  * the fix and carries the whole argument for each rule.
  */
 export function reviewRecovery(world, { runsFor = reviewRunsFor, now = Date.now(), hours = AWAITING_REVIEW_HOURS, evidenceOf = NO_RETRY_EVIDENCE, retryHours = RETRY_COOL_DOWN_HOURS } = {}) {
+  // A re-delivery starts a paid agent run; a human who held the project stopped those
+  // (`K-AGENT-32`, kanon#1397), as `splitRecovery` already declines.
+  if (world?.projectHeld) return { churn: [], noted: [] };
   // EVERY in-flight member, carried out or not (RA-1783): this re-delivers an event that
   // never arrived, which is a stall wherever it happens — it dispatches nothing new.
   const inFlight = (world?.open ?? []).filter((i) => (i.labels ?? []).includes(IMPLEMENT));

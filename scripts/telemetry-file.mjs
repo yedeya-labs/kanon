@@ -82,7 +82,9 @@
 //   env: GH_TOKEN (issues write for `filed here`; issues and pull requests read for `sent with
 //        evidence`, to read the participants; none otherwise), GITHUB_REPOSITORY, AGENT_OUTCOME,
 //        REPORT_PATH, AGGREGATE_PATH, UPSTREAM (`filed here`, `drafted`, `sent` or `sent with
-//        evidence`), GITHUB_STEP_SUMMARY; and for the rows: KANON, APP_NAME_HASHES (the gate
+//        evidence`), PERSONA (the Explorer's persona, which the gate job read from the register on
+//        the default branch, `lane-persona.mjs`, kanon#1401: this job has no checkout; empty for
+//        the role's own name), GITHUB_STEP_SUMMARY; and for the rows: KANON, APP_NAME_HASHES (the gate
 //        job's), TAG, KANON_WORKFLOW_REF, KANON_WORKFLOW_SHA, FINDINGS_PATH, GITHUB_OUTPUT
 //
 // `node:` builtins only, like every script under scripts/ (`K-SELF-8`).
@@ -92,7 +94,6 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 
 import { AggregateError, checkAggregate } from './aggregate-read.mjs';
-import { appPersona } from './app-register.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
 import { PlanRefusal, bodyProblems, plan } from './issue-triage-defaults.mjs';
@@ -372,12 +373,14 @@ function sendFindings({ repo, gh, a, drafts, level, send, log }) {
 /**
  * The whole step. Returns the exit code; prints its annotations through `log` and its summary
  * through `summary`. With `sent` or `sent with evidence`, `send` is where its rows go. `route` is
- * `routingFor`, which a test replaces to make `plan()` refuse.
+ * `routingFor`, which a test replaces to make `plan()` refuse. `persona` is the Explorer's, as the
+ * gate job read it (`PERSONA`), or null for the role's name: the `file` job has no register.
  * @param {{ repo: string, text: string | null, aggregateText: string | null, agentOutcome: string, gh: Gh,
- *   log?: (line: string) => void, summary?: (line: string) => void, upstream?: string, send?: Send, route?: typeof routingFor }} o
+ *   log?: (line: string) => void, summary?: (line: string) => void, upstream?: string, send?: Send, route?: typeof routingFor,
+ *   persona?: string | null }} o
  * @returns {number}
  */
-export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log = console.log, summary = () => {}, upstream: declared, send, route = routingFor }) {
+export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log = console.log, summary = () => {}, upstream: declared, send, route = routingFor, persona = null }) {
   const { upstream: choice, unknown, level } = upstreamChoice(declared);
   if (unknown !== undefined) {
     log(`::warning title=telemetry explorer upstream choice::the lane passed \`${unknown}\`, which is neither \`drafted\` nor \`filed here\`, so the findings are drafted, not filed (K-LAYOUT-10)`);
@@ -468,7 +471,7 @@ export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log 
     const existing = open.get(c.signature);
     try {
       if (existing !== undefined) {
-        gh(['issue', 'comment', String(existing), '--repo', repo, '--body-file', '-'], signed(`Seen again in this week's aggregate.\n\n${evidence}`, 'Explorer', appPersona('Explorer')));
+        gh(['issue', 'comment', String(existing), '--repo', repo, '--body-file', '-'], signed(`Seen again in this week's aggregate.\n\n${evidence}`, 'Explorer', persona));
         log(`commented on #${existing}: the same signature`);
         summary(`- **Seen again:** #${existing}`);
         continue;
@@ -478,7 +481,7 @@ export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log 
       // The agent's prose holds no HTML comment (`proseProblem`), so no marker of its own can
       // stand in for the Explorer's header.
       const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...routed],
-        signed(`${f.body.trim()}\n\n${evidence}`, 'Explorer', appPersona('Explorer'))));
+        signed(`${f.body.trim()}\n\n${evidence}`, 'Explorer', persona)));
       filed += 1;
       log(`filed #${number} (${c.kind}): ${f.title}`);
       summary(`- **Filed:** #${number} (${c.kind})`);
@@ -516,6 +519,7 @@ if (isCliEntry(import.meta.url)) {
     aggregateText: read(process.env.AGGREGATE_PATH),
     agentOutcome: String(process.env.AGENT_OUTCOME ?? ''),
     upstream: process.env.UPSTREAM,
+    persona: process.env.PERSONA || null,
     gh,
     send: sendFromEnv(process.env),
     summary: (line) => { if (out) appendFileSync(out, `${line}\n`); },

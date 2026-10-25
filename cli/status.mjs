@@ -9,11 +9,12 @@
 // give a different result or exit code.
 //
 // ONE SECTION PER VIEW ASKED FOR. `--project <n>` asks for the project view, `--release` for the
-// release view, and both may be asked at once. A later view adds its own section within v1, which
-// docs/cli-json.md allows. A view whose reads didn't complete
+// release view and `--lanes` for the lane-health view, and any of them may be asked at once. A
+// later view adds its own section within v1, which docs/cli-json.md allows. A view whose reads didn't complete
 // answers with an error naming each read (`[STAT-3]`), never a partial answer, and the command
 // exits 4.
 import { spawn, spawnSync } from 'node:child_process';
+import { laneHealthView } from '../scripts/status/lanes.mjs';
 import { IncompleteRead, projectView } from '../scripts/status/project.mjs';
 import { ReadError, ghReader } from '../scripts/status/reader.mjs';
 import { releaseView } from '../scripts/status/release.mjs';
@@ -27,7 +28,7 @@ export const SCHEMA = 'kanon-status/v1';
 /** The exit codes, as docs/status.md documents them. */
 export const EXIT = /** @type {const} */ ({ ok: 0, usage: 2, error: 3, incomplete: 4 });
 
-export const USAGE = `Usage: kanon status (--project <n> | --release) [options]
+export const USAGE = `Usage: kanon status [--project <n>] [--release] [--lanes] [options]
 
 Reads where a repository that runs Kanon stands, live from GitHub, and prints it. Writes
 nothing, anywhere (docs/status.md).
@@ -39,6 +40,10 @@ Options:
   --release              the release view: the open release pull request, the latest release
                          and pre-release, each declared environment's last deploy, and the
                          promotion's gates where the repository runs Kanon's promotion
+  --lanes                the lane-health view: each lane caller's recent runs as the
+                         workflow-health check judges them, and each failure classed infra
+                         (the model unreachable, an API error, no verdict, or fixed by a
+                         re-run) or real
   --pr <n>               the pull-request readiness view (not in this release yet)
   --repo <owner>/<repo>  the repository (default: this checkout's origin remote)
   --json                 print one JSON document (docs/status.md) instead of prose
@@ -100,8 +105,8 @@ const number = (flag, v) => {
  * @param {string[]} argv
  */
 export const parseArgs = (argv) => {
-  /** @type {{ repo: string, project: number | null, release: boolean, pr: number | null, json: boolean, help: boolean }} */
-  const opts = { repo: '', project: null, release: false, pr: null, json: false, help: false };
+  /** @type {{ repo: string, project: number | null, release: boolean, pr: number | null, lanes: boolean, json: boolean, help: boolean }} */
+  const opts = { repo: '', project: null, release: false, pr: null, lanes: false, json: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
     const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
@@ -116,6 +121,7 @@ export const parseArgs = (argv) => {
     else if (flag === '--project') opts.project = number(flag, value());
     else if (flag === '--release' && inline === undefined) opts.release = true;
     else if (flag === '--pr') opts.pr = number(flag, value());
+    else if (flag === '--lanes' && inline === undefined) opts.lanes = true;
     else if (flag === '--json') opts.json = true;
     else throw new Error(`unknown argument "${arg}"`);
   }
@@ -124,8 +130,8 @@ export const parseArgs = (argv) => {
   if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
   // The readiness view is the core's next one (project #1327, Issue C); until it is there, the
   // flag says so rather than answering with no section.
-  if (opts.pr !== null) throw new Error(`--pr ${opts.pr}: the pull-request readiness view isn't in this release yet; --project and --release are the views there are`);
-  if (opts.project === null && !opts.release) throw new Error('name a view to read: --project <n> or --release');
+  if (opts.pr !== null) throw new Error(`--pr ${opts.pr}: the pull-request readiness view isn't in this release yet; --project, --release and --lanes are the views there are`);
+  if (opts.project === null && !opts.release && !opts.lanes) throw new Error('name a view to read: --project <n>, --release or --lanes');
   return opts;
 };
 
@@ -177,6 +183,7 @@ async function document(deps, opts) {
     views.project = await section(() => projectView({ reader, repo, project }));
   }
   if (opts.release) views.release = await section(() => releaseView({ reader, repo, now: new Date(readAt) }));
+  if (opts.lanes) views.lanes = await section(() => laneHealthView({ reader, repo }));
   const incomplete = Object.values(views).some((v) => 'error' in v);
   const exitCode = incomplete ? EXIT.incomplete : EXIT.ok;
   return { schema: SCHEMA, kanon: deps.release(), status: incomplete ? 'incomplete' : 'ok', exitCode, repo, readAt, ...views };
@@ -230,6 +237,20 @@ export function prose(doc) {
   const lines = [`${doc.repo}, read at ${doc.readAt}`];
   if ('project' in doc) lines.push('', ...projectProse(/** @type {any} */ (doc.project)));
   if ('release' in doc) lines.push('', ...releaseProse(/** @type {any} */ (doc.release)));
+  if ('lanes' in doc) lines.push('', ...lanesProse(/** @type {any} */ (doc.lanes)));
+  return lines;
+}
+
+/** @param {any} l the lane-health section */
+function lanesProse(l) {
+  if ('error' in l) return [`The lane-health view has no answer: ${l.error}`];
+  const lines = [`Lane health: ${l.callers.length} lane caller(s) on ${l.branch}, the last ${l.window} runs of each`];
+  for (const c of l.callers) {
+    lines.push(`  ${c.file}  ${c.health}${c.health === c.status ? '' : ` (the health check says ${c.status})`}, ${c.failed} failed of ${c.decisive} decisive`);
+    for (const f of c.failures) {
+      lines.push(`       run ${f.run}${f.attempt > 1 ? ` attempt ${f.attempt}` : ''} ${f.conclusion}: ${f.class}${f.reason ? `, ${f.reason}` : ''}${f.url ? ` ${f.url}` : ''}`);
+    }
+  }
   return lines;
 }
 

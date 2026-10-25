@@ -734,7 +734,7 @@ describe('hand-built gh --json fixtures match what gh actually returns (RA-917)'
   it('the recorded payloads are present and non-empty', () => {
     // A deleted or emptied recording must fail loudly rather than vacuously passing
     // every assertion below — the stale-golden-file problem one level up.
-    for (const f of ['pr-list-linked.json', 'issue-list-basic.json', 'issue-comments.json']) {
+    for (const f of ['pr-list-linked.json', 'issue-list-basic.json', 'issue-comments.json', 'run-list-live.json']) {
       const data = load(f);
       expect(Array.isArray(data) ? data.length : Object.keys(data).length, `${f} is empty`)
         .toBeGreaterThan(0);
@@ -790,6 +790,7 @@ describe('hand-built gh --json fixtures match what gh actually returns (RA-917)'
     'pr list': 'pr-list-linked.json',
     'issue list': 'issue-list-basic.json',
     'issue comments': 'issue-comments.json',
+    'run list': 'run-list-live.json',
   } as const;
 
   it('READ_SHAPES names only paths the real recordings carry, for every payload kind', () => {
