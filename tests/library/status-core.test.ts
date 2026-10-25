@@ -104,11 +104,14 @@ describe('the declarations come from the default branch', () => {
       ['STAT-1', 'seed', true], ['STAT-2', 'seed', false], ['STAT-3', 'seed', false], ['STAT-4', 'seed', false], ['STAT-5', 'seed', false],
     ]);
 
-    // The code names no repository and reads no checkout.
+    // The code names no repository, reads none from the environment, and reads no checkout. The
+    // one `GITHUB_REPOSITORY` is the key of the environment the promotion's check is handed, set
+    // to the repository the caller passed (the release view, Issue E).
     const dir = join(ROOT, 'scripts/status');
     for (const f of readdirSync(dir)) {
       const src = readFileSync(join(dir, f), 'utf8');
-      expect(src, f).not.toMatch(/yedeya|GITHUB_REPOSITORY|process\.cwd|from 'node:fs'/);
+      expect(src, f).not.toMatch(/yedeya|process\.env|process\.cwd|from 'node:fs'/);
+      expect(src.replace('check({ GITHUB_REPOSITORY: repo,', ''), f).not.toMatch(/GITHUB_REPOSITORY/);
     }
   });
 });

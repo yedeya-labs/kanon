@@ -7,7 +7,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ADOPTER } from './adopter.js';
-import { connection, fakeReader, type FakeWorld } from './fake-reader.js';
+import { FakeHttpError, connection, fakeReader, type FakeWorld } from './fake-reader.js';
 
 export const PROJECT = 7;
 export const marker = (project = PROJECT) => `Part of #${project}.\n\n<!-- qa:project ${project} -->`;
@@ -127,3 +127,67 @@ export const adopterProject = (opts: Partial<Parameters<typeof repoWorld>[0]> = 
   prs: { 11: [{ number: 21, state: 'MERGED' }, { number: 20, state: 'CLOSED' }], 12: [{ number: 22, state: 'OPEN' }] },
   ...opts,
 });
+
+/** The adoption record's `## Deploy` with a Kanon deploy chain, the reference deploy at its first environment. */
+export const CHAIN_DEPLOY = [
+  '## Deploy', '',
+  '- **Environments:** `staging`, `production`',
+  '- **Reference environment:** `staging`',
+  '- **Reference deploy workflow:** `deploy.yml`',
+  '- **Reference deploy job:** `staging / deploy`', '',
+].join('\n');
+
+/** The fixture adopter's adoption record with its `## Deploy` section replaced. */
+export const adoptionWith = (deploy: string) => {
+  const record = readFileSync(join(ADOPTER, 'docs/qa/adoption.md'), 'utf8');
+  return `${record.slice(0, record.indexOf('## Deploy'))}${deploy}`;
+};
+
+/** When the release view's tests read, so a pre-release's age is fixed. */
+export const RELEASE_NOW = '2026-10-24T09:30:00.000Z';
+
+/**
+ * A repository's releases, as the release view reads them (`scripts/status/release.mjs`): its open
+ * pull requests, its releases, the deploy workflow's runs and their jobs, and its workflow files,
+ * over the fixture adopter's declarations. `routes` answers any other REST `GET` first, by its
+ * exact path; a `contents/` read nothing answers is a 404.
+ */
+export function releaseWorld({
+  repo = 'acme/shop', branch = 'main', files = adopterFiles(), workflows = { 'ci.yml': 'jobs:\n  test:\n    runs-on: ubuntu-latest\n' } as Record<string, string>,
+  pulls = [] as Array<Record<string, unknown>>, releases = [] as Array<Record<string, unknown>>, latest = null as Record<string, unknown> | null,
+  runs = [] as FakeWorld['runs'], jobs = {} as FakeWorld['jobs'], tagShas = {} as Record<string, string>, routes = {} as Record<string, unknown>,
+  graphql = {} as FakeWorld['graphql'],
+}: {
+  repo?: string; branch?: string; files?: Record<string, string>; workflows?: Record<string, string>; pulls?: Array<Record<string, unknown>>;
+  releases?: Array<Record<string, unknown>>; latest?: Record<string, unknown> | null; runs?: FakeWorld['runs']; jobs?: FakeWorld['jobs'];
+  tagShas?: Record<string, string>; routes?: Record<string, unknown>; graphql?: FakeWorld['graphql'];
+} = {}) {
+  const world: FakeWorld = {
+    branch,
+    files,
+    runs,
+    jobs,
+    tagShas,
+    get: (path) => {
+      if (path in routes) return routes[path];
+      if (path === `repos/${repo}/releases/latest`) {
+        if (!latest) throw new FakeHttpError(`GET ${path}`, 404);
+        return latest;
+      }
+      const listed = /^repos\/[^/]+\/[^/]+\/releases\?per_page=100&page=(\d+)$/.exec(path);
+      if (listed) return releases.slice((Number(listed[1]) - 1) * 100, Number(listed[1]) * 100);
+      return undefined;
+    },
+    pages: (path) => (path === `repos/${repo}/pulls?state=open&per_page=100` ? [pulls] : undefined),
+    graphql: {
+      Workflows: (v) => {
+        if (v.expression !== `${branch}:.github/workflows`) throw new Error(`unrouted: Workflows ${JSON.stringify(v)}`);
+        const entries = Object.entries(workflows).map(([name, text]) => ({ name, type: 'blob', object: { text, isTruncated: false, isBinary: false } }));
+        return { repository: { object: entries.length ? { entries } : null } };
+      },
+      ...graphql,
+    },
+  };
+  const { reader, seen } = fakeReader(world);
+  return { reader, repo, seen };
+}

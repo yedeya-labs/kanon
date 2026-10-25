@@ -8,16 +8,18 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, normalize, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
-import { PROJECT, adopterFiles, adopterProject, repoWorld } from './helpers/status-world.js';
+import { RELEASES, chain, promoting } from './helpers/release-world.js';
+import { CHAIN_DEPLOY, PROJECT, adopterFiles, adopterProject, adoptionWith, repoWorld } from './helpers/status-world.js';
 
 const { status, SCHEMA, EXIT } = await import('../../cli/status.mjs');
 const { projectView } = await import('../../scripts/status/project.mjs');
+const { releaseView } = await import('../../scripts/status/release.mjs');
 const { ReadError } = await import('../../scripts/status/reader.mjs');
 const { HELD, HELD_MARKER } = await import('../../scripts/lead-reconcile.mjs');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
-type World = ReturnType<typeof adopterProject>;
+type World = { reader: ReturnType<typeof adopterProject>['reader']; seen: string[] };
 type GhResult = { status: number | null; stdout: string; stderr: string };
 
 const READ_AT = '2026-10-24T09:30:00.000Z';
@@ -68,6 +70,12 @@ const held = () => adopterProject({
 });
 const unparseable = () => repoWorld({ files: { ...adopterFiles(), [`docs/projects/${PROJECT}.md`]: '# Project 7\n\n## Decomposition\n\nJust prose.\n' } });
 const refusedLabels = () => adopterProject({ overrides: { graphql: { Labels: () => { throw new ReadError('GraphQL Labels', 'API rate limit exceeded', { status: 403, resetAt: '2026-10-24T10:00:00.000Z' }); } } } });
+const noJob = () => chain({ files: adopterFiles(undefined, { 'docs/qa/adoption.md': adoptionWith(CHAIN_DEPLOY.replace('`staging / deploy`', '`ship`')) }) });
+const refusedPulls = () => {
+  const w = chain();
+  w.reader.pages = () => { throw new ReadError('GET repos/acme/shop/pulls?state=open&per_page=100', 'Bad credentials', { status: 401 }); };
+  return w;
+};
 
 /** The body of a Markdown section: from its heading to the next heading of its level or above. */
 const section = (text: string, heading: string): string | null => {
@@ -111,6 +119,22 @@ describe('kanon status prints one document, or the same result as prose', () => 
     for (const i of doc.project.items) expect(prose.out).toContain(`${i.key}  ${i.title}`);
     expect(prose.out).toContain('STORE-1 seed, tested by tests/price.test.ts');
     expect(prose.out).toContain("can't proceed: dependency, B (#12) is still open");
+
+    // The release view is a section of its own, the view's answer for the same reads, and its prose.
+    const rel = await run(['--release', '--json'], chain());
+    expect(rel.code).toBe(EXIT.ok);
+    expect(Object.keys(rel.doc())).toEqual(['schema', 'kanon', 'status', 'exitCode', 'repo', 'readAt', 'release']);
+    expect(rel.doc().release).toEqual(await releaseView({ reader: chain().reader, repo: 'acme/shop', now: new Date(READ_AT) }));
+    const relProse = await run(['--release'], chain());
+    expect(relProse.code).toBe(rel.code);
+    expect(relProse.out).toContain('Release pull request #40: chore(main): release 2.2.0');
+    expect(relProse.out).toContain(`Latest pre-release: v2.2.0-rc.1, published ${RELEASES[0]!.published_at}, 48h ago`);
+    expect(relProse.out).toContain('production: v2.1.0 failed (deploy.yml, job `production / deploy`');
+    const gates = await run(['--release'], promoting());
+    expect(gates.out).toMatch(/Promotion \(promote\.yml\): promote, candidate-v0\.41\.0: every gate passed\n {7}Soak: pass, pinned \d+h/);
+    const relCut = await run(['--release', '--json'], refusedPulls());
+    expect([relCut.code, relCut.doc().release.reads[0].status]).toEqual([EXIT.incomplete, 401]);
+    expect((await run(['--release'], refusedPulls())).out).toMatch(/The release view has no answer: the release view couldn't be read whole, .*Bad credentials/);
 
     // A read that didn't complete: the view's answer is an error naming the read, never a partial one.
     const cut = await run(['--project', String(PROJECT), '--json'], refusedLabels());
@@ -186,6 +210,14 @@ describe('docs/status.md is held to the code', () => {
     // The worlds did reach each branch, so a field missing from them is missing from the code.
     expect(docs.map((d) => d.project?.brief?.state ?? d.project?.error?.slice(0, 10) ?? d.status)).toEqual(['parsed', 'parsed', 'unparseable', 'missing', 'project #7', 'error']);
     expect(docs[1].project.hold).toEqual({ label: HELD, by: 'lead' });
+    // And the release view's: a chain's deploys, an environment with no job, the promotion's gates
+    // with no pre-release beside them, and a read that didn't complete.
+    const releaseDocs: Any[] = [];
+    for (const w of [chain(), noJob(), promoting(), refusedPulls()]) releaseDocs.push((await run(['--release', '--json'], w)).doc());
+    for (const d of releaseDocs) for (const p of paths(d)) emitted.add(p);
+    expect(releaseDocs.map((d) => (d.release.error ? 'error' : [d.release.deploys.map((e: Any) => e.job), d.release.promotion?.gates.length ?? null]))).toEqual([
+      [['staging / deploy', 'production / deploy'], null], [['ship', null], null], [['ship'], 5], 'error',
+    ]);
 
     const sorted = (s: Set<string>) => [...s].sort();
     expect(sorted(emitted).filter((p) => !documented.has(p)), 'emitted, and not in the table').toEqual([]);
