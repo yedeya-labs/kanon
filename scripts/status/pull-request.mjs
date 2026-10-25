@@ -182,9 +182,10 @@ export async function readPullRequest(reader, repo, number, { merger = MERGER_LO
     mergeQueue.queuedHere = (await comments()).some((c) => byMerger(c) && spellings.some((m) => c.body.includes(m)));
   }
 
+  const who = node.author;
   const pr = {
     number: node.number,
-    author: node.author ? (node.author.__typename === 'Bot' ? `app/${node.author.login}` : String(node.author.login)) : '',
+    author: who ? (who.__typename === 'Bot' ? `app/${who.login}` : String(who.login)) : '',
     body: node.body ?? '',
     state: node.state,
     isDraft: node.isDraft,
