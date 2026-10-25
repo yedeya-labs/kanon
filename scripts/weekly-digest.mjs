@@ -934,11 +934,11 @@ const CLAUSE_END = String.raw`\s*(?:[.!;:,(\n\u2014\u2013-]|$)`;
 
 export const NARRATIVE_RULES = [
   {
-    // weekly-digest.yml: "NEVER claim something is live to customers, or name an
+    // agent-weekly-digest.yml: "NEVER claim something is live to customers, or name an
     // environment. Work is 'delivered'. Whether it has been promoted to
     // production is a separate decision this post does not speak to."
     rule: 'environment',
-    why: 'claims something is live, or names an environment (weekly-digest.yml:79-81)',
+    why: 'claims something is live, or names an environment (Kanon\'s .github/workflows/agent-weekly-digest.yml: "NEVER claim something is live to customers, or name an environment")',
     patterns: [
       /\b(?:to|in|on|onto|into|from|against)\s+(?:production|staging|prod)\b/i,
       /\b(?:production|staging)\s+(?:environment|server|instance|database|deploy\w*|release\w*)/i,
@@ -953,12 +953,12 @@ export const NARRATIVE_RULES = [
     ],
   },
   {
-    // weekly-digest.yml: "Past tense. Never mention what is pending, awaited, or
+    // agent-weekly-digest.yml: "Past tense. Never mention what is pending, awaited, or
     // remaining." This is the RA-166 line — RA-166 was REJECTED because it nagged
     // the human about their own backlog, and "3 PRs are still awaiting review"
     // in a narrative sentence reintroduces exactly that.
     rule: 'pending',
-    why: 'frames work as pending, awaited or remaining (weekly-digest.yml:86)',
+    why: 'frames work as pending, awaited or remaining (Kanon\'s .github/workflows/agent-weekly-digest.yml: "Past tense. Never mention what is pending, awaited, or remaining")',
     patterns: [
       // EVERY word here is scoped to the to-do FRAMING, never the bare noun —
       // `upcoming`, `pending`, `awaiting` and `remaining` are all first-class

@@ -8,9 +8,11 @@
  * vocabulary, a to-do-shaped open count, a raw commit scope, or a celebration
  * that fires every week.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  NARRATIVE_RULES,
   areaLabel,
   buildMessage,
   formatWeek,
@@ -52,6 +54,7 @@ import {
 import { LIMITS, renderText, validate } from '../../scripts/lib/notify-contract.mjs';
 import { SEARCH_READS } from '../../scripts/lib/search.mjs';
 import { payload } from '../../actions/notify/slack/slack.mjs';
+import { ROOT } from './helpers/adopter.js';
 
 /** Where every assembled message in this file comes from. */
 const SOURCE = { repo: 'o/r', runUrl: 'https://github.com/o/r/actions/runs/1' };
@@ -863,7 +866,21 @@ describe('sanitiseNarrative', () => {
   const rejects = (s: string) => sanitiseNarrative(s).violations.length > 0;
   const kept = (s: string) => sanitiseNarrative(s).narrative;
 
-  describe('environment vocabulary (weekly-digest.yml:79-81)', () => {
+  // kanon#1403: a rule's `why` goes out in the rejection warning, so it has to send the reader
+  // to the lane's own words. It named `weekly-digest.yml`, a file Kanon doesn't have, at line
+  // numbers that held an input and a `concurrency:` block. A line number drifts with every edit
+  // to the prompt, so the `why` names the file and quotes the rule instead.
+  it.each(NARRATIVE_RULES.map((r) => [r.rule, r.why]))("the %s rule's warning quotes the lane's rule, in a file that exists", (_rule, why) => {
+    const cited = /(\.github\/workflows\/[\w.-]+\.yml)/.exec(why)?.[1];
+    expect(cited, why).toBeDefined();
+    expect(existsSync(join(ROOT, cited!)), cited).toBe(true);
+    expect(why).not.toMatch(/\.yml:\d/);
+    const quoted = /"([^"]+)"/.exec(why)?.[1];
+    expect(quoted, why).toBeDefined();
+    expect(readFileSync(join(ROOT, cited!), 'utf8')).toContain(quoted);
+  });
+
+  describe('environment vocabulary (agent-weekly-digest.yml)', () => {
     it('rejects a claim that something is live to customers', () => {
       expect(rejects('Card payments are now live for customers.')).toBe(true);
       expect(rejects('The booking flow went live this week.')).toBe(true);
@@ -880,7 +897,7 @@ describe('sanitiseNarrative', () => {
 
     it('rejects the promotion vocabulary the prompt calls out by name', () => {
       // "Whether it has been promoted to production is a separate decision this
-      // post does not speak to" — weekly-digest.yml:80-81.
+      // post does not speak to" — agent-weekly-digest.yml.
       expect(rejects('Card payments were promoted to production on Friday.')).toBe(true);
       expect(rejects('The change was rolled out to customers.')).toBe(true);
     });
@@ -928,7 +945,7 @@ describe('sanitiseNarrative', () => {
     });
   });
 
-  describe('open/pending/to-do framing (weekly-digest.yml:86)', () => {
+  describe('open/pending/to-do framing (agent-weekly-digest.yml)', () => {
     it('rejects the RA-166 line — a to-do aimed at the reader’s own backlog', () => {
       // RA-166 was REJECTED because it nagged the human about their own backlog.
       // A narrative sentence reintroduces it just as effectively as a section.
@@ -982,7 +999,7 @@ describe('sanitiseNarrative', () => {
     // `awaiting`, `remaining` and `next week` were left as bare words — and all
     // five are first-class product vocabulary in this app, so the screen deleted
     // delivered-outcome prose. Each sentence below is the kind of thing
-    // `weekly-digest.yml` explicitly instructs the model to write, and each names
+    // `agent-weekly-digest.yml` explicitly instructs the model to write, and each names
     // the surface the word belongs to.
     it.each([
       // instructor/page.tsx:49 + instructor/classes/page.tsx:73 — "Upcoming classes"
