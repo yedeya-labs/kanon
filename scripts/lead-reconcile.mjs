@@ -233,6 +233,8 @@ const RETRO_MARKER = '<!-- qa:lead-retro -->';
  *  loads, as `botLogins()` is (kanon#1316): the status core imports this file with no checkout
  *  and passes the login it read from the default branch (project #1327). */
 export const explorerLogin = () => appLogin('Explorer');
+/** The Lead's login — the register's `Lead` row, read on call like `explorerLogin`. */
+export const leadLogin = () => appLogin('Lead');
 const QA_MARKER = '<!-- qa:verified -->';
 
 /** A secret must never reach a public issue comment (RA-1284).
@@ -2905,6 +2907,27 @@ export function explorerQaComments(comments, explorer = explorerLogin()) {
     && (c.body ?? '').includes(QA_MARKER));
 }
 
+/**
+ * The Lead's own comments: its App's login and its role marker (plan 0005 §3.3). The retro and
+ * hold markers are control signals, one stopping every later tick and the other silencing a
+ * hold, and a marker any commenter can copy proves nothing on its own (kanon#1399).
+ * @param {Array<{author?: {login?: string}, body?: string}>} comments
+ * @param {string | null} [lead]
+ */
+export function leadComments(comments, lead = leadLogin()) {
+  // A register with no Lead row names no login, and no comment is the Lead's then.
+  return (comments ?? []).filter((c) => lead != null
+    && asRole('Lead', { login: c.author?.login, expected: lead, body: c.body }));
+}
+
+/** Whether the Lead's own retro is among `comments`: the close a reopened tracking issue undid. */
+export const retroPosted = (comments, lead = leadLogin()) =>
+  leadComments(comments, lead).some((c) => (c.body ?? '').includes(RETRO_MARKER));
+
+/** Whether the Lead has already said this hold, for these `reasons`, in its own comment. */
+export const holdSaid = (comments, reasons, lead = leadLogin()) =>
+  leadComments(comments, lead).some((c) => (c.body ?? '').includes(holdMarker(reasons)));
+
 /** How many times the Explorer has verified this project, and when he last did.
  *  Counted from HIS OWN marker comments (`explorerQaComments`). */
 async function readQaRounds(qaNumber, io, explorer = explorerLogin()) {
@@ -3139,6 +3162,7 @@ function readWorld(project) {
  *   reference deploy, for the deploy phase; default: the adoption record on the default branch
  * @property {typeof classifyLane} [classify] the lane classifier, with its logins
  * @property {string | null} [explorer] the Explorer App's login
+ * @property {string | null} [lead] the Lead App's login, whose retro alone marks a close
  */
 
 /**
@@ -3156,6 +3180,7 @@ function readWorld(project) {
 export async function readProjectWorld(project, io) {
   const { reader, repo, readBrief, classify = classifyLane } = io;
   const explorer = io.explorer === undefined ? explorerLogin() : io.explorer;
+  const lead = io.lead === undefined ? leadLogin() : io.lead;
   const say = io.warn ?? warn;
   const reads = { reader, repo, warn: say };
   const briefPath = `docs/projects/${project}.md`;
@@ -3374,11 +3399,12 @@ export async function readProjectWorld(project, io) {
   // rule that a tick must not route around a question a human owes an answer to.
   //
   // Derived, like everything else: our own retro marker is on the issue and the issue
-  // is open, so a close already happened and someone undid it.
+  // is open, so a close already happened and someone undid it. OUR OWN: on a comment the
+  // Lead posted, or anyone could stop the project by quoting it (kanon#1399).
   const trackingReopened = await (async () => {
     if (trackingClosed !== false) return false;
     try {
-      return (await issueComments(project, reads)).some((c) => (c.body ?? '').includes(RETRO_MARKER));
+      return retroPosted(await issueComments(project, reads), lead);
     } catch {
       // Unreadable comments must not read as "never closed" — that resumes a project
       // a human may have stopped. Treat it as reopened and say nothing further.
@@ -4194,7 +4220,8 @@ export function renderHoldComment(reasons, kind = 'action') {
  *  the comment is suppressed when this tick's marker is already on the issue. Without
  *  the second half an hourly tick would turn one permanent failure into a comment an
  *  hour — which is the same invisibility as no comment at all, arrived at from the
- *  opposite direction.
+ *  opposite direction. The marker counts only on the Lead's own comment (`holdSaid`):
+ *  anyone else's copy of it would silence the one comment that says why (kanon#1399).
  *
  *  THE RUNNER IS INJECTABLE (RA-1202) so the argv this writes is assertable. It is the
  *  only way to hold a test on "a failed action holds the project": every other seam in
@@ -4202,14 +4229,13 @@ export function renderHoldComment(reasons, kind = 'action') {
  *
  *  @param {any} world
  *  @param {string[]} reasons
- *  @param {{run?: (a: string[]) => string, kind?: 'action'|'defect'|'stop'}} [io]
+ *  @param {{run?: (a: string[]) => string, kind?: 'action'|'defect'|'stop', lead?: string | null}} [io]
  */
-export function hold(world, reasons, { run = gh, kind = 'action' } = {}) {
+export function hold(world, reasons, { run = gh, kind = 'action', lead = leadLogin() } = {}) {
   try {
     run(['issue', 'edit', String(world.project), '--repo', REPO, '--add-label', HELD]);
-    const seen = run(['issue', 'view', String(world.project), '--repo', REPO, '--json', 'comments',
-      '--jq', '[.comments[].body] | join("\\n")']);
-    if (!seen.includes(holdMarker(reasons))) {
+    const { comments } = JSON.parse(run(['issue', 'view', String(world.project), '--repo', REPO, '--json', 'comments']));
+    if (!holdSaid(comments, reasons, lead)) {
       run(['issue', 'comment', String(world.project), '--repo', REPO, '--body', signed(renderHoldComment(reasons, kind), 'Lead', appPersona('Lead'))]);
     }
     console.log(`held #${world.project}: ${reasons.length} ${kind === 'stop' ? 'terminal stop reason(s)' : 'failed action(s)'}`);

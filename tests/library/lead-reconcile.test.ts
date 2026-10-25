@@ -14,6 +14,8 @@ const { itemSatisfied, satisfiedTitles, classifyDeploy, readDeploy: kanonReadDep
 const { qaRoundBudget, heldClearsRead, QA_ROUND_CAP } = await import('../../scripts/lead-reconcile.mjs');
 const { FILE_ONLY, trackingControls } = await import('../../scripts/lead-reconcile.mjs');
 const { membershipUnread } = await import('../../scripts/lead-reconcile.mjs');
+const { appLogin } = await import('../../scripts/app-register.mjs');
+const { signed } = await import('../../scripts/lib/role-marker.mjs');
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ROOT } from './helpers/adopter.js';
 import { workflowText } from '../unit/helpers/called-workflow.js';
@@ -4836,14 +4838,17 @@ describe('the half of the hold that WRITES it (RA-1202)', () => {
   // `if (failures.length) hold(world, failures)` left the whole unit tier green and put
   // the tick back to RA-963's behaviour, a `::warning` and a green run, hourly, forever.
   const w = () => ({ ...worldFrom(BRIEF(['t'])), project: '952' });
+  /** A comment as the Lead posts it: its App's login, its role marker on the first line. */
+  const byLead = (body: string) => ({ author: { login: appLogin('Lead') }, body: signed(body, 'Lead') });
 
-  /** Records argv; `answers` decides what a read returns and what throws. */
-  const spy = (fail: (args: string[]) => boolean = () => false, comments = '') => {
+  /** Records argv; `answers` decides what a read returns and what throws. `comments` are the
+   *  tracking issue's, as `gh issue view --json comments` prints them. */
+  const spy = (fail: (args: string[]) => boolean = () => false, comments: Array<{ author: { login: string }; body: string }> = []) => {
     const calls: string[][] = [];
     const run = (args: string[]) => {
       calls.push(args);
       if (fail(args)) { const e = new Error('gh issue edit failed: HTTP 422 milestone not found'); throw e; }
-      if (args.includes('comments')) return comments;
+      if (args.includes('comments')) return JSON.stringify({ comments });
       if (args[1] === 'view') return JSON.stringify({ body: '', milestone: null });
       return '';
     };
@@ -4865,7 +4870,7 @@ describe('the half of the hold that WRITES it (RA-1202)', () => {
     const reasons = ['`dispatch` for #5 — gh issue edit failed: HTTP 422 milestone not found'];
     const { calls, run } = spy(
       (a) => a.includes('--add-label') && a.includes('agent:implement'),
-      renderHoldComment(reasons),
+      [byLead(renderHoldComment(reasons))],
     );
     execute(w(), [{ kind: 'dispatch', number: 5, title: 'x' }], { run });
     expect(calls.some((c) => c[1] === 'comment'), 'the marker suppresses the repeat').toBe(false);
@@ -4877,9 +4882,27 @@ describe('the half of the hold that WRITES it (RA-1202)', () => {
     // RA-1242: a project held for a failed action that later enters a terminal stop had
     // the new reason — the one a human is being asked to decide — written nowhere.
     const older = renderHoldComment(['`file` for “a” — HTTP 422 milestone not found']);
-    const { calls, run } = spy(() => false, older);
+    const { calls, run } = spy(() => false, [byLead(older)]);
     hold(w(), ['phase 5 is `qa-exhausted`: two rounds and no pass'], { run, kind: 'stop' });
     expect(calls.some((c) => c[1] === 'comment')).toBe(true);
+  });
+
+  it('is silenced only by the Lead\'s own hold comment, never by a copy of its marker (kanon#1399)', () => {
+    // The digest is a public HTML comment, and the hold comment is what tells a human why the
+    // project stopped. A copy posted by anyone else, or by another role of the Lead's App,
+    // must not stand in for it.
+    const reasons = ['phase 5 is `qa-exhausted`: two rounds and no pass'];
+    const body = renderHoldComment(reasons);
+    const posts = (comments: Array<{ author: { login: string }; body: string }>) => {
+      const { calls, run } = spy(() => false, comments);
+      hold(w(), reasons, { run, kind: 'stop' });
+      return calls.some((c) => c[1] === 'comment');
+    };
+    expect(posts([{ author: { login: 'stranger' }, body }]), 'a stranger\'s copy').toBe(true);
+    expect(posts([{ author: { login: 'stranger' }, body: signed(body, 'Lead') }]), 'a stranger\'s signed copy').toBe(true);
+    expect(posts([{ author: { login: appLogin('Lead') }, body: signed(body, 'Implementer') }]), 'another role of the App').toBe(true);
+    expect(posts([{ author: { login: appLogin('Lead') }, body }]), 'the Lead\'s login without its marker').toBe(true);
+    expect(posts([byLead(body)]), 'the Lead\'s own').toBe(false);
   });
 
   it('escalate routing turns a decision into a hold, not just a report', () => {
