@@ -112,7 +112,7 @@ function checkOf(node) {
  * @param {(page: any) => unknown} [at] @param {(page: any) => number | undefined} [total]
  * @returns {Promise<any[]>}
  */
-async function listing(reader, path, at = (p) => p, total = () => undefined) {
+export async function listing(reader, path, at = (p) => p, total = () => undefined) {
   const pages = await reader.pages(path);
   if (!Array.isArray(pages)) throw new ReadError(`GET ${path}`, 'the answer has no pages');
   /** @type {any[]} */
@@ -345,8 +345,12 @@ const heldForPathAlone = (pr, merger) => {
 export async function readinessView({ reader: given, repo, pr: number, now = Date.now() }) {
   const { reader, failures } = watched(given);
   try {
-    return await view(Number(number), { reader, repo, now, failures });
+    const answer = await readinessOf(Number(number), { reader, repo, now, context: await readinessContext(reader, repo) });
+    const failed = failures();
+    if (failed.length) throw new IncompleteRead(`pull request #${number}`, failed);
+    return answer;
   } catch (e) {
+    if (e instanceof IncompleteRead) throw e;
     const failed = failures();
     if (e instanceof ReadError && !failed.includes(e)) failed.push(e);
     if (failed.length) throw new IncompleteRead(`pull request #${number}`, failed);
@@ -355,10 +359,12 @@ export async function readinessView({ reader: given, repo, pr: number, now = Dat
 }
 
 /**
- * @param {number} number
- * @param {{ reader: import('./reader.mjs').Reader, repo: string, now: number, failures: () => ReadError[] }} io
+ * What the readiness view reads from the default branch once, whichever pull request it judges:
+ * the App register, the logins the gate compares, and the escalating paths. A view that judges
+ * every open pull request (the needs-the-Owner view) reads it once for all of them.
+ * @param {import('./reader.mjs').Reader} reader @param {string} repo
  */
-async function view(number, { reader, repo, now, failures }) {
+export async function readinessContext(reader, repo) {
   const files = await defaultBranchReader(reader, repo);
   const registerText = await files.read(APP_REGISTER);
   const register = registerText === null ? new Map() : parseAppRegister(registerText, `${APP_REGISTER} on \`${files.branch}\``);
@@ -370,6 +376,17 @@ async function view(number, { reader, repo, now, failures }) {
     merger: register.get('Merger') ?? MERGER_LOGIN,
   };
   const escalations = await escalationsAt(files, reader, repo);
+  return { files, register, logins, escalations };
+}
+
+/**
+ * One pull request's readiness, over a context `readinessContext` read. Throws the first read that
+ * failed; a caller that tolerates none checks its watched reader's failures after.
+ * @param {number} number
+ * @param {{ reader: import('./reader.mjs').Reader, repo: string, now: number, context: Awaited<ReturnType<typeof readinessContext>> }} io
+ */
+export async function readinessOf(number, { reader, repo, now, context }) {
+  const { files, logins, escalations } = context;
   const { pr, node, changed } = await readPullRequest(reader, repo, number, { merger: logins.merger });
   const gate = { escalations, now, implementer: logins.implementer, reviewer: logins.reviewer };
   const verdict = mergeVerdict(pr, gate);
@@ -392,8 +409,6 @@ async function view(number, { reader, repo, now, failures }) {
     ? personsReadiness(pr, parts, decisions, reviewer)
     : implementersReadiness(pr, verdict, gate, logins.merger);
 
-  const failed = failures();
-  if (failed.length) throw new IncompleteRead(`pull request #${number}`, failed);
   /** @param {any[]} cs */
   const names = (cs) => cs.map((c) => c.name);
   return {
