@@ -8,12 +8,13 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, normalize, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
-import { PROJECT, adopterFiles, adopterProject, repoWorld } from './helpers/status-world.js';
+import { PROJECT, adopterFiles, adopterProject, laneCaller, laneFleet, laneWorld, repoWorld } from './helpers/status-world.js';
 import { NUMBER, briefPr, implementerPr, personPr, readerFor } from './helpers/pr-world.js';
 
 const { status, SCHEMA, EXIT } = await import('../../cli/status.mjs');
 const { projectView } = await import('../../scripts/status/project.mjs');
 const { readinessView } = await import('../../scripts/status/pull-request.mjs');
+const { laneHealthView } = await import('../../scripts/status/lanes.mjs');
 const { ReadError } = await import('../../scripts/status/reader.mjs');
 const { HELD, HELD_MARKER } = await import('../../scripts/lead-reconcile.mjs');
 
@@ -69,6 +70,17 @@ const held = () => adopterProject({
   trackingComments: [{ author: { login: 'lead' }, body: `held\n${HELD_MARKER}`, createdAt: '2026-10-01T00:00:00Z' }],
 });
 const unparseable = () => repoWorld({ files: { ...adopterFiles(), [`docs/projects/${PROJECT}.md`]: '# Project 7\n\n## Decomposition\n\nJust prose.\n' } });
+const refusedLanes = () => laneWorld({
+  workflows: { 'review.yml': laneCaller('review') },
+  runs: { 'review.yml': [{ id: 1, conclusion: 'failure' }] },
+  jobs: { 1: [] },
+  overrides: {
+    pages: (p) => {
+      if (p.includes('/jobs')) throw new ReadError(`GET ${p}`, 'API rate limit exceeded', { status: 403, resetAt: '2026-10-24T10:00:00.000Z' });
+      return undefined;
+    },
+  },
+});
 const refusedLabels = () => adopterProject({ overrides: { graphql: { Labels: () => { throw new ReadError('GraphQL Labels', 'API rate limit exceeded', { status: 403, resetAt: '2026-10-24T10:00:00.000Z' }); } } } });
 
 /** The body of a Markdown section: from its heading to the next heading of its level or above. */
@@ -126,8 +138,31 @@ describe('kanon status prints one document, or the same result as prose', () => 
     expect(cutProse.code).toBe(cut.code);
     expect(cutProse.out).toMatch(/The project view has no answer: project #7 couldn't be read whole, .*GraphQL Labels failed/);
 
+    // The lane-health view is a section of its own, the view's own answer for the same reads,
+    // and its prose the same result with the same exit code.
+    const lanes = await run(['--lanes', '--json'], laneFleet());
+    expect(lanes.code).toBe(EXIT.ok);
+    expect(lanes.doc()).toMatchObject({ schema: SCHEMA, status: 'ok', exitCode: EXIT.ok, repo: 'acme/shop' });
+    expect(lanes.doc().lanes).toEqual(await laneHealthView({ reader: laneFleet().reader, repo: 'acme/shop' }));
+    expect(lanes.doc(), 'one section per view asked for').not.toHaveProperty('project');
+    const lanesProse = await run(['--lanes'], laneFleet());
+    expect(lanesProse.code).toBe(lanes.code);
+    expect(lanesProse.out).toContain('Lane health: 5 lane caller(s) on main, the last 12 runs of each');
+    expect(lanesProse.out).toContain('implement.yml  red, 3 failed of 3 decisive');
+    expect(lanesProse.out).toContain('review.yml  flaky (the health check says red), 3 failed of 3 decisive');
+    expect(lanesProse.out).toContain('run 101 failure: infra, unreachable https://example.test/runs/101');
+    expect(lanesProse.out).toContain('run 401 attempt 2 startup_failure: infra, rerun-succeeded');
+    expect(lanesProse.out).toContain('run 301 failure: real https://example.test/runs/301');
+    const lanesCut = await run(['--lanes', '--json'], refusedLanes());
+    expect(lanesCut.code).toBe(EXIT.incomplete);
+    expect(lanesCut.doc().lanes.reads).toEqual([{ read: 'GET repos/acme/shop/actions/runs/1/jobs?per_page=100', why: 'API rate limit exceeded', status: 403, resetAt: '2026-10-24T10:00:00.000Z' }]);
+    expect(lanesCut.doc().lanes.callers, 'no partial answer beside the error').toBeUndefined();
+    const lanesCutProse = await run(['--lanes'], refusedLanes());
+    expect(lanesCutProse.code).toBe(lanesCut.code);
+    expect(lanesCutProse.out).toMatch(/The lane-health view has no answer: the lane-health view couldn't be read whole/);
+
     // A usage error: the error document, or the message and the usage, and exit 2 either way.
-    for (const argv of [['--project', 'seven'], [], ['--project', '7', '--repo', 'not-a-repo'], ['--bogus'], ['--pr', 'five']]) {
+    for (const argv of [['--project', 'seven'], [], ['--project', '7', '--repo', 'not-a-repo'], ['--bogus'], ['--pr', 'five'], ['--lanes=yes']]) {
       const j = await run([...argv, '--json'], null);
       expect(j.code, argv.join(' ')).toBe(EXIT.usage);
       expect(Object.keys(j.doc()).sort()).toEqual(['error', 'exitCode', 'kanon', 'schema', 'status']);
@@ -138,7 +173,7 @@ describe('kanon status prints one document, or the same result as prose', () => 
       expect(p.out, 'nothing on standard output').toBe('');
       expect(j.readers, 'nothing was read').toEqual([]);
     }
-    expect((await run(['--json'], null)).doc().error).toMatch(/--project <n> or --pr <n>/);
+    expect((await run(['--json'], null)).doc().error).toMatch(/--project <n>, --pr <n> or --lanes/);
 
     // The readiness view is a section of its own, the view's answer for the same reads, and in prose.
     const pr = await run(['--pr', String(NUMBER), '--json'], readerFor(implementerPr()));
@@ -214,7 +249,11 @@ describe('docs/status.md is held to the code', () => {
     expect(prDocs.map((d) => d.pr.readiness?.lacks ?? d.pr.error.slice(0, 15))).toEqual([[], ['decisions'], ['approval'], 'pull request #4']);
     docs.push(...prDocs);
     docs.push((await run(['--json'], null)).doc());
-    for (const d of docs) for (const p of paths(d)) emitted.add(p);
+    // And the lane-health view: callers with each class of failure, and a read that didn't complete.
+    const laneDocs = [(await run(['--lanes', '--json'], laneFleet())).doc(), (await run(['--lanes', '--json'], refusedLanes())).doc()];
+    expect(laneDocs.map((d) => d.status)).toEqual(['ok', 'incomplete']);
+    expect(new Set(laneDocs[0].lanes.callers.flatMap((c: Any) => c.failures.map((f: Any) => f.class)))).toEqual(new Set(['infra', 'real']));
+    for (const d of [...docs, ...laneDocs]) for (const p of paths(d)) emitted.add(p);
     // The worlds did reach each branch, so a field missing from them is missing from the code.
     expect(docs.filter((d) => !d.pr).map((d) => d.project?.brief?.state ?? d.project?.error?.slice(0, 10) ?? d.status)).toEqual(['parsed', 'parsed', 'unparseable', 'missing', 'project #7', 'error']);
     expect(docs[1].project.hold).toEqual({ label: HELD, by: 'lead' });

@@ -7,22 +7,25 @@ kanon status --project 1327
 kanon status --project 1327 --json
 kanon status --pr 1391
 kanon status --repo owner/name --project 12 --pr 40
+kanon status --lanes
+kanon status --repo owner/name --project 12 --lanes --json
 ```
 
 | Option | Meaning |
 |---|---|
 | `--project <n>` | The project view of tracking issue `<n>`. |
+| `--lanes` | The lane-health view. |
 | `--pr <n>` | The pull-request readiness view of pull request `<n>` ([below](#the-pull-request-readiness-view)). |
 | `--repo <owner>/<repo>` | The repository. The default is the origin remote of the checkout you run it from. |
 | `--json` | Print one JSON document instead of prose ([below](#the-json-output)). |
 
-Each view you ask for is one section of the answer, and you can ask for both at once. The project and pull-request readiness views are the ones there are so far. The lane-health, release and needs-the-Owner views each add their own section as they are built.
+Each view you ask for is one section of the answer, and you can ask for more than one at once. The project, pull-request readiness and lane-health views are the ones there are so far. The release and needs-the-Owner views each add their own section as they are built.
 
 ## What it reads
 
 It reads with your own `gh` credential, as [`kanon doctor`](doctor.md) does. `gh` takes its token from `GH_TOKEN`, then `GITHUB_TOKEN`, then its stored login. The command says on standard error which one it used and whose it is, and stops when GitHub refuses it. It reads only what that token can read, and asks GitHub only REST `GET`s and GraphQL queries.
 
-It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record, the escalation file, the exemptions file and the stack document. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used to find the repository when you don't pass `--repo`, and for one more thing with `--pr`: that view runs the merge gate's own verdict function, and loading it reads the App register from the directory you run in, as each lane does in its checkout. So run `--pr` from a checkout of a repository that runs Kanon. The logins the view judges by are still the default branch's register's, with one exception: the gate's hold logic still compares whoever applied `needs:human` against the Merger login (`MERGER_LOGIN`) in the register in the directory you run in. A checkout whose register names a different Merger can therefore read a hold differently.
+It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record, the escalation file, the exemptions file, the stack document and the workflows. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used to find the repository when you don't pass `--repo`, and for one more thing with `--pr`: that view runs the merge gate's own verdict function, and loading it reads the App register from the directory you run in, as each lane does in its checkout. So run `--pr` from a checkout of a repository that runs Kanon. The logins the view judges by are still the default branch's register's, with one exception: the gate's hold logic still compares whoever applied `needs:human` against the Merger login (`MERGER_LOGIN`) in the register in the directory you run in. A checkout whose register names a different Merger can therefore read a hold differently.
 
 **An incomplete read is no answer.** A read that GitHub refused, that wasn't found, that hit the rate limit or that came back cut short makes that view's answer an error. The error names each read and why it failed, with the time the rate limit resets when that is the cause. A view never answers in part.
 
@@ -60,6 +63,18 @@ Whether it is ready is never the view's own judgement:
   - `decisions`, for a brief only: the brief guard finds no open decision in it. A brief the default branch's `docs/qa/exemptions.md` lists as pre-standard isn't checked.
 
   Nothing else is asked of it: a person merging it reads the rest on GitHub.
+
+## The lane-health view
+
+`--lanes` reads the workflows in `.github/workflows/` on the default branch, and lists each lane caller among them: each workflow with a job that calls one of Kanon's lanes, the lane callers [the lane check](../actions/lane-check/README.md) holds to the lane rules. For each it gives:
+
+- **its state** over its recent runs, as the project digest's daily health check (`scripts/workflow-health.mjs`) judges it, with that check's own window and minimum: `red` when every run that ended in success or failure failed, `ok` when one succeeded, and `quiet` when too few runs ended either way to judge. A cancelled or skipped run counts neither way;
+- **each failed run**, and each failed attempt of a run that a re-run then fixed, classed:
+  - `infra` when the agent classifier recorded on the run that the model was unreachable or that its API failed mid-run, or the review lane recorded that its agent posted no verdict, each by the step the lane runs to say so, as the retry lanes read it; or when a later attempt of the same run succeeded. A run counts as `infra` only when every job of it that failed recorded one of those, so a matrix run with one capped job and one real failure is `real`;
+  - `real` otherwise;
+- **its health**: `flaky` when it has failures and every one is `infra`, whatever its state, and its state otherwise. A lane red only on `infra` failures is `flaky`, not `red`.
+
+It has no flake classifier of its own: the classes are the agent classifier's and a re-run's outcome.
 
 ## Exit codes
 
@@ -180,6 +195,30 @@ A path names a field inside its parent: `project.items[].key` is the `key` of ea
 | `pr.readiness.ready` | boolean | True when it is ready for that merge. |
 | `pr.readiness.lacks` | array | What it lacks: for a person's pull request, `checks`, `approval` or `decisions`; for the Implementer's, the merge gate's rule that stops it. Empty when it is ready. |
 | `pr.readiness.why` | string | A sentence saying why. |
+| `lanes` | object | The lane-health view, when `--lanes` asked for it: the fields below, or, when its reads didn't complete, only `error` and `reads`. |
+| `lanes.error` | string | Why the view has no answer, naming each read that failed. |
+| `lanes.reads` | array | Each read that failed. |
+| `lanes.reads[].read` | string | What was read, such as `GET repos/o/r/actions/runs/1/jobs?per_page=100`. |
+| `lanes.reads[].why` | string | Why it failed, as GitHub or `gh` said it. |
+| `lanes.reads[].status` | number or null | The HTTP status, when there is one. |
+| `lanes.reads[].resetAt` | string or null | When the exhausted rate limit resets, ISO 8601, when that is the cause. |
+| `lanes.branch` | string | The default branch the workflows were read from. |
+| `lanes.window` | number | How many of each lane's most recent runs were read, the workflow-health check's window. |
+| `lanes.minDecisive` | number | How many runs must end in success or failure before a lane can be `red`, the workflow-health check's minimum. |
+| `lanes.callers` | array | Each lane caller, by file name. |
+| `lanes.callers[].file` | string | Its file name in `.github/workflows/`. |
+| `lanes.callers[].status` | string | The workflow-health check's verdict over its recent runs: `ok`, `red` or `quiet`. |
+| `lanes.callers[].decisive` | number | The runs that verdict counted, those that ended in success or failure. |
+| `lanes.callers[].failed` | number | Of those, the ones that failed. |
+| `lanes.callers[].health` | string | `flaky` when it has failures and every one is `infra`; its `status` otherwise. |
+| `lanes.callers[].failures` | array | Each failed run, and each failed attempt of a run a later attempt fixed, newest first. |
+| `lanes.callers[].failures[].run` | number | The run's id. |
+| `lanes.callers[].failures[].attempt` | number | The attempt that failed. |
+| `lanes.callers[].failures[].url` | string or null | The run's, or the attempt's, page on GitHub. |
+| `lanes.callers[].failures[].createdAt` | string or null | When it started, ISO 8601. |
+| `lanes.callers[].failures[].conclusion` | string | `failure`, `timed_out` or `startup_failure`. |
+| `lanes.callers[].failures[].class` | string | `infra` or `real`. |
+| `lanes.callers[].failures[].reason` | string or null | Why it is `infra`: `unreachable`, `api_error`, `no_verdict` or `rerun-succeeded`; null when it is `real`. |
 
 On a usage error or when it can't run, the document is the error document, `{ "schema", "kanon", "status": "error", "exitCode", "error" }`.
 

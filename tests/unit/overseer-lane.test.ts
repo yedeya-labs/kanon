@@ -215,11 +215,28 @@ describe('who files what (decision 12)', () => {
       KANON: '${{ steps.kanon.outputs.path }}',
       UPSTREAM: '${{ needs.gate.outputs.upstream }}',
       APP_NAME_HASHES: '${{ needs.gate.outputs.names }}',
+      PERSONA: '${{ needs.gate.outputs.persona }}',
       TAG: "${{ inputs.smoke != '' && 'smoke' || 'run' }}",
       KANON_WORKFLOW_REF: '${{ job.workflow_ref }}',
       KANON_WORKFLOW_SHA: '${{ job.workflow_sha }}',
       FINDINGS_PATH: '${{ runner.temp }}/finding/kanon-finding.json',
     });
+  });
+
+  // Issue #1401 (`K-AGENT-1`): the file job checks out nothing and its token reads no contents, so
+  // the Overseer's persona is read in the gate job, from the register on the default branch.
+  it('reads the Overseer\'s persona in the gate job, from the default branch, and hands it to the file job alone', () => {
+    const gate = wf.jobs.gate!;
+    const gateSteps = (gate.steps ?? []) as Step[];
+    const read = gateSteps.find((s) => s.id === 'persona')!;
+    expect(read, 'the gate job\'s persona step').toBeDefined();
+    expect(gateSteps.indexOf(read)).toBeGreaterThan(gateSteps.findIndex((s) => s.id === 'runtime'));
+    expect(read.if).toBe("steps.runtime.outputs.due == 'true'");
+    expect(read.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
+    expect(read.run).toContain('persona="$(node "$KANON/scripts/lane-persona.mjs" Overseer)"');
+    expect(read.run).toContain('printf \'persona=%s\\n\' "$persona" >> "$GITHUB_OUTPUT"');
+    expect((gate as { outputs?: Record<string, string> }).outputs?.persona).toBe('${{ steps.persona.outputs.persona }}');
+    for (const [name, j] of Object.entries(wf.jobs)) if (name !== 'gate' && name !== 'file') expect(JSON.stringify(j), name).not.toMatch(/outputs\.persona|lane-persona/);
   });
 
   // kanon#423, `K-LAYOUT-10`: where upstream findings go is the repository's declaration, read

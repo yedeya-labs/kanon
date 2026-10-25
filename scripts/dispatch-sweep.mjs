@@ -586,6 +586,12 @@ export const READ_SHAPES = {
   // a decomposing lane, so it is not asserted here: absent is its normal state elsewhere.
   'issue list': ['[].number', '[].title', '[].createdAt', '[].labels', '[].labels[].name'],
   'issue comments': ['comments', 'comments[].body', 'comments[].createdAt', 'comments[].author.login'],
+  // One page of `actions/runs` (kanon#1410), read by `liveRunsByIssue`.
+  'run list': [
+    'workflow_runs', 'workflow_runs[].id', 'workflow_runs[].event', 'workflow_runs[].status',
+    'workflow_runs[].display_title', 'workflow_runs[].created_at',
+    'workflow_runs[].referenced_workflows', 'workflow_runs[].referenced_workflows[].path',
+  ],
 };
 
 /** Every key path in a JSON value — `a`, `a[]`, `a[].b` … — intermediate ones included. */
@@ -736,6 +742,12 @@ export function classify(issue, comments, hasPr, opts = {}) {
     // empty check (`runLeftNothing`). Null is the pre-#254 behaviour, and the bounded one:
     // the issue reads as it did, and nothing is dispatched that was not before.
     emptyAt = null,
+    // THIS ISSUE'S LANE RUN STILL QUEUED OR IN PROGRESS, `{ id, status, at }`, or null
+    // (kanon#1410): `liveRunsByIssue`'s entry for it. A run writes its cost row only at its
+    // end, and the agent may not comment for most of it, so without this a run 15 minutes
+    // in reads `never-ran` and is dispatched again underneath itself. Null is the pre-#1410
+    // reading, and is what an unread run list gives.
+    liveRun = null,
     // Defaults to the implement lane so every existing caller — and every existing
     // test — keeps its exact meaning (RA-1336).
     lane = LANES[0],
@@ -878,6 +890,16 @@ export function classify(issue, comments, hasPr, opts = {}) {
     // "remove the label", but answering in prose is the natural thing to do and
     // must not be punished with another dispatch.
     state = 'human-held';
+  } else if (liveRun) {
+    // A RUN IS UNDER WAY (kanon#1410). Read off the run list, not the conversation: the
+    // agent comments before it FINISHES, so silence mid-run is not evidence the run never
+    // happened. Ranked below a PR, a park and a person's hold, which own the issue whether
+    // or not a run is going, and above every reading of the conversation — `never-ran`,
+    // `answered`, and the waiting states, which all describe an agent that is not working.
+    // On 2026-10-25 a sweep 14 minutes after #1355 and #1353 were labelled read both as
+    // `never-ran`; the second runs pushed onto the first runs' branches, and both pull
+    // requests fell out of the Implementer's revise lane.
+    state = 'running';
   } else if (agentComments.length === 0) {
     // The lane's workflow prompt says "ALWAYS leave a comment before you finish",
     // so silence means the run never happened — not that it ran and said nothing.
@@ -913,6 +935,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
   const base = {
     issue, lane, redispatches, dispatched, unreached: Math.max(0, unreached),
     maxRedispatch, lastSweep, last, sawAgent: agentComments.length > 0, unmarked,
+    ...(state === 'running' ? { liveRun } : {}),
   };
 
   // TOO BIG — the latest run hit its cap (RA-1781). Checked before the attempt cap and the
@@ -925,9 +948,10 @@ export function classify(issue, comments, hasPr, opts = {}) {
   //   · an AGENT word after it — a later run happened and spoke;
   //   · the trigger label RE-APPLIED after it (`labeledAt`) — a re-run is under way,
   //     and stopping it mid-run would strand its work beside a split PR.
-  // NOT the states where a person or a PR already owns the issue. NOT `stop()`'s
+  // NOT the states where a person or a PR already owns the issue, nor `running`: a run under
+  // way is a re-run, as a re-applied label is (kanon#1410). NOT `stop()`'s
   // `exhausted` either, which is the sweep's own attempt budget running out.
-  const OWNED = ['has-pr', 'human-held', 'triage-settled', 'parked'];
+  const OWNED = ['has-pr', 'human-held', 'running', 'triage-settled', 'parked'];
   if (lane.decomposes && Number.isFinite(exhaustedAt) && !OWNED.includes(state)
     && !(Number.isFinite(labeledAt) && labeledAt > exhaustedAt)
     && !conversation.some((c) => Date.parse(c.createdAt) > exhaustedAt && (byAgent(c) || !bot(c.login)))) {
@@ -1120,7 +1144,7 @@ export function actionCell(v, breaker = { tripped: false }) {
   return breaker.tripped && v.act === 'stop' ? 'stop (withheld)' : v.act;
 }
 
-const REPORT_ORDER = ['never-ran', 'answered', 'ran-empty', 'too-big', 'awaiting-human', 'human-held', 'exhausted', 'in-flight', 'has-pr', 'triage-settled', 'parked'];
+const REPORT_ORDER = ['never-ran', 'answered', 'ran-empty', 'too-big', 'awaiting-human', 'human-held', 'exhausted', 'running', 'in-flight', 'has-pr', 'triage-settled', 'parked'];
 
 /**
  * The step-summary text, pure so it can be asserted on (RA-1260). Takes the breaker's
@@ -1158,7 +1182,7 @@ export function renderReport(verdicts, { apply = APPLY, breaker = { tripped: fal
     '| Issue | Lane | State | Action | Attempts | Last word |',
     '|---|---|---|---|---|---|',
     ...rows.map((v) =>
-      `| [#${v.issue.number}](https://github.com/${REPO}/issues/${v.issue.number}) | \`${v.lane.key}\` | \`${v.state}\`${v.unmarked ? ` (${v.unmarked} unmarked)` : ''} | ${actionCell(v, breaker)} | ${attemptsCell(v)} | ${excerpt(v.last).replace(/\|/g, '\\|')} |`),
+      `| [#${v.issue.number}](https://github.com/${REPO}/issues/${v.issue.number}) | \`${v.lane.key}\` | \`${v.state}\`${v.liveRun ? ` (run ${v.liveRun.id}, ${v.liveRun.status})` : ''}${v.unmarked ? ` (${v.unmarked} unmarked)` : ''} | ${actionCell(v, breaker)} | ${attemptsCell(v)} | ${excerpt(v.last).replace(/\|/g, '\\|')} |`),
     '',
   ];
 
@@ -1404,6 +1428,72 @@ export function makeLabeledAtReader({ json = ghJson } = {}) {
       return lastLabeledAt(json(['api', '--paginate', '--slurp', `repos/${REPO}/issues/${number}/events?per_page=100`]).flat(), label);
     } catch {
       return undefined;
+    }
+  };
+}
+
+/** The statuses GitHub gives a run that has not completed (kanon#1410). `pending` is a run
+ *  waiting on its concurrency group, which is where a second run of one issue sits. */
+export const LIVE_RUN_STATUSES = ['requested', 'waiting', 'pending', 'queued', 'in_progress'];
+
+/** How long a run may stay unfinished and still be believed (kanon#1410). The implement job's
+ *  ceiling is 180 minutes, and one more run may queue behind it in the issue's concurrency
+ *  group, so a live run older than this is stuck, not working: GitHub has kept a `queued` run
+ *  for weeks. Too SHORT re-dispatches a slow run, which is the pre-#1410 cost and no worse. */
+export const LIVE_RUN_HOURS = Number(process.env.QA_SWEEP_LIVE_RUN_HOURS || 12);
+
+/**
+ * Each issue's newest lane run still queued or in progress, `{ id, status, at }` with `at` its
+ * `created_at` as epoch-ms (kanon#1410). Pure.
+ *
+ * A run is the lane's when its `referenced_workflows` name the lane's file, which is how the
+ * caller's run records the reusable workflow it called, whatever the caller is named. It is the
+ * issue's when it was fired by an `issues` event and its `display_title` is the issue's title,
+ * which is what GitHub titles such a run. A `workflow_dispatch` run is titled for its workflow
+ * and names no issue, so it is never attributed. Two open issues with one title would both
+ * read `running` while one runs, which holds the other for that run's life and no longer.
+ *
+ * @param {Array<{id?: number, event?: string, status?: string, display_title?: string, created_at?: string|null,
+ *   referenced_workflows?: Array<{path?: string}>}>|null|undefined} runs the repository's live runs
+ * @param {Array<{number: number, title?: string}>} issues
+ * @param {{workflow: string}} lane
+ * @param {{now?: number, hours?: number}} [opts]
+ * @returns {Map<number, {id: number|undefined, status: string|undefined, at: number}>}
+ */
+export function liveRunsByIssue(runs, issues, lane, { now = Date.now(), hours = LIVE_RUN_HOURS } = {}) {
+  const byTitle = new Map();
+  for (const i of issues ?? []) {
+    if (!byTitle.has(i.title)) byTitle.set(i.title, []);
+    byTitle.get(i.title).push(i.number);
+  }
+  const callsLane = (r) => (r?.referenced_workflows ?? [])
+    .some((w) => new RegExp(`(^|/)\\.github/workflows/${lane.workflow.replace(/\./g, '\\.')}@`).test(String(w?.path ?? '')));
+  const out = new Map();
+  for (const r of runs ?? []) {
+    if (r?.event !== 'issues' || !LIVE_RUN_STATUSES.includes(r.status) || !callsLane(r)) continue;
+    const at = Date.parse(r.created_at ?? '');
+    if (!Number.isFinite(at) || hoursSince(r.created_at, now) >= hours) continue;
+    for (const n of byTitle.get(r.display_title) ?? []) {
+      if (!out.has(n) || at > out.get(n).at) out.set(n, { id: r.id, status: r.status, at });
+    }
+  }
+  return out;
+}
+
+/** Reads the repository's live `issues`-fired runs, every page of each live status; `null` when
+ *  any read fails, which the sweep warns about and classifies as before kanon#1410. INJECTABLE.
+ *  Needs `actions: read`, which the sweep's token holds. */
+export function makeLiveRunsReader({ json = ghJson, onPage = () => {} } = {}) {
+  return () => {
+    try {
+      return LIVE_RUN_STATUSES.flatMap((status) =>
+        [].concat(json(['api', '--paginate', '--slurp', `repos/${REPO}/actions/runs?status=${status}&event=issues&per_page=100`]))
+          .flatMap((page) => {
+            onPage(page);
+            return page?.workflow_runs ?? [];
+          }));
+    } catch {
+      return null;
     }
   };
 }
@@ -1702,6 +1792,16 @@ function main() {
   // ONE PR fetch for every lane — the index is keyed by issue number and a triage
   // fix PR closes its bug exactly the way an implement PR closes its issue.
   const isLinked = linkedPrIndex(fetchOpenPrs());
+  // THE RUNS STILL GOING (kanon#1410), one read for every lane, each lane's matched by the
+  // workflow file it calls. An unread list classifies as before #1410, and says so: a run
+  // under way may then read `never-ran` and be dispatched again.
+  const liveRuns = makeLiveRunsReader({ onPage: (p) => noteDrift('run list', p) })();
+  if (liveRuns === null) {
+    const msg = 'Could not read the queued and in-progress runs, so an issue whose run is still going may read `never-ran` and be re-dispatched this run (kanon#1410).';
+    warn(msg);
+    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `> [!WARNING]\n> ${msg}\n\n`);
+  }
+  const livePerLane = new Map(byLane.map(({ lane, issues }) => [lane.key, liveRunsByIssue(liveRuns, issues, lane)]));
 
   // An issue carrying BOTH trigger labels is classified once per lane, which is
   // correct: it has a separate attempt budget and a separate agent run in each.
@@ -1748,6 +1848,7 @@ function main() {
         unreached: unreachedPerLane.get(lane.key)?.get(issue.number) ?? 0,
         exhaustedAt: labeledAt === undefined ? null : exhaustedAt,
         labeledAt: labeledAt ?? null,
+        liveRun: livePerLane.get(lane.key)?.get(issue.number) ?? null,
       };
       const args = [issue, commentsFor(issue.number), Boolean(isLinked(issue.number))];
       const v = classify(...args, opts);
