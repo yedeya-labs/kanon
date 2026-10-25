@@ -123,7 +123,7 @@ describe('kanon status prints one document, or the same result as prose', () => 
     // The view is imported here, not with the others, so this file still loads without it and the
     // assertions below are what turn red when the release view is gone.
     const { releaseView } = await import('../../scripts/status/release.mjs');
-    const rel =await run(['--release', '--json'], chain());
+    const rel = await run(['--release', '--json'], chain());
     expect(rel.code).toBe(EXIT.ok);
     expect(Object.keys(rel.doc())).toEqual(['schema', 'kanon', 'status', 'exitCode', 'repo', 'readAt', 'release']);
     expect(rel.doc().release).toEqual(await releaseView({ reader: chain().reader, repo: 'acme/shop', now: new Date(READ_AT) }));
