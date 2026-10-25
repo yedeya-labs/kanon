@@ -9,10 +9,18 @@
 // give a different result or exit code.
 //
 // ONE SECTION PER VIEW ASKED FOR. `--project <n>` asks for the project view, `--release` for the
-// release view and `--lanes` for the lane-health view, and any of them may be asked at once. A
-// later view adds its own section within v1, which docs/cli-json.md allows. A view whose reads didn't complete
-// answers with an error naming each read (`[STAT-3]`), never a partial answer, and the command
-// exits 4.
+// release view, `--pr <n>` for the pull-request readiness view, `--lanes` for the lane-health view
+// and `--needs-owner` for the needs-the-Owner view, and any of them may be asked at once. A later
+// view adds its own section within v1, which docs/cli-json.md allows. A view whose reads didn't
+// complete answers with an error naming each read (`[STAT-3]`), never a partial answer, and the
+// command exits 4.
+//
+// THE READINESS VIEW IS LOADED ONLY WHEN ASKED FOR. It runs the merge gate's verdict function, and
+// loading `merge-gate.mjs` reads the App register from the working directory, as every lane that
+// loads it does in the adopter's checkout. So `--project`, `--release` and `--lanes` keep working
+// from any directory, and `--pr` and `--needs-owner`, which judges every open pull request with it,
+// need the checkout's register to load; the logins they judge by are still the default branch's
+// (docs/status.md).
 import { spawn, spawnSync } from 'node:child_process';
 import { laneHealthView } from '../scripts/status/lanes.mjs';
 import { IncompleteRead, projectView } from '../scripts/status/project.mjs';
@@ -28,7 +36,7 @@ export const SCHEMA = 'kanon-status/v1';
 /** The exit codes, as docs/status.md documents them. */
 export const EXIT = /** @type {const} */ ({ ok: 0, usage: 2, error: 3, incomplete: 4 });
 
-export const USAGE = `Usage: kanon status [--project <n>] [--release] [--lanes] [options]
+export const USAGE = `Usage: kanon status [--project <n>] [--release] [--pr <n>] [--lanes] [--needs-owner] [options]
 
 Reads where a repository that runs Kanon stands, live from GitHub, and prints it. Writes
 nothing, anywhere (docs/status.md).
@@ -44,7 +52,13 @@ Options:
                          workflow-health check judges them, and each failure classed infra
                          (the model unreachable, an API error, no verdict, or fixed by a
                          re-run) or real
-  --pr <n>               the pull-request readiness view (not in this release yet)
+  --pr <n>               the pull-request readiness view: pull request <n>'s checks, the
+                         Reviewer's verdict, the criteria of the issues it closes, the merge
+                         gate's verdict, and whether it is ready to merge, and by whom
+  --needs-owner          the needs-the-Owner view: what waits on a person, each with its
+                         link and reason: the pull requests ready for a person's merge, the
+                         Implementer's stops, the Lead's holds, the open decisions in brief
+                         pull requests, and the red lanes
   --repo <owner>/<repo>  the repository (default: this checkout's origin remote)
   --json                 print one JSON document (docs/status.md) instead of prose
   -h, --help             this text
@@ -105,8 +119,8 @@ const number = (flag, v) => {
  * @param {string[]} argv
  */
 export const parseArgs = (argv) => {
-  /** @type {{ repo: string, project: number | null, release: boolean, pr: number | null, lanes: boolean, json: boolean, help: boolean }} */
-  const opts = { repo: '', project: null, release: false, pr: null, lanes: false, json: false, help: false };
+  /** @type {{ repo: string, project: number | null, release: boolean, pr: number | null, lanes: boolean, needsOwner: boolean, json: boolean, help: boolean }} */
+  const opts = { repo: '', project: null, release: false, pr: null, lanes: false, needsOwner: false, json: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
     const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
@@ -122,16 +136,14 @@ export const parseArgs = (argv) => {
     else if (flag === '--release' && inline === undefined) opts.release = true;
     else if (flag === '--pr') opts.pr = number(flag, value());
     else if (flag === '--lanes' && inline === undefined) opts.lanes = true;
+    else if (flag === '--needs-owner' && inline === undefined) opts.needsOwner = true;
     else if (flag === '--json') opts.json = true;
     else throw new Error(`unknown argument "${arg}"`);
   }
   if (opts.help && opts.json) throw new Error('--help and --json contradict each other; give one');
   if (opts.help) return opts;
   if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
-  // The readiness view is the core's next one (project #1327, Issue C); until it is there, the
-  // flag says so rather than answering with no section.
-  if (opts.pr !== null) throw new Error(`--pr ${opts.pr}: the pull-request readiness view isn't in this release yet; --project, --release and --lanes are the views there are`);
-  if (opts.project === null && !opts.release && !opts.lanes) throw new Error('name a view to read: --project <n>, --release or --lanes');
+  if (opts.project === null && !opts.release && opts.pr === null && !opts.lanes && !opts.needsOwner) throw new Error('name a view to read: --project <n>, --release, --pr <n>, --lanes or --needs-owner');
   return opts;
 };
 
@@ -183,7 +195,16 @@ async function document(deps, opts) {
     views.project = await section(() => projectView({ reader, repo, project }));
   }
   if (opts.release) views.release = await section(() => releaseView({ reader, repo, now: new Date(readAt) }));
+  if (opts.pr !== null) {
+    const pr = opts.pr;
+    const { readinessView } = await import('../scripts/status/pull-request.mjs');
+    views.pr = await section(() => readinessView({ reader, repo, pr, now: Date.parse(readAt) }));
+  }
   if (opts.lanes) views.lanes = await section(() => laneHealthView({ reader, repo }));
+  if (opts.needsOwner) {
+    const { needsOwnerView } = await import('../scripts/status/needs-owner.mjs');
+    views.needsOwner = await section(() => needsOwnerView({ reader, repo, now: Date.parse(readAt) }));
+  }
   const incomplete = Object.values(views).some((v) => 'error' in v);
   const exitCode = incomplete ? EXIT.incomplete : EXIT.ok;
   return { schema: SCHEMA, kanon: deps.release(), status: incomplete ? 'incomplete' : 'ok', exitCode, repo, readAt, ...views };
@@ -237,7 +258,22 @@ export function prose(doc) {
   const lines = [`${doc.repo}, read at ${doc.readAt}`];
   if ('project' in doc) lines.push('', ...projectProse(/** @type {any} */ (doc.project)));
   if ('release' in doc) lines.push('', ...releaseProse(/** @type {any} */ (doc.release)));
+  if ('pr' in doc) lines.push('', ...prProse(/** @type {any} */ (doc.pr)));
   if ('lanes' in doc) lines.push('', ...lanesProse(/** @type {any} */ (doc.lanes)));
+  if ('needsOwner' in doc) lines.push('', ...needsOwnerProse(/** @type {any} */ (doc.needsOwner)));
+  return lines;
+}
+
+/** @param {any} n the needs-the-Owner section */
+function needsOwnerProse(n) {
+  if ('error' in n) return [`The needs-the-Owner view has no answer: ${n.error}`];
+  const count = n.merges.length + n.stops.length + n.holds.length + n.decisions.length + n.lanes.length;
+  const lines = [count ? `Needs a person: ${count} thing(s)` : 'Needs a person: nothing'];
+  for (const m of n.merges) lines.push(`  Merge #${m.number} ${m.title}: ${m.reason} ${m.url}`);
+  for (const s of n.stops) lines.push(`  Stopped #${s.number} ${s.title}: ${s.reasons.join(', ')} ${s.url}`);
+  for (const h of n.holds) lines.push(`  Held by the Lead #${h.number} ${h.title} ${h.url}`);
+  for (const d of n.decisions) lines.push(`  Decide #${d.number}, decision ${d.n} in ${d.brief}: ${d.headline} ${d.url}`);
+  for (const l of n.lanes) lines.push(`  Red lane ${l.file}: ${l.failed} failed of ${l.decisive} decisive ${l.url}`);
   return lines;
 }
 
@@ -251,6 +287,33 @@ function lanesProse(l) {
       lines.push(`       run ${f.run}${f.attempt > 1 ? ` attempt ${f.attempt}` : ''} ${f.conclusion}: ${f.class}${f.reason ? `, ${f.reason}` : ''}${f.url ? ` ${f.url}` : ''}`);
     }
   }
+  return lines;
+}
+
+/** @param {any} p the readiness section */
+function prProse(p) {
+  if ('error' in p) return [`The pull-request readiness view has no answer: ${p.error}`];
+  const r = p.readiness;
+  const whose = r.by === 'merger' ? "the Merger's to merge" : "a person's to merge";
+  const lines = [
+    `Pull request #${p.number}: ${p.title} (${p.state.toLowerCase()}${p.draft ? ', draft' : ''}, by ${p.author}, head ${p.head.slice(0, 7)})`,
+    `  ${r.ready ? 'Ready' : 'Not ready'}, ${whose}: ${r.why}`,
+  ];
+  if (r.lacks.length) lines.push(`  Lacks: ${r.lacks.join(', ')}`);
+  lines.push(`  Merge gate: ${p.verdict.action} (${p.verdict.rule}): ${p.verdict.why}`);
+  const c = p.checks;
+  lines.push(`  Checks: ${c.relevant.length} relevant; ${c.pending.length} pending, ${c.cancelled.length} cancelled, ${c.failed.length} failed`);
+  for (const [what, names] of [['pending', c.pending], ['cancelled', c.cancelled], ['failed', c.failed]]) {
+    if (names.length) lines.push(`       ${what}: ${names.join(', ')}`);
+  }
+  lines.push(p.review
+    ? `  Review: ${p.review.state.toLowerCase().replace('_', ' ')} on ${p.review.commit.slice(0, 7)}, ${p.review.current ? 'current' : 'not the head, so not current'}`
+    : '  Review: the Reviewer has given no verdict');
+  for (const i of p.closes) {
+    lines.push(`  Closes #${i.number}${i.acs.length ? '' : ', which cites no criterion'}`);
+    for (const a of i.acs) lines.push(`       ${a.id} ${a.clause ?? 'not in the spec layer'}${a.declared ? '' : ', mentioned only'}`);
+  }
+  for (const d of p.decisions ?? []) lines.push(`  Open decision ${d.n} in ${d.brief}: ${d.headline}`);
   return lines;
 }
 
