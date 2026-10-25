@@ -10,9 +10,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 import { connection } from './helpers/fake-reader.js';
-import { BRIEF, PROJECT, adopterFiles, adopterProject, marker, repoWorld } from './helpers/status-world.js';
+import { BRIEF, PROJECT, adopterFiles, adopterProject, laneCaller, laneFleet, marker, repoWorld } from './helpers/status-world.js';
 
 const { projectView, IncompleteRead } = await import('../../scripts/status/project.mjs');
+const { laneHealthView } = await import('../../scripts/status/lanes.mjs');
 const { ReadError, ghReader, watched } = await import('../../scripts/status/reader.mjs');
 const { readProjectWorld, phaseOf, HELD, HELD_MARKER } = await import('../../scripts/lead-reconcile.mjs');
 const { openGatingWork } = await import('../../scripts/project-closure.mjs');
@@ -28,6 +29,12 @@ describe('the status core reads through its reader alone', () => {
     expect(w.seen.length).toBeGreaterThan(5);
     for (const s of w.seen) expect(s, s).toMatch(/^(GET|PAGES|GraphQL) /);
     for (const q of w.queries) expect(q.trimStart(), q.slice(0, 60)).toMatch(/^query\s/);
+    // Every view: the lane-health view too.
+    const l = laneFleet();
+    const lanes: Any = await laneHealthView({ reader: l.reader, repo: l.repo });
+    expect(lanes.callers, 'the lane view was built').toHaveLength(5);
+    for (const s of l.seen) expect(s, s).toMatch(/^(GET|PAGES) /);
+    for (const q of l.queries) expect(q.trimStart(), q.slice(0, 60)).toMatch(/^query\s/);
 
     // No write of any kind: run in a process of its own, in an empty directory, with every fs
     // write, every child process and every fetch replaced by a recorder once the core is loaded.
@@ -37,6 +44,7 @@ describe('the status core reads through its reader alone', () => {
       import cp from 'node:child_process';
       import { syncBuiltinESMExports } from 'node:module';
       const { projectView } = await import(${JSON.stringify(join(ROOT, 'scripts/status/project.mjs'))});
+      const { laneHealthView } = await import(${JSON.stringify(join(ROOT, 'scripts/status/lanes.mjs'))});
       const calls = [];
       const record = (name) => (...args) => { calls.push(name + ' ' + String(args[0])); throw new Error('the core must not ' + name); };
       for (const name of ['writeFileSync', 'appendFileSync', 'mkdirSync', 'rmSync', 'unlinkSync', 'renameSync', 'copyFileSync', 'openSync', 'readFileSync', 'readdirSync', 'existsSync', 'statSync', 'writeFile', 'appendFile', 'mkdir', 'rm', 'unlink', 'createWriteStream']) fs[name] = record('fs.' + name);
@@ -52,14 +60,20 @@ describe('the status core reads through its reader alone', () => {
       };
       let view;
       try { view = await projectView({ reader, repo: 'acme/shop', project: 7 }); } catch (e) { view = { error: e.message }; }
-      console.log(JSON.stringify({ calls, view }));
+      let lanes;
+      try { lanes = await laneHealthView({ reader, repo: 'acme/shop' }); } catch (e) { lanes = { error: e.message }; }
+      console.log(JSON.stringify({ calls, view, lanes }));
     `;
     const answers = {
       get: {
         'repos/acme/shop': { default_branch: 'main' },
         'repos/acme/shop/contents/docs/projects/7.md?ref=main': { type: 'file', encoding: 'base64', content: Buffer.from(BRIEF).toString('base64') },
+        'repos/acme/shop/contents/.github/workflows?ref=main': [{ name: 'review.yml', path: '.github/workflows/review.yml', type: 'file' }],
+        'repos/acme/shop/contents/.github/workflows/review.yml?ref=main': { type: 'file', encoding: 'base64', content: Buffer.from(laneCaller('review')).toString('base64') },
+        'repos/acme/shop/actions/workflows/review.yml/runs?per_page=12': { workflow_runs: [{ id: 1, conclusion: 'failure', run_attempt: 1 }, { id: 2, conclusion: 'success', run_attempt: 2 }] },
+        'repos/acme/shop/actions/runs/2/attempts/1': { conclusion: 'failure' },
       },
-      pages: {},
+      pages: { 'repos/acme/shop/actions/runs/1/jobs?per_page=100': [{ total_count: 1, jobs: [{ name: 'review', conclusion: 'failure', steps: [] }] }] },
       graphql: {
         Labels: { repository: { labels: connection([{ name: 'enhancement' }]) } },
         Members: { search: { ...connection([]), issueCount: 0 } },
@@ -73,6 +87,8 @@ describe('the status core reads through its reader alone', () => {
     expect(out.calls, 'no file read or written, no process started, no other network').toEqual([]);
     expect(out.view.error, 'and the view was answered').toBeUndefined();
     expect(out.view.items.map((i: Any) => i.key)).toEqual(['A', 'B', 'C']);
+    expect(out.lanes.error, 'and the lane view too').toBeUndefined();
+    expect(out.lanes.callers.map((c: Any) => [c.file, c.failures.map((f: Any) => f.class)])).toEqual([['review.yml', ['real', 'infra']]]);
     expect(readdirSync(dir), 'nothing left behind').toEqual([]);
   });
 });

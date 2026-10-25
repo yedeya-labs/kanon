@@ -1586,6 +1586,17 @@ describe('gate candidates (RA-2399)', () => {
       expect(out).toContain('36 issues closed');
     });
 
+    // kanon#1404: the section posts in every state, so the lane doc can't promise "nothing pending"
+    // without naming it as the one exception the script's header names.
+    it('posts in every state, and docs/lanes.md names it as the exception to "nothing pending"', () => {
+      for (const gateCandidates of [{ ok: true, candidates: [] }, { ok: false, reason: 'boom' }, undefined]) {
+        expect(sectionBody(buildMessage({ ...base, gateCandidates }), 'Gate candidates'), JSON.stringify(gateCandidates)).toBeTruthy();
+      }
+      const bullet = readFileSync(new URL('../../docs/lanes.md', import.meta.url), 'utf8').split('\n').find((l) => l.startsWith('- **The weekly digest** ('))!;
+      expect(bullet).not.toContain('and nothing pending.');
+      expect(bullet).toMatch(/nothing pending but its \*Gate candidates\* list/);
+    });
+
     it('says "unreadable" in the post when the read failed', () => {
       const out = textOf({ ...base, gateCandidates: { ok: false, reason: 'boom' } });
       expect(out).toContain('could not be read');

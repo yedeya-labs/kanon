@@ -8,11 +8,12 @@
 // (`[STAT-11]`). The document is built first and the prose is printed from it, so the two can't
 // give a different result or exit code.
 //
-// ONE SECTION PER VIEW ASKED FOR. `--project <n>` asks for the project view. A later view adds
-// its own section within v1, which docs/cli-json.md allows. A view whose reads didn't complete
+// ONE SECTION PER VIEW ASKED FOR. `--project <n>` asks for the project view and `--lanes` for the
+// lane-health view. A later view adds its own section within v1, which docs/cli-json.md allows. A view whose reads didn't complete
 // answers with an error naming each read (`[STAT-3]`), never a partial answer, and the command
 // exits 4.
 import { spawn, spawnSync } from 'node:child_process';
+import { laneHealthView } from '../scripts/status/lanes.mjs';
 import { IncompleteRead, projectView } from '../scripts/status/project.mjs';
 import { ReadError, ghReader } from '../scripts/status/reader.mjs';
 import { remoteRepo } from './apps.mjs';
@@ -25,7 +26,7 @@ export const SCHEMA = 'kanon-status/v1';
 /** The exit codes, as docs/status.md documents them. */
 export const EXIT = /** @type {const} */ ({ ok: 0, usage: 2, error: 3, incomplete: 4 });
 
-export const USAGE = `Usage: kanon status --project <n> [options]
+export const USAGE = `Usage: kanon status [--project <n>] [--lanes] [options]
 
 Reads where a repository that runs Kanon stands, live from GitHub, and prints it. Writes
 nothing, anywhere (docs/status.md).
@@ -34,6 +35,10 @@ Options:
   --project <n>          the project view: tracking issue <n>'s brief, its items with their
                          issues, pull requests, criteria and what holds each, and the phase the
                          Lead's reconciler is in
+  --lanes                the lane-health view: each lane caller's recent runs as the
+                         workflow-health check judges them, and each failure classed infra
+                         (the model unreachable, an API error, no verdict, or fixed by a
+                         re-run) or real
   --pr <n>               the pull-request readiness view (not in this release yet)
   --repo <owner>/<repo>  the repository (default: this checkout's origin remote)
   --json                 print one JSON document (docs/status.md) instead of prose
@@ -95,8 +100,8 @@ const number = (flag, v) => {
  * @param {string[]} argv
  */
 export const parseArgs = (argv) => {
-  /** @type {{ repo: string, project: number | null, pr: number | null, json: boolean, help: boolean }} */
-  const opts = { repo: '', project: null, pr: null, json: false, help: false };
+  /** @type {{ repo: string, project: number | null, pr: number | null, lanes: boolean, json: boolean, help: boolean }} */
+  const opts = { repo: '', project: null, pr: null, lanes: false, json: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
     const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
@@ -110,6 +115,7 @@ export const parseArgs = (argv) => {
     else if (flag === '--repo') opts.repo = value();
     else if (flag === '--project') opts.project = number(flag, value());
     else if (flag === '--pr') opts.pr = number(flag, value());
+    else if (flag === '--lanes' && inline === undefined) opts.lanes = true;
     else if (flag === '--json') opts.json = true;
     else throw new Error(`unknown argument "${arg}"`);
   }
@@ -118,8 +124,8 @@ export const parseArgs = (argv) => {
   if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
   // The readiness view is the core's next one (project #1327, Issue C); until it is there, the
   // flag says so rather than answering with no section.
-  if (opts.pr !== null) throw new Error(`--pr ${opts.pr}: the pull-request readiness view isn't in this release yet; --project is the view there is`);
-  if (opts.project === null) throw new Error('name a view to read: --project <n>');
+  if (opts.pr !== null) throw new Error(`--pr ${opts.pr}: the pull-request readiness view isn't in this release yet; --project and --lanes are the views there are`);
+  if (opts.project === null && !opts.lanes) throw new Error('name a view to read: --project <n> or --lanes');
   return opts;
 };
 
@@ -170,6 +176,7 @@ async function document(deps, opts) {
     const project = opts.project;
     views.project = await section(() => projectView({ reader, repo, project }));
   }
+  if (opts.lanes) views.lanes = await section(() => laneHealthView({ reader, repo }));
   const incomplete = Object.values(views).some((v) => 'error' in v);
   const exitCode = incomplete ? EXIT.incomplete : EXIT.ok;
   return { schema: SCHEMA, kanon: deps.release(), status: incomplete ? 'incomplete' : 'ok', exitCode, repo, readAt, ...views };
@@ -222,6 +229,20 @@ export const status = async (argv, overrides = {}) => {
 export function prose(doc) {
   const lines = [`${doc.repo}, read at ${doc.readAt}`];
   if ('project' in doc) lines.push('', ...projectProse(/** @type {any} */ (doc.project)));
+  if ('lanes' in doc) lines.push('', ...lanesProse(/** @type {any} */ (doc.lanes)));
+  return lines;
+}
+
+/** @param {any} l the lane-health section */
+function lanesProse(l) {
+  if ('error' in l) return [`The lane-health view has no answer: ${l.error}`];
+  const lines = [`Lane health: ${l.callers.length} lane caller(s) on ${l.branch}, the last ${l.window} runs of each`];
+  for (const c of l.callers) {
+    lines.push(`  ${c.file}  ${c.health}${c.health === c.status ? '' : ` (the health check says ${c.status})`}, ${c.failed} failed of ${c.decisive} decisive`);
+    for (const f of c.failures) {
+      lines.push(`       run ${f.run}${f.attempt > 1 ? ` attempt ${f.attempt}` : ''} ${f.conclusion}: ${f.class}${f.reason ? `, ${f.reason}` : ''}${f.url ? ` ${f.url}` : ''}`);
+    }
+  }
   return lines;
 }
 

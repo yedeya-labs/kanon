@@ -1326,12 +1326,41 @@ describe('phase 4 — the deploy derivation itself (RA-1061)', () => {
     expect((await readDeploy(CLOSED, io)).tag).toBe('v1.0.0');
   });
 
-  it('a throwing gh is absorbed per-issue, not propagated', async () => {
-    // The tick must not die on one unreadable issue. Every GraphQL read fails; a compare
-    // would still answer `behind`, as the old double's `text` did.
+  it('an unreadable closing-PR read fails the read, never reads as no merge (kanon#1398)', async () => {
+    // Swallowed, every GraphQL read failing left `shas` empty: `nothing-to-deploy`, and a
+    // project closed with a retro saying NOTHING was deployed, on no evidence (`K-PROJ-11`).
+    // A transient failure fails the tick (`K-AGENT-32`); `reconcileAll` reports the one
+    // project and goes on to the next.
     const boom = () => { throw new Error('403'); };
     const io = { reader: { get: () => ({ status: 'behind' }), pages: boom, graphql: boom }, repo: 'o/r' };
-    expect(await closingMergeShas(CLOSED, io)).toEqual([]);
+    await expect(closingMergeShas(CLOSED, io)).rejects.toThrow('403');
+    await expect(readDeploy(CLOSED, { ...io, declared: () => { throw new Error('no deploy was looked for'); } })).rejects.toThrow('403');
+  });
+
+  it('one issue\'s unreadable closing PRs fail the read, not the other merges\' containment (kanon#1398)', async () => {
+    // Dropping issue #2 left `containsAll` checking #1's merge alone, so a release lacking
+    // #2's merge was credited as `deployed`.
+    const io = fakeReads({
+      closedBy: { 1: [9] },
+      graphql: { ClosedBy: (v) => { if (v.number === 2) throw new Error('rate limited'); return { repository: { issue: { closedByPullRequestsReferences: connection([{ number: 9 }]) } } }; } },
+      prs: { 9: { state: 'MERGED', mergeCommit: { oid: 'sha1' } } },
+      releases: ['v1.0.0'],
+      runs: [{ displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u1' }],
+      jobs: { 1: [{ name: 'deploy', conclusion: 'success' }] },
+      compare: () => 'behind',
+    });
+    const both = [{ number: 1, state: 'CLOSED' }, { number: 2, state: 'CLOSED' }];
+    await expect(readDeploy(both, io)).rejects.toThrow('rate limited');
+    // NOT VACUOUS: issue #1 alone, from this same world, does deploy.
+    expect((await readDeploy([both[0]], io)).state).toBe('deployed');
+  });
+
+  it('an unreadable closing pull request fails the read, never reads as no merge (kanon#1398)', async () => {
+    const io = fakeReads({
+      closedBy: { 1: [9] },
+      graphql: { PullRequestMerge: () => { throw new Error('502'); } },
+    });
+    await expect(closingMergeShas(CLOSED, io)).rejects.toThrow('502');
   });
 });
 
@@ -2146,6 +2175,40 @@ describe('a held project takes no actions (RA-963)', () => {
 
   it('an unheld project is unaffected', () => {
     expect(phaseOf({ ...heldWorld, projectHeld: false })).not.toBe('held');
+  });
+
+  describe('nor its review and revise re-deliveries (kanon#1397)', () => {
+    /**
+     * Each churn starts a paid Reviewer or Implementer run, and `nextActions` adds them on
+     * top of the core's empty `held` decision. `splitRecovery` already declined on a hold;
+     * these two did not, so a held project with a stalled PR kept starting agent runs.
+     */
+    const OLD = new Date(Date.now() - 5 * 3600e3).toISOString();
+    const REVIEWED = new Date(Date.now() - 4.5 * 3600e3).toISOString();
+    const unreviewed = { number: 77, state: 'OPEN', headSha: 'deadbeefcafe', reviews: [], headPushedAt: OLD };
+    const changesRequested = {
+      number: 55, state: 'OPEN', headSha: 'cafed00dbeef', headPushedAt: OLD,
+      reviews: [{ state: 'CHANGES_REQUESTED', sha: 'cafed00dbeef', submittedAt: REVIEWED }],
+    };
+    const stalled = (held: boolean) => world({
+      open: [{ ...issue(5, ['agent:implement']), prs: [unreviewed] }, { ...issue(9, ['agent:implement']), prs: [changesRequested] }],
+      projectHeld: held,
+    });
+    const noRuns = () => [];
+
+    it('churns nothing for an unreviewed PR or a standing changes-request', () => {
+      expect(reviewRecovery(stalled(true), { runsFor: noRuns }).churn).toEqual([]);
+      expect(reviseRecovery(stalled(true), { runsFor: noRuns }).churn).toEqual([]);
+      const r = nextActions(stalled(true), { runsFor: noRuns });
+      expect(r.phase).toBe('held');
+      expect(r.actions).toEqual([]);
+    });
+
+    it('the same world unheld still churns both, so the fixture is a real stall', () => {
+      const kinds = nextActions(stalled(false), { runsFor: noRuns }).actions.map((a: { kind: string }) => a.kind);
+      expect(kinds).toContain('review-churn');
+      expect(kinds).toContain('revise-churn');
+    });
   });
 });
 
