@@ -200,6 +200,13 @@ const SIGNED: Record<string, string> = {
   'scripts/overseer-file.mjs': 'Overseer',
   'scripts/telemetry-file.mjs': 'Explorer',
 };
+/**
+ * The writers whose job checks out nothing, so no register is in their working directory: the
+ * lane's gate job reads the persona from the default branch (`lane-persona.mjs`) and the script
+ * takes it as `persona` (kanon#1401). `tests/unit/overseer-lane.test.ts` and
+ * `explore-telemetry-lane.test.ts` hold each lane to that hand-over.
+ */
+const HANDED_PERSONA = new Set(['scripts/overseer-file.mjs', 'scripts/telemetry-file.mjs']);
 const UNSIGNED: Record<string, string> = {
   'scripts/implement-crash.mjs': 'posts as github-actions, deliberately not as the Implementer (its header says why)',
   'scripts/split-lineage.mjs': 'its gate posts on the default token, before the Lead\'s is minted',
@@ -232,8 +239,10 @@ describe('every fixed step that posts as an App opens the post with its header (
     const src = readFileSync(file, 'utf8');
     const calls = [...src.matchAll(POST)].map((m) => callAround(src, m.index!));
     expect(calls.length).toBeGreaterThan(0);
-    // With the register's persona for the role (plan 0005 §3.3), read where the script runs.
-    for (const call of calls) expect(call, `${file}: ${call.slice(0, 120)}`).toMatch(new RegExp(`signed\\([\\s\\S]*'${role}', appPersona\\('${role}'\\)\\)`));
+    // With the register's persona for the role (plan 0005 §3.3), read where the script runs, or,
+    // in a job with no checkout, handed in from the gate job's read (`HANDED_PERSONA`, kanon#1401).
+    const persona = HANDED_PERSONA.has(file) ? 'persona' : `appPersona\\('${role}'\\)`;
+    for (const call of calls) expect(call, `${file}: ${call.slice(0, 120)}`).toMatch(new RegExp(`signed\\([\\s\\S]*'${role}', ${persona}\\)`));
   });
 
   it('the rebase lane\'s attempt comment, posted on the Implementer\'s token, is signed by its script', async () => {

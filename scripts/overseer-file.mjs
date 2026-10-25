@@ -26,7 +26,9 @@
 // IN A JOB OF ITS OWN. This runs in the lane's `file` job, on a fresh runner that runs no agent
 // and checks out nothing: the report is data downloaded from the agent's job, so a steered agent
 // can change what the report says, never how it is routed (the lane's header says so, and names
-// the one dependency, kanon#274).
+// the one dependency, kanon#274). With no checkout there is no App register here either, so the
+// Overseer's persona (`K-AGENT-1`) comes in as `PERSONA`, the gate job's reading of the register
+// on the default branch (`lane-persona.mjs`, kanon#1401), never from the working directory.
 //
 // SENT TO KANON, AND STILL DRAFTED (plan 0006 §3.1 and §5, F3). With `sent` or `sent with
 // evidence`, the findings only Kanon can act on are drafted as with `drafted`, and each one whose
@@ -78,7 +80,8 @@
 //   env: GH_TOKEN (issues write), GITHUB_REPOSITORY, AGENT_OUTCOME (the agent step's outcome),
 //        REPORT_PATH (the downloaded report; default `qa-overseer-audit.json`),
 //        UPSTREAM (`drafted`, `filed here`, `sent` or `sent with evidence`, the gate job's reading
-//        of the record; default `drafted`); and for the rows: KANON, APP_NAME_HASHES (the gate
+//        of the record; default `drafted`), PERSONA (the Overseer's persona, the gate job's
+//        reading of the register; empty for the role's own name); and for the rows: KANON, APP_NAME_HASHES (the gate
 //        job's), TAG, KANON_WORKFLOW_REF, KANON_WORKFLOW_SHA, FINDINGS_PATH, GITHUB_OUTPUT
 //
 // `node:` builtins only, like every script under scripts/ (`K-SELF-8`).
@@ -93,7 +96,6 @@ import { isCliEntry } from './lib/cli-entry.mjs';
 import { buildRows, levelOf, notWritten, readUpstream, renderSent, sendFromEnv, sentSentence } from './lib/finding-rows.mjs';
 import { beforeApply } from './lib/labels.mjs';
 import { bodyProblems, plan } from './issue-triage-defaults.mjs';
-import { appPersona } from './app-register.mjs';
 import { signed } from './lib/role-marker.mjs';
 
 /** The report the agent writes, at the repository root. */
@@ -415,11 +417,12 @@ function sendFindings({ repo, gh, log, level, send, drafts, sent }) {
  * repository's declared routing for findings only Kanon can act on, as the gate job read it
  * (`UPSTREAM`): `filed here`, or anything else for `drafted`, warning on a value it doesn't know.
  * With `sent` or `sent with evidence`, `send` is where its rows go, and the run they belong to.
+ * `persona` is the Overseer's, as the gate job read it (`PERSONA`), or null for the role's name.
  * @param {{ repo: string, text: string | null, agentOutcome: string, gh: Gh, interlock?: (repo: string, gh: Gh) => { count: number },
- *   log?: (line: string) => void, upstream?: string, send?: Send }} o
+ *   log?: (line: string) => void, upstream?: string, send?: Send, persona?: string | null }} o
  * @returns {number}
  */
-export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInterlock, log = console.log, upstream: declared, send }) {
+export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInterlock, log = console.log, upstream: declared, send, persona = null }) {
   if (text === null) {
     log(`::error title=overseer produced nothing::The agent wrote no ${REPORT}, so nothing was filed and the whole audit was lost (the agent step's outcome: ${agentOutcome || 'unknown'}). Why it stopped is on this run's \`overseer\` telemetry row: its \`outcome\` and \`terminal_reason\`.`);
     return 1;
@@ -458,7 +461,7 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
     const kanon = classify(f).who === 'kanon' ? { kanon: true } : {};
     try {
       const routed = routing([...LABELS, ...(f.capability ? ['capability'] : [])]);
-      const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...routed], signed(f.body, 'Overseer', appPersona('Overseer'))));
+      const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...routed], signed(f.body, 'Overseer', persona)));
       filed.push({ title: f.title, number, ...kanon });
       log(`filed #${number}: ${f.title}`);
     } catch (e) {
@@ -480,7 +483,7 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
       '--json', 'number,title,state']));
     const n = nextAuditNumber(prior.map((p) => p.title));
     const body = renderAudit({ audit: report.audit, filed, held, upstream, choice, ...(level ? { level, sent } : {}) });
-    audit = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', auditTitle(n), '--body-file', '-', ...routing(LABELS)], signed(body, 'Overseer', appPersona('Overseer'))));
+    audit = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', auditTitle(n), '--body-file', '-', ...routing(LABELS)], signed(body, 'Overseer', persona)));
   } catch (e) {
     log(`::error title=overseer audit not filed::${String(/** @type {Error} */ (e).message).split('\n')[0]}`);
     return 1;
@@ -489,7 +492,7 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
 
   for (const p of prior.filter((x) => x.state === 'OPEN' && AUDIT_NUMBER.test(x.title) && x.number !== audit)) {
     try {
-      gh(['issue', 'comment', String(p.number), '--repo', repo, '--body', signed(`Superseded by #${audit}.`, 'Overseer', appPersona('Overseer'))]);
+      gh(['issue', 'comment', String(p.number), '--repo', repo, '--body', signed(`Superseded by #${audit}.`, 'Overseer', persona)]);
       gh(['issue', 'close', String(p.number), '--repo', repo]);
     } catch (e) {
       failed += 1;
@@ -518,6 +521,7 @@ if (IS_CLI) {
   process.exitCode = fileAudit({
     repo: process.env.GITHUB_REPOSITORY,
     upstream: process.env.UPSTREAM,
+    persona: process.env.PERSONA || null,
     text: (() => { const at = process.env.REPORT_PATH || REPORT; return existsSync(at) ? readFileSync(at, 'utf8') : null; })(),
     agentOutcome: String(process.env.AGENT_OUTCOME ?? ''),
     gh,
