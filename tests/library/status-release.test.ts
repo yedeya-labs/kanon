@@ -61,6 +61,32 @@ describe('the release view', () => {
     expect([bare.releasePrs, bare.latest, bare.preRelease, bare.deploys, bare.promotion]).toEqual([[], null, null, [], null]);
   });
 
+  it('a draft release whose tag isn\'t in the repository yet (commits/<tag> answers 422) is skipped, and the older releases\' deploys still answer', async () => {
+    const draft = { tag_name: 'v2.3.0', name: 'v2.3.0', prerelease: false, draft: true, published_at: null, html_url: 'https://github.com/acme/shop/releases/tag/untagged-1' };
+    const w = chain({ releases: [draft, ...RELEASES] });
+    const get = w.reader.get;
+    const asked: string[] = [];
+    w.reader.get = (p: string) => {
+      asked.push(p);
+      // GitHub's answer for a ref it doesn't have.
+      if (p === 'repos/acme/shop/commits/v2.3.0') throw new ReadError(`GET ${p}`, 'No commit found for SHA: v2.3.0', { status: 422 });
+      return get(p);
+    };
+    const view: Any = await releaseView({ reader: w.reader, repo: w.repo, now: new Date(RELEASE_NOW) });
+    expect(asked, 'the draft\'s tag was looked up').toContain('repos/acme/shop/commits/v2.3.0');
+    expect(view.deploys).toEqual([
+      { environment: 'staging', workflow: 'deploy.yml', job: 'staging / deploy', last: { tag: 'v2.2.0-rc.1', outcome: 'deployed', url: run(503) } },
+      { environment: 'production', workflow: 'deploy.yml', job: 'production / deploy', last: { tag: 'v2.1.0', outcome: 'failed', url: run(502) } },
+    ]);
+
+    // Any other failure on that read is still no answer, by name.
+    w.reader.get = (p: string) => {
+      if (p === 'repos/acme/shop/commits/v2.3.0') throw new ReadError(`GET ${p}`, 'Server Error', { status: 502 });
+      return get(p);
+    };
+    await expect(releaseView({ reader: w.reader, repo: w.repo, now: new Date(RELEASE_NOW) })).rejects.toThrow(/GET repos\/acme\/shop\/commits\/v2\.3\.0 failed: Server Error/);
+  });
+
   it('[STAT-9] gives each promotion gate\'s verdict and evidence from the promotion\'s own check, only where the default branch runs its workflow', async () => {
     const w = promoting();
     const view: Any = await releaseView({ reader: w.reader, repo: w.repo, now: PROMOTION_NOW });

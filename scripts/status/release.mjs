@@ -201,7 +201,9 @@ function jobOf(environment, reference) {
 }
 
 /**
- * The commit a release tag names, for a run titled by it, or null when the tag isn't there.
+ * The commit a release tag names, for a run titled by it, or null when the tag isn't there. GitHub
+ * answers a ref it doesn't have (a draft's new tag, a deleted one) with 422 `No commit found for
+ * SHA`, or 404; only those two read as "not there". Any other failure still errors the view.
  * @param {string} tag @param {{ reader: import('./reader.mjs').Reader, repo: string }} io
  */
 async function tagSha(tag, { reader, repo }) {
@@ -209,7 +211,7 @@ async function tagSha(tag, { reader, repo }) {
     const sha = /** @type {{ sha?: unknown }} */ (await reader.get(`repos/${repo}/commits/${encodeURIComponent(tag)}`))?.sha;
     return typeof sha === 'string' ? sha : null;
   } catch (e) {
-    if (!isNotFound(e)) throw e;
+    if (!isNotFound(e) && !(e instanceof ReadError && e.status === 422)) throw e;
     /** @type {{ expected?: boolean }} */ (e).expected = true;
     return null;
   }
