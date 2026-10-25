@@ -1583,24 +1583,20 @@ export async function closingMergesByIssue(issues, io = tickReads()) {
   // RA-912's use of `closingIssuesReferences`: a `#N` regex over bodies cannot tell a
   // mention from a closure, and this field cannot drift from what GitHub did.
   // It reports the PR number but not its merge commit, so the PR is read too.
+  //
+  // AN UNREADABLE READ THROWS (kanon#1398). Caught, it read as "no merge": with every read
+  // failing the state was `nothing-to-deploy` and the project closed saying nothing was
+  // deployed; with one failing, the release was checked for the other merges only. A
+  // transient failure fails the tick (`K-AGENT-32`), and `reconcileAll` reports the project.
   const out = [];
   for (const i of issues) {
     if (i.state !== 'CLOSED') continue;
-    let refs = [];
-    try {
-      refs = await closingPrNumbers(i.number, io);
-    } catch {
-      continue;
-    }
+    const refs = await closingPrNumbers(i.number, io);
     // The title and body come back on the same read, for `relandedReverts` (kanon#280).
     const prs = [];
     for (const number of refs) {
-      try {
-        const pr = await prMergeRead(number, io);
-        if (pr.state === 'MERGED' && pr.mergeCommit?.oid) prs.push({ number, sha: pr.mergeCommit.oid, text: `${pr.title ?? ''}\n${pr.body ?? ''}` });
-      } catch {
-        // An unreadable pull request is no merge, as before.
-      }
+      const pr = await prMergeRead(number, io);
+      if (pr.state === 'MERGED' && pr.mergeCommit?.oid) prs.push({ number, sha: pr.mergeCommit.oid, text: `${pr.title ?? ''}\n${pr.body ?? ''}` });
     }
     if (prs.length) out.push({ issue: i.number, shas: prs.map((p) => p.sha), prs });
   }
