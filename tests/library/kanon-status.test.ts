@@ -10,17 +10,19 @@ import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 import { PROJECT, adopterFiles, adopterProject, laneCaller, laneFleet, laneWorld, repoWorld } from './helpers/status-world.js';
 import { NUMBER, briefPr, implementerPr, personPr, readerFor } from './helpers/pr-world.js';
+import { ownerWorld } from './helpers/owner-world.js';
 
 const { status, SCHEMA, EXIT } = await import('../../cli/status.mjs');
 const { projectView } = await import('../../scripts/status/project.mjs');
 const { readinessView } = await import('../../scripts/status/pull-request.mjs');
 const { laneHealthView } = await import('../../scripts/status/lanes.mjs');
+const { needsOwnerView } = await import('../../scripts/status/needs-owner.mjs');
 const { ReadError } = await import('../../scripts/status/reader.mjs');
 const { HELD, HELD_MARKER } = await import('../../scripts/lead-reconcile.mjs');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
-type World = { reader: ReturnType<typeof adopterProject>['reader'] | ReturnType<typeof readerFor>['reader']; seen: string[] };
+type World = { reader: ReturnType<typeof adopterProject>['reader'] | ReturnType<typeof readerFor>['reader'] | ReturnType<typeof ownerWorld>['reader']; seen: string[] };
 type GhResult = { status: number | null; stdout: string; stderr: string };
 
 const READ_AT = '2026-10-24T09:30:00.000Z';
@@ -80,6 +82,20 @@ const refusedLanes = () => laneWorld({
       return undefined;
     },
   },
+});
+/** One of each thing the needs-the-Owner view lists, and a world where its reads don't complete. */
+const owing = () => ownerWorld({
+  prs: [personPr(), briefPr('Which store? ⛔ OPEN', { number: 46, head: 'b'.repeat(40), reviews: [] })],
+  issues: [
+    { number: 7, title: 'Project: storefront', labels: [HELD], comments: [{ login: 'example-lead', body: `**Lead** <!-- kanon:role=lead -->\n\nheld\n${HELD_MARKER}`, createdAt: '2026-10-01T00:00:00Z' }] },
+    { number: 30, title: 'Pick a store', labels: ['qa:needs-info'] },
+  ],
+  workflows: { 'implement.yml': laneCaller('implement') },
+  runs: { 'implement.yml': [{ id: 1, conclusion: 'failure' }, { id: 2, conclusion: 'failure' }, { id: 3, conclusion: 'failure' }] },
+  jobs: { 1: [], 2: [], 3: [] },
+});
+const refusedOwing = () => ownerWorld({
+  overrides: { graphql: { OpenPullRequests: () => { throw new ReadError('GraphQL OpenPullRequests', 'API rate limit exceeded', { status: 403, resetAt: '2026-10-24T10:00:00.000Z' }); } } },
 });
 const refusedLabels = () => adopterProject({ overrides: { graphql: { Labels: () => { throw new ReadError('GraphQL Labels', 'API rate limit exceeded', { status: 403, resetAt: '2026-10-24T10:00:00.000Z' }); } } } });
 
@@ -173,7 +189,31 @@ describe('kanon status prints one document, or the same result as prose', () => 
       expect(p.out, 'nothing on standard output').toBe('');
       expect(j.readers, 'nothing was read').toEqual([]);
     }
-    expect((await run(['--json'], null)).doc().error).toMatch(/--project <n>, --pr <n> or --lanes/);
+    expect((await run(['--json'], null)).doc().error).toMatch(/--project <n>, --pr <n>, --lanes or --needs-owner/);
+    expect((await run(['--needs-owner=yes', '--json'], null)).code).toBe(EXIT.usage);
+
+    // The needs-the-Owner view is a section of its own, the view's answer for the same reads, and in prose.
+    const owner = await run(['--needs-owner', '--json'], owing());
+    expect(owner.code).toBe(EXIT.ok);
+    expect(owner.doc().needsOwner).toEqual(await needsOwnerView({ reader: owing().reader, repo: 'acme/shop', now: Date.parse(READ_AT) }));
+    expect(owner.doc(), 'one section per view asked for').not.toHaveProperty('pr');
+    const ownerProse = await run(['--needs-owner'], owing());
+    expect(ownerProse.code).toBe(owner.code);
+    expect(ownerProse.out).toContain('Needs a person: 5 thing(s)');
+    expect(ownerProse.out).toContain(`Merge #${NUMBER} docs: say how to order: a person's to merge`);
+    expect(ownerProse.out).toContain('Stopped #30 Pick a store: qa:needs-info https://github.com/acme/shop/issues/30');
+    expect(ownerProse.out).toContain('Held by the Lead #7 Project: storefront https://github.com/acme/shop/issues/7');
+    expect(ownerProse.out).toContain('Decide #46, decision 1 in docs/projects/9.md: Which store? ⛔ OPEN https://github.com/acme/shop/pull/46');
+    expect(ownerProse.out).toContain('Red lane implement.yml: 3 failed of 3 decisive https://github.com/acme/shop/actions/workflows/implement.yml');
+    const nothing = await run(['--needs-owner'], ownerWorld({}));
+    expect([nothing.code, nothing.out]).toEqual([EXIT.ok, expect.stringContaining('Needs a person: nothing')]);
+    const ownerCut = await run(['--needs-owner', '--json'], refusedOwing());
+    expect(ownerCut.code).toBe(EXIT.incomplete);
+    expect(ownerCut.doc().needsOwner.reads).toEqual([{ read: 'GraphQL OpenPullRequests', why: 'API rate limit exceeded', status: 403, resetAt: '2026-10-24T10:00:00.000Z' }]);
+    expect(ownerCut.doc().needsOwner.merges, 'no partial answer beside the error').toBeUndefined();
+    const ownerCutProse = await run(['--needs-owner'], refusedOwing());
+    expect(ownerCutProse.code).toBe(ownerCut.code);
+    expect(ownerCutProse.out).toMatch(/The needs-the-Owner view has no answer: the needs-the-Owner view couldn't be read whole/);
 
     // The readiness view is a section of its own, the view's answer for the same reads, and in prose.
     const pr = await run(['--pr', String(NUMBER), '--json'], readerFor(implementerPr()));
@@ -253,7 +293,11 @@ describe('docs/status.md is held to the code', () => {
     const laneDocs = [(await run(['--lanes', '--json'], laneFleet())).doc(), (await run(['--lanes', '--json'], refusedLanes())).doc()];
     expect(laneDocs.map((d) => d.status)).toEqual(['ok', 'incomplete']);
     expect(new Set(laneDocs[0].lanes.callers.flatMap((c: Any) => c.failures.map((f: Any) => f.class)))).toEqual(new Set(['infra', 'real']));
-    for (const d of [...docs, ...laneDocs]) for (const p of paths(d)) emitted.add(p);
+    // And the needs-the-Owner view: one of each entry, and a read that didn't complete.
+    const ownerDocs = [(await run(['--needs-owner', '--json'], owing())).doc(), (await run(['--needs-owner', '--json'], refusedOwing())).doc()];
+    expect(ownerDocs.map((d) => d.status)).toEqual(['ok', 'incomplete']);
+    expect(['merges', 'stops', 'holds', 'decisions', 'lanes'].map((k) => ownerDocs[0].needsOwner[k].length)).toEqual([1, 1, 1, 1, 1]);
+    for (const d of [...docs, ...laneDocs, ...ownerDocs]) for (const p of paths(d)) emitted.add(p);
     // The worlds did reach each branch, so a field missing from them is missing from the code.
     expect(docs.filter((d) => !d.pr).map((d) => d.project?.brief?.state ?? d.project?.error?.slice(0, 10) ?? d.status)).toEqual(['parsed', 'parsed', 'unparseable', 'missing', 'project #7', 'error']);
     expect(docs[1].project.hold).toEqual({ label: HELD, by: 'lead' });

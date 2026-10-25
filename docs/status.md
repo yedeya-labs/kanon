@@ -9,6 +9,7 @@ kanon status --pr 1391
 kanon status --repo owner/name --project 12 --pr 40
 kanon status --lanes
 kanon status --repo owner/name --project 12 --lanes --json
+kanon status --needs-owner
 ```
 
 | Option | Meaning |
@@ -16,16 +17,17 @@ kanon status --repo owner/name --project 12 --lanes --json
 | `--project <n>` | The project view of tracking issue `<n>`. |
 | `--lanes` | The lane-health view. |
 | `--pr <n>` | The pull-request readiness view of pull request `<n>` ([below](#the-pull-request-readiness-view)). |
+| `--needs-owner` | The needs-the-Owner view: what waits on a person ([below](#the-needs-the-owner-view)). |
 | `--repo <owner>/<repo>` | The repository. The default is the origin remote of the checkout you run it from. |
 | `--json` | Print one JSON document instead of prose ([below](#the-json-output)). |
 
-Each view you ask for is one section of the answer, and you can ask for more than one at once. The project, pull-request readiness and lane-health views are the ones there are so far. The release and needs-the-Owner views each add their own section as they are built.
+Each view you ask for is one section of the answer, and you can ask for more than one at once. The project, pull-request readiness, lane-health and needs-the-Owner views are the ones there are so far. The release view adds its own section as it is built.
 
 ## What it reads
 
 It reads with your own `gh` credential, as [`kanon doctor`](doctor.md) does. `gh` takes its token from `GH_TOKEN`, then `GITHUB_TOKEN`, then its stored login. The command says on standard error which one it used and whose it is, and stops when GitHub refuses it. It reads only what that token can read, and asks GitHub only REST `GET`s and GraphQL queries.
 
-It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record, the escalation file, the exemptions file, the stack document and the workflows. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used to find the repository when you don't pass `--repo`, and for one more thing with `--pr`: that view runs the merge gate's own verdict function, and loading it reads the App register from the directory you run in, as each lane does in its checkout. So run `--pr` from a checkout of a repository that runs Kanon. The logins the view judges by are still the default branch's register's, with one exception: the gate's hold logic still compares whoever applied `needs:human` against the Merger login (`MERGER_LOGIN`) in the register in the directory you run in. A checkout whose register names a different Merger can therefore read a hold differently.
+It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record, the escalation file, the exemptions file, the stack document and the workflows. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used to find the repository when you don't pass `--repo`, and for one more thing with `--pr`: that view runs the merge gate's own verdict function, and loading it reads the App register from the directory you run in, as each lane does in its checkout. So run `--pr` from a checkout of a repository that runs Kanon, and `--needs-owner` too, which runs it for each open pull request. The logins the view judges by are still the default branch's register's, with one exception: the gate's hold logic still compares whoever applied `needs:human` against the Merger login (`MERGER_LOGIN`) in the register in the directory you run in. A checkout whose register names a different Merger can therefore read a hold differently.
 
 **An incomplete read is no answer.** A read that GitHub refused, that wasn't found, that hit the rate limit or that came back cut short makes that view's answer an error. The error names each read and why it failed, with the time the rate limit resets when that is the cause. A view never answers in part.
 
@@ -76,13 +78,27 @@ Whether it is ready is never the view's own judgement:
 
 It has no flake classifier of its own: the classes are the agent classifier's and a re-run's outcome.
 
+## The needs-the-Owner view
+
+`--needs-owner` lists what in the repository waits on a person now, each with its link and its reason. It lists five things and nothing else, and each is another view's or another lane's own answer:
+
+- **the pull requests ready for a person's merge**, `merges`: each open pull request the [readiness view](#the-pull-request-readiness-view) reports ready for a person's merge. That is the Implementer's when the merge gate escalates it for an escalation path alone, and any pull request the gate skips as not the Implementer's: a person's, a Lead's brief, a dependency bump, the release pull request. The reason is the readiness view's;
+- **the Implementer's stops that wait on a person**, `stops`, each open issue with its reasons:
+  - `qa:needs-info` or `qa:needs-split` on it;
+  - for an issue carrying `agent:implement` or `qa:needs-triage`, the dispatch sweep's own reading of its conversation, its open pull requests and the lane runs still going: `scope-first-bail` when the Implementer's last word is a scope-first bail that nobody has answered, and `awaiting-human` when the sweep calls it that: the Implementer has spoken, no person has since, and the last word is two days old. An issue the sweep reads as in flight, answered, running or with a pull request isn't listed;
+- **the Lead's holds**, `holds`: each open issue carrying `needs:human` with the Lead's hold marker in the Lead's own comment, as the reconciler counts it. A copy of the marker in anyone else's comment isn't the Lead's;
+- **each open decision in an open brief pull request**, `decisions`, read at its head as the brief guard reads it;
+- **the red lanes**, `lanes`: each lane caller the [lane-health view](#the-lane-health-view) reports `red`. A `flaky` lane isn't listed.
+
+It reads a comment only to find a bail or the hold marker, and gives the fact and its link, never a comment's or an issue's text. The dispatch sweep also reads the telemetry store's cost rows, which mark an issue whose last run hit its cap or ended with nothing to show. This view has no store to read, so such an issue reads here as its conversation reads.
+
 ## Exit codes
 
 | Code | Status | Meaning |
 |---|---|---|
 | 0 | `ok` | Every view asked for was answered. |
 | 2 | `error` | A usage error: an unknown or malformed flag, or no view named. |
-| 3 | `error` | It couldn't run: no repository to read, a token GitHub refuses, or `--pr` run outside a checkout that has an App register (`docs/qa/agent-identities.md`). |
+| 3 | `error` | It couldn't run: no repository to read, a token GitHub refuses, or `--pr` or `--needs-owner` run outside a checkout that has an App register (`docs/qa/agent-identities.md`). |
 | 4 | `incomplete` | A view's reads didn't complete, so that view has no answer. |
 
 The prose and `--json` exit with the same code for the same result.
@@ -219,6 +235,42 @@ A path names a field inside its parent: `project.items[].key` is the `key` of ea
 | `lanes.callers[].failures[].conclusion` | string | `failure`, `timed_out` or `startup_failure`. |
 | `lanes.callers[].failures[].class` | string | `infra` or `real`. |
 | `lanes.callers[].failures[].reason` | string or null | Why it is `infra`: `unreachable`, `api_error`, `no_verdict` or `rerun-succeeded`; null when it is `real`. |
+| `needsOwner` | object | The needs-the-Owner view, when `--needs-owner` asked for it: the fields below, or, when its reads didn't complete, only `error` and `reads`. |
+| `needsOwner.error` | string | Why the view has no answer, naming each read that failed. |
+| `needsOwner.reads` | array | Each read that failed. |
+| `needsOwner.reads[].read` | string | What was read. |
+| `needsOwner.reads[].why` | string | Why it failed, as GitHub or `gh` said it. |
+| `needsOwner.reads[].status` | number or null | The HTTP status, when there is one. |
+| `needsOwner.reads[].resetAt` | string or null | When the exhausted rate limit resets, ISO 8601, when that is the cause. |
+| `needsOwner.branch` | string | The default branch the declarations were read from. |
+| `needsOwner.merges` | array | The open pull requests ready for a person's merge. |
+| `needsOwner.merges[].number` | number | The pull request. |
+| `needsOwner.merges[].title` | string | Its title. |
+| `needsOwner.merges[].url` | string | Its link. |
+| `needsOwner.merges[].rule` | string | The merge gate's rule for it: `escalating-path` for the Implementer's, `not-the-implementer` or `not-implementer-label` for any other. |
+| `needsOwner.merges[].reason` | string | Why it is ready, as the readiness view gives it. |
+| `needsOwner.stops` | array | The open issues where the Implementer stopped and waits on a person. |
+| `needsOwner.stops[].number` | number | The issue. |
+| `needsOwner.stops[].title` | string | Its title. |
+| `needsOwner.stops[].url` | string | Its link. |
+| `needsOwner.stops[].reasons` | array | Why: `qa:needs-info`, `qa:needs-split`, `scope-first-bail` or `awaiting-human`. |
+| `needsOwner.holds` | array | The open issues the Lead holds. |
+| `needsOwner.holds[].number` | number | The issue. |
+| `needsOwner.holds[].title` | string | Its title. |
+| `needsOwner.holds[].url` | string | Its link. |
+| `needsOwner.decisions` | array | Each open decision in an open brief pull request. |
+| `needsOwner.decisions[].number` | number | The pull request. |
+| `needsOwner.decisions[].title` | string | Its title. |
+| `needsOwner.decisions[].url` | string | Its link. |
+| `needsOwner.decisions[].brief` | string | The brief, `docs/projects/<n>.md`. |
+| `needsOwner.decisions[].n` | number | The decision's number. |
+| `needsOwner.decisions[].headline` | string | Its headline. |
+| `needsOwner.decisions[].marker` | string | The open mark its headline carries, such as `⛔` or `PROPOSED`. |
+| `needsOwner.lanes` | array | The lane callers the lane-health view reports `red`. |
+| `needsOwner.lanes[].file` | string | Its file name in `.github/workflows/`. |
+| `needsOwner.lanes[].url` | string | Its runs on GitHub. |
+| `needsOwner.lanes[].failed` | number | The failed runs the workflow-health check counted. |
+| `needsOwner.lanes[].decisive` | number | The runs it counted, those that ended in success or failure. |
 
 On a usage error or when it can't run, the document is the error document, `{ "schema", "kanon", "status": "error", "exitCode", "error" }`.
 
