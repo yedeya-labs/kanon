@@ -2147,6 +2147,40 @@ describe('a held project takes no actions (RA-963)', () => {
   it('an unheld project is unaffected', () => {
     expect(phaseOf({ ...heldWorld, projectHeld: false })).not.toBe('held');
   });
+
+  describe('nor its review and revise re-deliveries (kanon#1397)', () => {
+    /**
+     * Each churn starts a paid Reviewer or Implementer run, and `nextActions` adds them on
+     * top of the core's empty `held` decision. `splitRecovery` already declined on a hold;
+     * these two did not, so a held project with a stalled PR kept starting agent runs.
+     */
+    const OLD = new Date(Date.now() - 5 * 3600e3).toISOString();
+    const REVIEWED = new Date(Date.now() - 4.5 * 3600e3).toISOString();
+    const unreviewed = { number: 77, state: 'OPEN', headSha: 'deadbeefcafe', reviews: [], headPushedAt: OLD };
+    const changesRequested = {
+      number: 55, state: 'OPEN', headSha: 'cafed00dbeef', headPushedAt: OLD,
+      reviews: [{ state: 'CHANGES_REQUESTED', sha: 'cafed00dbeef', submittedAt: REVIEWED }],
+    };
+    const stalled = (held: boolean) => world({
+      open: [{ ...issue(5, ['agent:implement']), prs: [unreviewed] }, { ...issue(9, ['agent:implement']), prs: [changesRequested] }],
+      projectHeld: held,
+    });
+    const noRuns = () => [];
+
+    it('churns nothing for an unreviewed PR or a standing changes-request', () => {
+      expect(reviewRecovery(stalled(true), { runsFor: noRuns }).churn).toEqual([]);
+      expect(reviseRecovery(stalled(true), { runsFor: noRuns }).churn).toEqual([]);
+      const r = nextActions(stalled(true), { runsFor: noRuns });
+      expect(r.phase).toBe('held');
+      expect(r.actions).toEqual([]);
+    });
+
+    it('the same world unheld still churns both, so the fixture is a real stall', () => {
+      const kinds = nextActions(stalled(false), { runsFor: noRuns }).actions.map((a: { kind: string }) => a.kind);
+      expect(kinds).toContain('review-churn');
+      expect(kinds).toContain('revise-churn');
+    });
+  });
 });
 
 describe('a file-only project files its issues and dispatches none (kanon#1113)', () => {

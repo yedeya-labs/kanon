@@ -2342,6 +2342,9 @@ export function reviseRunsFor(sha, since, { json = ghJson, churnedAfter = /** @t
  * nor a marker, so it re-delivers the SAME round rather than spending another one.
  */
 export function reviseRecovery(world, { runsFor = reviseRunsFor, now = Date.now(), hours = AWAITING_REVIEW_HOURS, evidenceOf = NO_RETRY_EVIDENCE, retryHours = RETRY_COOL_DOWN_HOURS } = {}) {
+  // A re-delivery starts a paid agent run; a human who held the project stopped those
+  // (`K-AGENT-32`, kanon#1397), as `splitRecovery` already declines.
+  if (world?.projectHeld) return { churn: [], noted: [] };
   // EVERY in-flight member, carried out or not (RA-1783): this re-delivers an event that
   // never arrived, which is a stall wherever it happens — it dispatches nothing new.
   const inFlight = (world?.open ?? []).filter((i) => (i.labels ?? []).includes(IMPLEMENT));
@@ -2449,6 +2452,9 @@ export function reviseRecovery(world, { runsFor = reviseRunsFor, now = Date.now(
  * the fix and carries the whole argument for each rule.
  */
 export function reviewRecovery(world, { runsFor = reviewRunsFor, now = Date.now(), hours = AWAITING_REVIEW_HOURS, evidenceOf = NO_RETRY_EVIDENCE, retryHours = RETRY_COOL_DOWN_HOURS } = {}) {
+  // A re-delivery starts a paid agent run; a human who held the project stopped those
+  // (`K-AGENT-32`, kanon#1397), as `splitRecovery` already declines.
+  if (world?.projectHeld) return { churn: [], noted: [] };
   // EVERY in-flight member, carried out or not (RA-1783): this re-delivers an event that
   // never arrived, which is a stall wherever it happens — it dispatches nothing new.
   const inFlight = (world?.open ?? []).filter((i) => (i.labels ?? []).includes(IMPLEMENT));
