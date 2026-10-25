@@ -22,7 +22,7 @@ Each view you ask for is one section of the answer, and you can ask for both at 
 
 It reads with your own `gh` credential, as [`kanon doctor`](doctor.md) does. `gh` takes its token from `GH_TOKEN`, then `GITHUB_TOKEN`, then its stored login. The command says on standard error which one it used and whose it is, and stops when GitHub refuses it. It reads only what that token can read, and asks GitHub only REST `GET`s and GraphQL queries.
 
-It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record, the escalation file, the exemptions file and the stack document. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used to find the repository when you don't pass `--repo`, and for one more thing with `--pr`: that view runs the merge gate's own verdict function, and loading it reads the App register from the directory you run in, as each lane does in its checkout. So run `--pr` from a checkout of a repository that runs Kanon. The logins the view judges by are still the default branch's register's.
+It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record, the escalation file, the exemptions file and the stack document. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used to find the repository when you don't pass `--repo`, and for one more thing with `--pr`: that view runs the merge gate's own verdict function, and loading it reads the App register from the directory you run in, as each lane does in its checkout. So run `--pr` from a checkout of a repository that runs Kanon. The logins the view judges by are still the default branch's register's, with one exception: the gate's hold logic still compares whoever applied `needs:human` against the Merger login (`MERGER_LOGIN`) in the register in the directory you run in. A checkout whose register names a different Merger can therefore read a hold differently.
 
 **An incomplete read is no answer.** A read that GitHub refused, that wasn't found, that hit the rate limit or that came back cut short makes that view's answer an error. The error names each read and why it failed, with the time the rate limit resets when that is the cause. A view never answers in part.
 
@@ -67,7 +67,7 @@ Whether it is ready is never the view's own judgement:
 |---|---|---|
 | 0 | `ok` | Every view asked for was answered. |
 | 2 | `error` | A usage error: an unknown or malformed flag, or no view named. |
-| 3 | `error` | It couldn't run: no repository to read, or a token GitHub refuses. |
+| 3 | `error` | It couldn't run: no repository to read, a token GitHub refuses, or `--pr` run outside a checkout that has an App register (`docs/qa/agent-identities.md`). |
 | 4 | `incomplete` | A view's reads didn't complete, so that view has no answer. |
 
 The prose and `--json` exit with the same code for the same result.
