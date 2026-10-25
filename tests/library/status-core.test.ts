@@ -209,6 +209,27 @@ describe('the project view', () => {
     expect(view.gating).toEqual([12]);
   });
 
+  it('[STAT-4] finds a criterion\'s tests whether or not another cited id has a clause (#1402)', async () => {
+    // A brief citing only `STORE-99`: its prefix is declared, the spec layer has no such clause,
+    // and a test cites it. Whether that test cites it can't hang on which other ids are cited.
+    const only99 = BRIEF.replace('- `[STORE-1]` — the price before confirm.', 'It shows the price.')
+      .replace('- `[STORE-2]` — once, however many presses.', 'It takes the order once.');
+    const tests = { 'tests/order.test.ts': "it('[STORE-99] is checked before it is declared', () => {});\n" };
+    const alone = adopterProject({ files: adopterFiles(undefined, { [`docs/projects/${PROJECT}.md`]: only99 }), tests });
+    const [, b]: Any[] = (await projectView({ reader: alone.reader, repo: alone.repo, project: PROJECT }) as Any).items;
+    expect(b.acs).toEqual([{ id: 'STORE-99', declared: true, clause: null, tested: true, tests: ['tests/order.test.ts'] }]);
+
+    // The same row with `STORE-1`, which has a clause, cited by another item: the same answer.
+    const beside = adopterProject({ tests });
+    const [, again]: Any[] = (await projectView({ reader: beside.reader, repo: beside.repo, project: PROJECT }) as Any).items;
+    expect(again.acs.find((a: Any) => a.id === 'STORE-99')).toEqual(b.acs[0]);
+
+    // A brief citing no id under a declared prefix still reads no test file.
+    const none = adopterProject({ files: adopterFiles(undefined, { [`docs/projects/${PROJECT}.md`]: only99.replace('- `[STORE-99]` — not an invariant.', '- `[OTHER-1]` — another area.') }) });
+    await projectView({ reader: none.reader, repo: none.repo, project: PROJECT });
+    expect(none.seen.filter((s) => s.includes('/git/trees/'))).toEqual([]);
+  });
+
   it('[STAT-5] names why each item can\'t proceed, and a missing or unparseable brief as that', async () => {
     const issues = [
       { number: 11, title: 'Show the price', labels: ['qa:needs-info', 'blocked'] },

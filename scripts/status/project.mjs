@@ -147,8 +147,10 @@ async function holdOf(project, io) {
  */
 async function itemsOf(world, brief, { reader, repo, files, hold }) {
   const acs = acsFromBrief(brief);
-  const spec = acs.length ? await readSpecLayer(files) : { prefixes: [], clauses: new Map() };
-  const cited = acs.some((a) => spec.clauses.has(a.id)) ? await readCitations(reader, repo, files, spec.prefixes) : new Map();
+  const spec = acs.length ? await readSpecLayer(files) : /** @type {import('./spec-layer.mjs').SpecLayer} */ ({ prefixes: [], clauses: new Map() });
+  // The test files are read when a cited id is under a declared prefix, as `readCitations` matches
+  // them, not only when it has a clause: whether a test cites one id can't hang on another (#1402).
+  const cited = acs.some((a) => spec.prefixes.includes(a.id.replace(/-\d+$/, ''))) ? await readCitations(reader, repo, files, spec.prefixes) : new Map();
   /** @param {string} key */
   const issueOf = (key) => {
     const mine = world.all.filter((/** @type {any} */ i) => i.key === key && i.number !== Number(world.project));
