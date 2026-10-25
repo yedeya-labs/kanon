@@ -259,6 +259,26 @@ describe('where findings go: the adoption record\'s Upstream findings choice (ka
   });
 });
 
+// Issue #1401 (`K-AGENT-1`): the file job checks out nothing and its tokens read no contents, so
+// the Explorer's persona is read in the gate job, from the register on the default branch.
+describe('the persona the filing step signs with (kanon#1401)', () => {
+  it('is read in the gate job, from the default branch, and handed to the file job alone', () => {
+    const gate = wf.jobs.gate!;
+    const gsteps = gate.steps as Step[];
+    const read = gsteps.find((s) => s.id === 'persona')!;
+    expect(read, 'the gate job\'s persona step').toBeDefined();
+    expect(gsteps.indexOf(read)).toBeGreaterThan(gsteps.findIndex((s) => s.id === 'configured'));
+    expect(read.if).toBe("steps.configured.outputs.configured == 'true'");
+    expect(read.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
+    expect(read.run).toContain('persona="$(node "$KANON/scripts/lane-persona.mjs" Explorer)"');
+    expect(read.run).toContain('printf \'persona=%s\\n\' "$persona" >> "$GITHUB_OUTPUT"');
+    expect((gate as { outputs?: Record<string, string> }).outputs?.persona).toBe('${{ steps.persona.outputs.persona }}');
+    const file = ((wf.jobs.file!.steps ?? []) as Step[]).find((s) => s.id === 'file')!;
+    expect(file.env?.PERSONA).toBe('${{ needs.gate.outputs.persona }}');
+    for (const [name, j] of Object.entries(wf.jobs)) if (name !== 'gate' && name !== 'file') expect(JSON.stringify(j), name).not.toMatch(/outputs\.persona|lane-persona/);
+  });
+});
+
 // Plan 0006 §5, steps 1 and 2 (F3, kanon#588): with `sent` or `sent with evidence`, the filing step
 // also writes finding rows, and the file job uploads them for the telemetry collector. The scrub's
 // App names are read in the gate job, from the default branch, before the agent runs.
@@ -280,6 +300,7 @@ describe('finding rows for Kanon\'s telemetry store (plan 0006 F3)', () => {
   it('gives the filing step the run\'s names, tag, release and where to write the rows', () => {
     expect(file.env).toMatchObject({
       APP_NAME_HASHES: '${{ needs.gate.outputs.names }}',
+      PERSONA: '${{ needs.gate.outputs.persona }}',
       TAG: "${{ inputs.smoke != '' && 'smoke' || 'run' }}",
       KANON_WORKFLOW_REF: '${{ job.workflow_ref }}',
       KANON_WORKFLOW_SHA: '${{ job.workflow_sha }}',

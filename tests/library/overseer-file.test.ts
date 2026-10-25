@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 import { validate } from '../../actions/agent-telemetry/schema.mjs';
@@ -48,7 +49,7 @@ const fakeGh = (prior: Array<{ number: number; title: string; state: string }> =
     .map((c) => ({ title: c.args[c.args.indexOf('--title') + 1]!, body: c.input ?? '', args: c.args }));
   return { gh, calls, created };
 };
-const run = (text: string | null, opts: { prior?: Array<{ number: number; title: string; state: string }>; interlock?: number | 'throws'; agentOutcome?: string; upstream?: string } = {}) => {
+const run = (text: string | null, opts: { prior?: Array<{ number: number; title: string; state: string }>; interlock?: number | 'throws'; agentOutcome?: string; upstream?: string; persona?: string | null } = {}) => {
   const fake = fakeGh(opts.prior);
   const log: string[] = [];
   const code = fileAudit({
@@ -62,6 +63,7 @@ const run = (text: string | null, opts: { prior?: Array<{ number: number; title:
     },
     log: (l) => log.push(l),
     ...(opts.upstream === undefined ? {} : { upstream: opts.upstream }),
+    ...(opts.persona === undefined ? {} : { persona: opts.persona }),
   });
   const created = fake.created();
   const audit = created.find((c) => c.title.startsWith('[pipeline] audit-summary'));
@@ -107,6 +109,27 @@ describe('who can act decides where a finding goes', () => {
       expect(args[args.indexOf('--milestone') + 1]).toBe(PIPELINE_MILESTONE);
       expect(r.audit!.body).toContain(`- #100 a ${subject} finding`);
     });
+
+  // Issue #1401 (`K-AGENT-1`): the `file` job checks out nothing, so the persona is the gate
+  // job's reading of the register on the default branch, handed in, never the working directory's.
+  it('opens every issue and comment it files with the persona it is handed, and the bare role without one', () => {
+    const prior = [{ number: 7, title: auditTitle(3), state: 'OPEN' }];
+    const withPersona = run(report([finding('playbook')]), { prior, persona: 'Ada' });
+    const posts = withPersona.calls.filter((c) => c.args[1] === 'create' || c.args[1] === 'comment');
+    expect(posts).toHaveLength(3);
+    for (const c of posts) {
+      const body = c.input ?? c.args[c.args.indexOf('--body') + 1]!;
+      expect(body.split('\n', 1)[0], c.args.join(' ')).toBe('**Ada (Overseer)** <!-- kanon:role=overseer -->');
+    }
+    for (const persona of [null, '']) {
+      const bare = run(report([finding('playbook')]), { prior, persona });
+      expect(bare.findings[0]!.body.split('\n', 1)[0]).toBe('**Overseer** <!-- kanon:role=overseer -->');
+    }
+  });
+
+  it('reads no App register from its working directory: the `file` job has none', () => {
+    expect(readFileSync(`${ROOT}/scripts/overseer-file.mjs`, 'utf8')).not.toMatch(/appPersona|app-register\.mjs/);
+  });
 
   it('an unknown or missing subject goes upstream, unfiled, and says why: nothing is filed on a guess', () => {
     expect(classify(finding('workflow'))).toEqual({ who: 'kanon', why: 'subject `workflow` is not one of the known subjects, so it was not filed here' });

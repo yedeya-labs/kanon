@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 import { validate } from '../../actions/agent-telemetry/schema.mjs';
@@ -221,6 +222,24 @@ describe('fileFindings', () => {
     expect(noAgg.gh.calls).toEqual([]);
     // An aggregate below the threshold is not one this step will judge against.
     expect(run(report([finding()]), fakeGh(), JSON.stringify({ ...AGG, min_adopters: 2 })).code).toBe(1);
+  });
+
+  // Issue #1401 (`K-AGENT-1`): the `file` job checks out nothing, so the persona is the gate
+  // job's reading of the register on the default branch, handed in, never the working directory's.
+  it('opens every issue and comment it files with the persona it is handed', () => {
+    const r = checkFinding(finding(), A);
+    if (!r.ok) throw new Error(r.why);
+    const other = finding({ title: 'A tail cost', body: '## What must be true\n\nThe tail is far above the median.', severity: '', signals: [], cells: [ownRef] });
+    const gh = fakeGh([{ number: 41, body: `old\n<!-- kanon:telemetry-signature=${r.checked.signature} -->` }]);
+    const code = fileFindings({ repo: 'o/r', text: report([finding(), other]), aggregateText: JSON.stringify(AGG), agentOutcome: 'success', gh: gh.gh, log: () => {}, upstream: 'filed here', persona: 'Grace' });
+    expect(code).toBe(0);
+    const posts = [...gh.creates(), ...gh.comments()];
+    expect(posts).toHaveLength(2);
+    for (const c of posts) expect(c.input!.split('\n', 1)[0], c.args.join(' ')).toBe('**Grace (Explorer)** <!-- kanon:role=explorer -->');
+  });
+
+  it('reads no App register from its working directory: the `file` job has none', () => {
+    expect(readFileSync(`${ROOT}/scripts/telemetry-file.mjs`, 'utf8')).not.toMatch(/appPersona|app-register\.mjs/);
   });
 
   it('reds and files nothing when the open issues can\'t be listed, rather than filing duplicates', () => {
