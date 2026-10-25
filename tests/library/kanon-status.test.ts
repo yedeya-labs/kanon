@@ -13,7 +13,6 @@ import { CHAIN_DEPLOY, PROJECT, adopterFiles, adopterProject, adoptionWith, repo
 
 const { status, SCHEMA, EXIT } = await import('../../cli/status.mjs');
 const { projectView } = await import('../../scripts/status/project.mjs');
-const { releaseView } = await import('../../scripts/status/release.mjs');
 const { ReadError } = await import('../../scripts/status/reader.mjs');
 const { HELD, HELD_MARKER } = await import('../../scripts/lead-reconcile.mjs');
 
@@ -121,7 +120,10 @@ describe('kanon status prints one document, or the same result as prose', () => 
     expect(prose.out).toContain("can't proceed: dependency, B (#12) is still open");
 
     // The release view is a section of its own, the view's answer for the same reads, and its prose.
-    const rel = await run(['--release', '--json'], chain());
+    // The view is imported here, not with the others, so this file still loads without it and the
+    // assertions below are what turn red when the release view is gone.
+    const { releaseView } = await import('../../scripts/status/release.mjs');
+    const rel =await run(['--release', '--json'], chain());
     expect(rel.code).toBe(EXIT.ok);
     expect(Object.keys(rel.doc())).toEqual(['schema', 'kanon', 'status', 'exitCode', 'repo', 'readAt', 'release']);
     expect(rel.doc().release).toEqual(await releaseView({ reader: chain().reader, repo: 'acme/shop', now: new Date(READ_AT) }));
