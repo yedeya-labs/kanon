@@ -22,6 +22,7 @@ import {
   briefSections,
   checkBrief,
   decisionsIn,
+  openDecisions,
   isBrief,
   isPreStandard,
   PRE_STANDARD_SKIPS,
@@ -844,6 +845,20 @@ describe('RA-1732 — an unanswered decision must not merge', () => {
     expect(inside).toHaveLength(1);
     expect(inside[0].n).toBe(3);
     expect(inside[0].headline).toBe(outside[0].headline);
+  });
+
+  it('[STAT-14] openDecisions is the check the guard runs, and the one the readiness view composes', () => {
+    // The status core asks this, not a copy of it, whether a brief pull request still has
+    // an open decision, so the guard and the view cannot disagree on one.
+    const body = [
+      ...openHeadlines,
+      ...answeredHeadlines,
+      '12. **Decision 3 was OPEN until 2026-09-06 and is now answered. ✅** Retrospective.',
+    ].join('\n');
+    expect(openDecisions(body, false).map((d) => [d.n, d.marker])).toEqual([[3, '⛔'], [9, '⛔'], [11, 'PROPOSED'], [4, 'TBD']]);
+    expect(openDecisions(body, true)).toEqual([]);
+    const md = withSection('Decisions', `${PAD}\n\n${openHeadlines.join('\n')}\n`);
+    expect(checkBrief('docs/projects/1.md', md).filter((x) => /still open/.test(x.problem))).toHaveLength(openHeadlines.length);
   });
 
   it('DECISION_ITEM requires the bold — a fenced block is not a decision', () => {

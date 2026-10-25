@@ -9,16 +9,18 @@ import { dirname, join, normalize, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 import { PROJECT, adopterFiles, adopterProject, laneCaller, laneFleet, laneWorld, repoWorld } from './helpers/status-world.js';
+import { NUMBER, briefPr, implementerPr, personPr, readerFor } from './helpers/pr-world.js';
 
 const { status, SCHEMA, EXIT } = await import('../../cli/status.mjs');
 const { projectView } = await import('../../scripts/status/project.mjs');
+const { readinessView } = await import('../../scripts/status/pull-request.mjs');
 const { laneHealthView } = await import('../../scripts/status/lanes.mjs');
 const { ReadError } = await import('../../scripts/status/reader.mjs');
 const { HELD, HELD_MARKER } = await import('../../scripts/lead-reconcile.mjs');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
-type World = ReturnType<typeof adopterProject>;
+type World = { reader: ReturnType<typeof adopterProject>['reader'] | ReturnType<typeof readerFor>['reader']; seen: string[] };
 type GhResult = { status: number | null; stdout: string; stderr: string };
 
 const READ_AT = '2026-10-24T09:30:00.000Z';
@@ -160,7 +162,7 @@ describe('kanon status prints one document, or the same result as prose', () => 
     expect(lanesCutProse.out).toMatch(/The lane-health view has no answer: the lane-health view couldn't be read whole/);
 
     // A usage error: the error document, or the message and the usage, and exit 2 either way.
-    for (const argv of [['--project', 'seven'], [], ['--project', '7', '--repo', 'not-a-repo'], ['--bogus'], ['--pr', '5'], ['--lanes=yes']]) {
+    for (const argv of [['--project', 'seven'], [], ['--project', '7', '--repo', 'not-a-repo'], ['--bogus'], ['--pr', 'five'], ['--lanes=yes']]) {
       const j = await run([...argv, '--json'], null);
       expect(j.code, argv.join(' ')).toBe(EXIT.usage);
       expect(Object.keys(j.doc()).sort()).toEqual(['error', 'exitCode', 'kanon', 'schema', 'status']);
@@ -171,7 +173,28 @@ describe('kanon status prints one document, or the same result as prose', () => 
       expect(p.out, 'nothing on standard output').toBe('');
       expect(j.readers, 'nothing was read').toEqual([]);
     }
-    expect((await run(['--pr', '5', '--json'], null)).doc().error).toMatch(/readiness view/);
+    expect((await run(['--json'], null)).doc().error).toMatch(/--project <n>, --pr <n> or --lanes/);
+
+    // The readiness view is a section of its own, the view's answer for the same reads, and in prose.
+    const pr = await run(['--pr', String(NUMBER), '--json'], readerFor(implementerPr()));
+    expect(pr.code).toBe(EXIT.ok);
+    expect(pr.doc().pr).toEqual(await readinessView({ reader: readerFor(implementerPr()).reader, repo: 'acme/shop', pr: NUMBER, now: Date.parse(READ_AT) }));
+    expect(pr.doc().pr.readiness).toMatchObject({ by: 'merger', ready: true });
+    const prProse = await run(['--pr', String(NUMBER)], readerFor(implementerPr()));
+    expect(prProse.code).toBe(pr.code);
+    expect(prProse.out).toContain(`Pull request #${NUMBER}: feat: place an order once`);
+    expect(prProse.out).toContain("Ready, the Merger's to merge: the merge gate answers merge");
+    expect(prProse.out).toContain('Merge gate: merge (green-zone)');
+    expect(prProse.out).toContain('STORE-99 not in the spec layer');
+    const brief = await run(['--pr', String(NUMBER)], readerFor(briefPr('Which store? ⛔ OPEN')));
+    expect(brief.out).toContain("Not ready, a person's to merge");
+    expect(brief.out).toContain('Lacks: decisions');
+    expect(brief.out).toContain('Open decision 1 in docs/projects/9.md: Which store? ⛔ OPEN');
+    // Both views at once are two sections, and one view's failed read is that view's alone.
+    const both = await run(['--project', String(PROJECT), '--pr', '404', '--json'], adopterProject());
+    expect(both.code).toBe(EXIT.incomplete);
+    expect(both.doc().project.items).toHaveLength(3);
+    expect(both.doc().pr.error).toMatch(/pull request #404 couldn't be read whole/);
 
     // It can't run: no repository to read, or a token GitHub refuses. Exit 3 either way.
     const nowhere = await run(['--project', '7', '--json'], null, { origin: '' });
@@ -216,6 +239,15 @@ describe('docs/status.md is held to the code', () => {
     for (const w of [adopterProject(), held(), unparseable(), repoWorld({ files: adopterFiles() }), refusedLabels()]) {
       docs.push((await run(['--project', String(PROJECT), '--json'], w)).doc());
     }
+    // And the readiness view: the Implementer's, a person's brief with an open decision, one with
+    // no review, and one whose reads didn't complete.
+    const prDocs: Any[] = [];
+    for (const w of [implementerPr(), briefPr('Which store? ⛔ OPEN'), personPr({ reviews: [] })]) {
+      prDocs.push((await run(['--pr', String(NUMBER), '--json'], readerFor(w))).doc());
+    }
+    prDocs.push((await run(['--pr', '404', '--json'], readerFor(implementerPr()))).doc());
+    expect(prDocs.map((d) => d.pr.readiness?.lacks ?? d.pr.error.slice(0, 15))).toEqual([[], ['decisions'], ['approval'], 'pull request #4']);
+    docs.push(...prDocs);
     docs.push((await run(['--json'], null)).doc());
     // And the lane-health view: callers with each class of failure, and a read that didn't complete.
     const laneDocs = [(await run(['--lanes', '--json'], laneFleet())).doc(), (await run(['--lanes', '--json'], refusedLanes())).doc()];
@@ -223,7 +255,7 @@ describe('docs/status.md is held to the code', () => {
     expect(new Set(laneDocs[0].lanes.callers.flatMap((c: Any) => c.failures.map((f: Any) => f.class)))).toEqual(new Set(['infra', 'real']));
     for (const d of [...docs, ...laneDocs]) for (const p of paths(d)) emitted.add(p);
     // The worlds did reach each branch, so a field missing from them is missing from the code.
-    expect(docs.map((d) => d.project?.brief?.state ?? d.project?.error?.slice(0, 10) ?? d.status)).toEqual(['parsed', 'parsed', 'unparseable', 'missing', 'project #7', 'error']);
+    expect(docs.filter((d) => !d.pr).map((d) => d.project?.brief?.state ?? d.project?.error?.slice(0, 10) ?? d.status)).toEqual(['parsed', 'parsed', 'unparseable', 'missing', 'project #7', 'error']);
     expect(docs[1].project.hold).toEqual({ label: HELD, by: 'lead' });
 
     const sorted = (s: Set<string>) => [...s].sort();
