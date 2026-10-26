@@ -126,26 +126,30 @@ describe("an agent's commits pass the adopter's dco check (agent-commits.sh, K-A
       expect(checkCommit(c, TRUST)).toEqual({ ok: true, delegated: SLUG });
     }));
 
-  // PLAN 0005 §3.3 (step L3): the persona is the author's NAME, and the App's noreply address
-  // stays the email, which is what GitHub attributes the commit by and what `checkCommit` reads.
-  it('authors a persona-named commit with the App\'s noreply email, which passes with the delegate\'s sign-off', () =>
-    within(run({ env: { KANON_PERSONA: 'Implementer' } }), (r) => {
+  // kanon#1383 (`K-AGENT-1`, amended): the commit's author is the App's bot account, name and
+  // email, whatever persona the block resolved. The push job re-creates a lane's commits through
+  // GitHub, which authors them as the App, so a persona in the local author name would be lost
+  // there and show only on the lanes that still push. The persona stays in the post header and
+  // the role marker.
+  it('[K-AGENT-1] authors a commit as the App\'s bot account even with a persona, which passes with the delegate\'s sign-off', () =>
+    within(run({ env: { KANON_PERSONA: 'The Builder' } }), (r) => {
       expect(r.status, r.out).toBe(0);
-      expect(r.env).toMatchObject({ ...IDENTITY, GIT_AUTHOR_NAME: 'Implementer' });
+      expect(r.env).toMatchObject({ ...IDENTITY, GIT_AUTHOR_NAME: `${SLUG}[bot]` });
       const c = commitAs(r, AGENT_MESSAGE);
-      expect(c.commit.author).toEqual({ name: 'Implementer', email: IDENTITY.GIT_AUTHOR_EMAIL });
+      expect(c.commit.author).toEqual({ name: `${SLUG}[bot]`, email: IDENTITY.GIT_AUTHOR_EMAIL });
       expect(git(r.dir, 'log', '-1', '--format=%cn')).toBe(`${SLUG}[bot]\n`);
+      expect(c.commit.message).not.toMatch(/persona/i);
       expect(checkCommit(c, TRUST)).toEqual({ ok: true, delegated: SLUG });
-      // A declared persona's display name, spaces and all, is only ever the name.
+      // A commit some other path names after a persona, spaces and all, still passes by its email.
       const named = { ...c, commit: { ...c.commit, author: { ...c.commit.author, name: 'The Builder' } } };
       expect(checkCommit(named, TRUST)).toEqual({ ok: true, delegated: SLUG });
     }));
 
-  it('a persona-named commit without the delegate\'s sign-off still fails', () =>
+  it('a commit without the delegate\'s sign-off still fails', () =>
     within(run({ env: { KANON_PERSONA: 'Implementer' }, record: null }), (r) => {
       expect(r.status, r.out).toBe(0);
       const c = commitAs(r, AGENT_MESSAGE);
-      expect(c.commit.author.name).toBe('Implementer');
+      expect(c.commit.author.name).toBe(`${SLUG}[bot]`);
       expect(checkCommit(c, TRUST).ok).toBe(false);
     }));
 

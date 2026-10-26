@@ -9,11 +9,15 @@
 # still describes the whole lane.
 #
 # A LANE NEVER CALLS THIS FILE. Its inputs mirror the spine's (less the `permission-*` set,
-# which the mint consumes), and the spine passes each one through unchanged.
+# which the mint consumes, and the push job's switches), and the spine passes each one through
+# unchanged.
 #
 # WHAT THE AGENT CAN STILL REACH HERE, stated so nobody reads more into the split: the token
 # it was always given, for at most the hour it lives, and the Claude token. Rewriting a cached
-# action in this job now reaches only those, which the agent holds anyway.
+# action in this job now reaches only those, which the agent holds anyway. On a lane that sets
+# `push` that token can't write code (`LANE-13`, kanon#1383): this job hands the agent's commits
+# to the spine's push job as a git bundle, with the agent's pull request request, and the push
+# job treats both as untrusted.
 name: Agent lane — the agent's job
 
 on:
@@ -176,15 +180,11 @@ on:
         required: false
         type: boolean
         default: true
-      push-probe:
+      push:
         description: >-
-          Prove the minted App can push (`git push --dry-run`) after the project's setup
-          and before a single turn is paid for. Default off. On for a lane
-          whose whole output is a pushed branch, where a missing `contents: write` grant
-          would otherwise surface as a 403 at the END of a long run — or not at all, read
-          as "the agent had nothing to say". A capability switch like `database`, not a
-          hook: the step is the same for every lane that sets it, and the App slug and
-          the arm name are what make its message the lane's own.
+          Hand the agent's commits to the spine's push job (kanon#1383): keep the pull
+          request's request file out of every commit before the agent runs, and after it
+          bundle each local branch's commits GitHub lacks, with the request beside them.
         required: false
         type: boolean
         default: false
@@ -228,17 +228,17 @@ on:
       outcome:
         description: The agent step's outcome, readable from the caller after the job.
         value: ${{ jobs.run.outputs.outcome }}
-      # THE BRANCH HEADS THIS JOB HELD WHEN THE AGENT FINISHED (#324), for the implementer
-      # status's `open` pick: see `Record the branch heads the agent left` below.
-      heads:
-        description: A JSON array of `{ ref, sha }`, the local branches and HEAD after the agent, or empty.
-        value: ${{ jobs.run.outputs.heads }}
       # THE COMMIT THIS JOB CHECKED OUT, BEFORE THE AGENT RAN (#1263): a revise lane's pull
-      # request branch as `actions/checkout` fetched it. The implementer status's `carry` moves
-      # only when it is the head the run started from, so nothing landed in between.
-      base:
+      # request branch as `actions/checkout` fetched it. The push job moves that branch only from
+      # here, and builds the bundle's other branches on commits GitHub has (kanon#1383).
+      start:
         description: The commit `actions/checkout` checked out (its `commit` output), or empty.
-        value: ${{ jobs.run.outputs.base }}
+        value: ${{ jobs.run.outputs.start }}
+      # WHETHER THIS JOB HANDED COMMITS ON (kanon#1383): `true` when the agent left commits GitHub
+      # lacks and their bundle was uploaded, which is when the spine's push job runs.
+      commits:
+        description: "`true` when the agent's commits were handed to the push job."
+        value: ${{ jobs.run.outputs.commits }}
     secrets:
       app-token:
         description: >-
@@ -262,9 +262,9 @@ jobs:
       # `agent` is the agent-run block, whose only step that can fail is the action, so its
       # outcome is the action's — see that block's header.
       outcome: ${{ steps.agent.outcome }}
-      heads: ${{ steps.heads.outputs.heads }}
       # The checkout's own output, set before any step of the agent's could write one.
-      base: ${{ steps.checkout.outputs.commit }}
+      start: ${{ steps.checkout.outputs.commit }}
+      commits: ${{ steps.upload.outcome == 'success' }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1): a cancelled
       # job that ran at least its `timeout-minutes` timed out. Nothing else in the job's
@@ -430,8 +430,21 @@ jobs:
           arm: ${{ inputs.arm }}
           app-slug: ${{ steps.app-token.outputs.app-slug }}
           role: ${{ inputs.role }}
-          push-probe: ${{ inputs.push-probe }}
           github-token: ${{ steps.app-token.outputs.token }}
+
+      # THE PULL REQUEST'S REQUEST STAYS OUT OF EVERY COMMIT (kanon#1383, `[LANE-15]`). The agent
+      # asks for its pull request by writing `docs/.kanon-pull-request.json`, under `docs/`, the one
+      # path every lane's agent may write (the Lead's `Edit(/docs/**)`). Excluded here, before the
+      # agent runs, so `git add -A` leaves it untracked; the handoff below carries it beside the
+      # commits, and the push job refuses a branch whose commits hold it.
+      - name: Keep the pull request's request out of the agent's commits
+        id: exclude-request
+        if: inputs.push
+        run: |
+          set -euo pipefail
+          exclude="$(git rev-parse --git-path info/exclude)"
+          mkdir -p "$(dirname "$exclude")"
+          echo '/docs/.kanon-pull-request.json' >> "$exclude"
 
       # CREATE-BEFORE-APPLY (plan 0005 §5.3, `K-WORK-12`): each label the lane's agent may apply
       # and the repository lacks is created first, with the taxonomy's colour and description,
@@ -481,29 +494,50 @@ jobs:
             echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
           fi
 
-      # THE BRANCH HEADS THE AGENT LEFT (#324; plan 0005 §3.3, "at the head it pushed"). The
-      # implementer status's `open` pick stamps a pull request only when its head is one of
-      # these, so a run binds to the commit ITS job pushed, not to whatever the shared Author
-      # App pushed meanwhile: an overlapping run's pull request is not here, and a run that
-      # pushed nothing has nothing here to match. Local branches only, never `refs/remotes`:
-      # a `git fetch` brings in every other run's branches there, but creates no local branch.
-      # A fixed step, after the agent, holding no key (`K-AGENT-49`). The agent could rewrite
-      # what it reads, but only to point at a commit in its own job's repository, which it
-      # could as well have pushed as its own pull request: the record is as trustworthy as the
-      # agent whose pull request it binds, and no other lane's agent reaches this job.
-      # `core.fsmonitor` off, so no hook the agent configured runs here. Every lane records it;
-      # only the Implementer's lanes read it.
-      - name: Record the branch heads the agent left
-        id: heads
-        if: always() && steps.agent.outcome != 'skipped'
-        continue-on-error: true
+      # THE AGENT'S COMMITS GO TO THE PUSH JOB, NOT TO GITHUB (kanon#1383, `[LANE-13]`, `[LANE-14]`).
+      # This job's token can't push. So after the agent, whatever it did, this bundles every local
+      # branch's commits that neither the checked-out commit nor a remote-tracking branch holds,
+      # which are the ones GitHub may lack, and hands them on as an artifact with the agent's
+      # request, for the spine's push job to re-create through the verified-commit helper. A run
+      # that left no such commit hands on nothing, and the push job doesn't run. Local branches only,
+      # never `refs/remotes`: a `git fetch` brings in every other run's branches there. A step after
+      # the agent, so the agent could steer what it writes: the push job trusts none of it, and
+      # re-checks each commit and each branch against GitHub. `core.fsmonitor` off, so no hook the
+      # agent configured runs here. The request is copied only as a regular file, never a link.
+      - name: Hand the agent's commits to the push job
+        id: handoff
+        if: always() && inputs.push && steps.agent.outcome != 'skipped'
+        env:
+          START: ${{ steps.checkout.outputs.commit }}
         run: |
           set -euo pipefail
-          {
-            git -c core.fsmonitor=false for-each-ref --count=100 --format='%(objectname) %(refname:strip=2)' refs/heads
-            if sha="$(git -c core.fsmonitor=false rev-parse --verify -q HEAD)"; then echo "$sha HEAD"; fi
-          } | jq -Rsc 'split("\n") | map(select(length > 0) | capture("^(?<sha>[0-9a-f]{40}) (?<ref>.+)$"))' \
-            | sed 's/^/heads=/' >> "$GITHUB_OUTPUT"
+          out="$RUNNER_TEMP/kanon-push"
+          rm -rf "$out"
+          mkdir -p "$out"
+          if ! git -c core.fsmonitor=false bundle create "$out/commits.bundle" --branches --not --remotes "$START" 2>"$out/bundle.err"; then
+            if grep -q 'empty bundle' "$out/bundle.err"; then
+              rm -rf "$out"
+              echo "The agent left no commit GitHub lacks, so there is nothing to push"
+              exit 0
+            fi
+            cat "$out/bundle.err"
+            exit 1
+          fi
+          rm -f "$out/bundle.err"
+          req=docs/.kanon-pull-request.json
+          if [ -f "$req" ] && [ ! -L "$req" ]; then
+            cp "$req" "$out/request.json"
+          fi
+          echo "commits=true" >> "$GITHUB_OUTPUT"
+      - name: Upload the agent's commits for the push job
+        id: upload
+        if: always() && steps.handoff.outputs.commits == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-push-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kanon-push/
+          retention-days: 1
+          if-no-files-found: error
 
       # Explain a red run, count what it opened, record what it cost. `always()` and
       # `continue-on-error` for the reasons in the block's header; `job-status` because the

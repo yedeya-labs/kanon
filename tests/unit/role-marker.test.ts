@@ -13,8 +13,8 @@ const { appPersona, parsePersonas } = await import('../../scripts/app-register.m
 const { withBaselines, withHeadless } = await import('../../actions/agent-run/persona-prompt.mjs');
 
 /**
- * Plan 0005 §3.3, step L3: the persona header, the role marker, and the persona as the agent's
- * commit author. The readers of §3.3's table are in `tests/library/role-marker-readers.test.ts`;
+ * Plan 0005 §3.3, step L3: the persona header and the role marker. Since kanon#1383 a commit's
+ * author is the App's bot account, not the persona (`tests/unit/agent-commits.test.ts`). The readers of §3.3's table are in `tests/library/role-marker-readers.test.ts`;
  * the writers' guard is below.
  */
 

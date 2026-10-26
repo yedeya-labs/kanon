@@ -25,7 +25,7 @@ Besides the lane's own bail list, stop with a plan comment, keeping the label, w
 
 ## Follow-ups: branch off the open parent
 
-A follow-up says where it came from ("Surfaced by PR #n"). If that pull request is still open, branch off its head and open yours with `--base <its branch>`, so it stacks on the work it follows rather than diverging from `main`. Say so in your body. When the parent merges, GitHub retargets yours to `main`. If the parent is merged or closed, branch off `main` as usual.
+A follow-up says where it came from ("Surfaced by PR #n"). If that pull request is still open, branch off its head and open yours on its branch (`--base <its branch>`, or the `base` of your pull request's request where the lane's push job opens it for you), so it stacks on the work it follows rather than diverging from `main`. Say so in your body. When the parent merges, GitHub retargets yours to `main`. If the parent is merged or closed, branch off `main` as usual.
 
 ## Revise mode
 

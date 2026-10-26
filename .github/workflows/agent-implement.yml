@@ -293,27 +293,39 @@ jobs:
         self-promote a `[seed]` invariant to `[confirmed]`; any new feature invariants
         you add land as `[seed]` for a human to promote.
 
-        OUTPUT: open ONE PR (implementation + tests) that closes the issue, with the
-        agent-fix PR template, labeled `agent:implement` AND `review:please` (so the Reviewer
-        reviews it). State the acceptance criteria you built to, the approach, the
-        BLAST RADIUS honestly, and — for any schema change — the deploy steps the
-        stack document's `## Schema changes` section names and the result of the
+        OUTPUT: COMMIT ON YOUR BRANCH, AND WRITE THE REQUEST (kanon#1383). You do
+        not push and you do not open the PR: your token cannot write code. A job
+        after yours pushes your branch and opens ONE PR (implementation + tests)
+        that closes the issue, from the request you write to
+        `docs/.kanon-pull-request.json` — a JSON object with `branch`, `base`,
+        `title`, `body` and `labels`. Git ignores that file here, so it is never
+        committed; write it last. Use the agent-fix PR template for the body, and
+        the labels `agent:implement` AND `review:please` (so the Reviewer reviews
+        it). State the acceptance criteria you built to, the approach, the BLAST
+        RADIUS honestly, and — for any schema change — the deploy steps the stack
+        document's `## Schema changes` section names and the result of the
         data-isolation checks. NEVER merge (a human merges).
+        GitHub writes new commits when the job pushes yours, so cite no commit id
+        from your checkout in the PR body or a comment.
         NAME YOUR BRANCH `<type>/<issue>-<slug>` (`K-WS-8`), such as
         `fix/42-empty-cart-total`: crash recovery and the dispatch sweep find an
-        issue's branch by that name.
+        issue's branch by that name. A new branch only: the job refuses to move
+        the default branch or one that existed before this run.
         If this issue is a FOLLOW-UP whose parent PR is still OPEN (its body says
-        "Surfaced by PR #N" and #N isn't merged), branch off that PR's head and open
-        yours with `--base <its branch>` so it STACKS — don't diverge off main. See
-        the playbook's "Follow-ups: branch off the open parent" rule.
+        "Surfaced by PR #N" and #N isn't merged), branch off that PR's head and set
+        the request's `base` to its branch so it STACKS — don't diverge off main.
+        See the playbook's "Follow-ups: branch off the open parent" rule.
 
         ALWAYS leave a comment before you finish — never end with no output. If you're
         running low on budget, post your progress and what remains.
       # The App token's permissions, narrowed to what this lane's agent uses (`K-AGENT-46`).
-      permission-contents: write
+      # Contents read only (`LANE-13`): the `push` job after the agent's pushes its commits.
+      permission-contents: read
       permission-issues: write
       permission-pull-requests: write
-      permission-workflows: write
+      # The push job's own token holds Contents and Workflows write, and opens the pull request.
+      push: true
+      push-workflows: true
     secrets:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
@@ -339,8 +351,8 @@ jobs:
           app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           since: ${{ needs.filter.outputs.since }}
           branches-before: ${{ needs.filter.outputs.branches }}
-          # The one thing read from the agent's job: the heads it held after the agent (#324).
-          heads: ${{ needs.implement.outputs.heads }}
+          # The heads the push job moved, never what the agent's job reports (`LANE-16`).
+          heads: ${{ needs.implement.outputs.push-heads }}
 
   # A RUN THAT ENDS GREEN WITH NOTHING TO SHOW IS RED (kanon#181).
   #

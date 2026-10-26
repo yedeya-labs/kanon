@@ -71,7 +71,7 @@ describe('both implementer lanes re-point the cites their diff moved, before the
   it('sits with the gates: before the implement lane opens its PR, and before the revise lane reports', () => {
     const [implement, revise] = PROMPTS.map(([, p]) => p) as [string, string];
     expect(implement.indexOf('LINE CITES MOVE')).toBeGreaterThan(implement.indexOf('TEST-FIRST'));
-    expect(implement.indexOf('LINE CITES MOVE')).toBeLessThan(implement.indexOf('OUTPUT: open ONE PR'));
+    expect(implement.indexOf('LINE CITES MOVE')).toBeLessThan(implement.indexOf('OUTPUT: COMMIT ON YOUR BRANCH'));
     expect(revise.indexOf('LINE CITES MOVE')).toBeGreaterThan(revise.indexOf('RUN THE GATES BEFORE YOU PUSH'));
     expect(revise.indexOf('LINE CITES MOVE')).toBeLessThan(revise.indexOf('WHEN YOU ARE DONE'));
   });
@@ -163,7 +163,7 @@ describe('K-WS-8 the lanes that make their own branch name it for its issue', ()
 
   it("the Lead's brief lane names its branch for the tracking issue", () => {
     const flat = leadLane.jobs.brief.with.prompt.replace(/\s+/g, ' ');
-    expect(flat).toContain('Push it on a branch named `docs/<n>-<slug>` (`K-WS-8`), the same <n>');
+    expect(flat).toContain('Commit it on a new branch named `docs/<n>-<slug>` (`K-WS-8`), the same <n>');
     expect(flat.indexOf('`docs/<n>-<slug>`')).toBeGreaterThan(flat.indexOf('docs/projects/<n>.md where <n> is the TRACKING ISSUE NUMBER'));
     expect(branchPattern(902).test('docs/902-project-brief')).toBe(true);
   });

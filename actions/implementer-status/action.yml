@@ -43,16 +43,17 @@ inputs:
     default: ""
   heads:
     description: >-
-      `open` and `carry`: a JSON array of `{ ref, sha }`, the branch heads the agent's job held
-      when the agent finished (the lane spine's `heads` output). Only a pull request at one of
-      these heads is this run's (#324), and only such a head takes a carried status (#1263).
+      `open` and `carry`: a JSON array of `{ ref, sha }`, the branch heads the lane spine's push
+      job moved (its `push-heads` output), never what the agent's job reports (`LANE-16`). Only a
+      pull request at one of these heads is this run's (#324), and only such a head takes a
+      carried status (#1263).
     required: false
     default: ""
   base:
     description: >-
-      `carry`: the branch's head as the agent's job checked it out, before the agent ran (the
-      lane spine's `base` output), or the head the revise lane's fix commit was made on. It must
-      be `start-head`, or nothing carries (#1263).
+      `carry`: the head the push job built the branch's new commits on (the lane spine's
+      `push-base` output), or the head the revise lane's fix commit was made on. It must be
+      `start-head`, or nothing carries (#1263).
     required: false
     default: ""
   fix-sha:

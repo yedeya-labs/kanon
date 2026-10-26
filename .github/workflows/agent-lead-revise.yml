@@ -691,9 +691,15 @@ jobs:
         ${{ needs.filter.outputs.mandate }}
 
         You are ALREADY ON THE PR'S BRANCH. Revise the existing brief in place and
-        push to this branch. Do NOT create a new branch, a new PR, or a new file,
+        commit on this branch. Do NOT create a new branch, a new PR, or a new file,
         and do NOT re-author the brief from scratch — the review threads and the
         findings are attached to what is there, and rewriting discards them.
+
+        YOU COMMIT; A JOB AFTER YOURS PUSHES (kanon#1383). Your token cannot write
+        code, so `git push` fails: leave your commits on this branch and the push
+        job moves it, after you finish. Below, "push" means the commits you leave.
+        GitHub writes new commits when the job pushes yours, so cite no commit id
+        from your checkout in a comment.
 
         YOUR SHELL IS AN ALLOW-LIST (kanon#243). You run none of this repository's
         code: nothing is installed, and no build, test, package script or interpreter
@@ -774,10 +780,14 @@ jobs:
         --setting-sources user
         --exclude-dynamic-system-prompt-sections
       # The App token's permissions, narrowed to what this lane's agent uses (`K-AGENT-46`).
-      permission-contents: write
+      # Contents read only (`LANE-13`): the `push` job after the agent's pushes its commits,
+      # with a token of its own holding Contents and Pull requests write. It moves only this
+      # lane's `ref`, from the commit the agent's job checked out.
+      permission-contents: read
       permission-issues: write
       permission-pull-requests: write
       permission-actions: read
+      push: true
     secrets:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}

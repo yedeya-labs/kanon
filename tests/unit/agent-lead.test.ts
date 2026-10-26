@@ -107,16 +107,26 @@ describe('the spine runs what this lane ran before it was converted (RA-2609)', 
 });
 
 describe('the permission probe', () => {
-  // The probe is the spine's since RA-2609, switched on by this lane's `push-probe`.
-  const probe = brief.steps.find((s) => s.name?.includes('Probe that the App can push')) as { name: string; run: string; if?: string };
+  // The probe is the spine's since RA-2609, switched on by this lane's `push-probe`. Since
+  // kanon#1383 the agent never pushes, so the probe proves what the push job will need: the
+  // spine's mint job mints the push job's token once, before the agent's, and revokes it.
+  const spine = parse(readFileSync(join(process.cwd(), '.github/workflows/agent-lane.yml'), 'utf8')) as {
+    jobs: Record<string, { needs?: string[] | string; steps: Array<{ id?: string; name?: string; if?: string; run?: string; uses?: string; with?: Record<string, string>; 'continue-on-error'?: boolean }> }>;
+  };
+  const mintSteps = spine.jobs.mint!.steps;
+  const at = (id: string) => mintSteps.findIndex((s) => s.id === id || s.name === id);
+  const probe = mintSteps[at('push-probe')]!;
+  const revoke = mintSteps[at("Revoke the push probe's token")]!;
+  const explain = mintSteps[at('Say why the push probe failed')]!;
 
   it('is switched on for this lane, and off for a lane that does not ask for it', () => {
-    expect(probe, 'the lead lane no longer runs the push probe').toBeDefined();
+    expect(probe, 'the spine no longer runs the push probe').toBeDefined();
+    expect(probe.if).toBe('inputs.push-probe');
     expect(wf.jobs.brief.with['push-probe']).toBe(true);
     // Default OFF: a lane converted later must not start probing (and failing) on a
     // grant it never needed. `lead-revise` pushes too, but never had the probe.
     const revise = parse(readFileSync(join(process.cwd(), '.github/workflows/agent-lead-revise.yml'), 'utf8'));
-    expect(spineJobFor(revise.jobs.revise).steps.map((s) => s.name ?? '')).not.toContain(probe.name);
+    expect(revise.jobs.revise.with['push-probe']).toBeUndefined();
   });
 
   it('probes the capability instead of asking the API about it', () => {
@@ -125,32 +135,46 @@ describe('the permission probe', () => {
     // `contents` or `pull_requests` — so it failed closed on every dispatch and the
     // workflow could not reach the agent at all. Same defect class as RA-929's
     // `repository.nameWithOwner`: a guard written against a field that does not
-    // exist. A dry-run push negotiates over receive-pack, which requires write, so
-    // it tests the real thing and creates nothing.
-    expect(probe.run).toContain('git push --dry-run');
-    expect(probe.run).not.toContain('installation/repositories');
+    // exist. A mint asks for the permissions themselves, and GitHub refuses one the
+    // installation doesn't hold, so it tests the real thing — the push job's own set,
+    // `pull_requests: write` included, which the dry-run push it replaced never could.
+    const push = spine.jobs.push!.steps.find((s) => s.id === 'push-token')!;
+    const set = (w: Record<string, string> = {}) => Object.fromEntries(Object.entries(w).filter(([k]) => k.startsWith('permission-')));
+    expect(set(probe.with)).toEqual(set(push.with));
+    expect(set(probe.with)).toMatchObject({ 'permission-contents': 'write', 'permission-pull-requests': 'write' });
+    expect(JSON.stringify(mintSteps)).not.toContain('installation/repositories');
+  });
+
+  it('revokes the probe\'s token at once, so nothing after it can use it', () => {
+    expect(probe.with?.['skip-token-revoke']).toBe('true');
+    expect(at("Revoke the push probe's token")).toBe(at('push-probe') + 1);
+    expect(revoke.if).toBe("always() && steps.push-probe.outputs.token != ''");
+    expect(revoke.run).toMatch(/-X DELETE[\s\S]*\/installation\/token/);
+    // Nothing else reads the probe's token.
+    expect(mintSteps.filter((s) => JSON.stringify(s).includes('steps.push-probe.outputs.token')).map((s) => s.name)).toEqual([revoke.name]);
   });
 
   it('runs before a single turn of reasoning is paid for', () => {
     // A 403 on push 90 turns in costs the whole run, and reads identically to "the
     // agent had nothing to say" — silent-absence (RA-946) in the newest component.
-    const at = stepNames.findIndex((n) => n.includes('Probe that the App can push'));
-    const claude = stepNames.findIndex((n) => n.includes('claude-code-action'));
-    expect(at).toBeGreaterThan(-1);
-    expect(at).toBeLessThan(claude);
+    // The probe runs in the mint job, which the agent's job needs, and before the agent's
+    // token: a failed probe skips that mint, so the agent's job gets no token and stops.
+    expect(at('push-probe')).toBeLessThan(at('app-token'));
+    expect(probe['continue-on-error']).toBeUndefined();
+    expect(mintSteps[at('app-token')]!.if).toBeUndefined();
+    expect(spine.jobs.run!.needs).toBe('mint');
     // The Lead installs nothing since kanon#243 (`K-AGENT-50`): the spine's project setup is
-    // off for this lane, so no hook and no `npm ci` runs before the probe, or at all.
+    // off for this lane, so no hook and no `npm ci` runs, at all.
     expect(stepNames.indexOf('npm ci')).toBe(-1);
-    // After the App-token checkout, or it probes the default token's credential.
-    expect(at).toBeGreaterThan(stepNames.findIndex((n) => n.startsWith('actions/checkout')));
   });
 
   it('fails the job with a readable message rather than warning', () => {
-    expect(probe.run).toContain('::error');
-    expect(probe.run).toContain('exit 1');
+    expect(explain.if).toBe("failure() && steps.push-probe.outcome == 'failure'");
+    expect(explain.run).toContain('::error');
+    expect(explain.run).toContain('exit 1');
     // The likeliest cause is a grant made but never accepted, so the message must
     // say so — the settings page can show a scope the installation does not hold.
-    expect(probe.run).toContain('re-authorized');
+    expect(explain.run).toContain('re-authorized');
   });
 
   it('mints before checkout, so the push credential is the App token', () => {

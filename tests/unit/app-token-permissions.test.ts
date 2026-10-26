@@ -116,17 +116,31 @@ const STATUS: Record<string, Perms> = {
 };
 /** Each lane that calls the spine, and the token its agent gets there. */
 const SPINE_CALLERS: Record<string, Perms> = {
-  // Implement, triage and revise push code (workflow files included), open and comment.
-  'agent-implement.yml': { contents: 'write', issues: 'write', 'pull-requests': 'write', workflows: 'write' },
-  'agent-triage.yml': { contents: 'write', issues: 'write', 'pull-requests': 'write', workflows: 'write' },
-  'agent-implement-revise.yml': { contents: 'write', issues: 'write', 'pull-requests': 'write', workflows: 'write' },
-  // The brief's author pushes its branch and opens the pull request.
-  'agent-lead.yml': { contents: 'write', issues: 'write', 'pull-requests': 'write' },
+  // Implement, triage and revise read the tree and fetch, and comment and label; their commits go
+  // to the push job, which pushes them and opens the pull request (kanon#1383, `[LANE-13]`).
+  'agent-implement.yml': { contents: 'read', issues: 'write', 'pull-requests': 'write' },
+  'agent-triage.yml': { contents: 'read', issues: 'write', 'pull-requests': 'write' },
+  'agent-implement-revise.yml': { contents: 'read', issues: 'write', 'pull-requests': 'write' },
+  // The brief's author reads and comments; the push job pushes its branch and opens the pull request.
+  'agent-lead.yml': { contents: 'read', issues: 'write', 'pull-requests': 'write' },
   // The brief's reviser also reads the failed runs it is answering.
-  'agent-lead-revise.yml': { contents: 'write', issues: 'write', 'pull-requests': 'write', actions: 'read' },
+  'agent-lead-revise.yml': { contents: 'read', issues: 'write', 'pull-requests': 'write', actions: 'read' },
   // The deploy diagnosis reads the tree and the releases, and comments on the deploy lane's issues
   // (plan 0010 D8); the workflow token, not this one, reads the failed run.
   'agent-deploy-diagnose.yml': { contents: 'read', issues: 'write' },
+};
+/**
+ * The spine's push job's token, for each lane that sets `push` (kanon#1383, `[LANE-14]`): it moves
+ * the branch (`contents`) and opens the pull request with its labels (`pull-requests`). `workflows`
+ * only for a lane that sets `push-workflows`, whose commits may touch `.github/workflows/`. With
+ * `push-probe` on, the mint job mints the same set once before the agent and revokes it at once.
+ */
+const SPINE_PUSH: Record<string, Perms> = {
+  'agent-implement.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
+  'agent-triage.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
+  'agent-implement-revise.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
+  'agent-lead.yml': { contents: 'write', 'pull-requests': 'write' },
+  'agent-lead-revise.yml': { contents: 'write', 'pull-requests': 'write' },
 };
 /** Minting steps outside the lanes, and why each is exempt. */
 const EXEMPT: Record<string, string> = {
@@ -295,8 +309,9 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
 
   it('the spine passes every permission input through to its mint, and nothing else', () => {
     const spine = mints.filter((m) => m.name === SPINE);
-    expect(spine).toHaveLength(1);
-    const w = spine[0]!.step.with ?? {};
+    // The agent's token, the push job's, and the push probe's, which mints the push job's set.
+    expect(spine.map((m) => m.step.id).sort()).toEqual(['app-token', 'push-probe', 'push-token']);
+    const w = spine.find((m) => m.step.id === 'app-token')!.step.with ?? {};
     expect(Object.keys(w).filter((k) => k.startsWith('permission-')).sort()).toEqual(PERMISSIONS.map((p) => `permission-${p}`).sort());
     for (const p of PERMISSIONS) expect(String(w[`permission-${p}`])).toBe(`\${{ inputs.permission-${p} }}`);
   });
@@ -304,6 +319,45 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
   it('every lane that calls the spine is listed', () => {
     const callers = yamls.filter((f) => Object.values(read(f).jobs ?? {}).some((j) => String(j.uses ?? '').endsWith(`/${SPINE}`)));
     expect(callers.map((f) => f.split('/').pop()).sort()).toEqual(Object.keys(SPINE_CALLERS).sort());
+  });
+
+  it('[LANE-13] on the spine\'s lanes, the agent\'s token holds neither contents: write nor workflows: write', () => {
+    const callers = yamls.filter((f) => Object.values(read(f).jobs ?? {}).some((j) => String(j.uses ?? '').endsWith(`/${SPINE}`)));
+    expect(callers.length).toBe(Object.keys(SPINE_CALLERS).length);
+    for (const f of callers) {
+      for (const job of Object.values(read(f).jobs ?? {}).filter((j) => String(j.uses ?? '').endsWith(`/${SPINE}`))) {
+        const perms = requested(job.with);
+        expect(perms.contents ?? 'none', `${f}: the agent's token asks contents: ${perms.contents}`).not.toBe('write');
+        expect(perms.workflows ?? 'none', `${f}: the agent's token asks workflows: ${perms.workflows}`).not.toBe('write');
+      }
+    }
+    // And the spine's mint for the agent passes exactly the lane's set, so the lane's list is the token's.
+    const w = mints.find((m) => m.name === SPINE && m.step.id === 'app-token')!.step.with ?? {};
+    expect(String(w['permission-contents'])).toBe('${{ inputs.permission-contents }}');
+    expect(String(w['permission-workflows'])).toBe('${{ inputs.permission-workflows }}');
+  });
+
+  it.each(Object.entries(SPINE_PUSH))('%s: the push job\'s token, and the push probe\'s, are its push list, within its role', (name, perms) => {
+    const spineDoc = read(`.github/workflows/${SPINE}`);
+    const pushMint = (spineDoc.jobs?.push?.steps ?? []).find((s) => s.id === 'push-token')!;
+    const probe = (spineDoc.jobs?.mint?.steps ?? []).find((s) => s.id === 'push-probe')!;
+    // One set, written once in each place: the probe proves exactly what the push job will ask.
+    for (const step of [pushMint, probe]) {
+      expect(requested(step.with)).toEqual({ contents: 'write', 'pull-requests': 'write', workflows: "${{ inputs.push-workflows && 'write' || '' }}" });
+    }
+    const jobs = Object.values(read(`.github/workflows/${name}`).jobs ?? {}).filter((j) => String(j.uses ?? '').endsWith(`/${SPINE}`));
+    expect(jobs.length).toBeGreaterThan(0);
+    for (const job of jobs) {
+      expect(job.with?.push, `${name} sets push`).toBe(true);
+      const asked: Perms = { contents: 'write', 'pull-requests': 'write', ...(job.with?.['push-workflows'] === true ? { workflows: 'write' } : {}) };
+      expect(asked).toEqual(perms);
+      withinGrant(name, job.secrets?.['app-id'], perms);
+    }
+  });
+
+  it('only the lanes listed set push, so no other spine lane gets a push job', () => {
+    const pushing = yamls.filter((f) => Object.values(read(f).jobs ?? {}).some((j) => String(j.uses ?? '').endsWith(`/${SPINE}`) && j.with?.push === true));
+    expect(pushing.map((f) => f.split('/').pop()).sort()).toEqual(Object.keys(SPINE_PUSH).sort());
   });
 
   it.each(Object.entries(SPINE_CALLERS))('%s narrows the spine\'s token to its list, within its role', (name, perms) => {
