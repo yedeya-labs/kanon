@@ -58,7 +58,7 @@ const restRead = (path) => `GET ${path}`;
 export const graphqlRead = (query) => `GraphQL ${/query\s+(\w+)/.exec(query)?.[1] ?? /{\s*(\w+)/.exec(query)?.[1] ?? 'query'}`;
 
 /** A rate limit, as GitHub words one in a REST message or a GraphQL error. */
-const RATE_LIMITED = /rate limit|RATE_LIMITED|abuse detection/i;
+export const RATE_LIMITED = /rate limit|RATE_LIMITED|abuse detection/i;
 
 /**
  * A reader over `gh api`. `run` takes `gh`'s arguments and its standard input, and returns its
@@ -177,11 +177,22 @@ export function watched(reader) {
   };
 }
 
+/**
+ * A repository, `owner/name`, as a regular expression's source: `kanon status --repo`, the hosted
+ * server's tool schema and `ownerAndName` all take this one. Neither part is `.` or `..`, which
+ * GitHub allows no owner or repository to be: in a path such as `repos/${repo}/…`, a URL would
+ * resolve either as a dot segment and read another path.
+ */
+export const REPO_PATTERN = '^(?!\\.\\.?/)[\\w.-]+/(?!\\.\\.?$)[\\w.-]+$';
+
+/** Is `repo` one repository, `owner/name`? @param {unknown} repo */
+export const isRepo = (repo) => typeof repo === 'string' && new RegExp(REPO_PATTERN).test(repo);
+
 /** `owner` and `name` of an `owner/name` repository. @param {string} repo */
 export function ownerAndName(repo) {
-  const [owner, name, ...rest] = String(repo ?? '').split('/');
-  if (!owner || !name || rest.length) throw new Error(`a repository is \`owner/name\`, not \`${repo}\``);
-  return { owner, name };
+  if (!isRepo(repo)) throw new Error(`a repository is \`owner/name\`, not \`${repo}\``);
+  const [owner, name] = repo.split('/');
+  return { owner: /** @type {string} */ (owner), name: /** @type {string} */ (name) };
 }
 
 /**

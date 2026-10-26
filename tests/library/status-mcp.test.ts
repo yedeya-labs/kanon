@@ -16,7 +16,7 @@ import { ownerWorld } from './helpers/owner-world.js';
 const { handle, METHODS, PROTOCOL_VERSION, TOOLS } = await import('../../infra/status/function/index.mjs');
 const { fetchReader } = await import('../../infra/status/function/reader.mjs');
 const { status } = await import('../../cli/status.mjs');
-const { ReadError } = await import('../../scripts/status/reader.mjs');
+const { ReadError, ownerAndName } = await import('../../scripts/status/reader.mjs');
 const { HELD, HELD_MARKER } = await import('../../scripts/lead-reconcile.mjs');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -309,6 +309,12 @@ describe('[MCP-2] exactly the listed tools, read-only, each equal to its view\'s
       ['lanes', {}, /repo/],
       ['lanes', { repo: 'acme' }, /owner\/name/],
       ['lanes', { repo: 'acme/shop/x' }, /owner\/name/],
+      // A dot segment would name another path once `fetch` resolves the URL (#1422).
+      ['lanes', { repo: 'acme/..' }, /owner\/name/],
+      ['lanes', { repo: 'acme/.' }, /owner\/name/],
+      ['release', { repo: '../shop' }, /owner\/name/],
+      ['release', { repo: './shop' }, /owner\/name/],
+      ['project', { repo: '../..', project: 7 }, /owner\/name/],
       ['release', { repo: REPO, extra: 1 }, /extra/],
     ] as const) {
       const { reader, reads } = untouched();
@@ -316,6 +322,14 @@ describe('[MCP-2] exactly the listed tools, read-only, each equal to its view\'s
       expect([r.result?.isError, reads], `${name} ${JSON.stringify(args)}`).toEqual([true, []]);
       expect(r.result.content[0].text).toMatch(says);
     }
+    // The schema a client validates against refuses the same: one pattern, the core's own.
+    for (const tool of TOOLS) {
+      const pattern = new RegExp(tool.inputSchema.properties.repo.pattern);
+      for (const bad of ['acme/..', 'acme/.', '../shop', './shop', '../..', 'acme', 'acme/shop/x']) expect(pattern.test(bad), `${tool.name} ${bad}`).toBe(false);
+      for (const good of [REPO, 'acme/.github', 'acme/shop.js', 'a-b/c_d', 'acme/..shop']) expect(pattern.test(good), `${tool.name} ${good}`).toBe(true);
+    }
+    for (const bad of ['acme/..', 'acme/.', '../shop', './shop', 'acme', 'acme/shop/x', '']) expect(() => ownerAndName(bad), bad).toThrow(/owner\/name/);
+    expect(ownerAndName('acme/.github')).toEqual({ owner: 'acme', name: '.github' });
     // An unknown tool is a protocol error, as the specification has it.
     const unknown = (await call('merge', { repo: REPO }, untouched().reader)).json();
     expect(unknown.error.code).toBe(-32602);
@@ -351,9 +365,32 @@ describe('[MCP-3] no write and no store', () => {
       return new Response(JSON.stringify([{ n: 1 }]), { status: 200, headers: { link: '<https://elsewhere.example/steal?page=2>; rel="next"' } });
     }) as unknown as typeof fetch;
     const reader = fetchReader({ token: 't', fetch: fetchImpl });
-    for (const doc of ['mutation Merge { mergePullRequest(input: {}) { clientMutationId } }', '  subscription S { x }', 'query A { a } mutation B { b }']) {
-      await expect(reader.graphql(doc), doc).rejects.toThrow(/writes nothing|only queries/);
+    // Every ignored token GraphQL allows between one definition's `}` and the next counts (#1422):
+    // a comma, a comment however its line ends, a byte-order mark; and a block string's escaped
+    // `\"""` doesn't end the string, so it can't hide the definitions after it.
+    for (const doc of [
+      'mutation Merge { mergePullRequest(input: {}) { clientMutationId } }',
+      '  subscription S { x }',
+      'query A { a } mutation B { b }',
+      'fragment F on Mutation { a },mutation { ...F }',
+      'query A { a } , , mutation B { b }',
+      '{ a },subscription S { x }',
+      'query A { a } # note\nmutation B { b }',
+      'query A { a } # note\rmutation B { b }',
+      'query A { a } # note\r\nmutation B { b }',
+      '\uFEFFmutation B { b }',
+      'query A { a }\uFEFFmutation B { b }',
+      'query A { a(s: """x\\""" """) } mutation B { b(s: """ """) }',
+    ]) {
+      await expect(reader.graphql(doc), JSON.stringify(doc)).rejects.toThrow(/writes nothing|only queries/);
     }
+    expect(requests, 'a refused document sends nothing').toEqual([]);
+    // A query is sent, whatever its strings and comments say.
+    for (const doc of ['query A { a(s: "} mutation B") }', 'query A { a } # } mutation B', 'query A { a(s: """} ,mutation\\""" } subscription""") }', 'query A { a }, query B { b }', 'fragment F on Mutation { a } query { ...F }']) {
+      await reader.graphql(doc);
+    }
+    expect(requests).toEqual(Array(5).fill(`POST ${API}/graphql`));
+    requests.length = 0;
     await expect(reader.pages('repos/o/r/pulls')).rejects.toThrow(/GitHub's API/);
     expect(requests).toEqual([`GET ${API}/repos/o/r/pulls`]);
     expect(Object.keys(reader).sort()).toEqual(['get', 'graphql', 'pages']);

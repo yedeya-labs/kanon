@@ -21,7 +21,7 @@ kanon status --needs-owner
 | `--lanes` | The lane-health view. |
 | `--pr <n>` | The pull-request readiness view of pull request `<n>` ([below](#the-pull-request-readiness-view)). |
 | `--needs-owner` | The needs-the-Owner view: what waits on a person ([below](#the-needs-the-owner-view)). |
-| `--repo <owner>/<repo>` | The repository. The default is the origin remote of the checkout you run it from. |
+| `--repo <owner>/<repo>` | The repository. The default is the origin remote of the checkout you run it from. Neither part may be `.` or `..`. |
 | `--json` | Print one JSON document instead of prose ([below](#the-json-output)). |
 
 Each view you ask for is one section of the answer, and you can ask for more than one at once. All five are built: the project, release, pull-request readiness, lane-health and needs-the-Owner views.
@@ -331,7 +331,7 @@ On a usage error or when it can't run, the document is the error document, `{ "s
 
 ## The hosted MCP server
 
-The same five views are served read-only to an MCP client, such as Claude Code, claude.ai or the Claude app on a phone, by a hosted MCP server: one request handler in [`infra/status/function/`](../infra/status/function/), with no MCP SDK. Each tool is one view, and returns the same object as that view's section of the JSON output above, for the same reads: the server builds it with the code `kanon status` uses (`scripts/status/views.mjs`). A view whose reads didn't complete answers with its section's `error` and `reads`, as the tool's error. The server reads GitHub with the person's own token, through a reader over `fetch` that can ask only REST `GET`s and GraphQL queries. It writes nothing, to GitHub or anywhere else, and keeps nothing. The server's clauses are the `MCP` area of the spec layer ([`docs/qa/specs/mcp.md`](qa/specs/mcp.md)).
+The same five views are served read-only to an MCP client, such as Claude Code, claude.ai or the Claude app on a phone, by a hosted MCP server: one request handler in [`infra/status/function/`](../infra/status/function/), with no MCP SDK. Each tool is one view, and returns the same object as that view's section of the JSON output above, for the same reads: the server builds it with the code `kanon status` uses (`scripts/status/views.mjs`). A view whose reads didn't complete answers with its section's `error` and `reads`, as the tool's error. The server reads GitHub with the person's own token, through a reader over `fetch` that can ask only REST `GET`s and GraphQL queries. A GraphQL document holding a mutation or a subscription is refused before anything is sent, whatever ignored tokens (white space, commas, comments, a byte-order mark) stand before it. It writes nothing, to GitHub or anywhere else, and keeps nothing. The server's clauses are the `MCP` area of the spec layer ([`docs/qa/specs/mcp.md`](qa/specs/mcp.md)).
 
 It speaks MCP's Streamable HTTP transport at protocol version `2025-11-25`, at one endpoint, `/mcp`:
 
@@ -350,7 +350,7 @@ The server's code is more than its own directory: it links the status core, and 
 
 ## The hosted server's tools
 
-A test holds this list to the server's own tools (`[STAT-12]`, `[MCP-2]`). Every tool takes `repo`, the repository as `owner/name`, and is annotated read-only.
+A test holds this list to the server's own tools (`[STAT-12]`, `[MCP-2]`). Every tool takes `repo`, the repository as `owner/name`, and is annotated read-only. A `repo` is checked against the same pattern `--repo` is: neither part may be `.` or `..`, which would name another path once GitHub's API URL is resolved, so such a call is the tool's error and reads nothing.
 
 | Tool | Section | Arguments | View |
 |---|---|---|---|

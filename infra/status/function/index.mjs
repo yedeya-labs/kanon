@@ -26,6 +26,7 @@
 // `node:` built-ins only, and no MCP SDK (decision 11).
 
 import { Buffer } from 'node:buffer';
+import { REPO_PATTERN } from '../../../scripts/status/reader.mjs';
 import { VIEWS, section } from '../../../scripts/status/views.mjs';
 
 /** The MCP protocol version the server speaks, as docs/status.md names it. */
@@ -40,8 +41,8 @@ const INVALID_REQUEST = -32600;
 const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS = -32602;
 
-/** A repository, `owner/name`, as `kanon status --repo` takes one. */
-const REPO = { type: 'string', pattern: '^[\\w.-]+/[\\w.-]+$', description: 'The repository, `owner/name`.' };
+/** A repository, `owner/name`, as `kanon status --repo` takes one: the core's own pattern. */
+const REPO = { type: 'string', pattern: REPO_PATTERN, description: 'The repository, `owner/name`.' };
 /** An issue or pull-request number. */
 const NUMBER = (/** @type {string} */ what) => ({ type: 'integer', minimum: 1, description: what });
 
