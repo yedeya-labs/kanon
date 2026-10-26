@@ -358,7 +358,7 @@ const Q_COMMENTS = `query Comments($owner: String!, $name: String!, $number: Int
 const Q_CLOSED_BY = `query ClosedBy($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     issue(number: $number) {
-      closedByPullRequestsReferences(first: 100, after: $after) { nodes { number } pageInfo { hasNextPage endCursor } }
+      closedByPullRequestsReferences(first: 100, after: $after) { nodes { number state repository { nameWithOwner } } pageInfo { hasNextPage endCursor } }
     }
   }
 }`;
@@ -428,10 +428,27 @@ async function issueRead(number, { reader, repo }) {
 export const issueComments = (number, { reader, repo }) =>
   allNodes(reader, Q_COMMENTS, { ...ownerAndName(repo), number: Number(number) }, (d) => d?.repository?.issue?.comments);
 
-/** The numbers of the pull requests GitHub says close this issue (`closedByPullRequestsReferences`). */
-const closingPrNumbers = async (number, { reader, repo }) =>
-  (await allNodes(reader, Q_CLOSED_BY, { ...ownerAndName(repo), number: Number(number) }, (d) => d?.repository?.issue?.closedByPullRequestsReferences))
-    .map((r) => r.number);
+/**
+ * The pull requests GitHub says close this issue (`closedByPullRequestsReferences`), split by
+ * repository (kanon#1412). The connection can list a pull request from ANOTHER repository (a
+ * body there saying `Fixes owner/this#N`), and its number means nothing here: read here, it
+ * failed the read on every tick or read an unrelated pull request. So `here` holds the numbers
+ * to read in `repo`, and `elsewhere` the others, by repository, with the state the connection
+ * gave, never read here. A node whose repository didn't come back is a failed read.
+ * @returns {Promise<{here: number[], elsewhere: {number: number, repo: string, state: string}[]}>}
+ */
+async function closingPrs(number, { reader, repo }) {
+  const nodes = await allNodes(reader, Q_CLOSED_BY, { ...ownerAndName(repo), number: Number(number) }, (d) => d?.repository?.issue?.closedByPullRequestsReferences);
+  const here = [];
+  const elsewhere = [];
+  for (const r of nodes) {
+    const owner = r?.repository?.nameWithOwner;
+    if (typeof owner !== 'string') throw new Error(`#${number}'s closing pull request #${r?.number}'s repository could not be read`);
+    if (owner.toLowerCase() === String(repo).toLowerCase()) here.push(r.number);
+    else elsewhere.push({ number: r.number, repo: owner, state: r.state });
+  }
+  return { here, elsewhere };
+}
 
 /** A pull request's merge: its state, merge commit, title and body. */
 async function prMergeRead(number, { reader, repo }) {
@@ -505,6 +522,7 @@ export const DEPLOY_PHASE = {
   'deploy-job-absent': 'deploy-job-absent',
   reverted: 'deploy-reverted',
   'history-unreadable': 'deploy-history-unreadable',
+  'merged-elsewhere': 'deploy-merged-elsewhere',
 };
 
 
@@ -1033,6 +1051,14 @@ function nextActionsCore(world, {
     'deploy-unknown': () => `readDeploy returned a state this tick does not know how to act on — refusing to guess`,
   };
   if (WAITING[phase]) return { phase, actions: [], stopped: WAITING[phase]() };
+  // A CLOSING MERGE IN ANOTHER REPOSITORY (kanon#1412). Permanent by construction: it stays
+  // merged, and no release of this repository will ever contain it, so every tick would stop
+  // here again. It holds (`K-AGENT-32`) and names each merge.
+  if (phase === 'deploy-merged-elsewhere') {
+    const named = (world.deploy?.merges ?? []).map((m) => `\`${m.repo}#${m.number}\` (closing #${m.issue})`).join(', ') || 'a closing pull request';
+    const why = `phase 4 is \`deploy-merged-elsewhere\`: ${named} merged in another repository, so no release of this one can contain it and ${deployEnvironment(world)} can't be checked for it. Once that work is deployed where it lives, close this project by hand; or, if it doesn't belong to this project, edit that pull request so it no longer closes the issue and remove \`${HELD}\``;
+    return { phase, actions: [], escalateKind: 'stop', escalate: [why], stopped: `${why}. NOT closing it here: the release was never checked for that work` };
+  }
 
   // ── PHASE 5 outcomes ──────────────────────────────────────────────────────
   if (phase === 'file-qa') {
@@ -1578,7 +1604,10 @@ export async function closingMergeShas(issues, io = tickReads()) {
  *
  * @param {object[]} issues
  * @param {{reader?: object, repo?: string}} [io]
- * @returns {Promise<{issue: number, shas: string[], prs: {number: number, sha: string, text: string}[]}[]>}
+ * Each closing pull request merged in another repository is kept in `elsewhere`, by number and
+ * repository, and contributes no `sha` (kanon#1412).
+ *
+ * @returns {Promise<{issue: number, shas: string[], prs: {number: number, sha: string, text: string}[], elsewhere: {number: number, repo: string}[]}[]>}
  */
 export async function closingMergesByIssue(issues, io = tickReads()) {
   // `closedByPullRequestsReferences` is GitHub's OWN join, the same reasoning as
@@ -1590,17 +1619,22 @@ export async function closingMergesByIssue(issues, io = tickReads()) {
   // failing the state was `nothing-to-deploy` and the project closed saying nothing was
   // deployed; with one failing, the release was checked for the other merges only. A
   // transient failure fails the tick (`K-AGENT-32`), and `reconcileAll` reports the project.
+  //
+  // A MERGE IN ANOTHER REPOSITORY IS KEPT APART, BY NAME (kanon#1412). It is never read here,
+  // and no release of this repository can contain it, so it is `elsewhere`, never a `sha`:
+  // `readDeploy` holds the project on it rather than crediting or dropping it.
   const out = [];
   for (const i of issues) {
     if (i.state !== 'CLOSED') continue;
-    const refs = await closingPrNumbers(i.number, io);
+    const refs = await closingPrs(i.number, io);
     // The title and body come back on the same read, for `relandedReverts` (kanon#280).
     const prs = [];
-    for (const number of refs) {
+    for (const number of refs.here) {
       const pr = await prMergeRead(number, io);
       if (pr.state === 'MERGED' && pr.mergeCommit?.oid) prs.push({ number, sha: pr.mergeCommit.oid, text: `${pr.title ?? ''}\n${pr.body ?? ''}` });
     }
-    if (prs.length) out.push({ issue: i.number, shas: prs.map((p) => p.sha), prs });
+    const elsewhere = refs.elsewhere.filter((p) => p.state === 'MERGED').map((p) => ({ number: p.number, repo: p.repo }));
+    if (prs.length || elsewhere.length) out.push({ issue: i.number, shas: prs.map((p) => p.sha), prs, elsewhere });
   }
   return out;
 }
@@ -1870,6 +1904,11 @@ export async function readDeploy(issues, io = {}) {
   const { reader, repo } = { ...tickReads(), ...io };
   const declared = io.declared ?? (async () => referenceDeployAt(await defaultBranchReader(reader, repo)));
   const byIssue = await closingMergesByIssue(issues, { reader, repo });
+  // NO RELEASE HERE CAN HOLD ANOTHER REPOSITORY'S MERGE (kanon#1412), so neither crediting a
+  // release nor dropping the merge is right: the project holds, naming each one, for a human
+  // to decide whether that work is deployed where it lives.
+  const elsewhere = byIssue.flatMap((i) => (i.elsewhere ?? []).map((p) => ({ issue: i.issue, ...p })));
+  if (elsewhere.length) return { state: 'merged-elsewhere', merges: elsewhere };
   const shas = byIssue.flatMap((i) => i.shas);
   if (!shas.length) return classifyDeploy({ shas, tag: null, run: null, deployJob: null });
   const deploy = await declared();
@@ -2863,7 +2902,12 @@ export async function linkedPrsRead(issueNumber, io = tickReads()) {
   const { reader, repo, warn: say = warn } = io;
   try {
     const prs = [];
-    for (const number of await closingPrNumbers(issueNumber, { reader, repo })) {
+    const refs = await closingPrs(issueNumber, { reader, repo });
+    // ANOTHER REPOSITORY'S PULL REQUEST IS NOT READ HERE (kanon#1412): its number names a
+    // different pull request, or none, in this one, and every consumer of this list acts on
+    // this repository's pull requests by number.
+    for (const p of refs.elsewhere) say(`#${issueNumber} is closed by ${p.repo}#${p.number}, a pull request in another repository: not read here`);
+    for (const number of refs.here) {
       const pr = await pullRequestRead(number, { reader, repo });
       prs.push({
         number: pr.number,

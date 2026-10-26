@@ -57,6 +57,16 @@
 // that was never reviewed. The age gate makes this rare and the check makes it
 // impossible.
 //
+// ── A HELD PROJECT TAKES NO ACTIONS (`K-AGENT-32`, kanon#1411) ─────────────────
+// A PR that closes a member of a project whose tracking issue carries `needs:human` is
+// not churned: a human stopped that project, and a churn starts a paid Reviewer run. The
+// Lead's `reviewRecovery` declines the same PRs (kanon#1397, PR #1405), and this lane runs
+// in the same tick, so without this it re-delivered them anyway. A tracking issue whose
+// labels can't be read counts as held, as `readWorld` reads it, and a PR whose closing
+// issues can't be read is not churned. It is asked only of a PR about to be churned, so a
+// healthy PR costs no read. The review lane's own CI-completion review is untouched: only
+// the re-delivery is withheld. See `projectHoldReader`.
+//
 // ── NO `actions: write` ─────────────────────────────────────────────────────
 // Recovery is a label churn (the Lead's row in `rulebook/03-agents.md`, `K-AGENT-4`), which is what
 // RA-1281 cost when phase 5 reached for `gh workflow run` instead. `agent-review.yml`
@@ -66,7 +76,8 @@
 // Usage: node scripts/review-recovery.mjs [--apply]
 
 import { execFileSync } from 'node:child_process';
-import { AWAITING_REVIEW_HOURS } from './lead-reconcile.mjs';
+import { AWAITING_REVIEW_HOURS, HELD } from './lead-reconcile.mjs';
+import { projectOf } from './split-lineage.mjs';
 import { CONFLICT_JSON, CONFLICT_WHY, blocksChurn, conflictState } from './conflict-state.mjs';
 import { readTrailer } from './review-trailer.mjs';
 import { normaliseLogin, reviewAttempts, reviewRunsFor, whyNoChurn } from './review-run-evidence.mjs';
@@ -186,10 +197,19 @@ export function reviewRecovery(prs, {
   // tier never shells out; `main()` passes the real reader.
   evidenceOf = NO_RETRY_EVIDENCE,
   retryHours = RETRY_COOL_DOWN_HOURS,
+  // Why this PR's project is held, or null (kanon#1411). Asked last, of a PR about to be
+  // churned only, so a healthy PR costs no read.
+  heldBy = projectHoldReader(),
 } = {}) {
   const churn = [];
   const noted = [];
   for (const pr of reviewPrs(prs)) {
+    // A HELD PROJECT TAKES NO ACTIONS (`K-AGENT-32`): both churn arms below go through here.
+    const churnUnlessHeld = (entry) => {
+      const held = heldBy(pr);
+      if (held) noted.push({ number: pr.number, sha: pr.headRefOid, why: held });
+      else churn.push(entry);
+    };
     if (verdictOnHead(pr)) continue;
     // AGE, NOT MERE ABSENCE. A PR pushed a minute ago has no review either, and
     // calling that a stall would fire on every healthy PR in the window CI takes.
@@ -234,18 +254,76 @@ export function reviewRecovery(prs, {
       churnedAfter: new Date(pushedAt).getTime() + hours * 3600_000,
     });
     if (attempts.length === 0) {
-      churn.push({ number: pr.number, sha: pr.headRefOid });
+      churnUnlessHeld({ number: pr.number, sha: pr.headRefOid });
       continue;
     }
     // Its only attempt died of its cause and the cool-down has passed (RA-2519).
     const retry = retryDecision(attempts, { evidenceOf, now, hours: retryHours });
     if (retry?.retry) {
-      churn.push({ number: pr.number, sha: pr.headRefOid, retry: retry.retry });
+      churnUnlessHeld({ number: pr.number, sha: pr.headRefOid, retry: retry.retry });
       continue;
     }
     noted.push({ number: pr.number, sha: pr.headRefOid, why: retry?.why ?? whyNoChurn(attempts) });
   }
   return { churn, noted };
+}
+
+/**
+ * Why a PR's project is held, or null when no project it belongs to is (kanon#1411).
+ *
+ * The PR's project is the one each issue it closes declares with its last-line
+ * `qa:project <n>` marker (`projectOf`, the rule `readWorld` applies), through GitHub's own
+ * `closingIssuesReferences`, the join the Lead's follow-up membership reads (`prTraceRead`).
+ * An issue in another repository is not read here: its number means nothing in this one.
+ *
+ * Every unknown answers "held", never "not held", because "not held" is the direction that
+ * acts on a project a human stopped: a tracking issue whose labels can't be read is held, as
+ * `readWorld` treats it, and so is a PR whose closing issues, or one of their bodies, can't
+ * be read. Each tracking issue's labels are read once per reader, so once per tick.
+ *
+ * @param {{json?: (args: string[]) => any, repo?: string}} [io]
+ * @returns {(pr: {number: number}) => string | null}
+ */
+export function projectHoldReader({ json = ghJson, repo = REPO } = {}) {
+  const here = String(repo ?? '').toLowerCase();
+  /** @type {Map<number, string | null>} */
+  const tracking = new Map();
+  const heldWhy = (project) => {
+    if (!tracking.has(project)) {
+      let why;
+      try {
+        const names = (json(['issue', 'view', String(project), '--repo', repo, '--json', 'labels']).labels ?? []).map((l) => l.name ?? l);
+        why = names.includes(HELD)
+          ? `project #${project} is held (\`${HELD}\` on its tracking issue), and a held project takes no actions (\`K-AGENT-32\`), so its review is not re-delivered. Removing the label resumes it`
+          : null;
+      } catch {
+        why = `could not read #${project}'s labels, so whether project #${project} is held is UNKNOWN — not re-delivering its review, because a held project takes no actions (\`K-AGENT-32\`)`;
+      }
+      tracking.set(project, why);
+    }
+    return tracking.get(project);
+  };
+  return (pr) => {
+    let closes;
+    try {
+      closes = (json(['pr', 'view', String(pr.number), '--repo', repo, '--json', 'closingIssuesReferences']).closingIssuesReferences ?? [])
+        .filter((r) => `${r.repository?.owner?.login}/${r.repository?.name}`.toLowerCase() === here)
+        .map((r) => r.number);
+    } catch {
+      return `could not read which issues PR #${pr.number} closes, so whether its project is held is UNKNOWN — not re-delivering its review (\`K-AGENT-32\`)`;
+    }
+    for (const number of closes) {
+      let project;
+      try {
+        project = projectOf(json(['issue', 'view', String(number), '--repo', repo, '--json', 'body']).body);
+      } catch {
+        return `could not read #${number}, which PR #${pr.number} closes, so whether its project is held is UNKNOWN — not re-delivering its review (\`K-AGENT-32\`)`;
+      }
+      const why = project == null ? null : heldWhy(project);
+      if (why) return why;
+    }
+    return null;
+  };
 }
 
 /** What a human reads. Two lanes of nothing is still a finding, so it says so. */
@@ -340,7 +418,7 @@ function main() {
   for (const n of unreadable) {
     console.log(`::warning title=review recovery::could not read PR #${n}, so whether it is parked without a review is unknown. Not churning it (RA-1689).`);
   }
-  const decision = reviewRecovery(prs, { evidenceOf: makeRetryEvidenceReader({ json: ghJson }) });
+  const decision = reviewRecovery(prs, { evidenceOf: makeRetryEvidenceReader({ json: ghJson }), heldBy: projectHoldReader({ json: ghJson }) });
   const text = report(decision);
   console.log(text);
   if (process.env.GITHUB_STEP_SUMMARY) {

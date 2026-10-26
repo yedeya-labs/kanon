@@ -971,6 +971,9 @@ describe('phases 4 and 6 — deploy watch, then close (RA-1056)', () => {
       // history after the merges could not be read. Neither is a deploy.
       [{ state: 'reverted', tag: 'v0.38.5' }, 'deploy-reverted'],
       [{ state: 'history-unreadable', tag: 'v0.38.5' }, 'deploy-history-unreadable'],
+      // kanon#1412: a closing pull request merged in another repository, which no release of
+      // this one can hold.
+      [{ state: 'merged-elsewhere', merges: [{ issue: 1, number: 9, repo: 'someone-else/other-repo' }] }, 'deploy-merged-elsewhere'],
       // Nothing merged closed these issues, so nothing shipped — but it must not
       // block, and it must not claim a deploy either.
       [{ state: 'nothing-to-deploy' }, 'file-qa'],
@@ -1004,6 +1007,18 @@ describe('phases 4 and 6 — deploy watch, then close (RA-1056)', () => {
       const r = nextActions(allClosed({ deploy }));
       expect(r.actions).toEqual([]);
       expect(r.stopped).toMatch(re);
+    });
+
+    it('holds the project for a closing merge in another repository, naming it (kanon#1412)', () => {
+      // Permanent by construction: the merge stays merged and no release here will contain
+      // it, so the tick holds rather than recomputing the same stop every hour (`K-AGENT-32`).
+      const r = nextActions(allClosed({ deploy: { state: 'merged-elsewhere', merges: [{ issue: 1, number: 9, repo: 'someone-else/other-repo' }] } }));
+      expect(r.actions).toEqual([]);
+      expect(r.escalateKind).toBe('stop');
+      expect(r.escalate).toHaveLength(1);
+      expect(r.escalate?.[0]).toContain('someone-else/other-repo#9');
+      expect(r.escalate?.[0]).toContain('#1');
+      expect(r.stopped).toContain('someone-else/other-repo#9');
     });
 
     it('is idempotent for nothing-to-deploy too, not only for deployed', () => {
@@ -1354,7 +1369,7 @@ describe('phase 4 — the deploy derivation itself (RA-1061)', () => {
     // #2's merge was credited as `deployed`.
     const io = fakeReads({
       closedBy: { 1: [9] },
-      graphql: { ClosedBy: (v) => { if (v.number === 2) throw new Error('rate limited'); return { repository: { issue: { closedByPullRequestsReferences: connection([{ number: 9 }]) } } }; } },
+      graphql: { ClosedBy: (v) => { if (v.number === 2) throw new Error('rate limited'); return { repository: { issue: { closedByPullRequestsReferences: connection([{ number: 9, repository: { nameWithOwner: 'o/r' } }]) } } }; } },
       prs: { 9: { state: 'MERGED', mergeCommit: { oid: 'sha1' } } },
       releases: ['v1.0.0'],
       runs: [{ displayTitle: 'v1.0.0', status: 'completed', conclusion: 'success', databaseId: 1, url: 'u1' }],
