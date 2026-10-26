@@ -19,14 +19,24 @@
 // NOTHING WRITES (`[MCP-3]`). No tool, method or route writes to GitHub, and the handler keeps
 // nothing: no table, no bucket, no file. What the reader asks is GETs and GraphQL queries alone.
 //
-// NOT DEPLOYABLE ON ITS OWN. Authentication is Issue H's: it wraps `handle`, refuses a request
-// without a valid credential, and passes the person's `fetchReader` in. The template and the
-// deploy are Issue I's. Nothing here is a Lambda entry point, and no local server is shipped.
+// ONLY WHERE THE APP REACHES, WITH THE PERSON'S ACCESS (`[MCP-7]`). Given `reach`, a tool call
+// asks it first whether Kanon's status App is installed on the repository's owner where the
+// person can see it, and is granted that repository: `appReaches` reads the person's
+// installations of the App and their repositories, never the repository itself. A repository it
+// can't reach is the tool's error, saying which, and its view doesn't run.
+//
+// EVERY ANSWER CARRIES ITS READ TIME (`[MCP-9]`): a call that read GitHub says when its reads
+// began, as `_meta.readAt` and as a last line of text.
+//
+// NOT DEPLOYABLE ON ITS OWN. Authentication is `auth.mjs`'s: its `serve` wraps `handle`, refuses
+// a request without a valid credential, and passes the person's `fetchReader` and `reach` in. The
+// template and the deploy are Issue I's. Nothing here is a Lambda entry point, and no local
+// server is shipped.
 //
 // `node:` built-ins only, and no MCP SDK (decision 11).
 
 import { Buffer } from 'node:buffer';
-import { REPO_PATTERN } from '../../../scripts/status/reader.mjs';
+import { REPO_PATTERN, ownerAndName } from '../../../scripts/status/reader.mjs';
 import { VIEWS, section } from '../../../scripts/status/views.mjs';
 
 /** The MCP protocol version the server speaks, as docs/status.md names it. */
@@ -106,7 +116,10 @@ const annotations = (/** @type {Tool} */ t) => ({ title: t.title, readOnlyHint: 
  *   reader: import('../../../scripts/status/reader.mjs').Reader,
  *   now?: () => Date,
  *   release?: string,
- * }} Deps the person's reader, the clock, and the Kanon release the server runs, as its wrapper knows it
+ *   reach?: ((repo: string) => Promise<string | null>) | null,
+ * }} Deps the person's reader, the clock, the Kanon release the server runs, as its wrapper knows
+ *   it, and what says whether the status App reaches a repository with the person's access: null
+ *   when it does, else why not
  * @typedef {{ statusCode: number, headers: Record<string, string>, body: string }} Reply
  */
 
@@ -144,7 +157,7 @@ export const METHODS = {
  * @param {Deps} deps
  * @returns {Promise<Reply>}
  */
-export async function handle(event, { reader, now = () => new Date(), release = 'unreleased' }) {
+export async function handle(event, { reader, now = () => new Date(), release = 'unreleased', reach = null }) {
   const headers = Object.fromEntries(Object.entries(event?.headers ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
   if ((event?.rawPath ?? event?.requestContext?.http?.path) !== MCP_PATH) return empty(404);
   if (headers.origin !== undefined) return json(403, failure(null, INVALID_REQUEST, 'a request from a browser page is refused'));
@@ -157,8 +170,7 @@ export async function handle(event, { reader, now = () => new Date(), release = 
   /** @type {any} */
   let message;
   try {
-    const raw = event?.isBase64Encoded ? Buffer.from(String(event.body ?? ''), 'base64').toString('utf8') : String(event?.body ?? '');
-    message = JSON.parse(raw);
+    message = JSON.parse(bodyOf(event));
   } catch {
     return json(400, failure(null, PARSE_ERROR, 'the body is not JSON'));
   }
@@ -179,7 +191,7 @@ export async function handle(event, { reader, now = () => new Date(), release = 
   const { id, method, params } = message;
   const run = Object.hasOwn(METHODS, method) ? METHODS[method] : undefined;
   if (!run) return json(200, failure(id, METHOD_NOT_FOUND, `method not found: ${method}`));
-  const answer = /** @type {any} */ (await run(params ?? {}, { reader, now, release }));
+  const answer = /** @type {any} */ (await run(params ?? {}, { reader, now, release, reach }));
   return json(200, answer && Object.hasOwn(answer, 'error') ? { jsonrpc: '2.0', id, error: answer.error } : { jsonrpc: '2.0', id, result: answer });
 }
 
@@ -188,25 +200,68 @@ export async function handle(event, { reader, now = () => new Date(), release = 
  * protocol error; arguments the tool can't take, and a view with no answer, are the tool's error.
  * @param {any} params @param {Required<Deps>} deps
  */
-async function callTool(params, { reader, now }) {
+async function callTool(params, { reader, now, reach }) {
   const tool = TOOLS.find((t) => t.name === params?.name);
   if (!tool) return { error: { code: INVALID_PARAMS, message: `unknown tool: ${params?.name}` } };
   const args = params.arguments ?? {};
   const wrong = problems(tool, args);
   if (wrong.length) return toolError(`${tool.name} can't run: ${wrong.join('; ')}`);
-  const reads = { reader, repo: String(args.repo), readAt: now().toISOString(), ...(tool.n ? { n: Number(args[tool.n]) } : {}) };
+  const repo = String(args.repo);
+  const readAt = now().toISOString();
+  if (reach) {
+    /** @type {string | null} */
+    let refused;
+    try {
+      refused = await reach(repo);
+    } catch (e) {
+      refused = `couldn't check that Kanon's status App reaches \`${repo}\` with your access: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    if (refused) return readAtOn(toolError(refused), readAt);
+  }
+  const reads = { reader, repo, readAt, ...(tool.n ? { n: Number(args[tool.n]) } : {}) };
   /** @type {object} */
   let answer;
   try {
     answer = await section(() => VIEWS[tool.view](reads));
   } catch (e) {
-    return toolError(`the ${tool.name} view stopped on an unexpected error: ${e instanceof Error ? e.message : String(e)}`);
+    return readAtOn(toolError(`the ${tool.name} view stopped on an unexpected error: ${e instanceof Error ? e.message : String(e)}`), readAt);
   }
-  return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: 'error' in answer };
+  return readAtOn({ content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: 'error' in answer }, readAt);
 }
 
-/** A tool's error, as text. @param {string} text */
+/** A tool's error, as text. @param {string} text @returns {{ content: Array<{ type: 'text', text: string }>, isError: boolean }} */
 const toolError = (text) => ({ content: [{ type: 'text', text }], isError: true });
+
+/**
+ * A tool's answer, saying when its reads began (`[MCP-9]`).
+ * @template {{ content: Array<{ type: 'text', text: string }> }} T @param {T} result @param {string} readAt
+ */
+const readAtOn = (result, readAt) => ({ ...result, content: [...result.content, { type: 'text', text: `Read from GitHub at ${readAt}.` }], _meta: { readAt } });
+
+/** A function URL event's body, as text, whether it came base64-encoded or not. @param {any} event */
+export const bodyOf = (event) => (event?.isBase64Encoded ? Buffer.from(String(event.body ?? ''), 'base64').toString('utf8') : String(event?.body ?? ''));
+
+/**
+ * Whether Kanon's status App reaches `repo` with the person's access (`[MCP-7]`): null when it
+ * does, else which it isn't. It reads the person's installations of the App, and the repositories
+ * the matching one grants, never the repository's content. Inside an installed account GitHub
+ * answers the same for a repository the App isn't granted and one the person can't read, and
+ * only the App's own key could tell them apart, which the server doesn't hold (`[MCP-5]`), so
+ * that answer names both.
+ * @param {import('../../../scripts/status/reader.mjs').Reader} reader the person's
+ * @param {string} repo `owner/name`
+ * @returns {Promise<string | null>}
+ */
+export async function appReaches(reader, repo) {
+  const { owner } = ownerAndName(repo);
+  const same = (/** @type {unknown} */ a, /** @type {string} */ b) => typeof a === 'string' && a.toLowerCase() === b.toLowerCase();
+  const installations = /** @type {any[]} */ (await reader.pages('user/installations?per_page=100')).flatMap((p) => (Array.isArray(p?.installations) ? p.installations : []));
+  const installation = installations.find((i) => same(i?.account?.login, owner) && Number.isSafeInteger(i?.id));
+  if (!installation) return `Kanon's status App isn't installed on \`${owner}\`, or not where you can see it, so \`${repo}\` can't be read with your access.`;
+  const granted = /** @type {any[]} */ (await reader.pages(`user/installations/${installation.id}/repositories?per_page=100`)).flatMap((p) => (Array.isArray(p?.repositories) ? p.repositories : []));
+  if (!granted.some((r) => same(r?.full_name, repo))) return `Kanon's status App can't reach \`${repo}\` with your access: it isn't installed on that repository, or you can't read it.`;
+  return null;
+}
 
 /**
  * What is wrong with a tool's arguments against its input schema, one sentence each.
