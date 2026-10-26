@@ -20,7 +20,7 @@
 // (kanon#1396, docs/status.md). `scripts/status/views.mjs` builds each section, for the hosted
 // server too.
 import { spawn, spawnSync } from 'node:child_process';
-import { ghReader } from '../scripts/status/reader.mjs';
+import { ghReader, isRepo } from '../scripts/status/reader.mjs';
 import { VIEWS, section } from '../scripts/status/views.mjs';
 import { remoteRepo } from './apps.mjs';
 import { kanonRelease } from './callers.mjs';
@@ -138,7 +138,7 @@ export const parseArgs = (argv) => {
   }
   if (opts.help && opts.json) throw new Error('--help and --json contradict each other; give one');
   if (opts.help) return opts;
-  if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
+  if (opts.repo && !isRepo(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
   if (opts.project === null && !opts.release && opts.pr === null && !opts.lanes && !opts.needsOwner) throw new Error('name a view to read: --project <n>, --release, --pr <n>, --lanes or --needs-owner');
   return opts;
 };

@@ -204,7 +204,7 @@ describe('kanon status prints one document, or the same result as prose', () => 
     expect(lanesCutProse.out).toMatch(/The lane-health view has no answer: the lane-health view couldn't be read whole/);
 
     // A usage error: the error document, or the message and the usage, and exit 2 either way.
-    for (const argv of [['--project', 'seven'], [], ['--project', '7', '--repo', 'not-a-repo'], ['--bogus'], ['--pr', 'five'], ['--lanes=yes'], ['--release=yes']]) {
+    for (const argv of [['--project', 'seven'], [], ['--project', '7', '--repo', 'not-a-repo'], ['--project', '7', '--repo', 'acme/..'], ['--lanes', '--repo', '../shop'], ['--bogus'], ['--pr', 'five'], ['--lanes=yes'], ['--release=yes']]) {
       const j = await run([...argv, '--json'], null);
       expect(j.code, argv.join(' ')).toBe(EXIT.usage);
       expect(Object.keys(j.doc()).sort()).toEqual(['error', 'exitCode', 'kanon', 'schema', 'status']);

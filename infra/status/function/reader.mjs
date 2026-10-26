@@ -17,7 +17,7 @@
 //
 // `node:` built-ins only (decision 11): `fetch` is Node's own.
 
-import { ReadError, graphqlRead } from '../../../scripts/status/reader.mjs';
+import { RATE_LIMITED, ReadError, graphqlRead } from '../../../scripts/status/reader.mjs';
 
 /** GitHub's REST and GraphQL API. */
 export const GITHUB_API = 'https://api.github.com';
@@ -25,16 +25,16 @@ export const GITHUB_API = 'https://api.github.com';
 /** The REST API version the reads are written against. */
 const API_VERSION = '2022-11-28';
 
-/** A rate limit, as GitHub words one in a REST message or a GraphQL error. */
-const RATE_LIMITED = /rate limit|RATE_LIMITED|abuse detection/i;
-
 /**
  * A GraphQL document that would write or subscribe: an operation definition, at the document's
- * top level, that isn't a query. Strings and comments are dropped first, so a word inside one
- * doesn't count.
+ * top level, that isn't a query. Every definition but the first follows a `}`, so a mutation or
+ * subscription starts the document or follows a `}`, with only ignored tokens between: white
+ * space, line ends, commas and the byte-order mark (`\s` holds all but the comma). Strings and
+ * comments are dropped first, as GraphQL reads them, so a word inside one doesn't count: a block
+ * string's escaped `\"""` doesn't end it, and a comment ends at `\n` or `\r`.
  * @param {string} query
  */
-const writes = (query) => /(^|\})\s*(mutation|subscription)\b/.test(String(query).replace(/"""[\s\S]*?"""|"(?:\\.|[^"\\])*"|#[^\n]*/g, ''));
+const writes = (query) => /(^|\})[\s,]*(mutation|subscription)\b/.test(String(query).replace(/"""(?:\\"""|[\s\S])*?"""|"(?:\\.|[^"\\\n\r])*"|#[^\n\r]*/g, ''));
 
 /** The `next` page's URL in a `Link` header, or null. @param {string | null} link */
 const nextOf = (link) => /<([^>]+)>;\s*rel="next"/.exec(link ?? '')?.[1] ?? null;
