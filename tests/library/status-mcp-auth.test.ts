@@ -212,6 +212,22 @@ function server(people: Record<string, Person>, opts: { accessLife?: number; ref
 type Server = ReturnType<typeof server>;
 
 const form = (o: Record<string, string>) => new URLSearchParams(o).toString();
+
+/**
+ * The `Origin` a browser sends when a page served from `from` posts a form to `to`. This is the
+ * Fetch standard's "append a request `Origin` header" step: a POST that isn't CORS follows the
+ * page's referrer policy. Under `no-referrer`, and under `same-origin` for a post to another
+ * origin, the browser sends `null`. The tests post the Allow with what the page's served policy
+ * gives, never a hand-picked origin, so a page that makes browsers send `null` fails the flow.
+ */
+function browserOrigin(page: { headers: Record<string, string> }, to = `${ORIGIN}/authorize`, from = ORIGIN) {
+  const policy = page.headers['referrer-policy'] ?? 'strict-origin-when-cross-origin';
+  const target = new URL(to);
+  if (policy === 'no-referrer') return 'null';
+  if (policy === 'same-origin' && target.origin !== from) return 'null';
+  if (['no-referrer-when-downgrade', 'strict-origin', 'strict-origin-when-cross-origin'].includes(policy) && from.startsWith('https:') && target.protocol !== 'https:') return 'null';
+  return from;
+}
 const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
@@ -237,7 +253,7 @@ async function signIn(s: Server, person: string, { redirect = CLAUDE } = {}) {
   const page = await s.send({ path: '/authorize', query: authorizeQuery(client_id, s256(verifier), redirect) });
   expect(page.statusCode, page.body).toBe(200);
   const consent = /name="consent" value="([^"]+)"/.exec(page.body)![1]!;
-  const allow = await s.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: ORIGIN }, body: form({ consent, decision: 'allow' }) });
+  const allow = await s.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: browserOrigin(page) }, body: form({ consent, decision: 'allow' }) });
   expect(allow.statusCode, allow.body).toBe(302);
   const cookie = allow.cookies[0].split(';')[0];
   const upstream = new URL(allow.headers.location).searchParams.get('state')!;
@@ -251,7 +267,7 @@ async function signIn(s: Server, person: string, { redirect = CLAUDE } = {}) {
   const tok = await s.send({ method: 'POST', path: '/token', headers: FORM, body: form({ grant_type: 'authorization_code', code, redirect_uri: redirect, client_id, code_verifier: verifier }) });
   expect(tok.statusCode, tok.body).toBe(200);
   const tokens = tok.json();
-  return { client_id, verifier, consent, upstream, cookie, code, ghCode: back.searchParams.get('code')!, ...tokens } as { client_id: string; verifier: string; consent: string; upstream: string; cookie: string; code: string; ghCode: string; access_token: string; refresh_token: string; expires_in: number; token_type: string };
+  return { client_id, verifier, consent, from: browserOrigin(page), upstream, cookie, code, ghCode: back.searchParams.get('code')!, ...tokens } as { client_id: string; verifier: string; consent: string; from: string; upstream: string; cookie: string; code: string; ghCode: string; access_token: string; refresh_token: string; expires_in: number; token_type: string };
 }
 
 const rpc = (method: string, params?: unknown, id: number | string = 1) => JSON.stringify({ jsonrpc: '2.0', id, method, ...(params === undefined ? {} : { params }) });
@@ -479,7 +495,7 @@ describe('[MCP-8] no token, login or read text in any log', () => {
     // The whole flow, and its refusals.
     const t = await signIn(t2, 'octo');
     const loopback = await signIn(t2, 'octo', { redirect: 'http://localhost:33418/callback' });
-    const denied = await t2.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: ORIGIN }, body: form({ consent: t.consent, decision: 'deny' }) });
+    const denied = await t2.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: t.from }, body: form({ consent: t.consent, decision: 'deny' }) });
     expect(denied.statusCode).toBe(302);
     await t2.send({ method: 'POST', path: '/register', headers: JSON_HEADERS, body: JSON.stringify({ client_name: 'Evil', redirect_uris: ['https://evil.example/cb'] }) });
     await t2.send({ method: 'POST', path: '/token', headers: FORM, body: form({ grant_type: 'authorization_code', code: t.code, redirect_uri: CLAUDE, client_id: t.client_id, code_verifier: t.verifier }) });
@@ -579,9 +595,9 @@ describe('[MCP-9] every answer carries its read time, and any cache is per perso
     expect([refused.isError, refused._meta]).toEqual([true, { readAt: at }]);
   }, 60_000);
 
-  it('[MCP-9] caches per person, keyed by the person\'s token and never shared, revalidated with GitHub every time, and held no longer than the time docs/status.md states', async () => {
-    // The page states the lifetime, and the cache holds it.
-    expect(/per-person cache[^.]*?at most (\d+) seconds/i.exec(PAGE())?.[1], 'docs/status.md states the cache\'s lifetime').toBe(String(CACHE_TTL_MS / 1000));
+  it('[MCP-9] caches per person, keyed by the person\'s token and never shared, revalidated with GitHub every time, and used no longer than the time docs/status.md states', async () => {
+    // The page states the lifetime, and the cache keeps it.
+    expect(/per-person cache[^.]*\.\s*An answer is never used after (\d+) seconds/i.exec(PAGE())?.[1], 'docs/status.md states the cache\'s lifetime').toBe(String(CACHE_TTL_MS / 1000));
     expect(CACHE_TTL_MS).toBe(60_000);
 
     let clock = START;
@@ -717,16 +733,18 @@ describe('the authorisation flow', () => {
     const page = await s.send({ path: '/authorize', query: authorizeQuery(client_id, s256(verifier)) });
     const consent = /name="consent" value="([^"]+)"/.exec(page.body)![1]!;
     // A form posted from another page, or with no origin, is refused: a crafted page can't press Allow.
+    // `null` is what a crafted page under `no-referrer` makes a browser send. Our own page's posts
+    // below carry what its served policy gives a browser.
     for (const headers of [{ ...FORM }, { ...FORM, origin: 'https://evil.example' }, { ...FORM, origin: 'null' }]) {
       const r = await s.send({ method: 'POST', path: '/authorize', headers, body: form({ consent, decision: 'allow' }) });
       expect([r.statusCode, r.headers.location], JSON.stringify(headers)).toEqual([403, undefined]);
     }
     // Deny goes back to the client.
-    const deny = await s.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: ORIGIN }, body: form({ consent, decision: 'deny' }) });
+    const deny = await s.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: browserOrigin(page) }, body: form({ consent, decision: 'deny' }) });
     expect(new URL(deny.headers.location).searchParams.get('error')).toBe('access_denied');
     // A consent form that has lapsed, or isn't one, is refused.
-    expect((await s.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: ORIGIN }, body: form({ consent: client_id, decision: 'allow' }) })).statusCode).toBe(400);
-    const allow = await s.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: ORIGIN }, body: form({ consent, decision: 'allow' }) });
+    expect((await s.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: browserOrigin(page) }, body: form({ consent: client_id, decision: 'allow' }) })).statusCode).toBe(400);
+    const allow = await s.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: browserOrigin(page) }, body: form({ consent, decision: 'allow' }) });
     expect(allow.statusCode).toBe(302);
     const up = new URL(allow.headers.location);
     expect(up.searchParams.get('redirect_uri')).toBe(`${ORIGIN}/callback`);
@@ -758,7 +776,7 @@ describe('the authorisation flow', () => {
       const verifier = b64url(randomBytes(32));
       const page = await s.send({ path: '/authorize', query: authorizeQuery(client_id, s256(verifier)) });
       const consent = /name="consent" value="([^"]+)"/.exec(page.body)![1]!;
-      const allow = await s.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: ORIGIN }, body: form({ consent, decision: 'allow' }) });
+      const allow = await s.send({ method: 'POST', path: '/authorize', headers: { ...FORM, origin: browserOrigin(page) }, body: form({ consent, decision: 'allow' }) });
       const back = new URL(s.gh.authorize('octo', allow.headers.location));
       const cb = await s.send({ path: '/callback', query: back.search.slice(1), cookies: [allow.cookies[0].split(';')[0]] });
       return { code: new URL(cb.headers.location).searchParams.get('code')!, verifier };

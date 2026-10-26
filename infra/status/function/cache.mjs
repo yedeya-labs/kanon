@@ -6,10 +6,12 @@
 // token, and a reader is handed only its person's (`for`), so one person's answer can't reach
 // another. The cache holds the hash, never the token.
 //
-// AT MOST `CACHE_TTL_MS`. An entry is dropped that long after GitHub answered it with a body, even
-// if GitHub has confirmed it since: a body read to find a marker is held no longer than that. It
-// is never served without asking GitHub (the reader always revalidates), so an answer is always
-// live. GraphQL is never cached: GitHub has no conditional GraphQL.
+// USED FOR AT MOST `CACHE_TTL_MS`. An entry is never used once that long has passed since GitHub
+// answered it with a body, even if GitHub has confirmed it since. It leaves memory at the cache's
+// next use after that (a `get`, `put` or `keys`), not on a timer, which a frozen container doesn't
+// run: until then a body read to find a marker stays in the container's memory, unused, or goes
+// with the container. It is never served without asking GitHub (the reader always revalidates),
+// so an answer is always live. GraphQL is never cached: GitHub has no conditional GraphQL.
 
 import { createHash } from 'node:crypto';
 

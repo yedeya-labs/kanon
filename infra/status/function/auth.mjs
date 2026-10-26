@@ -108,7 +108,14 @@ const ENTITY = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#
 /** Text, safe in HTML's text and in a quoted attribute. @param {string} s */
 const html = (s) => s.replace(/[&<>"']/g, (c) => ENTITY[c] ?? c);
 
-/** A page, for the person's browser. @param {number} statusCode @param {string} title @param {string} inner @returns {Reply} */
+/**
+ * A page, for the person's browser. Its referrer policy is `same-origin`, never `no-referrer`: a
+ * form the page posts takes the page's policy, and under `no-referrer` the browser sends the POST
+ * with `Origin: null` (the Fetch standard's "append a request `Origin` header"), which the Allow's
+ * origin check refuses. `same-origin` keeps the real `Origin` on the post to this server, and
+ * sends no referrer anywhere else.
+ * @param {number} statusCode @param {string} title @param {string} inner @returns {Reply}
+ */
 const page = (statusCode, title, inner) => ({
   statusCode,
   headers: {
@@ -116,7 +123,7 @@ const page = (statusCode, title, inner) => ({
     'cache-control': 'no-store',
     'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
     'x-frame-options': 'DENY',
-    'referrer-policy': 'no-referrer',
+    'referrer-policy': 'same-origin',
   },
   body: `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${html(title)}</title>`
     + '<style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem}button{font:inherit;padding:.5rem 1.25rem;margin-right:.5rem}.warn{background:#fff4e5;padding:.75rem;border-radius:.25rem}</style>'

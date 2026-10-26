@@ -395,7 +395,7 @@ A leaked access token reads, as that person, for at most an hour, or until they 
 
 ### Freshness and the cache
 
-Every read is sent to GitHub. The server keeps a per-person cache in the warm function's memory, of the REST answers that person's reads got, for at most 60 seconds. It uses the cache only to ask GitHub conditionally, with the answer's ETag, and a 304 serves that answer, which doesn't count against the person's rate limit. So an answer is always live, and its `readAt` is when its reads began. Each person's entries are filed under a hash of their own GitHub token, so no entry is ever served to another person. GraphQL is never cached.
+Every read is sent to GitHub. The server keeps a per-person cache in the warm function's memory, of the REST answers that person's reads got. An answer is never used after 60 seconds, and it leaves memory the next time that function uses its cache, or when the function's container is discarded. It uses the cache only to ask GitHub conditionally, with the answer's ETag, and a 304 serves that answer, which doesn't count against the person's rate limit. So an answer is always live, and its `readAt` is when its reads began. Each person's entries are filed under a hash of their own GitHub token, so no entry is ever served to another person. GraphQL is never cached.
 
 ### What the server logs
 
