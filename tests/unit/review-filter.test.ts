@@ -1116,8 +1116,8 @@ describe('a human re-applying the review label outranks the already-reviewed ski
   });
 });
 
-// #1379, the Owner's addition of 2026-10-26: an Implementer revise round that changes only the
-// pull request's body pushes nothing, so no CI run and no new head fire a review, and the PR kept
+// #1379, the Owner's decisions of 2026-10-26: an Implementer revise round that answers without a
+// push (an edited body, or a reply disagreeing with a finding) pushes nothing, so no CI run and no new head fire a review, and the PR kept
 // its CHANGES_REQUESTED until a person re-applied the label. The round's record re-applies
 // `review:please` as the Implementer's App. That App's label still hits the already-reviewed
 // skip, unless the head carries an answer the Reviewer has not read: a revise marker posted by
@@ -1140,6 +1140,13 @@ describe('an Implementer\'s answer the Reviewer has not read outranks the alread
     expect(r.review).toBe('true');
     expect(r.explicit).toBe('true');
     expect(r.stdout).toMatch(/answered .* after the changes-request/);
+  });
+
+  it('also when the answer is a reply disagreeing with a finding, with nothing else changed', () => {
+    const reply = { user: { login: IMPL }, body: `I disagree with finding 2: the guard already covers it.\n${MARKER}`, created_at: '2026-10-25T13:10:00Z' };
+    const r = relabel({ comments: [reply] });
+    expect(r.review).toBe('true');
+    expect(r.explicit).toBe('true');
   });
 
   it('not when the answer is older than the changes-request: the Reviewer read it', () => {

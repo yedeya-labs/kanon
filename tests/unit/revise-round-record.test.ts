@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -90,7 +89,7 @@ for (const lane of LANES) {
   const idx = steps.findIndex((s) => s.name?.startsWith('Record the round'));
   const record = steps[idx]!;
   const run = ({ head = AFTER, comments = [] as { author: { login: string }; body: string }[],
-    marked = '0', before = BEFORE, readable = true, outcome = 'failure', body = 'the body', beforeBody = 'the body', mode = 'review', editFails = false } = {}) => {
+    marked = '0', before = BEFORE, readable = true, outcome = 'failure', mode = 'review', editFails = false } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'round-record-'));
     writeStub(join(dir, 'gh'), GH_STUB);
     const log = join(dir, 'comments.log');
@@ -105,10 +104,10 @@ for (const lane of LANES) {
         [lane.loginVar]: lane.login,
         BEFORE_SHA: before, BEFORE_MARKED: marked, OUTCOME: outcome,
         RUN_URL: 'https://github.com/example-org/example-repo/actions/runs/1',
-        STUB_STATE: readable ? JSON.stringify({ headRefOid: head, comments, body }) : '',
+        STUB_STATE: readable ? JSON.stringify({ headRefOid: head, comments }) : '',
         COMMENT_LOG: log,
-        // #1379: the body the filter read, as its hash, and the mode it opened.
-        BEFORE_BODY: createHash('sha256').update(beforeBody).digest('hex'), MODE: mode,
+        // #1379: the mode the filter opened.
+        MODE: mode,
         EDIT_LOG: edits, EDIT_FAILS: editFails ? '1' : '',
       },
     });
@@ -222,26 +221,30 @@ for (const lane of LANES) {
       expect(run({ head: BEFORE, outcome: 'failure' }).status).toBe(0);
     });
 
-    // #1379, the Owner's addition of 2026-10-26: a round that answered the review by changing only
-    // the pull request's body pushed nothing, so nothing fired a new review and the PR kept its
-    // CHANGES_REQUESTED until a person re-applied `review:please` (#1374 round 2, #1413 round 1).
-    describe.runIf(lane.name === 'implementer')('a round that changed only the body re-requests review (#1379)', () => {
-      const answered = { head: BEFORE, outcome: 'success', marked: '0', beforeBody: 'the body', body: 'the body, revised',
+    // #1379, the Owner's decisions of 2026-10-26: a round that answered the review without a push
+    // fired no new review, so the PR kept its CHANGES_REQUESTED until a person re-applied
+    // `review:please` (#1374 round 2, #1413 round 1). Any answered round re-requests review,
+    // whether it edited the body or only replied, disagreeing with a finding.
+    describe.runIf(lane.name === 'implementer')('a round that answered without a push re-requests review (#1379)', () => {
+      const answered = { head: BEFORE, outcome: 'success', marked: '0',
         comments: [{ author: { login: `app/${lane.login}` }, body: `Fixed the body.\n${lane.marker}` }] };
+      const REREQUEST = [
+        'pr edit 1822 --repo example-org/example-repo --remove-label review:please',
+        'pr edit 1822 --repo example-org/example-repo --add-label review:please',
+      ];
 
-      it('removes and re-adds `review:please` when the head did not move, the body changed and the implementer answered', () => {
+      it('removes and re-adds `review:please` when the head did not move and the implementer answered', () => {
         const r = run(answered);
         expect(r.status, r.output).toBe(0);
-        expect(r.edited).toEqual([
-          'pr edit 1822 --repo example-org/example-repo --remove-label review:please',
-          'pr edit 1822 --repo example-org/example-repo --add-label review:please',
-        ]);
+        expect(r.edited).toEqual(REREQUEST);
         expect(r.posted).toEqual([]);
         expect(r.output).toMatch(/re-requested review/);
       });
 
-      it('not when the body did not change: a disagreement or a bail is a person\'s to read', () => {
-        expect(run({ ...answered, body: 'the body' }).edited).toEqual([]);
+      it('also when the answer only replied, disagreeing with a finding, with the body unchanged', () => {
+        const r = run({ ...answered, comments: [{ author: { login: `app/${lane.login}` }, body: `I disagree with finding 2: …\n${lane.marker}` }] });
+        expect(r.status, r.output).toBe(0);
+        expect(r.edited).toEqual(REREQUEST);
       });
 
       it('not when the run pushed: the push fires the review', () => {
@@ -250,17 +253,18 @@ for (const lane of LANES) {
 
       it('not when the implementer left no new marker', () => {
         expect(run({ ...answered, comments: [], outcome: 'failure' }).edited).toEqual([]);
+        // A marker it had before the run is not this run's answer.
+        expect(run({ ...answered, marked: '1' }).edited).toEqual([]);
       });
 
       it('not on a hand-back: the approval stands, and only a push asks for a new one', () => {
         expect(run({ ...answered, mode: 'handback' }).edited).toEqual([]);
       });
 
-      it('compares against the body and mode the FILTER read, and creates the label with the agent\'s', () => {
+      it('reads the mode the FILTER opened, and the label is created with the agent\'s', () => {
         const env = (record as { env: Record<string, string> }).env;
-        expect(env.BEFORE_BODY).toBe('${{ needs.filter.outputs.body_sha }}');
         expect(env.MODE).toBe('${{ needs.filter.outputs.mode }}');
-        expect(wf.jobs.filter.outputs?.body_sha).toBe('${{ steps.filter.outputs.body_sha }}');
+        expect(env.BEFORE_BODY).toBeUndefined();
         // The spine creates the label before the agent runs, so the record never applies one the
         // repository lacks (`K-WORK-12`).
         expect(String((wf.jobs.revise as unknown as { with: Record<string, string> }).with.labels).split(/\s+/)).toContain('review:please');

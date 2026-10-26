@@ -914,9 +914,9 @@ jobs:
                 | last | if . == null then "" else ((stamped // .commit_id // "") | ascii_downcase) end')"
           evidence LAST_REVIEWED "$LAST"
 
-          # AN ANSWER THE REVIEWER HAS NOT READ IS A REQUEST TOO (#1379, the Owner's addition of
-          # 2026-10-26). An Implementer revise round that changes only the pull request's body
-          # pushes nothing, so no CI run and no new head reach this filter, and the PR kept its
+          # AN ANSWER THE REVIEWER HAS NOT READ IS A REQUEST TOO (#1379, the Owner's decisions of
+          # 2026-10-26). An Implementer revise round that answers without a push (an edited body,
+          # or a reply disagreeing with a finding) pushes nothing, so no CI run and no new head reach this filter, and the PR kept its
           # changes-request until a person re-applied the label (#1374, #1413). The round's record
           # re-applies `review:please` as the Implementer's App, which the arm above refuses as
           # an App's echo. This arm honours it only while the head carries an answer the Reviewer

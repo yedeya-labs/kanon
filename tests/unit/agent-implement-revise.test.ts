@@ -1,5 +1,4 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import { callsSpine } from './helpers/spine.js';
@@ -78,13 +77,6 @@ describe('what it acts on', () => {
       it('counts only the implementer\'s own marker, not a quote of it', () => {
         const quote = { author: { login: 'a-developer' }, body: 'about <!-- qa:implement-revise -->', createdAt: '2026-10-23T14:40:00Z' };
         expect(runFilter({ isLabel: true, changesRequested: 1, reviewAt: REQUESTED, extraComments: [quote] }).act).toBe(true);
-      });
-
-      it('hands the round record the body it read, as a hash, for the body-only re-request', () => {
-        const body = 'Closes #7\n\nThe body as the reviewer read it.';
-        const hash = createHash('sha256').update(body).digest('hex');
-        expect(runFilter({ body }).outputs.body_sha).toBe(hash);
-        expect(runFilter({ body: '' }).outputs.body_sha).toBe(createHash('sha256').update('').digest('hex'));
       });
 
       it('leaves the review event and a dispatch alone: each is a request of its own', () => {

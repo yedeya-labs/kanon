@@ -145,15 +145,13 @@ export const runFilter = ({
   // Unset leaves the field out, as an unknown time.
   reviewAt = '',
   markerAt = '',
-  // The pull request's body, which the filter hands the round record (#1379).
-  body = '',
 }: Partial<{
   author: string; labels: string[]; prState: string; reviewState: string;
   rounds: number; changesRequested: number; isDispatch: boolean; reset: boolean;
   isLabel: boolean; labelAdded: string; headVerdict: string;
   headMoved: false | 'content-free' | 'revised'; readableDiffs: boolean; statuses: string;
   extraComments: { author: { login: string }; body: string; createdAt?: string }[]; register: string;
-  reviewAt: string; markerAt: string; body: string;
+  reviewAt: string; markerAt: string;
 }> = {}) => {
   // ONE HEAD PER CHANGES-REQUEST, because a review is filed against a commit and a
   // healthy loop reviews a new one each round. The old fixture put every review on the
@@ -193,7 +191,6 @@ export const runFilter = ({
         baseRefName: 'main',
         headRefOid: HEAD_OID,
         labels: labels.map((name) => ({ name })),
-        body,
       }),
       STUB_DIFFS: readableDiffs ? JSON.stringify(diffs) : '',
       STUB_REVIEWS: JSON.stringify({
