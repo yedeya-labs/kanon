@@ -169,16 +169,29 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
   it('is called from exactly one place: a workflow that holds the mint and this call, and nothing else', () => {
     expect(call, `${agentFile} is called by no workflow`).toBeDefined();
     expect(more.map((c) => `${c.file}:${c.name}`)).toEqual([]);
-    expect(Object.keys(run.jobs ?? {}).sort()).toEqual([call.name, 'mint'].sort());
+    // The spine's third job pushes the agent's commits with a token of its own (kanon#1383).
+    expect(Object.keys(run.jobs ?? {}).sort()).toEqual([call.name, 'mint', ...(runFile === 'agent-lane.yml' ? ['push'] : [])].sort());
     expect(Object.keys(run.on?.workflow_call?.secrets ?? {})).toEqual(expect.arrayContaining(['app-id', 'app-private-key', 'claude-token', 'anthropic-api-key']));
   });
 
   it('the mint runs only the mint and the seal, and leaves the revoke to the agent\'s job', () => {
     const mint = run.jobs!.mint!;
-    expect(mint.steps!.map((s) => s.uses ?? s.id)).toEqual(['actions/create-github-app-token@v3', 'seal']);
-    expect(mint.steps![0]!.with).toMatchObject({ 'client-id': '${{ secrets.app-id }}', 'private-key': '${{ secrets.app-private-key }}', 'skip-token-revoke': 'true' });
-    expect(mint.outputs).toEqual({ sealed: '${{ steps.seal.outputs.sealed }}', 'app-slug': '${{ steps.app-token.outputs.app-slug }}', attempt: '${{ github.run_attempt }}' });
-    expect(mint.steps![1]!.run).toBe(docs['agent-lane.yml']!.jobs!.mint!.steps![1]!.run);
+    const spine = runFile === 'agent-lane.yml';
+    // The spine's mint also proves the push job's token can be minted, before the agent's (the
+    // push probe, kanon#1383), and lists the branches that exist before the agent runs: each
+    // only when its switch is on, and none running anything but GitHub's API.
+    const core = spine ? mint.steps!.filter((s) => s.id === 'app-token' || s.id === 'seal') : mint.steps!;
+    if (spine) {
+      expect(mint.steps!.map((s) => s.id ?? s.name)).toEqual(['push-probe', "Revoke the push probe's token", 'Say why the push probe failed', 'app-token', 'seal', 'branches']);
+      for (const s of mint.steps!.filter((x) => !core.includes(x))) expect(s.if, s.name).toMatch(/inputs\.push|steps\.push-probe\./);
+    }
+    expect(core.map((s) => s.uses ?? s.id)).toEqual(['actions/create-github-app-token@v3', 'seal']);
+    expect(core[0]!.with).toMatchObject({ 'client-id': '${{ secrets.app-id }}', 'private-key': '${{ secrets.app-private-key }}', 'skip-token-revoke': 'true' });
+    expect(mint.outputs).toEqual({
+      sealed: '${{ steps.seal.outputs.sealed }}', 'app-slug': '${{ steps.app-token.outputs.app-slug }}', attempt: '${{ github.run_attempt }}',
+      ...(spine ? { branches: '${{ steps.branches.outputs.branches }}' } : {}),
+    });
+    expect(core[1]!.run).toBe(docs['agent-lane.yml']!.jobs!.mint!.steps!.find((s) => s.id === 'seal')!.run);
     // No gate of its own: it runs when the call does, inside the calling job's scope.
     expect(mint.needs).toBeUndefined();
     expect(mint.if).toBeUndefined();
@@ -274,7 +287,9 @@ describe('the spine\'s own handoff (kanon#274)', () => {
   const steps = agentJob.jobs!.run!.steps!;
 
   it('passes every other input through unchanged, under its own name', () => {
-    const spineInputs = Object.keys(spine.on!.workflow_call!.inputs!).filter((k) => !k.startsWith('permission-'));
+    // The push job's switches are the spine's alone: the probe runs in the mint, and the push job
+    // mints with `push-workflows`. The agent's job gets `push`, for its handoff (kanon#1383).
+    const spineInputs = Object.keys(spine.on!.workflow_call!.inputs!).filter((k) => !k.startsWith('permission-') && k !== 'push-probe' && k !== 'push-workflows');
     const jobInputs = Object.keys(agentJob.on!.workflow_call!.inputs!);
     expect(jobInputs.sort()).toEqual([...spineInputs, 'app-slug', 'mint-attempt'].sort());
     for (const k of spineInputs) expect(run.with?.[k], k).toBe(`\${{ inputs.${k} }}`);
@@ -282,7 +297,7 @@ describe('the spine\'s own handoff (kanon#274)', () => {
 
   it('receives the token before the checkout, which persists it as the push credential', () => {
     expect(steps.findIndex((s) => s.id === 'app-token')).toBeLessThan(steps.findIndex((s) => String(s.uses).startsWith('actions/checkout@')));
-    expect(mint.steps![0]!.with?.['permission-contents']).toBe('${{ inputs.permission-contents }}');
+    expect(mint.steps!.find((s) => s.id === 'app-token')!.with?.['permission-contents']).toBe('${{ inputs.permission-contents }}');
   });
 
   it('refuses a token minted for another attempt, by name, before writing it to an output', () => {

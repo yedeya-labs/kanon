@@ -4,8 +4,9 @@
 # check out, start the project's database, run the project's setup, run `claude-code-action`,
 # explain a red run, and record what it cost. Only the PROMPT and the IDENTITY differ — plus a few CAPABILITY SWITCHES a lane
 # sets for what it genuinely lacks or needs (`database`, `browsers`, `ref`/`fetch-depth`,
-# and `push-probe` for a lane whose whole output is a pushed branch, which is OFF by
-# default: a lane converted without it silently loses its early 403). Each switch is the
+# `push` for a lane whose agent's commits are pushed, and `push-probe` for a lane whose whole
+# output is a pushed branch, which is OFF by default: a lane converted without it silently
+# loses its early failure). Each switch is the
 # same step for every lane that sets it. Before this, that spine was copied into
 # eleven files, so a fix to it was eleven edits and eleven chances to miss one — RA-1544
 # and RA-1562 are both that shape.
@@ -68,12 +69,24 @@
 # `database` IS STILL THE LANE'S SWITCH: a lane that edits prose (`lead-revise`) passes
 # `database: false` and starts nothing, whatever the project declares.
 #
-# THE APP'S PRIVATE KEY NEVER ENTERS THE AGENT'S JOB (`K-AGENT-49`, which says why). Two jobs:
+# THE APP'S PRIVATE KEY NEVER ENTERS THE AGENT'S JOB (`K-AGENT-49`, which says why). Three jobs:
 #   • `mint` holds the key, and nothing else runs there: no checkout, no project code, no
 #     agent. It mints the lane's narrowed token with `skip-token-revoke`, because its post
 #     step would otherwise revoke the token the moment this job ends, and hands it on.
 #   • `run` is `lane-agent-job.yml`, the job that checks out, runs the project's hook and the
 #     agent. It is given the TOKEN, never the key, and revokes the token itself when it ends.
+#   • `push`, on a lane that sets `push`, moves the agent's commits (kanon#1383). The agent's
+#     token can't write code (`LANE-13`): the agent commits on its runner, and `run` hands the
+#     commits on as an artifact, a git bundle, with the pull request the agent asked for. `push`
+#     runs after `run`, even a failed one, whenever it left commits (`LANE-14`). It runs no agent
+#     and no project code, and checks out nothing: it mints its own token, narrowed to Contents
+#     and Pull requests write (and Workflows write for a lane that sets `push-workflows`),
+#     re-creates the commits through GitHub with the verified-commit helper, so each is verified
+#     as the App's, and only then opens the pull request (`LANE-15`, `scripts/lane-push.mjs`).
+#     Everything it reads from `run` is the agent's and untrusted: it moves no default branch
+#     and, but for the lane's own `ref`, no branch that existed before the agent ran, which
+#     `mint` lists before `run` starts. The implementer status reads what `push` moved, never
+#     what `run` reports (`LANE-16`).
 #
 # HOW THE TOKEN CROSSES, and why that way. GitHub drops a job output that contains a masked
 # value, so `mint` hex-encodes the token. A job output is never printed, but a value used in a
@@ -253,13 +266,32 @@ on:
         default: true
       push-probe:
         description: >-
-          Prove the minted App can push (`git push --dry-run`) after the project's setup
-          and before a single turn is paid for. Default off. On for a lane
-          whose whole output is a pushed branch, where a missing `contents: write` grant
-          would otherwise surface as a 403 at the END of a long run — or not at all, read
-          as "the agent had nothing to say". A capability switch like `database`, not a
-          hook: the step is the same for every lane that sets it, and the App slug and
-          the arm name are what make its message the lane's own.
+          Prove the App can mint the push job's token before a single turn is paid for: the
+          mint job mints that set once, before the agent's token, and revokes it at once
+          (kanon#1383, the Owner's answer to its plan). GitHub refuses a mint that asks for
+          more than the installation holds, so a missing `contents: write` or `pull_requests:
+          write` grant fails here, not at the END of a long run, or not at all, read as "the
+          agent had nothing to say". Default off. On for a lane whose whole output is a pushed
+          branch. A capability switch like `database`, not a hook: the step is the same for
+          every lane that sets it, and the arm name is what makes its message the lane's own.
+        required: false
+        type: boolean
+        default: false
+      push:
+        description: >-
+          This lane's agent commits, and the spine's push job pushes its commits and opens the
+          pull request it asks for (kanon#1383, `[LANE-13]` to `[LANE-15]`). The agent's own
+          token can't push: a lane that sets this passes no `permission-contents: write` and no
+          `permission-workflows: write`. Default off, so a lane whose agent commits nothing (the
+          deploy diagnosis) gets no push job and no write token.
+        required: false
+        type: boolean
+        default: false
+      push-workflows:
+        description: >-
+          The push job's token also carries `workflows: write`, because this lane's commits may
+          touch `.github/workflows/` (the Implementer's lanes). Off for a lane that writes only
+          prose (the Lead's).
         required: false
         type: boolean
         default: false
@@ -315,17 +347,23 @@ on:
       outcome:
         description: The agent step's outcome, readable from the caller after the job.
         value: ${{ jobs.run.outputs.outcome }}
-      # THE BRANCH HEADS THE AGENT'S JOB HELD WHEN IT FINISHED (#324): the implementer status's
-      # `open` pick stamps only a pull request whose head is one of them. See the spine's
-      # `Record the branch heads the agent left`.
-      heads:
-        description: A JSON array of `{ ref, sha }`, the agent's job's local branches and HEAD after the agent, or empty.
-        value: ${{ jobs.run.outputs.heads }}
-      # THE COMMIT THE AGENT'S JOB CHECKED OUT, BEFORE THE AGENT RAN (#1263): the implementer
-      # status's `carry` moves only when it is the head the run started from.
-      base:
-        description: The commit the agent's job checked out, before the agent ran, or empty.
-        value: ${{ jobs.run.outputs.base }}
+      # THE BRANCHES THE PUSH JOB MOVED, AT THE HEADS GITHUB CREATED (#324, kanon#1383): the
+      # implementer status's `open` pick stamps only a pull request whose head is one of them, and
+      # its `carry` only such a head. From the push job, never the agent's job (`[LANE-16]`): the
+      # agent's local commits are not the ones GitHub has.
+      push-heads:
+        description: A JSON array of `{ ref, sha }`, each branch the push job moved and its new head, or empty.
+        value: ${{ jobs.push.outputs.heads }}
+      # THE HEAD THE PUSH BUILT ON (#1263): on a revise lane, the commit the agent's job checked out
+      # before the agent ran. The implementer status's `carry` moves only when it is the head the
+      # run started from.
+      push-base:
+        description: The head the push job built on, or empty.
+        value: ${{ jobs.push.outputs.base }}
+      # THE PULL REQUEST THE PUSH JOB OPENED FROM THE AGENT'S REQUEST (`[LANE-15]`).
+      push-pr:
+        description: The number of the pull request the push job opened, or empty.
+        value: ${{ jobs.push.outputs.pr }}
     secrets:
       app-id:
         required: true
@@ -359,7 +397,42 @@ jobs:
       app-slug: ${{ steps.app-token.outputs.app-slug }}
       # The attempt this token was minted for. A partial re-run reuses this job's outputs.
       attempt: ${{ github.run_attempt }}
+      branches: ${{ steps.branches.outputs.branches }}
     steps:
+      # THE PUSH PROBE, BEFORE THE AGENT'S TOKEN (kanon#1383). The agent's job can't push any more,
+      # so a `git push --dry-run` there would fail every run. Instead this mints the push job's own
+      # set once and revokes it at once: GitHub refuses a mint asking for more than the
+      # installation holds. First, so a refused probe mints no token for the agent's job, which
+      # then fails at `Receive the App token` before any turn is paid for.
+      - name: Prove the push job can mint its token
+        id: push-probe
+        if: inputs.push-probe
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          skip-token-revoke: "true"
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: ${{ inputs.push-workflows && 'write' || '' }}
+      - name: Revoke the push probe's token
+        if: always() && steps.push-probe.outputs.token != ''
+        env:
+          TOKEN: ${{ steps.push-probe.outputs.token }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            "$API_URL/installation/token" || true)"
+          if [ "$STATUS" = "204" ]; then echo "push capability confirmed, and the probe's token revoked"; else echo "::warning title=agent-lane::the push probe's token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi
+      - name: Say why the push probe failed
+        if: failure() && steps.push-probe.outcome == 'failure'
+        env:
+          ARM: ${{ inputs.arm }}
+        run: |
+          echo "::error title=agent-lane::the App cannot mint the push job's token, so the $ARM's commits could never reach GitHub. It needs Contents: Read & write and Pull requests: Read & write on the App, AND the installation re-authorized to accept them — a permission change does not take effect until it is accepted. Kanon's apps-check workflow compares the installation's permissions with the App's (Kanon's docs/apps.md, \"Checking the installations later\")."
+          exit 1
+
       - name: Mint App token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -387,6 +460,24 @@ jobs:
         env:
           TOKEN: ${{ steps.app-token.outputs.token }}
         run: printf 'sealed=%s\n' "$(printf %s "$TOKEN" | od -An -v -tx1 | tr -d ' \n')" >> "$GITHUB_OUTPUT"
+
+      # THE BRANCHES THAT EXIST BEFORE THE AGENT RUNS (kanon#1383), for the push job, which moves
+      # none of them but a revise lane's own (`[LANE-15]`). Here, because no agent has run yet, so
+      # nothing an agent wrote can be in it. A failed read leaves it empty, and the push job then
+      # moves no new branch, since it can't tell one.
+      - name: Record the branches that exist before the agent runs
+        id: branches
+        if: inputs.push
+        # Never the mint's failure: with no list the push job can't tell a new branch from an
+        # old one, and moves none but the lane's own `ref` (it fails closed).
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          branches="$(gh api --paginate "repos/$REPO/branches?per_page=100" --jq '.[].name' | jq -Rsc 'split("\n") | map(select(length > 0))')"
+          echo "branches=$branches" >> "$GITHUB_OUTPUT"
 
   # THE AGENT'S JOB, GIVEN THE TOKEN AND NEVER THE KEY (`K-AGENT-49`). `!cancelled()`, not the
   # implicit `success()`: a failed mint still reaches `run`, whose token step then fails and
@@ -417,7 +508,7 @@ jobs:
       database: ${{ inputs.database }}
       browsers: ${{ inputs.browsers }}
       project-setup: ${{ inputs.project-setup }}
-      push-probe: ${{ inputs.push-probe }}
+      push: ${{ inputs.push }}
       quality-pr-label: ${{ inputs.quality-pr-label }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}
@@ -425,3 +516,58 @@ jobs:
       app-token: ${{ needs.mint.outputs.sealed }}
       claude-token: ${{ secrets.claude-token }}
       anthropic-api-key: ${{ secrets.anthropic-api-key }}
+
+  # THE PUSH JOB (kanon#1383, `[LANE-14]`, `[LANE-15]`). The agent committed locally, and its job
+  # handed the commits on as an artifact, with the pull request it asks for. This job holds the key
+  # and mints its own token, narrowed to the push, as the revise lane's `fix-push` does, so the
+  # mint-and-agent pair above stays two jobs (`K-AGENT-49`). It runs no agent and no project code,
+  # and checks nothing out: Kanon's scripts at the release the lane pinned, and `git` on a bare
+  # store. It re-creates each commit GitHub lacks through the verified-commit helper, moves the
+  # branch, and opens the pull request; `scripts/lane-push.mjs` says which branches may move.
+  #
+  # AFTER THE AGENT'S JOB, WHATEVER IT DID, whenever it left commits: a crashed agent's work
+  # survives, as it did when the agent pushed mid-run, and with no request no pull request opens.
+  # `!cancelled()` because a failed `run` would otherwise skip it. A refused branch fails this job,
+  # so the lane's run is red, and the step summary names each commit, branch and refusal.
+  push:
+    needs: [mint, run]
+    if: ${{ !cancelled() && inputs.push && needs.run.outputs.commits == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      heads: ${{ steps.push.outputs.heads }}
+      base: ${{ steps.push.outputs.base }}
+      pr: ${{ steps.push.outputs.pr }}
+    steps:
+      - uses: $/actions/kanon-path
+      # Narrowed to what this job uses (`K-AGENT-46`): the commits and the branch (`contents`), the
+      # pull request and its labels (`pull_requests`), and `workflows` only for a lane whose
+      # commits may touch `.github/workflows/`. Revoked by the action's own post step.
+      - name: Mint the push token
+        id: push-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: ${{ inputs.push-workflows && 'write' || '' }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: kanon-push-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kanon-push
+      - name: Push the agent's commits, and open its pull request
+        id: push
+        env:
+          GH_TOKEN: ${{ steps.push-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          APP_LOGIN: ${{ steps.push-token.outputs.app-slug }}[bot]
+          START: ${{ needs.run.outputs.start }}
+          REF: ${{ inputs.ref }}
+          BEFORE: ${{ needs.mint.outputs.branches }}
+          LABELS: ${{ inputs.labels }}
+        run: |
+          set -euo pipefail
+          in="$RUNNER_TEMP/kanon-push"
+          node "$KANON/scripts/lane-push.mjs" --bundle "$in/commits.bundle" --request "$in/request.json" \
+            --start "$START" --ref "$REF" --before "$BEFORE" --labels "$LABELS" --app-login "$APP_LOGIN"

@@ -234,16 +234,16 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
     if (mode === 'open') {
       expect(call.with?.since).toBe('${{ needs.filter.outputs.since }}');
       expect(call.with?.['branches-before']).toBe('${{ needs.filter.outputs.branches }}');
-      // The one input read from the agent's job (#324): the heads its fixed step recorded after
-      // the agent, which bind the pick to the head this run pushed. Nothing else of that job.
-      expect(call.with?.heads).toBe(`\${{ needs.${agent}.outputs.heads }}`);
+      // The one input read from the lane's call (#324): the heads its push job moved, which bind
+      // the pick to the head this run pushed (`[LANE-16]`). Nothing else of that call.
+      expect(call.with?.heads).toBe(`\${{ needs.${agent}.outputs.push-heads }}`);
       const rest = Object.entries(call.with ?? {}).filter(([k]) => k !== 'heads').map(([, v]) => v).join(' ');
       expect(rest).not.toMatch(new RegExp(`needs\\.${agent}\\.`));
     } else {
       expect(inputs).toMatch(/needs\.filter\.outputs\.(head_sha|heads)/);
       // #1263: the binding to what the agent's job checked out and left, and nothing else of it.
-      const read = [...inputs.matchAll(new RegExp(`needs\\.${agent}\\.outputs\\.(\\w+)`, 'g'))].map((m) => m[1]);
-      expect([...new Set(read)].sort()).toEqual(file === 'agent-rebase.yml' ? ['checked'] : ['base', 'heads']);
+      const read = [...inputs.matchAll(new RegExp(`needs\\.${agent}\\.outputs\\.([\\w-]+)`, 'g'))].map((m) => m[1]);
+      expect([...new Set(read)].sort()).toEqual(file === 'agent-rebase.yml' ? ['checked'] : ['push-base', 'push-heads']);
     }
   });
 
@@ -260,8 +260,8 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
       const call = job.steps![1]!;
       expect(call.with).toMatchObject({
         'start-head': '${{ needs.filter.outputs.head_sha }}',
-        heads: '${{ needs.revise.outputs.heads }}',
-        base: '${{ needs.revise.outputs.base || needs.fix-push.outputs.base }}',
+        heads: '${{ needs.revise.outputs.push-heads }}',
+        base: '${{ needs.revise.outputs.push-base || needs.fix-push.outputs.base }}',
         'fix-sha': '${{ needs.fix-push.outputs.sha }}',
       });
       expect(jobs.revise!.uses).toBe('$/.github/workflows/agent-lane.yml');
@@ -269,15 +269,37 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
       const push = jobs['fix-push']!.steps!.find((s) => s.id === 'push')!;
       expect(push.run).toMatch(/revise-fix\.mjs" push .*--head "\$HEAD_SHA"/s);
       expect(readFileSync('scripts/revise-fix.mjs', 'utf8')).toContain("output({ pushed: 'true', sha, base })");
-      // The spine passes both up from the agent's job, and the job sets them.
-      expect(called('agent-lane.yml').on.workflow_call.outputs).toMatchObject({ heads: { value: '${{ jobs.run.outputs.heads }}' }, base: { value: '${{ jobs.run.outputs.base }}' } });
+      // The spine passes both up from its push job, which builds on the commit the agent's job
+      // checked out, read from that job's checkout before the agent ran (kanon#1383).
+      expect(called('agent-lane.yml').on.workflow_call.outputs).toMatchObject({ 'push-heads': { value: '${{ jobs.push.outputs.heads }}' }, 'push-base': { value: '${{ jobs.push.outputs.base }}' } });
+      expect(called('agent-lane.yml').jobs.push!.outputs).toMatchObject({ heads: '${{ steps.push.outputs.heads }}', base: '${{ steps.push.outputs.base }}' });
       const spine = called('lane-agent-job.yml');
-      expect(spine.on.workflow_call.outputs).toMatchObject({ heads: { value: '${{ jobs.run.outputs.heads }}' }, base: { value: '${{ jobs.run.outputs.base }}' } });
-      expect(spine.jobs.run!.outputs).toMatchObject({ heads: '${{ steps.heads.outputs.heads }}', base: '${{ steps.checkout.outputs.commit }}' });
+      expect(spine.on.workflow_call.outputs).toMatchObject({ start: { value: '${{ jobs.run.outputs.start }}' } });
+      expect(spine.jobs.run!.outputs).toMatchObject({ start: '${{ steps.checkout.outputs.commit }}' });
       const steps = spine.jobs.run!.steps!;
       const checkout = steps.findIndex((s) => s.id === 'checkout');
       expect(steps[checkout]!.uses).toMatch(/^actions\/checkout@/);
       expect(checkout).toBeLessThan(steps.findIndex((s) => s.id === 'agent'));
+    });
+
+    it('[LANE-16] on the spine\'s lanes, the status reads heads and base only from the push job or fix-push, never the agent\'s job', () => {
+      const spineOutputs = called('agent-lane.yml').on.workflow_call.outputs ?? {};
+      // What the spine hands up from the agent's job is how it ended, never a head or a base.
+      const fromRun = Object.entries(spineOutputs).filter(([, o]) => /jobs\.run\./.test(o.value)).map(([k]) => k);
+      expect(fromRun.sort()).toEqual(['kind', 'outcome']);
+      for (const k of ['push-heads', 'push-base', 'push-pr']) expect(spineOutputs[k]?.value, k).toMatch(/^\$\{\{ jobs\.push\.outputs\.\w+ \}\}$/);
+      // And each spine lane's status reads its call's push outputs, or the revise lane's fix-push.
+      for (const file of ['agent-implement.yml', 'agent-triage.yml', 'agent-implement-revise.yml'] as const) {
+        const { agent } = LANES[file];
+        const call = wf(file).jobs['implementer-status']!.steps![1]!;
+        for (const key of ['heads', 'base'] as const) {
+          const v = call.with?.[key];
+          if (v === undefined) continue;
+          const reads = [...v.matchAll(/needs\.([\w-]+)\.outputs\.([\w-]+)/g)].map((m) => `${m[1]}.${m[2]}`);
+          expect(reads.length, `${file} ${key}`).toBeGreaterThan(0);
+          for (const r of reads) expect([`${agent}.push-${key}`, `fix-push.${key}`], `${file} ${key} reads ${r}`).toContain(r);
+        }
+      }
     });
 
     it('the rebase lane: one `{ pr, base, heads }` per entry, through rebase-run, used only for its own pull request', () => {
@@ -380,55 +402,25 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
   });
 });
 
-// #324: the binding the `open` pick matches on, recorded by a fixed step of the agent's job.
-describe('the spine records the branch heads the agent left, for the open pick', () => {
-  type SpineStep = Step & { name?: string; if?: string };
-  const spine = parse(readFileSync('.github/workflows/lane-agent-job.yml', 'utf8')) as {
-    on: { workflow_call: { outputs: Record<string, { value: string }> } }; jobs: { run: { outputs: Record<string, string>; steps: SpineStep[] } };
+// #324: the binding the `open` pick matches on. Since kanon#1383 the push job records it: the
+// heads it moved through GitHub, not what the agent's job held (`LANE-16`).
+describe('the push job records the heads it moved, for the open pick', () => {
+  const lane = parse(readFileSync('.github/workflows/agent-lane.yml', 'utf8')) as {
+    on: { workflow_call: { outputs: Record<string, { value: string }> } }; jobs: Record<string, { outputs?: Record<string, string> }>;
   };
-  const steps = spine.jobs.run.steps;
-  const at = (id: string) => steps.findIndex((s) => s.id === id);
-  const record = steps[at('heads')]!;
 
-  it('after the agent, never failing the job, and passed up through both spines', () => {
-    expect(at('heads')).toBeGreaterThan(at('agent'));
-    expect(at('heads')).toBeLessThan(at('finish'));
-    expect(record.if).toMatch(/^always\(\)/);
-    expect(record['continue-on-error']).toBe(true);
-    expect(record.uses).toBeUndefined();
-    expect(spine.jobs.run.outputs.heads).toBe('${{ steps.heads.outputs.heads }}');
-    expect(spine.on.workflow_call.outputs.heads?.value).toBe('${{ jobs.run.outputs.heads }}');
-    const lane = parse(readFileSync('.github/workflows/agent-lane.yml', 'utf8')) as { on: { workflow_call: { outputs: Record<string, { value: string }> } } };
-    expect(lane.on.workflow_call.outputs.heads?.value).toBe('${{ jobs.run.outputs.heads }}');
+  it('passes them up from the push job as `push-heads`, and the agent\'s job passes up none', () => {
+    expect(lane.on.workflow_call.outputs['push-heads']?.value).toBe('${{ jobs.push.outputs.heads }}');
+    expect(lane.jobs.push?.outputs?.heads).toBe('${{ steps.push.outputs.heads }}');
+    expect(lane.on.workflow_call.outputs.heads).toBeUndefined();
   });
 
-  it('lists the local branches and HEAD, and not a branch a `git fetch` brought in', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'implementer-heads-'));
-    try {
-      const git = (...a: string[]) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { encoding: 'utf8' }).trim();
-      git('init', '-q', '-b', 'main');
-      git('commit', '-q', '--allow-empty', '-m', 'base');
-      const base = git('rev-parse', 'HEAD');
-      git('checkout', '-q', '-b', 'feat/7-mine');
-      git('commit', '-q', '--allow-empty', '-m', 'mine');
-      const mine = git('rev-parse', 'HEAD');
-      // Another run's branch, as a fetch leaves it: a remote-tracking ref, no local branch.
-      git('commit', '-q', '--allow-empty', '-m', 'theirs');
-      git('update-ref', 'refs/remotes/origin/feat/8-theirs', 'HEAD');
-      const theirs = git('rev-parse', 'HEAD');
-      git('reset', '-q', '--hard', mine);
-      const out = join(dir, '.out');
-      execFileSync('bash', ['-c', record.run!], { cwd: dir, env: { ...process.env, GITHUB_OUTPUT: out } });
-      const line = readFileSync(out, 'utf8').trim();
-      expect(line.startsWith('heads=')).toBe(true);
-      const heads = JSON.parse(line.slice('heads='.length)) as Array<{ ref: string; sha: string }>;
-      expect(heads).toEqual(expect.arrayContaining([{ ref: 'main', sha: base }, { ref: 'feat/7-mine', sha: mine }, { ref: 'HEAD', sha: mine }]));
-      expect(heads.map((h) => h.sha)).not.toContain(theirs);
-      // And the pick reads exactly that shape.
-      const v = pickOpened({ prs: [pr(7, 'feat/7-mine', mine), pr(8, 'feat/8-theirs', theirs)], repo: REPO, since: SINCE, branchesBefore: ['main'], email: EMAIL, heads, headCommit: (x: string) => commitBy(x) });
-      expect(v).toEqual({ pr: 7, sha: mine });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it('in the shape the pick reads: the pull request at a moved head is this run\'s', () => {
+    // `scripts/lane-push.mjs` writes `heads=<JSON [{ref, sha}]>`, one entry per branch it moved.
+    const mine = 'a'.repeat(40);
+    const theirs = 'b'.repeat(40);
+    const heads = [{ ref: 'feat/7-mine', sha: mine }];
+    const v = pickOpened({ prs: [pr(7, 'feat/7-mine', mine), pr(8, 'feat/8-theirs', theirs)], repo: REPO, since: SINCE, branchesBefore: ['main'], email: EMAIL, heads, headCommit: (x: string) => commitBy(x) });
+    expect(v).toEqual({ pr: 7, sha: mine });
   });
 });

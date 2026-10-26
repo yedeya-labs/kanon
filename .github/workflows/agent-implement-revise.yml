@@ -849,8 +849,8 @@ jobs:
       labels: agent:revise
       arm: implementer (revise) agent
       timeout-minutes: 180
-      # The PR's own branch, with history: the agent pushes to it and merges `main` into
-      # it to clear a red check. The spine's blocks, the telemetry action among them, are
+      # The PR's own branch, with history: the agent commits on it and merges `main` into
+      # it to clear a red check, and the spine's push job pushes it (kanon#1383). The spine's blocks, the telemetry action among them, are
       # `$/` references (RA-2697), so a branch cut before any of them existed still runs them.
       ref: ${{ needs.filter.outputs.branch }}
       fetch-depth: 0
@@ -875,10 +875,16 @@ jobs:
 
         ${{ needs.filter.outputs.mandate }}
 
-        You are ALREADY ON THE PR'S BRANCH. Fix in place and push to this branch.
+        You are ALREADY ON THE PR'S BRANCH. Fix in place and commit on this branch.
         Do NOT create a new branch, a new PR, or a new file for the fix — the
         review threads and the findings are attached to what is there, and
         re-authoring discards them.
+
+        YOU COMMIT; A JOB AFTER YOURS PUSHES (kanon#1383). Your token cannot write
+        code, so `git push` fails: leave your commits on this branch and the push
+        job moves it, after you finish. Below, "push" means the commits you leave.
+        GitHub writes new commits when the job pushes yours, so cite no commit id
+        from your checkout in a comment.
 
         FIRST READ YOUR PLAYBOOK: docs/qa/triage-fix-playbook.md, and the
         project's stack document, docs/qa/stack.md, which says how this project
@@ -1004,10 +1010,14 @@ jobs:
         --allowedTools Read,Edit,Write,Bash,Grep,Glob
         --exclude-dynamic-system-prompt-sections
       # The App token's permissions, narrowed to what this lane's agent uses (`K-AGENT-46`).
-      permission-contents: write
+      # Contents read only (`LANE-13`): the `push` job after the agent's pushes its commits.
+      permission-contents: read
       permission-issues: write
       permission-pull-requests: write
-      permission-workflows: write
+      # The push job's own token holds Contents and Workflows write. It moves only this
+      # lane's `ref`, from the commit the agent's job checked out.
+      push: true
+      push-workflows: true
     secrets:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
@@ -1118,9 +1128,9 @@ jobs:
   # the agent's, never the agent: it moves `kanon/role: implementer` to the pull request's new
   # head only when the head this run started from (`head_sha`, read before the agent ran)
   # carried one created by the Implementer's App, and every commit between them is the App's.
-  # And only to a head this run pushed, on exactly that head (#1263): one the agent's job held
-  # (`revise`'s `heads`) or the fix commit (`fix-push`'s `sha`), made on a checkout (`base`)
-  # that is `head_sha`. `fix-push` is a need so its outputs reach the step; on that path
+  # And only to a head this run pushed, on exactly that head (#1263): one the push job moved
+  # (`revise`'s `push-heads`, never the agent's job, `LANE-16`) or the fix commit (`fix-push`'s
+  # `sha`), built on a head (`base`) that is `head_sha`. `fix-push` is a need so its outputs reach the step; on that path
   # `revise` is skipped and its outputs are empty, and the reverse on every other.
   # Otherwise it sets none and says why. It never reds the lane. Since L4 the Merger requires the
   # status, and this lane's filter refuses a pull request whose head has none.
@@ -1139,6 +1149,6 @@ jobs:
           app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           pr: ${{ needs.filter.outputs.pr }}
           start-head: ${{ needs.filter.outputs.head_sha }}
-          heads: ${{ needs.revise.outputs.heads }}
-          base: ${{ needs.revise.outputs.base || needs.fix-push.outputs.base }}
+          heads: ${{ needs.revise.outputs.push-heads }}
+          base: ${{ needs.revise.outputs.push-base || needs.fix-push.outputs.base }}
           fix-sha: ${{ needs.fix-push.outputs.sha }}

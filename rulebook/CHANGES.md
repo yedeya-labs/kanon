@@ -64,6 +64,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-21.** No longer prose only for the tracking issue: the brief guard reads issue `<n>` for each `docs/projects/<n>.md` and fails when it lacks a kind label, isn't on the bucket that matches it, or carries `project:<n>`. Kanon's one brief's tracking issue had no kind label. [#1245](https://github.com/yedeya-labs/kanon/issues/1245)
 
+## `K-AGENT-1`
+
+- **2026-10-26.** The Owner decided that an Author lane's commits are authored by the App's bot account, not the persona: GitHub verifies an App's commit only when it names no custom author, and the spine's push job now re-creates a lane's commits that way. The persona stays in every post's header and role marker, and no commit trailer carries it. [#1373](https://github.com/yedeya-labs/kanon/issues/1373), [#1383](https://github.com/yedeya-labs/kanon/issues/1383)
+
 ## `K-AGENT-2`
 
 - **2026-10-15.** The Owner decided that the Releaser may open a candidate's pin pull request, the one exception to its touching no file outside the release file set, where the adoption record declares the Workflows write that pull request needs. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)

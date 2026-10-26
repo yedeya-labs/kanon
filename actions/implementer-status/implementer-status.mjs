@@ -13,17 +13,17 @@
 //          is never found by its link to the issue, its label or its author, all of which an
 //          agent can forge. It is the one pull request that was opened after the run started,
 //          from a branch that didn't exist before the run (the filter job's snapshot), whose
-//          head commit is authored by the App, AT A HEAD THIS RUN'S AGENT JOB HELD when the
-//          agent finished (the lane spine's `heads` output, #324). The App's email alone binds
+//          head commit is authored by the App, AT A HEAD THIS RUN'S PUSH JOB MOVED (the lane
+//          spine's `push-heads` output, #324; never the agent's job, `LANE-16`). The App's email alone binds
 //          nothing: every run of the shared Author App commits under it, so two overlapping
 //          runs would each see both pull requests, and a run that opened none would stamp
 //          another lane's. None, or more than one, and it stamps nothing and says so by name.
 //   carry  (implement-revise, rebase): the status moves to the new head only when the head the
 //          run started from carried one created by this App, and only to a head THIS RUN
 //          PUSHED, built on exactly what it checked out (#1263). All three must hold: the new
-//          head is one the agent's job held when the agent finished (`heads`) or the commit the
-//          revise lane's no-model fix pushed (`fix-sha`); the branch's head as the agent's job
-//          checked it out (`base`) is the head the run started from, so nothing landed between
+//          head is one the run's push moved (`heads`: the spine's push job, or the rebase lane's
+//          agent job) or the commit the revise lane's no-model fix pushed (`fix-sha`); the head
+//          that push built on (`base`) is the head the run started from, so nothing landed between
 //          the filter's read and the checkout; and every commit on the first-parent path from
 //          the new head back to it is authored by the App. The email alone binds nothing, as
 //          for `open`: a person's commit under the App's address, pushed below the run's tip

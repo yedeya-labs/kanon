@@ -12,9 +12,8 @@
 #
 #   1. writes the App's bot identity to `$GITHUB_ENV` as GIT_AUTHOR_* and GIT_COMMITTER_*.
 #      These outrank `user.name`/`user.email` in any git config, so every commit the agent or a
-#      later step of the job makes is authored `<persona> <id+slug[bot]@users.noreply.…>`
-#      (the persona from the block's previous step, or `<slug>[bot]` without one) and
-#      committed by `<slug>[bot]`, whatever the action writes. `agentSlug` in `actions/dco/dco.mjs` recognises the login
+#      later step of the job makes is authored and committed by
+#      `<slug>[bot] <id+slug[bot]@users.noreply.…>`, whatever the action writes. `agentSlug` in `actions/dco/dco.mjs` recognises the login
 #      everywhere, and the noreply email on github.com only: on GitHub Enterprise Server the
 #      address is `users.noreply.<host>`, and the agent is recognised by its login alone.
 #   2. when the default branch records a delegation, points git at a hooks directory outside
@@ -54,10 +53,11 @@ host="${GITHUB_SERVER_URL:-https://github.com}"
 host="${host#*://}"
 host="${host%%/*}"
 email="${id}+${bot}@users.noreply.${host}"
-# THE PERSONA AS THE AUTHOR'S NAME (plan 0005 §3.3), when the block's persona step resolved
-# one; the App's noreply address stays the email, so GitHub still attributes the commit to the
-# App and the `dco` check still recognises it by that email. The committer stays the bot.
-author="${KANON_PERSONA:-$bot}"
+# THE BOT ACCOUNT AS THE AUTHOR, NOT THE PERSONA (`K-AGENT-1`, amended by kanon#1383). The spine's
+# push job re-creates a lane's commits through GitHub, which authors them as the App's bot
+# account, so that is what every commit says on every lane. The persona stays in the post header
+# and the role marker; no trailer carries it.
+author="$bot"
 {
   echo "GIT_AUTHOR_NAME=$author"
   echo "GIT_AUTHOR_EMAIL=$email"

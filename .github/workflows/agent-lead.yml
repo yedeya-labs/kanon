@@ -31,17 +31,19 @@
 # the invariants this brief proposes stay `[seed]` until separately promoted, and
 # a `[seed]` → `[confirmed]` transition is outside the green zone by design (§3).
 #
-# SETUP: this lane narrows its Author App token to `contents: write`, `issues: write` and
-# `pull-requests: write` (`K-AGENT-46`; the `permission-*` inputs below), which the Lead's
-# row of the roles table (rulebook/03-agents.md) and of the App register allows. It is
-# wider than the dispatch sweep's token because this lane pushes a branch and opens a pull
-# request; tests/unit/app-token-permissions.test.ts records each lane's list and why.
-# The push probe (the spine's `push-probe`, switched on below) fails LOUDLY if
-# `contents: write` is missing, because a 403 on push is the likeliest first-run failure
-# and a silent one would be indistinguishable from "the agent had nothing to say" —
-# `silent-absence` (RA-946), in the newest component. `pull_requests: write` is NOT probed
-# — it cannot be, without creating a PR — and the run verifies it by doing it; the probe
-# step says so, and RA-959 is this comment having claimed the guard covered both.
+# SETUP: this lane narrows its agent's Author App token to `contents: read`, `issues: write`
+# and `pull-requests: write` (`K-AGENT-46`; the `permission-*` inputs below), and its push
+# job's to `contents: write` and `pull-requests: write` (`push: true`, kanon#1383): the agent
+# commits the brief and writes the pull request's request, and the push job, which runs no
+# agent, pushes the branch and opens the pull request (`LANE-13`, `LANE-15`). Both fit the
+# Lead's row of the roles table (rulebook/03-agents.md) and of the App register;
+# tests/unit/app-token-permissions.test.ts records each lane's lists and why.
+# The push probe (the spine's `push-probe`, switched on below) fails LOUDLY, before the agent
+# runs, if the App can't mint the push job's token, because a missing grant is the likeliest
+# first-run failure and a silent one would be indistinguishable from "the agent had nothing
+# to say" — `silent-absence` (RA-946). It mints that token and revokes it at once; a mint
+# grants every permission it names or fails, so it checks `pull_requests: write` too, which
+# the dry-run push it replaced could not (RA-959).
 #
 # INERT until: the caller is on the default branch + the Author App installed, with the
 # Lead's row in the App register + these secrets (plan 0001 §8):
@@ -142,8 +144,8 @@ jobs:
         run: node "$KANON/scripts/lane-gate.mjs"
 
   # THE SPINE LIVES IN `agent-lane.yml` (RA-2609, extending RA-2092 and RA-2592) — token,
-  # checkout, the push probe, install, the action, red-run classification, the RA-2519
-  # breadcrumbs and the cost row. What stays here is what makes this lane THIS lane:
+  # the push probe, checkout, install, the action, red-run classification, the RA-2519
+  # breadcrumbs, the cost row and the push job. What stays here is what makes this lane THIS lane:
   # the trigger, the workflow-level concurrency, the default-token scope, the App
   # identity and the prompt. There was never an admission filter and there is none now:
   # the job above is the membership gate alone.
@@ -181,7 +183,7 @@ jobs:
       # A missing grant must be a red run with a readable message, never a 403
       # discovered 90 turns in after the reasoning has been paid for. The probe and why
       # it probes rather than asks live in the spine; this lane is the one it was built
-      # for (RA-951), and `pull_requests: write` is still verified only by doing it.
+      # for (RA-951).
       push-probe: true
       prompt: |
         You are the Lead (Agent 5), in BRIEF mode. You produce ONE
@@ -397,14 +399,23 @@ jobs:
         finds the project's issues by a `<!-- qa:project <n> -->` marker on the LAST line of the body, RA-1066), so a slug-named brief can
         never be reconciled and would sit in the directory while every tick
         reported "no project to reconcile". If you were given no tracking issue,
-        STOP and say so rather than inventing a name. Push it on a branch named
-        `docs/<n>-<slug>` (`K-WS-8`), the same <n>. Open ONE PR labelled
-        `review:please` so the Reviewer reviews it. Do NOT milestone the PR (K-WORK-7:
-        issues only). Do NOT create the issues you propose — the brief proposes
-        them; a human approves before anything is filed. NEVER merge.
+        STOP and say so rather than inventing a name. Commit it on a new branch
+        named `docs/<n>-<slug>` (`K-WS-8`), the same <n>, and write the request
+        for ONE PR labelled `review:please` so the Reviewer reviews it.
 
-        ALWAYS leave the PR open with a comment summarising the decisions that need
-        the developer, even if you run short of budget. Never end with no output.
+        YOU COMMIT AND WRITE THE REQUEST; A JOB AFTER YOURS PUSHES (kanon#1383).
+        Your token cannot write code, so `git push` fails. A job after yours
+        pushes your branch and opens the PR from `docs/.kanon-pull-request.json`,
+        which you write: a JSON object with `branch`, `base`, `title`, `body` and
+        `labels`. Git ignores it here, so it is never committed; write it last.
+        The PR does not exist while you run, so put the decisions that need the
+        developer in its `body`. GitHub writes new commits when the job pushes
+        yours, so cite no commit id from your checkout. Do NOT milestone the PR
+        (K-WORK-7: issues only). Do NOT create the issues you propose — the brief
+        proposes them; a human approves before anything is filed. NEVER merge.
+
+        ALWAYS write the request, with the decisions that need the developer, even
+        if you run short of budget. Never end with no output.
       # THE LEAD'S SHELL IS AN ALLOW-LIST THAT RUNS NO TREE CODE (`K-AGENT-50`, kanon#243, the
       # Owner's decision of 2026-10-05), the way the Reviewer's is (`K-AGENT-24`, kanon#248):
       # it writes only under `docs/`, runs Kanon's scripts by name (the spine puts them on the
@@ -445,9 +456,12 @@ jobs:
         --setting-sources user
         --exclude-dynamic-system-prompt-sections
       # The App token's permissions, narrowed to what this lane's agent uses (`K-AGENT-46`).
-      permission-contents: write
+      # Contents read only (`LANE-13`): the `push` job after the agent's pushes its commits,
+      # with a token of its own holding Contents and Pull requests write, and opens the PR.
+      permission-contents: read
       permission-issues: write
       permission-pull-requests: write
+      push: true
     secrets:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}

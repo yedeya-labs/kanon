@@ -172,12 +172,13 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
 
   it('a job that inherits id-token from the workflow-level permissions', () => {
     // The spine declares no permissions anywhere: a workflow-level grant reaches every job. Its
-    // `mint` job runs steps, and its `run` job calls `lane-agent-job.yml` (kanon#281), which
-    // holds the agent job: each is named in its own form.
+    // `mint` and `push` jobs run steps, and its `run` job calls `lane-agent-job.yml` (kanon#281),
+    // which holds the agent job: each is named in its own form.
     const inherits = "(it declares no permissions, so it inherits the workflow's)";
     expect(mutate((w) => { w['agent-lane.yml']!.permissions = { contents: 'read', 'id-token': 'write' }; })).toEqual([
       `agent-lane.yml: job mint holds id-token: write ${inherits}; only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may`,
       `agent-lane.yml: job run holds id-token: write ${inherits} and calls lane-agent-job.yml, which has no store job to pass it to`,
+      `agent-lane.yml: job push holds id-token: write ${inherits}; only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may`,
     ]);
     // The spine's agent job, in the workflow it calls.
     expect(mutate((w) => { w['lane-agent-job.yml']!.permissions = { contents: 'read', 'id-token': 'write' }; }))
