@@ -1081,7 +1081,7 @@ describe('K-PROJ-18 — a decision only a person may answer, marked answered by 
 
   it.each([
     ['spend', '1. **The monthly spend ceiling. ✅ ANSWERED (Lead, technical): $5 a month.**', /spend/],
-    ['paging', '1. **Whether a failed sync pages. ✅ ANSWERED (Lead, technical): it pages on the second failure.**', /paging/],
+    ['paging', '1. **Whether a failed sync is paged. ✅ ANSWERED (Lead, technical): paging on the second failure.**', /paging/],
     ['roadmap placement', '1. **Which milestone the export ships in. ✅ ANSWERED (Lead): the Launch roadmap milestone.**', /roadmap placement/],
   ])('flags a Lead-answered decision about %s, by its number and the rule', (_subject, item, subject) => {
     const [f, ...rest] = findings(decisions(item));
@@ -1103,9 +1103,16 @@ describe('K-PROJ-18 — a decision only a person may answer, marked answered by 
   it('passes the same subjects answered by a person, and a Lead answer on a technical subject', () => {
     expect(findings(decisions([
       '1. **The monthly spend ceiling. ✅ ANSWERED (Owner): $5 a month.**',
-      '2. **Whether a failed sync pages. ✅ ANSWERED (the Owner, 2026-10-23): yes.**',
+      '2. **Whether a failed sync is paged. ✅ ANSWERED (the Owner, 2026-10-23): yes.**',
       '3. **Which milestone the export ships in. ✅ ANSWERED (Stakeholder): Launch.**',
       '4. **One read layer. ✅ ANSWERED (Lead, technical): the core takes an injected reader.**',
+    ].join('\n')))).toEqual([]);
+  });
+
+  it('reads a page as a document, not as paging: bare page and pages are not paging words', () => {
+    expect(findings(decisions([
+      '1. **Where the status page lives. ✅ ANSWERED (Lead, technical): beside the README.**',
+      '2. **How the metrics pages are split. ✅ ANSWERED (Lead, technical): one per lane.**',
     ].join('\n')))).toEqual([]);
   });
 

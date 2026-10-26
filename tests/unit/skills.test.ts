@@ -1106,9 +1106,15 @@ describe('the mandate skill (#853)', () => {
     const { PERSON_DECISION_SUBJECTS } = await import('../../scripts/brief-guard.mjs');
     const audit = steps(10, 11);
     expect(audit).toContain('`PERSON_DECISION_SUBJECTS` in Kanon\'s `scripts/brief-guard.mjs`');
-    // One place: the rule names the same list, and neither text spells out its patterns.
+    // One place: the rule names the same list, and the audit doesn't restate its words. A copy
+    // would list a subject's keywords together, so no two of one subject's keywords may appear.
     expect(read('rulebook/07-projects.md')).toContain('`PERSON_DECISION_SUBJECTS`');
-    for (const { match } of PERSON_DECISION_SUBJECTS) expect(audit).not.toContain(match.source);
+    const KEYWORDS: Record<string, string[]> = { spend: ['budget', 'billing', 'cost'], paging: ['on-call', 'alarm', 'pagedBusinessEvents'], 'roadmap placement': ['roadmap', 'milestone'] };
+    expect(PERSON_DECISION_SUBJECTS.map((x: { subject: string }) => x.subject)).toEqual(Object.keys(KEYWORDS));
+    for (const { subject, match } of PERSON_DECISION_SUBJECTS) {
+      for (const w of KEYWORDS[subject]!) expect(match.test(w), `${subject} matches ${w}`).toBe(true);
+      expect(KEYWORDS[subject]!.filter((w) => new RegExp(`\\b${w}\\b`, 'i').test(audit)).length, `the audit restates ${subject}'s keywords`).toBeLessThan(2);
+    }
   });
 
   it('audits the brief\'s decisions, posts the rulings as one comment, and checks the new head', () => {

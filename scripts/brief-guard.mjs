@@ -418,7 +418,8 @@ export const ANSWERED_DECISION = /✅|\bANSWERED\b/;
  * and marks it `✅ ANSWERED (Lead, technical)`. It never answers spend, paging or roadmap
  * placement: those wait for the person who owns them. These three are the subjects a headline
  * names in words a pattern can find; agent authority, product behaviour and a closure rule
- * don't have such words, and stay the Reviewer's and the mandate skill's to read.
+ * don't have such words, and stay the Reviewer's and the mandate skill's to read. Bare `page`
+ * and `pages` are left out: a status page or a metrics page is a document, not a page.
  *
  * THIS IS THE ONE COPY OF THE KEYWORDS. `K-PROJ-18` and the mandate skill's audit cite it by
  * name rather than restating it. It reads the HEADLINE only, the bold span `decisionsIn`
@@ -433,7 +434,7 @@ export const ANSWERED_DECISION = /✅|\bANSWERED\b/;
  */
 export const PERSON_DECISION_SUBJECTS = Object.freeze([
   { subject: 'spend', owner: 'the Owner', match: /\bspend(?:s|ing)?\b|\bcosts?\b|\bbudgets?\b|\bbilling\b|\bspend limit\b|\$\s?\d/i },
-  { subject: 'paging', owner: 'the Owner', match: /\bpag(?:e|es|ed|ing)\b|\bpagedBusinessEvents\b|\bon-call\b|\balarms?\b/i },
+  { subject: 'paging', owner: 'the Owner', match: /\bpag(?:ed|ing)\b|\bpagedBusinessEvents\b|\bon-call\b|\balarms?\b/i },
   { subject: 'roadmap placement', owner: 'the Stakeholder', match: /\broadmap\b|\bmilestones?\b/i },
 ]);
 

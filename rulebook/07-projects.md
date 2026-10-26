@@ -178,7 +178,7 @@ This chapter governs projects: work too large for one issue, planned by the Lead
 
 **Why.** The brief is the decision record (`K-PROJ-10`), so the answer has to be in it, where the guard reads it and where it survives the merge. A comment is where people naturally answer, and transcription keeps that convenience without leaving the record split between the brief and a thread.
 
-**Enforced by.** The brief guard reads only the headline (`K-PROJ-5`). Who may answer what is `K-PROJ-18`.
+**Enforced by.** The brief guard reads the open and answered marks from the headline only (`K-PROJ-5`), and warns when an answered decision's body still waits on a person. Who may answer what is `K-PROJ-18`.
 
 **Class.** framework
 

@@ -200,6 +200,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-02.** A test runs the brief guard on the brief template, whose example measurement item it must accept. [#55](https://github.com/yedeya-labs/kanon/issues/55)
 
+## `K-PROJ-17`
+
+- **2026-10-26.** The Enforced-by line no longer says the brief guard reads only the headline: it reads the open and answered marks there, and warns when an answered decision's body still waits on a person (`K-PROJ-18`). [#1235](https://github.com/yedeya-labs/kanon/issues/1235)
+
 ## `K-PROJ-18`
 
 - **2026-10-26.** No longer prose only: the brief guard warns, without failing, on a decision the Lead marked answered whose headline names spend, paging or roadmap placement, and on an answered headline whose body still waits on a person. The Owner decided on 2026-10-21 that this ships separately from the mandate skill. [#1235](https://github.com/yedeya-labs/kanon/issues/1235)
@@ -280,6 +284,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** The `## Deploy` section gained an optional `Smoke schedule` bullet: one code span per environment, its name and then a five-field cron, no environment twice and no two environments sharing a cron string, since the cron is what tells one scheduled run from another. [Plan 0013](../docs/plans/0013-smoke-lifecycle.md) §4.3, [#1165](https://github.com/yedeya-labs/kanon/issues/1165)
 
 - **2026-10-21.** The mechanism list takes a third status, `not applicable`, and `## Choices` its reason, one `Mechanism not applicable` bullet per such mechanism, naming its row's rules. [#1236](https://github.com/yedeya-labs/kanon/issues/1236)
+
+## `K-LAYOUT-13`
+
+- **2026-10-26.** A decision's bold headline is no longer the only part read: the open and answered marks are read there, and the brief guard also warns when an answered decision's body still waits on a person (`K-PROJ-18`). [#1235](https://github.com/yedeya-labs/kanon/issues/1235)
 
 ## `K-LAYOUT-16`
 
