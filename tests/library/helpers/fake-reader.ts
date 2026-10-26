@@ -36,8 +36,9 @@ export interface FakeRun {
 }
 
 export interface FakeWorld {
-  /** issue → the numbers of the pull requests that close it */
-  closedBy?: Record<number, number[]>;
+  /** issue → the pull requests that close it: a number for one in the repository read, or
+   *  `{ number, repo, state }` for one in another repository (kanon#1412) */
+  closedBy?: Record<number, Array<number | { number: number; repo: string; state?: string }>>;
   /** pull request number → the pull request */
   prs?: Record<number, FakePr>;
   /** issue → its comments, `{ author: { login }, body, createdAt }` */
@@ -177,7 +178,11 @@ export function fakeReader(world: FakeWorld = {}) {
     switch (op) {
       case 'ClosedBy':
         if (!world.closedBy) break;
-        return repository({ issue: { closedByPullRequestsReferences: connection((world.closedBy[n] ?? []).map((number) => ({ number }))) } });
+        // Each node names its repository, as the real connection does: the read's own unless the
+        // world says another (kanon#1412).
+        return repository({ issue: { closedByPullRequestsReferences: connection((world.closedBy[n] ?? []).map((ref) => (typeof ref === 'number'
+          ? { number: ref, repository: { nameWithOwner: `${variables.owner}/${variables.name}` } }
+          : { number: ref.number, state: ref.state ?? 'MERGED', repository: { nameWithOwner: ref.repo } }))) } });
       case 'PullRequestMerge':
       case 'PullRequest': {
         const pr = world.prs?.[n] ?? (world.prs ? undefined : {});

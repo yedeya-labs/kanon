@@ -247,11 +247,11 @@ describe('run', () => {
       // The linked-PR read goes through `ghReader`: a GraphQL query on standard input, named by
       // its operation, answered as `{ data }`.
       if (args.join(' ') === 'api graphql --input -') {
-        const { query, variables } = JSON.parse(input ?? '{}') as { query: string; variables: { number: number } };
+        const { query, variables } = JSON.parse(input ?? '{}') as { query: string; variables: { number: number; owner: string; name: string } };
         const op = /query (\w+)/.exec(query)?.[1];
         const n = Number(variables.number);
         if (op === 'ClosedBy') {
-          const nodes = (f.prs?.[n] ?? []).map((number) => ({ number }));
+          const nodes = (f.prs?.[n] ?? []).map((number) => ({ number, repository: { nameWithOwner: `${variables.owner}/${variables.name}` } }));
           return JSON.stringify({ data: { repository: { issue: { closedByPullRequestsReferences: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } } });
         }
         if (op === 'PullRequest') {
