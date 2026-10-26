@@ -30,6 +30,8 @@ import {
   KIND_BUCKETS,
   checkTrackingIssue,
   trackingIssueProblems,
+  PERSON_DECISION_SUBJECTS,
+  personDecisions,
 } from '../../scripts/brief-guard.mjs';
 import { parseProposed } from '../../scripts/lead-reconcile.mjs';
 import { ROOT } from './helpers/adopter.js';
@@ -642,6 +644,7 @@ describe('the pre-standard exemption names every check it skips (kanon#190)', ()
     predecessors: [decomposition('It is blocked on Issue B.\n\nAcceptance criteria:\n\n- `[AREA-1]` — c.'), /does not name Issue B/],
     'criteria-gap': [decomposition('Acceptance criteria:\n\n1. `[AREA-1]` — c.\n3. `[AREA-3]` — c.'), /criterion 2 is written 3/],
     'criterion-refs': [withSection('Scope', `${PAD} As Issue B criterion 9 says.`), /“Issue B criterion 9” points at nothing/],
+    'person-decision': [withSection('Decisions', `${PAD}\n\n1. **The monthly spend ceiling. ✅ ANSWERED (Lead, technical): $5.**\n`), /decision 1 is marked answered by the Lead/],
   };
 
   it('lists each skipped check once, with a label', () => {
@@ -1069,6 +1072,86 @@ describe('RA-1748 — a decisions section that parses to zero items is surfaced'
 
   it('is silent on a section with no numbered lines at all', () => {
     expect(unparsedDecisionLines(`${PAD} None outstanding.`)).toBe(0);
+  });
+});
+
+describe('K-PROJ-18 — a decision only a person may answer, marked answered by the Lead (kanon#1235)', () => {
+  const decisions = (items: string) => withSection('Decisions', `${PAD}\n\n${items}\n`);
+  const findings = (md: string) => checkBrief('docs/projects/1.md', md);
+
+  it.each([
+    ['spend', '1. **The monthly spend ceiling. ✅ ANSWERED (Lead, technical): $5 a month.**', /spend/],
+    ['paging', '1. **Whether a failed sync pages. ✅ ANSWERED (Lead, technical): it pages on the second failure.**', /paging/],
+    ['roadmap placement', '1. **Which milestone the export ships in. ✅ ANSWERED (Lead): the Launch roadmap milestone.**', /roadmap placement/],
+  ])('flags a Lead-answered decision about %s, by its number and the rule', (_subject, item, subject) => {
+    const [f, ...rest] = findings(decisions(item));
+    expect(rest).toEqual([]);
+    expect(f.advisory).toBe(true);
+    expect(f.at).toMatch(/^docs\/projects\/1\.md:\d+$/);
+    expect(f.problem).toMatch(/^decision 1 is marked answered by the Lead/);
+    expect(f.problem).toMatch(subject);
+    expect(f.problem).toContain('`K-PROJ-18`');
+  });
+
+  it('points at the decision\'s own line', () => {
+    const md = decisions('1. **Which store? ✅ ANSWERED (Lead, technical): the existing one.**\n2. **The budget. ✅ ANSWERED (Lead, technical): $5.**');
+    const [f] = findings(md);
+    const line = Number(f.at.split(':')[1]);
+    expect(md.split('\n')[line - 1]).toMatch(/^2\. \*\*The budget\./);
+  });
+
+  it('passes the same subjects answered by a person, and a Lead answer on a technical subject', () => {
+    expect(findings(decisions([
+      '1. **The monthly spend ceiling. ✅ ANSWERED (Owner): $5 a month.**',
+      '2. **Whether a failed sync pages. ✅ ANSWERED (the Owner, 2026-10-23): yes.**',
+      '3. **Which milestone the export ships in. ✅ ANSWERED (Stakeholder): Launch.**',
+      '4. **One read layer. ✅ ANSWERED (Lead, technical): the core takes an injected reader.**',
+    ].join('\n')))).toEqual([]);
+  });
+
+  it('reads the subject from the headline, not from the prose under it', () => {
+    expect(findings(decisions('1. **One read layer. ✅ ANSWERED (Lead, technical): an injected reader.** It costs nothing and pages nobody.'))).toEqual([]);
+  });
+
+  it.each([
+    "1. **Where the job runs. ✅ ANSWERED (Lead, technical): a separate job.** This still needs the developer's yes.",
+    '1. **Where the job runs. ✅ ANSWERED (Owner): a separate job.**\n   - (a) a separate job.\n\n   It still awaits the Owner, who answers in review.',
+    '**1. Where the job runs. ✅ ANSWERED (Lead, technical): a separate job.** Pending the Maintainer\'s confirmation.',
+  ])('flags an answered headline whose body still waits on a person: %s', (item) => {
+    const [f, ...rest] = findings(decisions(item));
+    expect(rest).toEqual([]);
+    expect(f.advisory).toBe(true);
+    expect(f.problem).toMatch(/^decision 1 is marked answered, but its body says it still waits on a person/);
+    expect(f.problem).toContain('`K-PROJ-18`');
+  });
+
+  it('ends a decision\'s body at the next decision and at prose back at column zero', () => {
+    expect(findings(decisions([
+      '1. **Where the job runs. ✅ ANSWERED (Owner): a separate job.** Carried into Issue A.',
+      '2. **Which store? ✅ ANSWERED (Maintainer): the existing one.**',
+      '',
+      'While a decision is still open, its headline carries *awaiting the Owner* instead.',
+    ].join('\n')))).toEqual([]);
+  });
+
+  it('reads the deferral from the body, so a headline narrating how it was answered stays quiet', () => {
+    expect(findings(decisions('1. **Where the job runs, awaiting the Owner until 2026-10-20. ✅ ANSWERED (Owner): a separate job.** Carried into Issue A.'))).toEqual([]);
+  });
+
+  it('leaves an open decision to the open-decision check, and reads hyphenated names as names', () => {
+    expect(findings(decisions('1. **The spend ceiling. ⛔ OPEN** It awaits the Owner.')).map((f) => f.advisory)).toEqual([undefined]);
+    expect(findings(decisions('1. **What the needs-the-Owner view counts. ✅ ANSWERED (Owner): (a).** The needs-the-Owner view lists them.'))).toEqual([]);
+  });
+
+  it('is pure: personDecisions reads a section body and names each subject it matched', () => {
+    expect(personDecisions('1. **The budget. ✅ ANSWERED (Lead): $5.**\n')).toEqual([
+      { n: 1, line: 0, kind: 'subject', subject: 'spend', owner: 'the Owner', word: 'budget' },
+    ]);
+    expect(PERSON_DECISION_SUBJECTS.map((s) => s.subject)).toEqual(['spend', 'paging', 'roadmap placement']);
+  });
+
+  it('only advises: every other finding carries no advisory mark', () => {
+    for (const f of findings(withoutSection('Scope'))) expect(f.advisory, f.problem).toBeUndefined();
   });
 });
 

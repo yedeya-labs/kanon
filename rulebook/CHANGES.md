@@ -200,6 +200,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-02.** A test runs the brief guard on the brief template, whose example measurement item it must accept. [#55](https://github.com/yedeya-labs/kanon/issues/55)
 
+## `K-PROJ-18`
+
+- **2026-10-26.** No longer prose only: the brief guard warns, without failing, on a decision the Lead marked answered whose headline names spend, paging or roadmap placement, and on an answered headline whose body still waits on a person. The Owner decided on 2026-10-21 that this ships separately from the mandate skill. [#1235](https://github.com/yedeya-labs/kanon/issues/1235)
+
 ## `K-OBS-12`
 
 - **2026-10-15.** A run whose turn cap a person raised for one dispatch gets its dollar ceiling derived from the raised cap at the same per-turn rate, by `agent-run`'s turn-limit step, held by `tests/unit/agent-run-turn-budget.test.ts`. [ADR 0005](../docs/decisions/0005-roles-and-standard-lane-settings.md) §2, amended 2026-10-15; [#891](https://github.com/yedeya-labs/kanon/issues/891)

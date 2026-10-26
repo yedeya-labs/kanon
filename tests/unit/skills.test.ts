@@ -1102,6 +1102,15 @@ describe('the mandate skill (#853)', () => {
     expect(s.body).toContain("gh workflow run agent-lead.yml -R <owner>/<repo> -f mandate='<one paragraph>' -f context=<n>\n");
   });
 
+  it("cites the brief guard's keyword list for K-PROJ-18's subjects rather than copying it (kanon#1235)", async () => {
+    const { PERSON_DECISION_SUBJECTS } = await import('../../scripts/brief-guard.mjs');
+    const audit = steps(10, 11);
+    expect(audit).toContain('`PERSON_DECISION_SUBJECTS` in Kanon\'s `scripts/brief-guard.mjs`');
+    // One place: the rule names the same list, and neither text spells out its patterns.
+    expect(read('rulebook/07-projects.md')).toContain('`PERSON_DECISION_SUBJECTS`');
+    for (const { match } of PERSON_DECISION_SUBJECTS) expect(audit).not.toContain(match.source);
+  });
+
   it('audits the brief\'s decisions, posts the rulings as one comment, and checks the new head', () => {
     expect(steps(10, 11)).toContain('**Audit the decisions section against `K-PROJ-18`.**');
     const record = steps(13, 14);
