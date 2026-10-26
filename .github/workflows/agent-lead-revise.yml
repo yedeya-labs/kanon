@@ -387,7 +387,7 @@ jobs:
             [ -n "$sha" ] || { printf 'sha:unknown'; return; }
             cache="$FP_CACHE/$sha"
             if [ ! -f "$cache" ]; then
-              if diff_text="$(gh api "repos/$REPO/compare/$BASE_REF...$sha" \
+              if diff_text="$(gh api "repos/$REPO/compare/$(node "$KANON/scripts/lib/branch-path.mjs" "$BASE_REF")...$sha" \
                                 -H "Accept: application/vnd.github.v3.diff" 2>/dev/null)" \
                  && [ -n "$diff_text" ]; then
                 printf '%s\n' "$diff_text" \

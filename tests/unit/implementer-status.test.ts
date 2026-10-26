@@ -334,6 +334,8 @@ esac
     expect(mint['continue-on-error']).toBe(true);
     expect(Object.entries(mint.with ?? {}).filter(([k]) => k.startsWith('permission-'))).toEqual([['permission-pull-requests', 'write']]);
     expect(action.runs.steps.at(-1)!.env?.PR_TOKEN).toBe('${{ steps.pr-token.outputs.token }}');
+    // The fingerprint's compare roots at the base branch as a REST path, as the revise lane's does (kanon#1432).
+    expect(readFileSync('actions/implementer-status/implementer-status.mjs', 'utf8')).toContain('compare/${branchPath(base)}...${sha}');
   });
 });
 

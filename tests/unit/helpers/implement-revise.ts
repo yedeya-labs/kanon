@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect } from 'vitest';
@@ -145,13 +145,15 @@ export const runFilter = ({
   // Unset leaves the field out, as an unknown time.
   reviewAt = '',
   markerAt = '',
+  // The PR's base branch, which the fingerprint's compare is rooted at (kanon#1432).
+  baseRefName = 'main',
 }: Partial<{
   author: string; labels: string[]; prState: string; reviewState: string;
   rounds: number; changesRequested: number; isDispatch: boolean; reset: boolean;
   isLabel: boolean; labelAdded: string; headVerdict: string;
   headMoved: false | 'content-free' | 'revised'; readableDiffs: boolean; statuses: string;
   extraComments: { author: { login: string }; body: string; createdAt?: string }[]; register: string;
-  reviewAt: string; markerAt: string;
+  reviewAt: string; markerAt: string; baseRefName: string;
 }> = {}) => {
   // ONE HEAD PER CHANGES-REQUEST, because a review is filed against a commit and a
   // healthy loop reviews a new one each round. The old fixture put every review on the
@@ -167,6 +169,7 @@ export const runFilter = ({
 
   const dir = mkdtempSync(join(tmpdir(), 'impl-revise-'));
   writeStub(join(dir, 'gh'), GH_STUB);
+  const compareLog = join(dir, 'compare.log');
   const r = runStepOrThrow(filter, {
     dir,
     env: {
@@ -184,11 +187,12 @@ export const runFilter = ({
       REVISE_LABEL: 'agent:revise',
       RESET: isDispatch ? String(reset) : '',
       STUB_STATUSES: statuses,
+      STUB_COMPARE_LOG: compareLog,
       STUB_META: JSON.stringify({
         author: { login: author },
         state: prState,
         headRefName: 'docs/1049-payments-transition-table',
-        baseRefName: 'main',
+        baseRefName,
         headRefOid: HEAD_OID,
         labels: labels.map((name) => ({ name })),
       }),
@@ -218,5 +222,7 @@ export const runFilter = ({
   });
 
   const { outputs, summary } = r;
-  return { act: outputs.act === 'true', outputs, stdout: r.stdout, summary };
+  // The paths the compare arm was asked for (kanon#1432).
+  const compares = existsSync(compareLog) ? readFileSync(compareLog, 'utf8').split('\n').filter((l) => l.includes('/compare/')) : [];
+  return { act: outputs.act === 'true', outputs, stdout: r.stdout, summary, compares };
 };

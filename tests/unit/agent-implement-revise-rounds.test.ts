@@ -269,7 +269,24 @@ describe('a content-free rebase is neither an answer nor a round (RA-1841)', () 
     // `baseRefName` in the META query the ref is empty and every fingerprint degrades
     // to its SHA — the defect back, silently, with the suite green on the diff lines.
     expect(filter.run).toContain('baseRefName');
-    expect(filter.run).toContain('$BASE_REF...$sha');
+    expect(filter.run).toContain('"$BASE_REF")...$sha');
+  });
+
+  // kanon#1432: unencoded, a `#` in the base began the URL's fragment, so the compare lost its
+  // `...sha` half, and a `%` was decoded into another branch's name.
+  it.each([
+    ['main', 'main'],
+    ['main#x', 'main%23x'],
+    ['feat/a%2fb', 'feat/a%252fb'],
+    ['rel/1.0', 'rel/1.0'],
+  ])('sends the base %j whole, each segment percent-encoded', (baseRefName, path) => {
+    const r = runFilter({ changesRequested: 2, baseRefName });
+    expect(r.compares.length).toBeGreaterThan(0);
+    const prefix = `repos/example-org/example-repo/compare/${path}...`;
+    for (const c of r.compares) {
+      expect(c.startsWith(prefix), c).toBe(true);
+      expect(c.slice(prefix.length)).toMatch(/^[0-9a-z-]+$/);
+    }
   });
 
   it('normalises away exactly what a rebase moves, and nothing else', () => {

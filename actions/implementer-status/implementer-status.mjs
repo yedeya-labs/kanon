@@ -53,6 +53,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 
+import { branchPath } from '../../scripts/lib/branch-path.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 import { ensureLabels } from '../../scripts/lib/labels.mjs';
 import { IMPLEMENTER_STATUS, implementerStatusOn } from '../../scripts/lib/role-marker.mjs';
@@ -298,7 +299,7 @@ function redeliver({ repo, pr, head, statusAt, read, prToken }) {
     if (!prints.has(sha)) {
       try {
         base ||= String(ghJson(['api', `repos/${repo}/pulls/${pr}`], read).base?.ref ?? '');
-        prints.set(sha, base ? patchFingerprint(gh(['api', `repos/${repo}/compare/${base}...${sha}`, '-H', 'Accept: application/vnd.github.v3.diff'], read)) : '');
+        prints.set(sha, base ? patchFingerprint(gh(['api', `repos/${repo}/compare/${branchPath(base)}...${sha}`, '-H', 'Accept: application/vnd.github.v3.diff'], read)) : '');
       } catch {
         prints.set(sha, '');
       }
