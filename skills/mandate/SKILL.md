@@ -101,7 +101,7 @@ The skill has two parts. **The mandate** (steps 1 to 8) runs from the person's i
 
 9. **Read the brief and its mandate.** The brief, `docs/projects/<n>.md` at the pull request's head (`gh pr diff <number> -R <owner>/<repo>`); the mandate, the tracking issue's body (`gh issue view <n> -R <owner>/<repo>`); and the Lead's comment that lists what it needs from the person.
 
-10. **Audit the decisions section against `K-PROJ-18`.** The brief guard reads only each decision's headline (`K-PROJ-5`), so a decision the Lead marked answered passes it whatever its subject. List:
+10. **Audit the decisions section against `K-PROJ-18`.** The brief guard fails on an open headline (`K-PROJ-5`). It warns, without failing, on a decision the Lead marked answered whose headline names spend, paging or roadmap placement, by the keyword list `PERSON_DECISION_SUBJECTS` in Kanon's `scripts/brief-guard.mjs`, and on an answered headline whose body still waits on a person. Read its warnings in the guard's run on the pull request, then read every decision yourself: the list misses agent authority, product behaviour and closure rules, and any subject worded without its keywords. List:
     - each decision marked answered by the Lead whose subject is one `K-PROJ-18` reserves for a person;
     - each headline marked answered whose body still defers to a person, such as "needs the developer's yes";
     - each decision still open;

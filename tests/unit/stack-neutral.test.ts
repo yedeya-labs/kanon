@@ -157,6 +157,35 @@ describe("Kanon's guards on a project with no package.json, run with only node a
     expect(r.out).toMatch(/what I did not examine/i);
   });
 
+  describe("brief-guard advises on a person's decision the Lead answered, and doesn't fail on it (K-PROJ-18, kanon#1235)", () => {
+    const leadAnswered = (dir: string) => edit(dir, 'docs/projects/1.md', (s) => s.replace('✅ ANSWERED (Maintainer): return the order already recorded.', '✅ ANSWERED (Lead, technical): return the order already recorded, under a $5 monthly budget.'));
+
+    it('is green, and prints the decision and the rule as a warning', () => {
+      const r = guard('brief-guard', leadAnswered);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toMatch(/brief-guard: 1 warning\(s\), which don't fail this run/);
+      expect(r.out).toMatch(/docs\/projects\/1\.md:41\n\s+decision 1 is marked answered by the Lead, but its headline names spend \(“\$5”\)/);
+      expect(r.out).toContain('`K-PROJ-18`');
+      expect(r.out).not.toContain('::warning');
+    });
+
+    it('annotates the line in GitHub Actions', () => {
+      const r = guard('brief-guard', leadAnswered, { BRIEF_GUARD_SKIP_TRACKING_ISSUES: '1', GITHUB_ACTIONS: 'true' });
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toMatch(/^::warning file=docs\/projects\/1\.md,line=41,title=brief-guard \(K-PROJ-18\)::decision 1 is marked answered by the Lead/m);
+    });
+
+    it('still fails on a blocking finding beside it, and prints both', () => {
+      const r = guard('brief-guard', (dir) => {
+        leadAnswered(dir);
+        edit(dir, 'docs/projects/1.md', (s) => s.replace(/## 8\. What I did not examine[\s\S]*$/, ''));
+      });
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toMatch(/what I did not examine/i);
+      expect(r.out).toContain('decision 1 is marked answered by the Lead');
+    });
+  });
+
   describe("brief-guard reads the brief's tracking issue from the repository (K-WORK-23, kanon#1245)", () => {
     /** brief-guard with a `gh` on PATH that answers the tracking issue's read with `issue`, and logs each call. */
     const withIssue = (issue: string) => {

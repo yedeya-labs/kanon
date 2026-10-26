@@ -178,7 +178,7 @@ This chapter governs projects: work too large for one issue, planned by the Lead
 
 **Why.** The brief is the decision record (`K-PROJ-10`), so the answer has to be in it, where the guard reads it and where it survives the merge. A comment is where people naturally answer, and transcription keeps that convenience without leaving the record split between the brief and a thread.
 
-**Enforced by.** The brief guard reads only the headline (`K-PROJ-5`). Who may answer what is `K-PROJ-18`.
+**Enforced by.** The brief guard reads the open and answered marks from the headline only (`K-PROJ-5`), and warns when an answered decision's body still waits on a person. Who may answer what is `K-PROJ-18`.
 
 **Class.** framework
 
@@ -188,7 +188,7 @@ This chapter governs projects: work too large for one issue, planned by the Lead
 
 **Why.** Humans decide product intent; agents solve code questions (`K-PRIN-3`). A brief that asks a human every technical question wastes their one decision point, and one that lets the Lead answer a spend or product question has an agent deciding what it was meant to propose. Naming the answerer in the headline lets the Reviewer check the line was respected.
 
-**Enforced by.** The Reviewer's brief review checks that no decision in a human's domain is marked answered by the Lead. Prose only; a guard is planned.
+**Enforced by.** The Reviewer's brief review checks that no decision in a human's domain is marked answered by the Lead. The brief guard (`scripts/brief-guard.mjs`) warns, without failing, on a decision marked answered by the Lead whose headline names spend, paging or roadmap placement, matched by its keyword list `PERSON_DECISION_SUBJECTS`, and on an answered headline whose body still waits on a person. Agent authority, product behaviour and a closure rule have no keywords, so they stay the Reviewer's.
 
 **Class.** framework
 

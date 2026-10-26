@@ -108,9 +108,9 @@ The questions that need a human, numbered, each with the options and your recomm
 
 Include anything that raises spend (the Owner's), anything that changes what pages or what an agent may do (the Owner's), anything that chooses the product's behaviour or a project's closure rule (the Maintainer's or the Stakeholder's), and anything that places work on a roadmap milestone (the Stakeholder's, `K-PROJ-14`). The Lead may settle a purely technical decision itself, and says so (`K-PROJ-18`).
 
-**Write each one as a numbered item whose headline is bold, and mark it answered** (`K-LAYOUT-13`). The guard reads the headline, not the prose under it, and fails the build while any decision is still open:
+**Write each one as a numbered item whose headline is bold, and mark it answered** (`K-LAYOUT-13`). The guard reads the open and answered marks from the headline only, not from the prose under it, and fails the build while any decision is still open. It also warns when an answered decision's prose still waits on a person (`K-PROJ-18`):
 
-1. **The question, once ruled. ✅ ANSWERED (Maintainer): what was chosen, and why.** Put the argument, the options and the rejected alternative in prose here; the guard reads only the bold headline above. Record where the answer was *carried*, because a decision that changed nothing downstream is indistinguishable from one nobody applied.
+1. **The question, once ruled. ✅ ANSWERED (Maintainer): what was chosen, and why.** Put the argument, the options and the rejected alternative in prose here; the guard reads the marks only from the bold headline above. Record where the answer was *carried*, because a decision that changed nothing downstream is indistinguishable from one nobody applied.
 
 While a decision is still open, its headline carries an open mark instead: `⛔ OPEN`, `PROPOSED`, `TBD`, `UNANSWERED`, or *awaiting the Owner*, *awaiting the Maintainer* or *awaiting the Stakeholder*. The brief does not merge until `✅` or `ANSWERED` replaces it. A human answers by editing the headline on the brief's own branch; an answer given in a review comment is transcribed there by the Lead (`K-PROJ-17`). **The uppercase marks are case-sensitive**: lowercase *open* and *proposed* are ordinary words in prose, so write them shouted. Both `N. **…**` and `**N. …**` are read as items.
 

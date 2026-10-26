@@ -414,6 +414,92 @@ export const OPEN_DECISION = /⛔|\bPROPOSED\b|\bOPEN\b(?!-)|\bTBD\b|\bUNANSWERE
 export const ANSWERED_DECISION = /✅|\bANSWERED\b/;
 
 /**
+ * WHO MAY ANSWER (`K-PROJ-18`, kanon#1235). The Lead may settle a technical decision itself,
+ * and marks it `✅ ANSWERED (Lead, technical)`. It never answers spend, paging or roadmap
+ * placement: those wait for the person who owns them. These three are the subjects a headline
+ * names in words a pattern can find; agent authority, product behaviour and a closure rule
+ * don't have such words, and stay the Reviewer's and the mandate skill's to read. Bare `page`
+ * and `pages` are left out: a status page or a metrics page is a document, not a page.
+ *
+ * THIS IS THE ONE COPY OF THE KEYWORDS. `K-PROJ-18` and the mandate skill's audit cite it by
+ * name rather than restating it. It reads the HEADLINE only, the bold span `decisionsIn`
+ * returns, question and answer both, so a Lead answer of "$5 a month" to a question worded
+ * technically is still spend. Prose under the headline is not read for a subject: a technical
+ * decision that says it "costs nothing" stays quiet.
+ *
+ * The check ADVISES and never fails the run. A keyword is not a subject, and a merged brief
+ * is a record that can't be edited to quiet a guess (`K-PROJ-10`), so a person reads the
+ * warning and decides. Each entry: the subject, who owns it, and its words.
+ * @type {readonly { subject: string, owner: string, match: RegExp }[]}
+ */
+export const PERSON_DECISION_SUBJECTS = Object.freeze([
+  { subject: 'spend', owner: 'the Owner', match: /\bspend(?:s|ing)?\b|\bcosts?\b|\bbudgets?\b|\bbilling\b|\bspend limit\b|\$\s?\d/i },
+  { subject: 'paging', owner: 'the Owner', match: /\bpag(?:ed|ing)\b|\bpagedBusinessEvents\b|\bon-call\b|\balarms?\b/i },
+  { subject: 'roadmap placement', owner: 'the Stakeholder', match: /\broadmap\b|\bmilestones?\b/i },
+]);
+
+/** A headline the Lead answered: `✅ ANSWERED (Lead…)`, or `(the Lead…)`. */
+export const LEAD_ANSWER = /\bANSWERED\s*\((?:the\s+)?Lead\b/;
+
+/**
+ * A decision's body that says it still waits on a person: "needs the developer's yes",
+ * "awaits the Owner", "pending the Maintainer's confirmation", "until the Stakeholder
+ * decides". Whitespace between the words, so a hyphenated name (`the needs-the-Owner view`)
+ * is a name and not a deferral.
+ */
+const PERSON = String.raw`(?:the\s+|a\s+)?(?:developer|Owner|Maintainer|Stakeholder|human|person)`;
+export const DEFERS_TO_PERSON = new RegExp(
+  String.raw`\b(?:awaits?|awaiting|waits?\s+(?:on|for)|waiting\s+(?:on|for)|pending|needs?|requires?)\s+${PERSON}\b` +
+    String.raw`|\buntil\s+${PERSON}\s+(?:decides|answers|confirms|rules|agrees)\b` +
+    String.raw`|\b${PERSON}\s+(?:has|have)\s+(?:not\s+)?yet\s+to\s+(?:decide|answer|confirm|rule)\b` +
+    String.raw`|\b${PERSON}\s+may\s+overrule\b`,
+  'i',
+);
+
+/**
+ * A decision's body: the text under its headline, to the next decision or to prose back at
+ * column zero after a blank line, whichever comes first. An indented continuation (options,
+ * a "Carried into" line) is the decision's; a paragraph at column zero is the section's.
+ * @param {string[]} lines the section body's lines @param {number} from the decision's line
+ * @returns {string}
+ */
+const decisionBody = (lines, from) => {
+  const out = [lines[from]];
+  for (let i = from + 1; i < lines.length; i++) {
+    if (DECISION_ITEM.test(lines[i])) break;
+    if (/^\S/.test(lines[i]) && lines[i - 1].trim() === '') break;
+    out.push(lines[i]);
+  }
+  // Drop the headline's bold span, which `decisionsIn` read.
+  return out.join('\n').replace(/^[\s\S]*?\*\*[\s\S]*?\*\*/, '');
+};
+
+/**
+ * The decisions in one decisions section's body that `K-PROJ-18` gives a person and that read
+ * as answered without one, as `{ n, line, kind, … }`. Pure. Two kinds:
+ *  - `subject`: the Lead answered it, and its headline names a subject from
+ *    `PERSON_DECISION_SUBJECTS` (`subject`, `owner`, and the `word` that matched);
+ *  - `deferred`: its headline is answered, by anyone, and its body still waits on a person
+ *    (`word`, the phrase that matched).
+ * An open decision is neither: the open-decision check already fails it.
+ * @param {string} body @returns {{ n: number, line: number, kind: 'subject' | 'deferred', subject?: string, owner?: string, word: string }[]}
+ */
+export const personDecisions = (body) => {
+  const lines = body.split('\n');
+  return decisionsIn(body).flatMap((d) => {
+    if (!ANSWERED_DECISION.test(d.headline)) return [];
+    const out = [];
+    if (LEAD_ANSWER.test(d.headline)) {
+      const hit = PERSON_DECISION_SUBJECTS.find((s) => s.match.test(d.headline));
+      if (hit) out.push({ n: d.n, line: d.line, kind: 'subject', subject: hit.subject, owner: hit.owner, word: (hit.match.exec(d.headline) ?? [''])[0] });
+    }
+    const deferral = DEFERS_TO_PERSON.exec(decisionBody(lines, d.line));
+    if (deferral) out.push({ n: d.n, line: d.line, kind: 'deferred', word: deferral[0].replace(/\s+/g, ' ') });
+    return out;
+  });
+};
+
+/**
  * The two arrangements a decision item is written in, both of which occur on the corpus.
  *
  * `N. **Headline.**` — number OUTSIDE the bold run — is what five of the six briefs use.
@@ -577,6 +663,7 @@ export const PRE_STANDARD_SKIPS = Object.freeze([
   { key: 'predecessors', label: 'a blocking predecessor named in prose but missing from its **Depends on:** line' },
   { key: 'criteria-gap', label: 'a gap in numbered criteria' },
   { key: 'criterion-refs', label: 'a dangling `Issue X criterion N` reference' },
+  { key: 'person-decision', label: "a person's decision marked answered by the Lead, or answered and still waiting on a person (a warning)" },
 ]);
 
 /**
@@ -911,7 +998,7 @@ export const briefCorpus = (tracked, present) => {
  * @param {string} markdown
  * @param {{ milestones?: () => Milestone[] }} [world] the repository's milestones, read only
  *   when an item names something other than a bucket. Absent, such a name is a finding.
- * @returns {{at: string, problem: string}[]}
+ * @returns {{at: string, problem: string, advisory?: true}[]} an `advisory` finding is printed as a warning and fails nothing
  */
 export function checkBrief(path, markdown, { milestones = () => { throw new Error('no milestone list was read'); } } = {}) {
   const findings = [];
@@ -996,6 +1083,23 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
               'unanswered question becomes an amendment to issues that already exist. Get ' +
               'the answer and record it, or split the decision so the answered half can ' +
               'proceed. Mark it `✅` once ruled',
+          });
+        }
+        // K-PROJ-18 (kanon#1235): a person's decision the Lead answered, or an answer that
+        // still waits on a person. ADVISORY: `main` prints it and doesn't fail on it; see
+        // `PERSON_DECISION_SUBJECTS`.
+        for (const d of runs('person-decision') ? personDecisions(sec.body) : []) {
+          findings.push({
+            at: at(sec.line + d.line),
+            advisory: true,
+            problem: d.kind === 'subject'
+              ? `decision ${d.n} is marked answered by the Lead, but its headline names ${d.subject} (“${d.word}”), ` +
+                `which is ${d.owner}'s to decide, never the Lead's (\`K-PROJ-18\`). If it is, ask ${d.owner} and ` +
+                'record their answer in the headline before the brief merges (`K-PROJ-17`); if the word is ' +
+                'incidental and the decision is technical, leave it'
+              : `decision ${d.n} is marked answered, but its body says it still waits on a person (“${d.word}”). ` +
+                'Get that answer and record it in the headline, naming who gave it (`K-PROJ-17`), or reopen the ' +
+                'decision; only a technical decision is the Lead\'s to settle (`K-PROJ-18`)',
           });
         }
       }
@@ -1326,7 +1430,7 @@ const main = () => {
   // A STALE ENTRY FAILS. An exemption for a brief that isn't there exempts nothing today and
   // would exempt whatever is written at that path tomorrow.
   const stale = exemptions.briefs.filter((b) => !briefs.includes(b.brief));
-  const findings = [
+  const all = [
     ...stale.map((b) => ({
       at: `docs/qa/exemptions.md:${b.line}`,
       problem: `\`${b.brief}\` is listed as a pre-standard brief, but there is no such brief. Remove the entry`,
@@ -1335,6 +1439,21 @@ const main = () => {
     // Each brief's tracking issue (`K-WORK-23`), unless the run says it can't be read here.
     ...(skipTracking ? [] : briefs.flatMap((f) => checkTrackingIssue(f, liveTrackingIssue))),
   ];
+  // ADVISORY FINDINGS ARE PRINTED, NEVER COUNTED (`K-PROJ-18`, kanon#1235): a warning before the
+  // verdict, and in GitHub Actions an annotation on the brief's line, so the pull request shows it.
+  const warnings = all.filter((f) => f.advisory);
+  const findings = all.filter((f) => !f.advisory);
+  if (warnings.length) {
+    console.log(`brief-guard: ${warnings.length} warning(s), which don't fail this run:\n`);
+    for (const w of warnings) {
+      console.log(`  ${w.at}\n    ${w.problem}`);
+      if (process.env.GITHUB_ACTIONS === 'true') {
+        const [file, line] = w.at.split(':');
+        console.log(`::warning file=${file},line=${line},title=brief-guard (K-PROJ-18)::${w.problem}`);
+      }
+    }
+    console.log('');
+  }
   if (findings.length) {
     console.error(`brief-guard: ${findings.length} problem(s) in ${briefs.length} project brief(s):\n`);
     for (const f of findings) console.error(`  ${f.at}\n    ${f.problem}`);
