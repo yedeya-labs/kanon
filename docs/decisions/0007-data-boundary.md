@@ -60,6 +60,12 @@ Written as rules `K-OBS-16`, `K-OBS-17` and `K-OBS-18` in [chapter 08](../../rul
 - **Never:** the release's commit or tag, an environment's name, a URL, the reviewer, or anything the hooks print.
 - **Rule 5 for smoke-check rows:** they are stored, from plan 0013's S3, and not published: no metric reads them, and a view of them is a later choice (plan 0013 §8).
 
+**Amended 2026-10-26, by project [#1327](https://github.com/yedeya-labs/kanon/issues/1327)'s decisions 1, 4 and 5: what passes through the hosted status server.** ADR 0007 governs what Kanon stores; this records what it relays. No rule changes.
+- **What it returns:** only numbers, titles, states, labels, check names and links, and the counts and times computed from them. It returns no comment or issue body. A tool's error may carry GitHub's own error message, such as "Not Found", which is returned to the person and never logged.
+- **What it reads and doesn't return:** a body it reads to find a Kanon marker is held in memory only, for at most the 60 seconds of decision 5's per-person cache, and is never returned or logged.
+- **What it keeps:** nothing at rest: no token, no answer, no body. A person's GitHub tokens exist only inside the tokens it issues, encrypted under its KMS key.
+- **What it logs:** one line per request, with the route or method, the tool, the outcome, the duration, the GitHub request count and the remaining rate limit, and never a token, a login or text read from GitHub (`[MCP-8]`, [`docs/status.md`](../status.md#what-the-server-logs)).
+
 ## Why
 
 - **Telemetry must be safe to leave a project by construction, not by review.** Free text is how content leaks: a bail reason or an error message can quote code, and a file path reveals a project's structure. A fixed schema with reason codes closes that route.

@@ -344,7 +344,7 @@ It speaks MCP's Streamable HTTP transport at protocol version `2025-11-25`, at o
   - a request carrying an `Origin` header comes from a browser page, and gets 403.
 - **An unknown tool** is a protocol error. **Arguments a tool can't take** are the tool's own error, which says what is wrong.
 
-The handler isn't deployed yet. Signing in, its deploy and how to connect to it follow in the items after it in project #1327.
+Every request to `/mcp` needs a token the server issued when the person signed in ([Signing in](#signing-in)). Without one, or with one that has expired, it gets 401, and no tool runs. The server isn't deployed yet: its template and deploy follow in the items after this one in project #1327, and its address is a placeholder below until then.
 
 The server's code is more than its own directory: it links the status core, and the core calls the deciders the lanes run, the Lead's reconciler, review recovery, workflow health, the brief guard and what they import, rather than copying them. On Kanon's repository every module it links, directly or through another, is the Owner's merge: each matches an `always` entry in [`docs/qa/escalation-paths.md`](qa/escalation-paths.md), and `tests/unit/hosted-function-closure.test.ts` fails on a new import that reaches one that doesn't ([kanon#1345](https://github.com/yedeya-labs/kanon/issues/1345)).
 
@@ -359,3 +359,52 @@ A test holds this list to the server's own tools (`[STAT-12]`, `[MCP-2]`). Every
 | `pull_request` | `pr` | `repo`, `number`: the pull request | [The pull-request readiness view](#the-pull-request-readiness-view) |
 | `lanes` | `lanes` | `repo` | [The lane-health view](#the-lane-health-view) |
 | `needs_owner` | `needsOwner` | `repo` | [The needs-the-Owner view](#the-needs-the-owner-view) |
+
+Before a tool reads a repository, the server checks that Kanon's status App reaches it with the person's access. It reads only the person's installations of the App and the repositories each grants, never the repository itself. A repository on an owner where the App isn't installed is the tool's error, saying so. So is one the installation doesn't grant, or one the person can't read: GitHub gives the same answer for both to the person's token, and only the App's own key could tell them apart, which the server doesn't hold.
+
+Every answer that read GitHub carries the time its reads began, as `_meta.readAt` and as the answer's last line of text.
+
+## Signing in
+
+The server reads GitHub as the person, with their own access. It is its own OAuth 2.1 authorisation server, in front of the sign-in of Kanon's status App on GitHub, as the MCP authorisation specification at protocol version `2025-11-25` describes:
+
+- **Discovery.** A 401 names the protected-resource metadata, `/.well-known/oauth-protected-resource/mcp`, which names the server as its own authorisation server. Its metadata is at `/.well-known/oauth-authorization-server`.
+- **Registration.** A client registers itself at `/register`, by dynamic client registration. Only a public client registers, and only with redirects on the server's allow-list. The allow-list is a parameter of the server's deploy, and defaults to Claude's connector callbacks (`https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback`) and any port on the loopback (`http://localhost:*` and `http://127.0.0.1:*`), for Claude Code.
+- **Consent.** `/authorize` checks the client, its exact redirect, PKCE with `S256` and the resource, and then shows a page naming the client and where it sends the sign-in. It warns when that is a program on the person's own computer. GitHub shows nothing to a person who has authorised the App before, so this page is what stops a link someone else made from signing the person in to their program. Nothing goes to GitHub until the person presses Allow on that page.
+- **GitHub.** The person signs in to GitHub with the status App, and GitHub sends them back to `/callback`, in the same browser.
+- **Tokens.** The client exchanges its code at `/token` for an access token and a refresh token, and refreshes there.
+
+The server keeps nothing. Everything the sign-in hands out, the client id included, is encrypted and authenticated under the server's KMS key, and carried by whoever holds it. The person's GitHub tokens exist only inside the access and refresh tokens the server issues. Its code wraps GitHub's code, so GitHub's refusal of a code used twice makes the server's single use too. Its refresh token wraps GitHub's, which GitHub replaces on every refresh and refuses a second time. The server mints no installation token and accepts no personal access token. When GitHub refuses the person's token, because they revoked the App's authorisation, the answer is 401, so the client signs in again. Revoking the App's authorisation on GitHub is how a person ends every token the server issued them at once: the server has no list of tokens to revoke from.
+
+The status App must have GitHub's "expire user authorization tokens" setting on, so that GitHub's tokens expire and come with a refresh token.
+
+### Token lifetimes
+
+| Token | Lifetime | What it is |
+|---|---|---|
+| `client`, the client id | No expiry | The client's registration. A new deploy under another key ends it, and the client registers again. |
+| `consent`, the consent form | 10 minutes | The page's Allow carries it. |
+| `state`, the state sent to GitHub | 10 minutes | It goes to GitHub and back. |
+| `code`, the authorisation code | 60 seconds | It is exchanged once. |
+| `access`, the access token | 1 hour | It carries the person's GitHub token, and is never longer-lived than that token. |
+| `refresh`, the refresh token | 30 days | Rolling: each refresh starts a new 30 days, so a person signs in again after 30 days without using it. |
+| GitHub's user-to-server token | 8 hours | GitHub's. It is refreshed with GitHub's refresh token. |
+| GitHub's refresh token | 6 months | GitHub's. |
+
+A leaked access token reads, as that person, for at most an hour, or until they revoke the App's authorisation on GitHub.
+
+### Freshness and the cache
+
+Every read is sent to GitHub. The server keeps a per-person cache in the warm function's memory, of the REST answers that person's reads got, for at most 60 seconds. It uses the cache only to ask GitHub conditionally, with the answer's ETag, and a 304 serves that answer, which doesn't count against the person's rate limit. So an answer is always live, and its `readAt` is when its reads began. Each person's entries are filed under a hash of their own GitHub token, so no entry is ever served to another person. GraphQL is never cached.
+
+### What the server logs
+
+One line per request, a JSON object of exactly these fields: the route, the MCP method, the tool, the outcome, the duration, the number of GitHub requests it made, and GitHub's remaining rate limit. Each value is a number or from a closed list, so a line never holds a token, a login, an error's message or anything GitHub answered. A tool's error may quote GitHub's own message, such as "Not Found": it is returned to the person and never logged.
+
+## Connecting
+
+Use the server's address, `<server-url>/mcp`. The first call opens the consent page, then GitHub, in a browser.
+
+- **Claude Code:** `claude mcp add --transport http kanon-status <server-url>/mcp`, then run `/mcp` in Claude Code, choose `kanon-status` and authenticate.
+- **claude.ai:** in Settings, under Connectors, add a custom connector with that address, and connect it.
+- **The Claude app on a phone:** add the connector on claude.ai first. The app then lists it among a chat's tools, and connecting it there opens the same sign-in.

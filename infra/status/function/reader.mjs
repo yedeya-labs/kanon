@@ -12,8 +12,17 @@
 // message, the HTTP status, and, when the rate limit is the cause, when it resets, from GitHub's
 // own `x-ratelimit-reset` header. No answer's text is put in an error.
 //
-// WHERE THE TOKEN COMES FROM is not this file's. The server's authentication (Issue H) gives the
-// person's own token to `fetchReader` per request; nothing here keeps it.
+// WHERE THE TOKEN COMES FROM is not this file's. The server's authentication (`auth.mjs`) gives
+// the person's own token to `fetchReader` per request; nothing here keeps it.
+//
+// CONDITIONAL, AND PER PERSON (`[MCP-9]`). Given the person's own cache (`cache.mjs`), every REST
+// `GET` is still sent to GitHub, with the ETag of the answer it last got for that URL, and a 304
+// serves that answer's body, which doesn't count against the person's rate limit. GraphQL is
+// never cached. Each answer's body is parsed afresh, so a view can't change what the cache holds.
+//
+// WHAT IT COUNTS. `stats`, when given, counts the requests sent, keeps GitHub's last
+// `x-ratelimit-remaining`, and notes a 401, which tells the server the person's token no longer
+// opens GitHub (`[MCP-8]`, `[MCP-5]`).
 //
 // `node:` built-ins only (decision 11): `fetch` is Node's own.
 
@@ -39,12 +48,14 @@ const writes = (query) => /(^|\})[\s,]*(mutation|subscription)\b/.test(String(qu
 /** The `next` page's URL in a `Link` header, or null. @param {string | null} link */
 const nextOf = (link) => /<([^>]+)>;\s*rel="next"/.exec(link ?? '')?.[1] ?? null;
 
+/** @typedef {{ requests: number, rateLimitRemaining: number | null, unauthorized: boolean }} Stats */
+
 /**
  * A reader over GitHub's API with `token`, the person's own.
- * @param {{ token: string, fetch?: typeof fetch, api?: string }} args
+ * @param {{ token: string, fetch?: typeof fetch, api?: string, cache?: import('./cache.mjs').PersonCache, stats?: Stats }} args
  * @returns {{ get: (path: string) => Promise<unknown>, pages: (path: string) => Promise<unknown[]>, graphql: (query: string, variables?: Record<string, unknown>) => Promise<unknown> }}
  */
-export function fetchReader({ token, fetch: fetchImpl = fetch, api = GITHUB_API }) {
+export function fetchReader({ token, fetch: fetchImpl = fetch, api = GITHUB_API, cache, stats }) {
   const headers = {
     accept: 'application/vnd.github+json',
     authorization: `Bearer ${token}`,
@@ -53,21 +64,34 @@ export function fetchReader({ token, fetch: fetchImpl = fetch, api = GITHUB_API 
   };
 
   /**
-   * One request: its parsed body and its `Link` header, or a `ReadError` naming `read`.
+   * One request: its parsed body and its `Link` header, or a `ReadError` naming `read`. A GET
+   * carries the person's cached ETag for the URL, and a 304 answers with the cached body.
    * @param {string} read @param {string} url @param {RequestInit} [init]
+   * @returns {Promise<{ body: any, link: string | null, res: Response }>}
    */
   const request = async (read, url, init = {}) => {
+    const hit = !init.method && cache ? cache.get(url) : null;
     /** @type {Response} */
     let res;
     try {
-      res = await fetchImpl(url, { ...init, headers: { ...headers, ...(init.body ? { 'content-type': 'application/json' } : {}) } });
+      res = await fetchImpl(url, { ...init, headers: { ...headers, ...(init.body ? { 'content-type': 'application/json' } : {}), ...(hit ? { 'if-none-match': hit.etag } : {}) } });
     } catch (e) {
       throw new ReadError(read, e instanceof Error ? e.message : String(e));
     }
+    if (stats) {
+      stats.requests += 1;
+      const left = Number(res.headers.get('x-ratelimit-remaining') ?? NaN);
+      if (res.headers.has('x-ratelimit-remaining') && Number.isFinite(left)) stats.rateLimitRemaining = left;
+      if (res.status === 401) stats.unauthorized = true;
+    }
+    if (res.status === 304 && hit) return { body: JSON.parse(hit.text), link: hit.link, res };
+    /** @type {string} */
+    let text;
     /** @type {any} */
     let body;
     try {
-      body = await res.json();
+      text = await res.text();
+      body = JSON.parse(text);
     } catch {
       throw new ReadError(read, res.ok ? "the answer isn't JSON" : `HTTP ${res.status}`, { status: res.ok ? null : res.status });
     }
@@ -76,7 +100,10 @@ export function fetchReader({ token, fetch: fetchImpl = fetch, api = GITHUB_API 
       const limited = (res.status === 403 || res.status === 429) && (res.headers.get('x-ratelimit-remaining') === '0' || RATE_LIMITED.test(why));
       throw new ReadError(read, why, { status: res.status, resetAt: limited ? resetOf(res) : null });
     }
-    return { body, res };
+    const link = res.headers.get('link');
+    const etag = res.headers.get('etag');
+    if (!init.method && cache && etag) cache.put(url, { etag, text, link });
+    return { body, link, res };
   };
 
   return {
@@ -87,9 +114,9 @@ export function fetchReader({ token, fetch: fetchImpl = fetch, api = GITHUB_API 
       /** @type {string | null} */
       let url = `${api}/${path}`;
       while (url) {
-        const { body, res } = await request(read, url);
+        const { body, link } = await request(read, url);
         pages.push(body);
-        url = nextOf(res.headers.get('link'));
+        url = nextOf(link);
         if (url && !url.startsWith(`${api}/`)) throw new ReadError(read, "a next page points off GitHub's API, so it isn't followed");
       }
       return pages;
