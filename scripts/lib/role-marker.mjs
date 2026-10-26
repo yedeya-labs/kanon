@@ -2,8 +2,9 @@
 //
 // WHAT A READER SEES. Every post a lane writes as one of its Apps (a comment, a review, an
 // issue or pull request body) opens with a persona header, `**<persona> (<Role>)**`, or with
-// the role alone, `**<Role>**`, when no persona is declared. Every commit an agent makes is
-// authored with the persona as its name (`actions/agent-setup/agent-commits.sh`).
+// the role alone, `**<Role>**`, when no persona is declared. A commit carries no persona: every
+// commit an agent makes is authored as the App's bot account (`K-AGENT-1`,
+// `actions/agent-setup/agent-commits.sh`).
 //
 // WHAT A MACHINE READS. A hidden role marker, `<!-- kanon:role=<role> -->`, on the header's
 // line. A check trusts a marker only on an object the expected App authored: the login says

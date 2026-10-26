@@ -1,6 +1,6 @@
 # 0013. Any GitHub account, two Apps, and personas in content
 
-- **Status:** accepted
+- **Status:** accepted; §3 amended 2026-10-26 (an agent's commits are authored by the App's bot account, not the persona)
 - **Date:** 2026-10-05
 - **Decided in:** [#288](https://github.com/yedeya-labs/kanon/issues/288), recorded by [plan 0005](../plans/0005-lean-installation.md), decisions 1 to 3 and question 6
 - **Supersedes:** [ADR 0008 §2](0008-installation-test-decisions.md) (Kanon assumes a GitHub organisation)
@@ -48,6 +48,8 @@ Two of the costs come from assumptions rather than from the governance. ADR 0008
 - **The green zone needs a signal no other Author lane can write.** Any Author lane's agent can write the `implementer` marker, so on its own it would let a steered Lead, Explorer or Overseer agent put a code pull request in the green zone. So a fixed step of the Implementer's lanes, never the agent, sets the commit status `kanon/role: implementer` on the head, with a token narrowed to Commit statuses: write, which no agent's token holds. The Merger requires that status on the current head, created by the Author App. Only a lane that opens a pull request creates the first status, and only on the pull request its own run opened; a lane that acts on an existing pull request carries the status to its new head only when the head it started from had one. A person's push ends the chain, and a person merges that pull request.
 
 *Why:* a marker in content costs nothing to write and survives the move to shared Apps, while the login alone can no longer tell two roles of one App apart. The only loss is a distinct avatar per persona. The status exists because a marker is a claim, and the green zone must rest on a mechanism (`K-PRIN-4`).
+
+**Amended 2026-10-26, by the Owner's decision on [#1373](https://github.com/yedeya-labs/kanon/issues/1373) (decision 3): the persona is no longer a commit's author name.** Every commit an agent makes is authored and committed by the App's bot account, `<slug>[bot]`, with the App's noreply address, because the Author lanes' commits are re-created through GitHub's API, which authors them as the App (`K-AGENT-1`). The persona stays in every post's header and role marker; no trailer carries it into a commit. GitHub still attributes each commit to the App, and the delegate's sign-off still matches (`K-AGENT-44`).
 
 ## Consequences
 

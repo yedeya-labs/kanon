@@ -51,8 +51,8 @@ export const CONTEXT = IMPLEMENTER_STATUS;
 /** @typedef {{ sha: string, parents?: Array<{ sha: string }>, commit?: { author?: { email?: string } } }} ApiCommit */
 
 /**
- * Whether the App authored `commit`: its noreply address as the author's email. The persona
- * is the author's NAME (§3.3), so the name says nothing; the email is the App's.
+ * Whether the App authored `commit`: its noreply address as the author's email. The email is
+ * read, not the name: the name is the bot account's (`K-AGENT-1`), and any pusher can set it.
  * @param {ApiCommit | undefined} commit
  * @param {string} email
  */
