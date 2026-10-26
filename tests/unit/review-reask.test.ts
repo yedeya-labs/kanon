@@ -24,6 +24,7 @@ type Comment = { author: { login: string }; body: string };
 type Pr = {
   number: number; headRefOid: string; isCrossRepository?: boolean; labels: { name: string }[];
   reviews: Review[]; comments: Comment[]; commits: { committedDate: string }[];
+  closingIssuesReferences?: { number: number; repository: { owner: { login: string }; name: string } }[];
 };
 
 const pr = (number: number, extra: Partial<Pr> = {}): Pr => ({
@@ -140,7 +141,7 @@ describe('reviewedHead', () => {
 
 /** A fake repository: open PRs by number, CI done, and every `gh` call recorded. Comments the
  *  sweep posts are kept, so a second pass reads them. */
-const fakeRepo = (prs: Pr[], { failComment = false, logs = {} as Record<number, string> } = {}) => {
+const fakeRepo = (prs: Pr[], { failComment = false, logs = {} as Record<number, string>, issues = {} as Record<number, { body?: string; labels?: string[] } | 'unreadable'> } = {}) => {
   const calls: string[][] = [];
   const byNumber = new Map(prs.map((p) => [p.number, p]));
   const gh = (args: string[]): string => {
@@ -150,6 +151,11 @@ const fakeRepo = (prs: Pr[], { failComment = false, logs = {} as Record<number, 
       return JSON.stringify([...byNumber.values()].filter((p) => p.labels.some((l) => l.name === REASK_LABEL)).map(({ number, headRefOid, isCrossRepository, labels }) => ({ number, headRefOid, isCrossRepository, labels })));
     }
     if (a0 === 'pr' && a1 === 'view') return JSON.stringify(byNumber.get(Number(args[2])));
+    if (a0 === 'issue' && a1 === 'view') {
+      const issue = issues[Number(args[2])];
+      if (issue === undefined || issue === 'unreadable') throw new Error('HTTP 502');
+      return JSON.stringify({ body: issue.body ?? '', labels: (issue.labels ?? []).map((name) => ({ name })) });
+    }
     if (a0 === 'run' && a1 === 'list') return JSON.stringify([{ headSha: args[args.indexOf('--commit') + 1], status: 'completed', conclusion: 'success', databaseId: 9 }]);
     if (a0 === 'api') {
       const path = args.find((x) => x.startsWith('repos/')) ?? '';
@@ -228,6 +234,60 @@ describe('run (kanon#1197)', () => {
     run({ ...io, apply: false, gh: repo.gh });
     const ci = repo.calls.find((c) => c[0] === 'run' && c[1] === 'list')!;
     expect(ci).toEqual(expect.arrayContaining(['--workflow', 'ci.yml', '--commit', HEAD]));
+  });
+});
+
+// ── kanon#1431: a held project takes no actions (K-AGENT-32) ───────────────────────────────
+
+describe('reaskPlan on a pull request of a held project (kanon#1431)', () => {
+  const HELD_WHY = 'project #7 is held (`needs:human` on its tracking issue)';
+
+  it('holds a pull request whose project is held, and says why', () => {
+    const plan = reaskPlan([pr(1), pr(2)], { ciSettled: () => true, runsFor: () => [done()], heldBy: (p: { number: number }) => (p.number === 1 ? HELD_WHY : null), now: NOW, hours: 4 });
+    expect(plan.reask).toEqual([{ number: 2, sha: HEAD }]);
+    expect(plan.held).toEqual([{ number: 1, sha: HEAD, why: HELD_WHY }]);
+  });
+
+  it('asks the hold only of a pull request about to be re-asked, so a waiting one costs no read', () => {
+    const asked: number[] = [];
+    const heldBy = (p: { number: number }) => { asked.push(p.number); return null; };
+    reaskPlan([pr(1), pr(2, { commits: [{ committedDate: '2026-10-21T11:00:00Z' }] })], { ciSettled: () => true, runsFor: () => [done()], heldBy, now: NOW, hours: 4 });
+    expect(asked).toEqual([1]);
+  });
+});
+
+describe('run on a pull request of a held project (kanon#1431)', () => {
+  const io = { repo: 'o/r', now: NOW, runsFor: () => [done()] };
+  const here = (number: number) => ({ number, repository: { owner: { login: 'o' }, name: 'r' } });
+  const member = () => pr(1, { closingIssuesReferences: [here(40)] });
+  const marked = { body: 'Do the thing.\n\n<!-- qa:project 7 -->' };
+
+  it('posts nothing and churns no label when the tracking issue carries needs:human, and the summary says why', () => {
+    const repo = fakeRepo([member()], { issues: { 40: marked, 7: { labels: ['needs:human'] } } });
+    let text = '';
+    const out = run({ ...io, apply: true, gh: repo.gh, summary: (t) => { text += t; } });
+    expect(out.reasked).toEqual([]);
+    expect(writes(repo.calls)).toEqual([]);
+    expect(text).toMatch(/#1 `aaaaaaa`: not re-asked, project #7 is held/);
+  });
+
+  it('counts a tracking issue it cannot read as held', () => {
+    const repo = fakeRepo([member()], { issues: { 40: marked, 7: 'unreadable' } });
+    const out = run({ ...io, apply: true, gh: repo.gh });
+    expect(out.reasked).toEqual([]);
+    expect(out.plan?.held).toEqual([expect.objectContaining({ number: 1, why: expect.stringMatching(/could not read #7's labels/) })]);
+    expect(writes(repo.calls)).toEqual([]);
+  });
+
+  it('counts a closing issue it cannot read as held', () => {
+    const repo = fakeRepo([member()], { issues: { 40: 'unreadable' } });
+    expect(run({ ...io, apply: true, gh: repo.gh }).reasked).toEqual([]);
+    expect(writes(repo.calls)).toEqual([]);
+  });
+
+  it('still re-asks a pull request whose project is not held', () => {
+    const repo = fakeRepo([member()], { issues: { 40: marked, 7: { labels: ['project'] } } });
+    expect(run({ ...io, apply: true, gh: repo.gh }).reasked).toEqual([1]);
   });
 });
 
