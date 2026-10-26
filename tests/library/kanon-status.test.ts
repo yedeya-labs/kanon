@@ -340,8 +340,10 @@ describe('docs/status.md is held to the code', () => {
     expect(sorted(emitted).filter((p) => !documented.has(p)), 'emitted, and not in the table').toEqual([]);
     expect(sorted(documented).filter((p) => !emitted.has(p)), 'in the table, and never emitted').toEqual([]);
 
-    // The hosted server's tools. It has none until it is built (Issue G), so the page lists none.
-    const TOOLS: string[] = [];
+    // The hosted server's tools, as the server lists them.
+    const { TOOLS: SERVED } = await import('../../infra/status/function/index.mjs');
+    const TOOLS: string[] = SERVED.map((t: Any) => t.name);
+    expect(TOOLS.length).toBe(5);
     const tools = section(page, '## The hosted server\'s tools');
     expect(tools, 'docs/status.md has a "## The hosted server\'s tools" section').not.toBeNull();
     expect(firstCells(tools!).sort()).toEqual([...TOOLS].sort());

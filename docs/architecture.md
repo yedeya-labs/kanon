@@ -104,7 +104,7 @@ Whether a gate moved anything is read from the rule its findings cite. [`scripts
 | [`scripts/`](../scripts/) | The library the lanes run. |
 | [`cli/`](../cli/) | The `kanon` command: `init`, `doctor`, `apps`, `milestones`, `metrics`, [`status`](status.md). |
 | [`skills/`](../skills/) | The Claude Code skills: `/kanon:adopt`, `/kanon:doctor`, `/kanon:upgrade`, `/kanon:mandate`, which starts a project for the Lead and carries its brief's pull request, and the lanes' skills, `file-issue` and `upstream-finding`, which an agent reads by its path. |
-| [`infra/`](../infra/) | The QA store's and the telemetry store's cloud templates. |
+| [`infra/`](../infra/) | The QA store's and the telemetry store's cloud templates, and the request handler of the [hosted status server](status.md#the-hosted-mcp-server), which serves `kanon status`'s five views read-only to an MCP client, through the same status core. Nothing deploys it yet. |
 | [`tests/`](../tests/) | Kanon's own tests, run on every pull request. |
 
 **Kanon's end-to-end tests live outside this repository,** in the public harness repository [`kanon-e2e/harness`](https://github.com/kanon-e2e/harness), which installs each of Kanon's release candidates in throwaway repositories and drives them as an adopter would ([plan 0012](plans/0012-end-to-end-tests.md)). Its verdict, the `kanon-e2e` check run on the candidate's commit, gates Kanon's own promotion of that candidate to a stable release, and the move of Kanon's own pins to it ([release.md](release.md#the-promotion)). It adds nothing to an adopter's repository.

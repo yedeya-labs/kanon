@@ -329,9 +329,31 @@ A path names a field inside its parent: `project.items[].key` is the `key` of ea
 
 On a usage error or when it can't run, the document is the error document, `{ "schema", "kanon", "status": "error", "exitCode", "error" }`.
 
+## The hosted MCP server
+
+The same five views are served read-only to an MCP client, such as Claude Code, claude.ai or the Claude app on a phone, by a hosted MCP server: one request handler in [`infra/status/function/`](../infra/status/function/), with no MCP SDK. Each tool is one view, and returns the same object as that view's section of the JSON output above, for the same reads: the server builds it with the code `kanon status` uses (`scripts/status/views.mjs`). A view whose reads didn't complete answers with its section's `error` and `reads`, as the tool's error. The server reads GitHub with the person's own token, through a reader over `fetch` that can ask only REST `GET`s and GraphQL queries. It writes nothing, to GitHub or anywhere else, and keeps nothing. The server's clauses are the `MCP` area of the spec layer ([`docs/qa/specs/mcp.md`](qa/specs/mcp.md)).
+
+It speaks MCP's Streamable HTTP transport at protocol version `2025-11-25`, at one endpoint, `/mcp`:
+
+- **A request** is a POST of one JSON-RPC message, answered with one JSON object. The server answers `initialize`, `ping`, `tools/list` and `tools/call`, and any other method with JSON-RPC's method-not-found error. `initialize` answers with `2025-11-25`, whatever version the client asked for.
+- **A notification**, a message with no `id` such as `notifications/initialized`, gets HTTP 202 and no body, whatever its method. So does a client's JSON-RPC response.
+- **The `MCP-Protocol-Version` header**, when a request carries one, must be `2025-11-25`. Any other version gets 400.
+- **Refused by the transport:**
+  - a body that isn't one JSON-RPC 2.0 message, such as a batch, gets 400;
+  - a GET or DELETE gets 405: the server is stateless, so it opens no stream and holds no session;
+  - a request carrying an `Origin` header comes from a browser page, and gets 403.
+- **An unknown tool** is a protocol error. **Arguments a tool can't take** are the tool's own error, which says what is wrong.
+
+The handler isn't deployed yet. Signing in, its deploy and how to connect to it follow in the items after it in project #1327.
+
 ## The hosted server's tools
 
-The same views will be served read-only by a hosted MCP server, whose tools are listed here once it is built. A test holds this list to the server's own (`[STAT-12]`). There are none yet.
+A test holds this list to the server's own tools (`[STAT-12]`, `[MCP-2]`). Every tool takes `repo`, the repository as `owner/name`, and is annotated read-only.
 
-| Tool | View |
-|---|---|
+| Tool | Section | Arguments | View |
+|---|---|---|---|
+| `project` | `project` | `repo`, `project`: the tracking issue | [The project view](#the-project-view) |
+| `release` | `release` | `repo` | [The release view](#the-release-view) |
+| `pull_request` | `pr` | `repo`, `number`: the pull request | [The pull-request readiness view](#the-pull-request-readiness-view) |
+| `lanes` | `lanes` | `repo` | [The lane-health view](#the-lane-health-view) |
+| `needs_owner` | `needsOwner` | `repo` | [The needs-the-Owner view](#the-needs-the-owner-view) |

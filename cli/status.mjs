@@ -20,12 +20,10 @@
 // loads it does in the adopter's checkout. So `--project`, `--release` and `--lanes` keep working
 // from any directory, and `--pr` and `--needs-owner`, which judges every open pull request with it,
 // need the checkout's register to load; the logins they judge by are still the default branch's
-// (docs/status.md).
+// (docs/status.md). `scripts/status/views.mjs` builds each section, for the hosted server too.
 import { spawn, spawnSync } from 'node:child_process';
-import { laneHealthView } from '../scripts/status/lanes.mjs';
-import { IncompleteRead, projectView } from '../scripts/status/project.mjs';
-import { ReadError, ghReader } from '../scripts/status/reader.mjs';
-import { releaseView } from '../scripts/status/release.mjs';
+import { ghReader } from '../scripts/status/reader.mjs';
+import { VIEWS, section } from '../scripts/status/views.mjs';
 import { remoteRepo } from './apps.mjs';
 import { kanonRelease } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
@@ -154,25 +152,6 @@ const errorDocument = (deps, exitCode, error) => ({ schema: SCHEMA, kanon: deps.
 class StatusError extends Error {}
 
 /**
- * A view's answer, or the error that stands in for it when its reads didn't complete
- * (`[STAT-3]`): each read named, why it failed, its HTTP status and the rate limit's reset.
- * @param {() => Promise<object>} read
- */
-async function section(read) {
-  try {
-    return await read();
-  } catch (e) {
-    if (!(e instanceof IncompleteRead || e instanceof ReadError)) throw e;
-    /** @type {ReadError[]} */
-    const reads = e instanceof IncompleteRead ? /** @type {ReadError[]} */ (e.reads) : [e];
-    return {
-      error: e.message,
-      reads: reads.map((r) => ({ read: r.read, why: r.why, status: r.status, resetAt: r.resetAt })),
-    };
-  }
-}
-
-/**
  * The document `kanon status` prints, or throws `StatusError` when it can't run.
  * @param {Deps} deps @param {ReturnType<typeof parseArgs>} opts
  */
@@ -190,21 +169,18 @@ async function document(deps, opts) {
   const reader = deps.reader();
   /** @type {Record<string, object>} */
   const views = {};
+  const reads = { reader, repo, readAt };
   if (opts.project !== null) {
-    const project = opts.project;
-    views.project = await section(() => projectView({ reader, repo, project }));
+    const n = opts.project;
+    views.project = await section(() => VIEWS.project({ ...reads, n }));
   }
-  if (opts.release) views.release = await section(() => releaseView({ reader, repo, now: new Date(readAt) }));
+  if (opts.release) views.release = await section(() => VIEWS.release(reads));
   if (opts.pr !== null) {
-    const pr = opts.pr;
-    const { readinessView } = await import('../scripts/status/pull-request.mjs');
-    views.pr = await section(() => readinessView({ reader, repo, pr, now: Date.parse(readAt) }));
+    const n = opts.pr;
+    views.pr = await section(() => VIEWS.pr({ ...reads, n }));
   }
-  if (opts.lanes) views.lanes = await section(() => laneHealthView({ reader, repo }));
-  if (opts.needsOwner) {
-    const { needsOwnerView } = await import('../scripts/status/needs-owner.mjs');
-    views.needsOwner = await section(() => needsOwnerView({ reader, repo, now: Date.parse(readAt) }));
-  }
+  if (opts.lanes) views.lanes = await section(() => VIEWS.lanes(reads));
+  if (opts.needsOwner) views.needsOwner = await section(() => VIEWS.needsOwner(reads));
   const incomplete = Object.values(views).some((v) => 'error' in v);
   const exitCode = incomplete ? EXIT.incomplete : EXIT.ok;
   return { schema: SCHEMA, kanon: deps.release(), status: incomplete ? 'incomplete' : 'ok', exitCode, repo, readAt, ...views };
