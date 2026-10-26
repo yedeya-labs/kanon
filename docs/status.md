@@ -5,6 +5,8 @@
 ```sh
 kanon status --project 1327
 kanon status --project 1327 --json
+kanon status --repo owner/name --project 12
+kanon status --release --json
 kanon status --pr 1391
 kanon status --repo owner/name --project 12 --pr 40
 kanon status --lanes
@@ -15,13 +17,14 @@ kanon status --needs-owner
 | Option | Meaning |
 |---|---|
 | `--project <n>` | The project view of tracking issue `<n>`. |
+| `--release` | The release view: what is about to ship, what shipped, where it is deployed, and the promotion's gates. |
 | `--lanes` | The lane-health view. |
 | `--pr <n>` | The pull-request readiness view of pull request `<n>` ([below](#the-pull-request-readiness-view)). |
 | `--needs-owner` | The needs-the-Owner view: what waits on a person ([below](#the-needs-the-owner-view)). |
 | `--repo <owner>/<repo>` | The repository. The default is the origin remote of the checkout you run it from. |
 | `--json` | Print one JSON document instead of prose ([below](#the-json-output)). |
 
-Each view you ask for is one section of the answer, and you can ask for more than one at once. The project, pull-request readiness, lane-health and needs-the-Owner views are the ones there are so far. The release view adds its own section as it is built.
+Each view you ask for is one section of the answer, and you can ask for more than one at once. All five are built: the project, release, pull-request readiness, lane-health and needs-the-Owner views.
 
 ## What it reads
 
@@ -44,6 +47,15 @@ For a tracking issue, `--project` reads its brief, `docs/projects/<n>.md`, on th
 - **why an item can't proceed**: a dependency still open or not filed, `qa:needs-info`, `qa:needs-split`, `blocked`, `qa:human-action`, or a hold on the project (`needs:human`), which is the Lead's when the Lead's hold comment is there beside it.
 
 A tracking issue with no brief, or a brief whose decomposition doesn't parse, is reported as that. It is never reported as a project with no items.
+
+## The release view
+
+`--release` gives, for the repository:
+
+- **the open release pull request**, as Kanon's metrics recognise one: by release-please's `autorelease:` labels, or by the App register's Releaser as its author, never by the repository's name. A person's pull request with a release's title isn't one;
+- **the latest release**, GitHub's `latest`, and **the latest pre-release**, the newest published one, with how many hours ago it was published;
+- **each environment** the adoption record's `## Deploy` declares, with **its last deploy**: the release, its outcome and the run. That is the `Environments` list, or, where the record declares only a reference deploy, the reference environment. The deploy is found as the Lead's reconciler finds a release's deploy: among the reference deploy workflow's latest 200 runs, the run titled with the release's tag or with its commit, and in that run the environment's deploy job, by its exact name. The view reads the 30 newest releases, as the reconciler does, newest first, and an environment's last deploy is the newest one whose job ran there. Its outcome is `deployed` when the job succeeded, `failed` when it concluded otherwise, and `deploying` while it hasn't finished, waiting for an approval included. A job that was skipped deployed nothing there, so the view reads on, as it does past a release whose tag isn't in the repository, such as a draft's. The record names the reference environment's job. Every other environment has the job the deploy caller `kanon init` writes gives it, the reference job with that environment's name in its place, such as `production / deploy` beside `staging / deploy`. Where the reference job isn't named that way, the other environments have no job the view can read, and it says so;
+- **the promotion's gates**, where the default branch runs Kanon's promotion workflow, a workflow that runs `scripts/promote.mjs check`: the decision that check would take now, why, the candidate, and each gate's verdict and evidence. They come from the promotion's own read-only check, run over the same reads: the check of the Kanon release you run, while the workflow runs the default branch's `scripts/promote.mjs`. So they match what its next run reports whenever that release's `promote.mjs` is the default branch's; a gate the default branch has added or changed since that release reads differently until you run the release that has it. A state the promotion refuses to act on is reported as `refused`, with the check's reason. On the repository of any other project, there is no promotion to report.
 
 ## The pull-request readiness view
 
@@ -163,6 +175,49 @@ A path names a field inside its parent: `project.items[].key` is the `key` of ea
 | `project.items[].stops[].reason` | string | `dependency`, `qa:needs-info`, `qa:needs-split`, `blocked`, `qa:human-action`, `lead-hold` or `held`. |
 | `project.items[].stops[].detail` | string | A sentence naming the issue, the label or the dependency. |
 | `project.notes` | array | What the reconciler warned of while it read, as sentences. |
+| `release` | object | The release view, when `--release` asked for it: the fields below, or, when its reads didn't complete, only `error` and `reads`. |
+| `release.error` | string | Why the view has no answer, naming each read that failed. |
+| `release.reads` | array | Each read that failed, with the same fields as `project.reads`. |
+| `release.reads[].read` | string | What was read. |
+| `release.reads[].why` | string | Why it failed, as GitHub or `gh` said it. |
+| `release.reads[].status` | number or null | The HTTP status, when there is one. |
+| `release.reads[].resetAt` | string or null | When the exhausted rate limit resets, ISO 8601, when that is the cause. |
+| `release.branch` | string | The default branch the declarations were read from. |
+| `release.releasePrs` | array | The open release pull requests; empty when there is none. |
+| `release.releasePrs[].number` | number | Its number. |
+| `release.releasePrs[].title` | string | Its title. |
+| `release.releasePrs[].url` | string | Its page. |
+| `release.releasePrs[].createdAt` | string | When it was opened, ISO 8601. |
+| `release.latest` | object or null | The latest release, or null when there is none. |
+| `release.latest.tag` | string | Its tag. |
+| `release.latest.name` | string | Its name. |
+| `release.latest.url` | string | Its page. |
+| `release.latest.publishedAt` | string | When it was published, ISO 8601. |
+| `release.preRelease` | object or null | The latest published pre-release, or null when there is none. |
+| `release.preRelease.tag` | string | Its tag. |
+| `release.preRelease.name` | string | Its name. |
+| `release.preRelease.url` | string | Its page. |
+| `release.preRelease.publishedAt` | string | When it was published, ISO 8601. |
+| `release.preRelease.ageHours` | number | Whole hours from its publication to `readAt`. |
+| `release.deploys` | array | Each environment the adoption record's `## Deploy` declares, in its order; empty when it declares none. |
+| `release.deploys[].environment` | string | The environment's name. |
+| `release.deploys[].workflow` | string | The reference deploy workflow, whose runs were read. |
+| `release.deploys[].job` | string or null | The environment's deploy job, as a run lists it, or null when the record names none for it. |
+| `release.deploys[].last` | object or null | Its last deploy among the 30 newest releases, or null when none of them deployed there. |
+| `release.deploys[].last.tag` | string | The release deployed. |
+| `release.deploys[].last.outcome` | string | `deployed`, `failed` or `deploying`. |
+| `release.deploys[].last.url` | string | The deploy run. |
+| `release.promotion` | object or null | The promotion's check, or null where the default branch runs no promotion workflow. |
+| `release.promotion.workflow` | string | The workflow that runs the check, such as `promote.yml`. |
+| `release.promotion.decision` | string | `promote`, `hold`, `none` or `refused`. |
+| `release.promotion.why` | string | Why, as the check says it. |
+| `release.promotion.candidate` | string or null | The candidate tag it read, or null when there is none. |
+| `release.promotion.gates` | array | Each gate the check read, in its order; empty when it read none. |
+| `release.promotion.gates[].id` | string | The gate's id, such as `soak` or `e2e`. |
+| `release.promotion.gates[].title` | string | The gate's title. |
+| `release.promotion.gates[].skipped` | boolean | True when the check skipped it. |
+| `release.promotion.gates[].pass` | boolean | True when it passes. |
+| `release.promotion.gates[].evidence` | string | The evidence the check gives for its verdict. |
 | `pr` | object | The pull-request readiness view, when `--pr` asked for it: the fields below, or, when its reads didn't complete, only `error` and `reads`. |
 | `pr.error` | string | Why the view has no answer, naming each read that failed. |
 | `pr.reads` | array | Each read that failed, as `project.reads` gives one. |

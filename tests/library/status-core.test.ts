@@ -12,6 +12,12 @@ import { ADOPTER, ROOT } from './helpers/adopter.js';
 import { connection } from './helpers/fake-reader.js';
 import { BRIEF, PROJECT, adopterFiles, adopterProject, laneCaller, laneFleet, marker, repoWorld } from './helpers/status-world.js';
 
+/**
+ * Any read of the environment: `process.env` or `process['env']`, `process` destructured, or the
+ * `process` module imported or required (`import { env } from 'node:process'`).
+ */
+const READS_ENV = /\bprocess\s*(?:\.|\[\s*['"`])\s*env\b|\}\s*=\s*process\b|(?:from|require\(|import\()\s*['"`](?:node:)?process['"`]/;
+
 const { projectView, IncompleteRead } = await import('../../scripts/status/project.mjs');
 const { laneHealthView } = await import('../../scripts/status/lanes.mjs');
 const { ReadError, ghReader, watched } = await import('../../scripts/status/reader.mjs');
@@ -121,12 +127,29 @@ describe('the declarations come from the default branch', () => {
       ['STAT-1', 'seed', true], ['STAT-2', 'seed', false], ['STAT-3', 'seed', false], ['STAT-4', 'seed', false], ['STAT-5', 'seed', false],
     ]);
 
-    // The code names no repository and reads no checkout.
+    // The code names no repository, reads none from the environment, and reads no checkout. The
+    // one `GITHUB_REPOSITORY` is the key of the environment the promotion's check is handed, set
+    // to the repository the caller passed (the release view, Issue E).
     const dir = join(ROOT, 'scripts/status');
     for (const f of readdirSync(dir)) {
       const src = readFileSync(join(dir, f), 'utf8');
-      expect(src, f).not.toMatch(/yedeya|GITHUB_REPOSITORY|process\.cwd|from 'node:fs'/);
+      expect(src, f).not.toMatch(/yedeya|process\.cwd|from 'node:fs'/);
+      expect(src, f).not.toMatch(READS_ENV);
+      expect(src.replace('check({ GITHUB_REPOSITORY: repo,', ''), f).not.toMatch(/GITHUB_REPOSITORY/);
     }
+  });
+
+  it('[STAT-2] the source guard\'s environment ban catches each way to reach the environment, and not a child process', () => {
+    for (const read of [
+      'const r = process.env.GITHUB_REPOSITORY;',
+      "const r = process['env'].X;",
+      'const { env } = process;',
+      "import { env } from 'node:process';",
+      'import proc from "process";',
+      "const { env } = require('node:process');",
+      "const { env } = await import('process');",
+    ]) expect(read, read).toMatch(READS_ENV);
+    for (const fine of ["import { execFileSync } from 'node:child_process';", 'const environment = names[0];', 'process.exitCode = 1;']) expect(fine, fine).not.toMatch(READS_ENV);
   });
 });
 

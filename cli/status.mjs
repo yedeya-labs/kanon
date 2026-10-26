@@ -8,22 +8,24 @@
 // (`[STAT-11]`). The document is built first and the prose is printed from it, so the two can't
 // give a different result or exit code.
 //
-// ONE SECTION PER VIEW ASKED FOR. `--project <n>` asks for the project view, `--pr <n>` for the
-// pull-request readiness view, `--lanes` for the lane-health view and `--needs-owner` for the
-// needs-the-Owner view. A later view adds its own
-// section within v1, which docs/cli-json.md allows. A view whose reads didn't complete answers with
-// an error naming each read (`[STAT-3]`), never a partial answer, and the command exits 4.
+// ONE SECTION PER VIEW ASKED FOR. `--project <n>` asks for the project view, `--release` for the
+// release view, `--pr <n>` for the pull-request readiness view, `--lanes` for the lane-health view
+// and `--needs-owner` for the needs-the-Owner view, and any of them may be asked at once. A later
+// view adds its own section within v1, which docs/cli-json.md allows. A view whose reads didn't
+// complete answers with an error naming each read (`[STAT-3]`), never a partial answer, and the
+// command exits 4.
 //
 // THE READINESS VIEW IS LOADED ONLY WHEN ASKED FOR. It runs the merge gate's verdict function, and
 // loading `merge-gate.mjs` reads the App register from the working directory, as every lane that
-// loads it does in the adopter's checkout. So `--project` and `--lanes` keep working from any
-// directory, and `--pr` and `--needs-owner`, which judges every open pull request with it, need
-// the checkout's register to load; the logins they judge by are still the default branch's
+// loads it does in the adopter's checkout. So `--project`, `--release` and `--lanes` keep working
+// from any directory, and `--pr` and `--needs-owner`, which judges every open pull request with it,
+// need the checkout's register to load; the logins they judge by are still the default branch's
 // (docs/status.md).
 import { spawn, spawnSync } from 'node:child_process';
 import { laneHealthView } from '../scripts/status/lanes.mjs';
 import { IncompleteRead, projectView } from '../scripts/status/project.mjs';
 import { ReadError, ghReader } from '../scripts/status/reader.mjs';
+import { releaseView } from '../scripts/status/release.mjs';
 import { remoteRepo } from './apps.mjs';
 import { kanonRelease } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
@@ -34,7 +36,7 @@ export const SCHEMA = 'kanon-status/v1';
 /** The exit codes, as docs/status.md documents them. */
 export const EXIT = /** @type {const} */ ({ ok: 0, usage: 2, error: 3, incomplete: 4 });
 
-export const USAGE = `Usage: kanon status [--project <n>] [--pr <n>] [--lanes] [--needs-owner] [options]
+export const USAGE = `Usage: kanon status [--project <n>] [--release] [--pr <n>] [--lanes] [--needs-owner] [options]
 
 Reads where a repository that runs Kanon stands, live from GitHub, and prints it. Writes
 nothing, anywhere (docs/status.md).
@@ -43,6 +45,9 @@ Options:
   --project <n>          the project view: tracking issue <n>'s brief, its items with their
                          issues, pull requests, criteria and what holds each, and the phase the
                          Lead's reconciler is in
+  --release              the release view: the open release pull request, the latest release
+                         and pre-release, each declared environment's last deploy, and the
+                         promotion's gates where the repository runs Kanon's promotion
   --lanes                the lane-health view: each lane caller's recent runs as the
                          workflow-health check judges them, and each failure classed infra
                          (the model unreachable, an API error, no verdict, or fixed by a
@@ -114,8 +119,8 @@ const number = (flag, v) => {
  * @param {string[]} argv
  */
 export const parseArgs = (argv) => {
-  /** @type {{ repo: string, project: number | null, pr: number | null, lanes: boolean, needsOwner: boolean, json: boolean, help: boolean }} */
-  const opts = { repo: '', project: null, pr: null, lanes: false, needsOwner: false, json: false, help: false };
+  /** @type {{ repo: string, project: number | null, release: boolean, pr: number | null, lanes: boolean, needsOwner: boolean, json: boolean, help: boolean }} */
+  const opts = { repo: '', project: null, release: false, pr: null, lanes: false, needsOwner: false, json: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
     const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
@@ -128,6 +133,7 @@ export const parseArgs = (argv) => {
     if (flag === '-h' || flag === '--help') opts.help = true;
     else if (flag === '--repo') opts.repo = value();
     else if (flag === '--project') opts.project = number(flag, value());
+    else if (flag === '--release' && inline === undefined) opts.release = true;
     else if (flag === '--pr') opts.pr = number(flag, value());
     else if (flag === '--lanes' && inline === undefined) opts.lanes = true;
     else if (flag === '--needs-owner' && inline === undefined) opts.needsOwner = true;
@@ -137,7 +143,7 @@ export const parseArgs = (argv) => {
   if (opts.help && opts.json) throw new Error('--help and --json contradict each other; give one');
   if (opts.help) return opts;
   if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
-  if (opts.project === null && opts.pr === null && !opts.lanes && !opts.needsOwner) throw new Error('name a view to read: --project <n>, --pr <n>, --lanes or --needs-owner');
+  if (opts.project === null && !opts.release && opts.pr === null && !opts.lanes && !opts.needsOwner) throw new Error('name a view to read: --project <n>, --release, --pr <n>, --lanes or --needs-owner');
   return opts;
 };
 
@@ -188,6 +194,7 @@ async function document(deps, opts) {
     const project = opts.project;
     views.project = await section(() => projectView({ reader, repo, project }));
   }
+  if (opts.release) views.release = await section(() => releaseView({ reader, repo, now: new Date(readAt) }));
   if (opts.pr !== null) {
     const pr = opts.pr;
     const { readinessView } = await import('../scripts/status/pull-request.mjs');
@@ -250,6 +257,7 @@ export const status = async (argv, overrides = {}) => {
 export function prose(doc) {
   const lines = [`${doc.repo}, read at ${doc.readAt}`];
   if ('project' in doc) lines.push('', ...projectProse(/** @type {any} */ (doc.project)));
+  if ('release' in doc) lines.push('', ...releaseProse(/** @type {any} */ (doc.release)));
   if ('pr' in doc) lines.push('', ...prProse(/** @type {any} */ (doc.pr)));
   if ('lanes' in doc) lines.push('', ...lanesProse(/** @type {any} */ (doc.lanes)));
   if ('needsOwner' in doc) lines.push('', ...needsOwnerProse(/** @type {any} */ (doc.needsOwner)));
@@ -330,5 +338,28 @@ function projectProse(p) {
     for (const s of i.stops) lines.push(`       can't proceed: ${s.reason}, ${s.detail}`);
   }
   for (const n of p.notes) lines.push(`  Note: ${n}`);
+  return lines;
+}
+
+/** @param {any} r the release section */
+function releaseProse(r) {
+  if ('error' in r) return [`The release view has no answer: ${r.error}`];
+  const lines = [`Releases (declarations on ${r.branch})`];
+  if (!r.releasePrs.length) lines.push('  No open release pull request.');
+  for (const p of r.releasePrs) lines.push(`  Release pull request #${p.number}: ${p.title} (${p.url})`);
+  lines.push(r.latest ? `  Latest release: ${r.latest.tag}, published ${r.latest.publishedAt}` : '  No release yet.');
+  lines.push(r.preRelease ? `  Latest pre-release: ${r.preRelease.tag}, published ${r.preRelease.publishedAt}, ${r.preRelease.ageHours}h ago` : '  No pre-release.');
+  if (!r.deploys.length) lines.push('  No environment declared in the adoption record\'s ## Deploy.');
+  for (const d of r.deploys) {
+    const where = `  ${d.environment}`;
+    if (d.job === null) lines.push(`${where}: the adoption record names no deploy job for it in ${d.workflow}`);
+    else if (d.last) lines.push(`${where}: ${d.last.tag} ${d.last.outcome} (${d.workflow}, job \`${d.job}\`, ${d.last.url})`);
+    else lines.push(`${where}: no deploy among the latest releases' runs of ${d.workflow} (job \`${d.job}\`)`);
+  }
+  const p = r.promotion;
+  if (p) {
+    lines.push(`  Promotion (${p.workflow}): ${p.decision}${p.candidate ? `, ${p.candidate}` : ''}: ${p.why}`);
+    for (const g of p.gates) lines.push(`       ${g.title}: ${g.skipped ? 'skipped' : g.pass ? 'pass' : 'hold'}, ${g.evidence}`);
+  }
   return lines;
 }

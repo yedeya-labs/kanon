@@ -27,8 +27,9 @@ Commands:
                read-only, and print counts only; report: the three headline indicators by
                band, from exported telemetry rows (kanon metrics --help)
   status       where the repository stands, read live from GitHub: a project's items, what
-               holds each, and its phase; how each lane has run lately; or whether a pull
-               request is ready to merge; writes nothing; --json for scripts (kanon status --help)`;
+               holds each, and its phase; what is about to ship, what shipped and where it is
+               deployed; how each lane has run lately; whether a pull request is ready to merge;
+               or what waits on a person; writes nothing; --json for scripts (kanon status --help)`;
 
 const [command, ...rest] = process.argv.slice(2);
 if (command === 'init') process.exitCode = await init(rest);

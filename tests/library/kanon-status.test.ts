@@ -8,7 +8,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, normalize, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
-import { PROJECT, adopterFiles, adopterProject, laneCaller, laneFleet, laneWorld, repoWorld } from './helpers/status-world.js';
+import { RELEASES, chain, promoting } from './helpers/release-world.js';
+import { CHAIN_DEPLOY, PROJECT, adopterFiles, adopterProject, adoptionWith, laneCaller, laneFleet, laneWorld, repoWorld } from './helpers/status-world.js';
 import { NUMBER, briefPr, implementerPr, personPr, readerFor } from './helpers/pr-world.js';
 import { ownerWorld } from './helpers/owner-world.js';
 
@@ -98,6 +99,12 @@ const refusedOwing = () => ownerWorld({
   overrides: { graphql: { OpenPullRequests: () => { throw new ReadError('GraphQL OpenPullRequests', 'API rate limit exceeded', { status: 403, resetAt: '2026-10-24T10:00:00.000Z' }); } } },
 });
 const refusedLabels = () => adopterProject({ overrides: { graphql: { Labels: () => { throw new ReadError('GraphQL Labels', 'API rate limit exceeded', { status: 403, resetAt: '2026-10-24T10:00:00.000Z' }); } } } });
+const noJob = () => chain({ files: adopterFiles(undefined, { 'docs/qa/adoption.md': adoptionWith(CHAIN_DEPLOY.replace('`staging / deploy`', '`ship`')) }) });
+const refusedPulls = () => {
+  const w = chain();
+  w.reader.pages = () => { throw new ReadError('GET repos/acme/shop/pulls?state=open&per_page=100', 'Bad credentials', { status: 401 }); };
+  return w;
+};
 
 /** The body of a Markdown section: from its heading to the next heading of its level or above. */
 const section = (text: string, heading: string): string | null => {
@@ -142,6 +149,25 @@ describe('kanon status prints one document, or the same result as prose', () => 
     expect(prose.out).toContain('STORE-1 seed, tested by tests/price.test.ts');
     expect(prose.out).toContain("can't proceed: dependency, B (#12) is still open");
 
+    // The release view is a section of its own, the view's answer for the same reads, and its prose.
+    // The view is imported here, not with the others, so this file still loads without it and the
+    // assertions below are what turn red when the release view is gone.
+    const { releaseView } = await import('../../scripts/status/release.mjs');
+    const rel = await run(['--release', '--json'], chain());
+    expect(rel.code).toBe(EXIT.ok);
+    expect(Object.keys(rel.doc())).toEqual(['schema', 'kanon', 'status', 'exitCode', 'repo', 'readAt', 'release']);
+    expect(rel.doc().release).toEqual(await releaseView({ reader: chain().reader, repo: 'acme/shop', now: new Date(READ_AT) }));
+    const relProse = await run(['--release'], chain());
+    expect(relProse.code).toBe(rel.code);
+    expect(relProse.out).toContain('Release pull request #40: chore(main): release 2.2.0');
+    expect(relProse.out).toContain(`Latest pre-release: v2.2.0-rc.1, published ${RELEASES[0]!.published_at}, 48h ago`);
+    expect(relProse.out).toContain('production: v2.1.0 failed (deploy.yml, job `production / deploy`');
+    const gates = await run(['--release'], promoting());
+    expect(gates.out).toMatch(/Promotion \(promote\.yml\): promote, candidate-v0\.41\.0: every gate passed\n {7}Soak: pass, pinned \d+h/);
+    const relCut = await run(['--release', '--json'], refusedPulls());
+    expect([relCut.code, relCut.doc().release.reads[0].status]).toEqual([EXIT.incomplete, 401]);
+    expect((await run(['--release'], refusedPulls())).out).toMatch(/The release view has no answer: the release view couldn't be read whole, .*Bad credentials/);
+
     // A read that didn't complete: the view's answer is an error naming the read, never a partial one.
     const cut = await run(['--project', String(PROJECT), '--json'], refusedLabels());
     expect(cut.code).toBe(EXIT.incomplete);
@@ -178,7 +204,7 @@ describe('kanon status prints one document, or the same result as prose', () => 
     expect(lanesCutProse.out).toMatch(/The lane-health view has no answer: the lane-health view couldn't be read whole/);
 
     // A usage error: the error document, or the message and the usage, and exit 2 either way.
-    for (const argv of [['--project', 'seven'], [], ['--project', '7', '--repo', 'not-a-repo'], ['--bogus'], ['--pr', 'five'], ['--lanes=yes']]) {
+    for (const argv of [['--project', 'seven'], [], ['--project', '7', '--repo', 'not-a-repo'], ['--bogus'], ['--pr', 'five'], ['--lanes=yes'], ['--release=yes']]) {
       const j = await run([...argv, '--json'], null);
       expect(j.code, argv.join(' ')).toBe(EXIT.usage);
       expect(Object.keys(j.doc()).sort()).toEqual(['error', 'exitCode', 'kanon', 'schema', 'status']);
@@ -189,7 +215,7 @@ describe('kanon status prints one document, or the same result as prose', () => 
       expect(p.out, 'nothing on standard output').toBe('');
       expect(j.readers, 'nothing was read').toEqual([]);
     }
-    expect((await run(['--json'], null)).doc().error).toMatch(/--project <n>, --pr <n>, --lanes or --needs-owner/);
+    expect((await run(['--json'], null)).doc().error).toMatch(/--project <n>, --release, --pr <n>, --lanes or --needs-owner/);
     expect((await run(['--needs-owner=yes', '--json'], null)).code).toBe(EXIT.usage);
 
     // The needs-the-Owner view is a section of its own, the view's answer for the same reads, and in prose.
@@ -301,6 +327,14 @@ describe('docs/status.md is held to the code', () => {
     // The worlds did reach each branch, so a field missing from them is missing from the code.
     expect(docs.filter((d) => !d.pr).map((d) => d.project?.brief?.state ?? d.project?.error?.slice(0, 10) ?? d.status)).toEqual(['parsed', 'parsed', 'unparseable', 'missing', 'project #7', 'error']);
     expect(docs[1].project.hold).toEqual({ label: HELD, by: 'lead' });
+    // And the release view's: a chain's deploys, an environment with no job, the promotion's gates
+    // with no pre-release beside them, and a read that didn't complete.
+    const releaseDocs: Any[] = [];
+    for (const w of [chain(), noJob(), promoting(), refusedPulls()]) releaseDocs.push((await run(['--release', '--json'], w)).doc());
+    for (const d of releaseDocs) for (const p of paths(d)) emitted.add(p);
+    expect(releaseDocs.map((d) => (d.release.error ? 'error' : [d.release.deploys.map((e: Any) => e.job), d.release.promotion?.gates.length ?? null]))).toEqual([
+      [['staging / deploy', 'production / deploy'], null], [['ship', null], null], [['ship'], 5], 'error',
+    ]);
 
     const sorted = (s: Set<string>) => [...s].sort();
     expect(sorted(emitted).filter((p) => !documented.has(p)), 'emitted, and not in the table').toEqual([]);
