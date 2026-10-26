@@ -22,7 +22,8 @@
 //   - whose `ci.yml` runs on that head have all completed, as the review lane's filter reads CI;
 //   - whose head was pushed at least the reconciler's stall window ago, `AWAITING_REVIEW_HOURS`
 //     (`K-MERGE-14`'s waiting threshold), and which the sweep has not re-asked before;
-//   - whose head the review lane does not decline BY DESIGN (kanon#1213), below.
+//   - whose head the review lane does not decline BY DESIGN (kanon#1213), below;
+//   - whose project is not held (kanon#1431), below.
 // A fork's head is never re-asked: the review lane refuses one before it reads anything.
 //
 // ── A HEAD THE LANE DECLINES ON PURPOSE IS NOT A DROPPED REVIEW (kanon#1213) ──
@@ -44,6 +45,15 @@
 //   - the filter failed or never decided (#1156: its membership gate failed): no decision line;
 //   - the filter deferred to CI, and CI's completion event was lost: a different reason;
 //   - the log can't be read: unreadable is not a decline, so the head is re-asked as before.
+//
+// ── A HELD PROJECT TAKES NO ACTIONS (`K-AGENT-32`, kanon#1431) ───────────────────
+// A pull request that closes a member of a project whose tracking issue carries `needs:human`
+// is not re-asked: a human stopped that project, and a re-ask starts a paid Reviewer run. The
+// reconciler's review recovery declines the same pull requests (kanon#1411), and this reuses its
+// reader, `projectHoldReader` in `review-recovery.mjs`, rather than reading the project marker a
+// second time. Every unknown answers "held": a tracking issue, a closing issue, or the list of
+// closing issues that can't be read holds the pull request. It is asked last, only of a pull
+// request about to be re-asked, so a pull request that is waiting anyway costs no read.
 //
 // ── ONCE PER HEAD, AND THE MARKER IS THE BOUND ──────────────────────────────
 // Before it re-asks, it posts one comment of the Lead's on the pull request, carrying
@@ -73,6 +83,7 @@ import { appLogin, appPersona } from './app-register.mjs';
 import { AWAITING_REVIEW_HOURS } from './lead-reconcile.mjs';
 import { readTrailer } from './review-trailer.mjs';
 import { reviewRunsFor } from './review-run-evidence.mjs';
+import { projectHoldReader } from './review-recovery.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
 import { beforeApply } from './lib/labels.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
@@ -176,12 +187,14 @@ export function reaskedHeads(comments) {
  * What this pass re-asks. PURE: every read that decides it is an argument.
  * @param {Pr[]} prs open pull requests, as `gh pr view --json` returns them
  * @param {{ ciSettled: (sha: string) => boolean | null, runsFor: (sha: string, since: string) => Run[] | null,
- *   decisionFor?: (sha: string, runs: Run[]) => Decision | null, now?: number, hours?: number }} io
+ *   decisionFor?: (sha: string, runs: Run[]) => Decision | null, heldBy?: (pr: Pr) => string | null,
+ *   now?: number, hours?: number }} io
  *   `ciSettled`: whether CI's runs on the head all completed, `null` when unreadable; `runsFor`:
  *   the head's Review runs, `null` when unreadable; `decisionFor`: the filter's latest decision
- *   on the head, from those runs, `null` when none was found or read
+ *   on the head, from those runs, `null` when none was found or read; `heldBy`: why the pull
+ *   request's project is held, `null` when it is not (kanon#1431), asked last
  */
-export function reaskPlan(prs, { ciSettled, runsFor, decisionFor = () => null, now = Date.now(), hours = AWAITING_REVIEW_HOURS }) {
+export function reaskPlan(prs, { ciSettled, runsFor, decisionFor = () => null, heldBy = () => null, now = Date.now(), hours = AWAITING_REVIEW_HOURS }) {
   /** @type {{ number: number, sha: string }[]} */
   const reask = [];
   /** @type {{ number: number, sha: string, why: string }[]} */
@@ -216,6 +229,10 @@ export function reaskPlan(prs, { ciSettled, runsFor, decisionFor = () => null, n
       hold(`the review lane declines this head by design: ${declined.why} (Review run ${decision?.run ?? '?'}'s filter). It is not a dropped review; to have it reviewed anyway, remove and re-add the label by hand`);
       continue;
     }
+    // A HELD PROJECT TAKES NO ACTIONS (`K-AGENT-32`, kanon#1431): asked last, so only a pull
+    // request about to be re-asked costs the read.
+    const heldWhy = heldBy(pr);
+    if (heldWhy) { hold(heldWhy); continue; }
     reask.push({ number: pr.number, sha });
   }
   return { reask, held, reviewed };
@@ -335,6 +352,7 @@ export function run({ repo, apply, gh, summary = () => {}, now = Date.now(), run
     ciSettled: (sha) => ciSettled(sha, { repo, gh }),
     runsFor: runsFor ?? ((sha, since) => reviewRunsFor(sha, { repo, json, since })),
     decisionFor: (sha, runs) => filterDecisionFor(sha, runs, { repo, gh }),
+    heldBy: projectHoldReader({ json, repo }),
     now,
   });
   /** @type {number[]} */
