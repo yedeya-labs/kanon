@@ -56,7 +56,7 @@
 // is the PR's and a PR must not choose the login it is judged by. The Merger's lane checks
 // out the default branch for the same reason (`agent-merge.yml`, kanon#210).
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { PERMISSION_COLUMNS } from '../cli/app-register.mjs';
@@ -344,6 +344,26 @@ export function appLogin(role, path = APP_REGISTER) {
   const slug = loadAppRegister(path).get(role);
   if (!slug) throw new Error(`App register ${path} lists no ${role} App — add its row (Role | App slug) before code that compares its login can run.`);
   return slug;
+}
+
+/**
+ * The login of the App that plays `role`, read when a module loads: `appLogin`'s answer, or
+ * `undefined` when there is no register at `path` at all (kanon#1396).
+ *
+ * WHY A SECOND READ. A lane module that keeps a login as a constant reads it when it is
+ * imported, and the status core imports the merge gate in a process with no checkout (the hosted
+ * status server), where that import would throw before the core read anything. The core passes
+ * the logins it read from the default branch instead. So only an ABSENT register is soft here: a
+ * register that is there and malformed, or lists no such role, still throws at import, as before.
+ * Code that compares the login when it runs falls back to `appLogin` while the constant is
+ * `undefined`, which throws the register's own error, so no comparison runs against nobody.
+ *
+ * @param {typeof ROLES[number]} role
+ * @param {string} [path]
+ * @returns {string | undefined}
+ */
+export function appLoginAtLoad(role, path = APP_REGISTER) {
+  return existsSync(resolve(path)) ? appLogin(role, path) : undefined;
 }
 
 // ── PERSONAS (plan 0005 §3.3; decided by the Owner, 2026-10-05) ───────────────────────────

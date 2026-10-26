@@ -167,6 +167,18 @@ describe('L4: the Merger lifts `needs:human` only on its own lapsed escalations 
     expect(verdict(held([{ rule: 'checks-failed', sha: START.slice(0, 12) }])).rule).toBe('escalation-lapsed');
   });
 
+  it('reads whose hold it is by the `merger` it is passed, over the working directory\'s (kanon#1396)', () => {
+    // The status core passes the default branch's Merger, here the Judge App, as it passes the
+    // Implementer and the Reviewer; the working directory's register names another.
+    expect(JUDGE).not.toBe(MERGER_LOGIN);
+    const lapsed = [{ rule: 'checks-failed', sha: START.slice(0, 12) }];
+    const byJudge = authorPr({ labels: ['agent:implement', 'needs:human'], hold: { labeledBy: `${JUDGE}[bot]`, escalations: lapsed } });
+    const gate = { escalations: ESCALATE_PATHS, implementer: AUTHOR, reviewer: JUDGE, now: NOW };
+    expect(mergeVerdict(byJudge, { ...gate, merger: JUDGE }).rule).toBe('escalation-lapsed');
+    expect(mergeVerdict(byJudge, gate).rule, 'not the working directory\'s Merger: a person\'s hold').toBe('escalating-label');
+    expect(mergeVerdict(held(lapsed), { ...gate, merger: JUDGE }).rule, 'the working directory\'s Merger is not the one passed').toBe('escalating-label');
+  });
+
   it('keeps one whose Merger escalation is about the current head', () => {
     expect(verdict(held([{ rule: 'checks-failed', sha: HEAD.slice(0, 12) }])).rule).toBe('escalating-label');
   });

@@ -36,7 +36,7 @@
 import { execFileSync } from 'node:child_process';
 import { CONFLICT_JSON, conflictState } from './conflict-state.mjs';
 import { NO_RETRY_EVIDENCE, RETRY_COOL_DOWN_HOURS, describeRetry, makeRetryEvidenceReader, retryDecision } from './lane-retry.mjs';
-import { appLogin, appPersona } from './app-register.mjs';
+import { appLogin, appLoginAtLoad, appPersona } from './app-register.mjs';
 import { asRole, implementerStatusOn, signed } from './lib/role-marker.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 
@@ -46,7 +46,11 @@ const REPO = process.env.GITHUB_REPOSITORY;
  *  `Implementer` row is what this reads, RA-2701), and the author of every branch it may touch. Asserted against the
  *  minted `app-slug` in the workflow: a renamed App would make the author check below
  *  match nothing, which is what keeps this lane off human branches. */
-export const IMPLEMENTER_LOGIN = appLogin('Implementer');
+export const IMPLEMENTER_LOGIN = /** @type {string} */ (appLoginAtLoad('Implementer'));
+// An absent register doesn't stop the load (kanon#1396): the merge gate, which the status core
+// loads where there is no checkout, imports this file's marker. A read with no login passed
+// throws the register's own error then, and the CLI entry asserts it first.
+const implementerLogin = () => IMPLEMENTER_LOGIN ?? appLogin('Implementer');
 
 /** One identity, three spellings across three endpoints (RA-1007). */
 export const normaliseLogin = (login) =>
@@ -131,7 +135,7 @@ export const attemptComment = (sha, runId = '') => signed([
  * ORDERED MOST-SPECIFIC FIRST, so the reported reason is the actionable one: a draft
  * that also carries `needs:human` should read as held, not as a draft.
  */
-export function ineligible(pr, { implementer = IMPLEMENTER_LOGIN } = {}) {
+export function ineligible(pr, { implementer = implementerLogin() } = {}) {
   const labels = (pr.labels ?? []).map((l) => l.name ?? l);
   if (pr.state !== 'OPEN') return 'not open';
   if (labels.includes(HELD_LABEL)) {
@@ -371,4 +375,4 @@ function main() {
 }
 
 const IS_CLI = isCliEntry(import.meta.url);
-if (IS_CLI) main();
+if (IS_CLI) { implementerLogin(); main(); }

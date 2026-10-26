@@ -71,7 +71,7 @@ import { CONFLICT_JSON, CONFLICT_WHY, blocksChurn, conflictState } from './confl
 import { readTrailer } from './review-trailer.mjs';
 import { normaliseLogin, reviewAttempts, reviewRunsFor, whyNoChurn } from './review-run-evidence.mjs';
 import { NO_RETRY_EVIDENCE, RETRY_COOL_DOWN_HOURS, describeRetry, makeRetryEvidenceReader, retryDecision } from './lane-retry.mjs';
-import { appLogin } from './app-register.mjs';
+import { appLogin, appLoginAtLoad } from './app-register.mjs';
 import { asRole } from './lib/role-marker.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
@@ -81,7 +81,11 @@ const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
 
 /** The reviewer's login, normalised — one identity, three spellings. Read from the
  *  register's `Reviewer` row (RA-2701). */
-export const REVIEWER_LOGIN = appLogin('Reviewer');
+export const REVIEWER_LOGIN = /** @type {string} */ (appLoginAtLoad('Reviewer'));
+// An absent register doesn't stop the load (kanon#1396): the status core loads this file for
+// `verdictOnHead` where there is no checkout, and passes the default branch's Reviewer. A read
+// with none passed throws the register's own error then, and the CLI entry asserts it first.
+const reviewerLogin = () => REVIEWER_LOGIN ?? appLogin('Reviewer');
 
 /** The labels that make a PR the Reviewer's, and the one that is churned to re-deliver.
  *
@@ -147,7 +151,7 @@ export function ciSettledFor(sha, { json = ghJson } = {}) {
  * `reviewer` is the register's `Reviewer` login, read from the working tree by default; the status
  * core passes the one it read from the default branch (project #1327, `[STAT-2]`, `[STAT-14]`).
  */
-export function verdictOnHead(pr, { reviewer = REVIEWER_LOGIN } = {}) {
+export function verdictOnHead(pr, { reviewer = reviewerLogin() } = {}) {
   return (pr.reviews ?? []).findLast((r) =>
     // The Reviewer's login and, from L4, its role marker (plan 0005 §3.3).
     asRole('Reviewer', { login: normaliseLogin(r.author?.login), expected: reviewer, body: r.body })
@@ -350,4 +354,4 @@ function main() {
 }
 
 const IS_CLI = isCliEntry(import.meta.url);
-if (IS_CLI) main();
+if (IS_CLI) { reviewerLogin(); main(); }

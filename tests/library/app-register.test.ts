@@ -1,10 +1,12 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ROOT } from './helpers/adopter.js';
 
 import { readVerdict } from '../../scripts/agent-quality-columns.mjs';
-import { APP_OF, OTHER_APP, ROLES, appLogin, appShape, loadAppRegister, parseAppRegister, parseOtherApps, parsePersonas } from '../../scripts/app-register.mjs';
+import { APP_OF, OTHER_APP, ROLES, appLogin, appLoginAtLoad, appShape, loadAppRegister, parseAppRegister, parseOtherApps, parsePersonas } from '../../scripts/app-register.mjs';
 
 /**
  * RA-2701 (Kanon move plan P4) — the bot logins every pipeline script compares against are
@@ -45,6 +47,21 @@ describe('every consumer reads the login it compared before the move', () => {
     expect((await import('../../scripts/review-run-evidence.mjs')).recoveryLogin()).toBe('example-lead');
     expect((await import('../../scripts/brief-revise-recovery.mjs')).LEAD_LOGIN).toBe('example-lead');
     expect((await import('../../scripts/lead-reconcile.mjs')).explorerLogin()).toBe('example-explorer');
+  });
+
+  it.each(['merge-gate', 'review-recovery', 'rebase-lane'])('%s loads with no register, and its lane still stops on one before it reads anything (kanon#1396)', (lane) => {
+    // Loading is soft so the status core can run where there is no checkout; running the lane
+    // asserts the logins first, so it fails as it did when they were read at load.
+    const dir = mkdtempSync(join(tmpdir(), 'no-register-'));
+    const file = join(ROOT, `scripts/${lane}.mjs`);
+    const loaded = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(file)}); console.log('loaded');`], { cwd: dir, encoding: 'utf8' });
+    expect(loaded.stderr).toBe('');
+    expect(loaded.stdout.trim()).toBe('loaded');
+    const ran = spawnSync(process.execPath, [file], { cwd: dir, encoding: 'utf8', env: { PATH: '', HOME: dir } });
+    expect(ran.status).toBe(1);
+    expect(ran.stderr).toMatch(/App register docs\/qa\/agent-identities\.md is unreadable/);
+    expect(ran.stdout).toBe('');
+    expect(readdirSync(dir)).toEqual([]);
   });
 
   it('incremental-review matches the reviewer by exact login, decorated or not, and nothing else', async () => {
@@ -207,6 +224,17 @@ describe('appLogin / loadAppRegister', () => {
     const path = join(dir, 'bad.md');
     writeFileSync(path, '# no table\n');
     expect(() => appLogin('Lead', path)).toThrow(/no App register table/);
+  });
+
+  it('appLoginAtLoad is soft only on a register that is not there at all (kanon#1396)', () => {
+    expect(appLoginAtLoad('Lead', join(dir, 'absent.md'))).toBeUndefined();
+    const ok = join(dir, 'at-load.md');
+    writeFileSync(ok, table('| Lead | `example-lead` | x |'));
+    expect(appLoginAtLoad('Lead', ok)).toBe('example-lead');
+    expect(() => appLoginAtLoad('Reviewer', ok), 'a register that lists no such role').toThrow(/lists no Reviewer App/);
+    const bad = join(dir, 'at-load-bad.md');
+    writeFileSync(bad, '# no table\n');
+    expect(() => appLoginAtLoad('Lead', bad), 'a malformed register').toThrow(/no App register table/);
   });
 });
 
