@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { asOneWorkflow } from './helpers/kanon-lane.js';
 import { describe, expect, it } from 'vitest';
 const {
-  CHURN_LABEL, REVIEW_LABELS, ciSettledFor, hydrate,
+  CHURN_LABEL, REVIEW_LABELS, ciSettledFor, hydrate, projectHoldReader,
   report, reviewPrs, reviewRecovery, verdictOnHead,
 } = await import('../../scripts/review-recovery.mjs');
 const { reviewAttempts, reviewRunsFor } = await import('../../scripts/review-run-evidence.mjs');
@@ -76,7 +76,8 @@ const noRuns = () => [];
 const decide = (prs: unknown[], {
   runsFor = noRuns as (sha: string) => unknown[] | null,
   ciSettled = () => true as boolean | null,
-} = {}) => reviewRecovery(prs, { runsFor, ciSettled, now: NOW, hours: HOURS });
+  heldBy = (() => null) as (pr: { number: number }) => string | null,
+} = {}) => reviewRecovery(prs, { runsFor, ciSettled, heldBy, now: NOW, hours: HOURS });
 
 describe('whose PRs this lane is about', () => {
   it('takes any open, non-draft PR carrying a review label', () => {
@@ -148,7 +149,7 @@ describe('when it acts', () => {
     const seen: unknown[] = [];
     reviewRecovery([pr()], {
       runsFor: (_sha: string, since?: string) => { seen.push(since); return []; },
-      ciSettled: () => true, now: NOW, hours: HOURS,
+      ciSettled: () => true, heldBy: () => null, now: NOW, hours: HOURS,
     });
     expect(seen).toEqual([ago(9)]);
   });
@@ -426,5 +427,133 @@ describe('a conflicting PR is hard-stopped, not slow (RA-1722)', () => {
     // PR on a value that resolves seconds later.
     const out = decide([pr({ mergeStateStatus: 'UNKNOWN', mergeable: 'UNKNOWN' })], { ciSettled: () => true });
     expect(out.churn).toHaveLength(1);
+  });
+});
+
+/**
+ * kanon#1411 — a held project's pull requests get no re-delivered review from this lane either.
+ *
+ * PR #1405 stopped the Lead's own `reviewRecovery` from re-delivering a review on a held
+ * project's PRs (`K-AGENT-32`: a held project takes no actions). This lane runs in the same
+ * hourly tick and churned `review:please` on the same PRs anyway, starting a paid Reviewer run
+ * on a project a human had stopped.
+ */
+describe('a held project takes no actions, from this lane either (K-AGENT-32, kanon#1411)', () => {
+  const REPO = 'example-org/example-repo';
+  const HELD_WHY = /project #500 is held/;
+
+  it('notes, and does not churn, a parked PR on a held project', () => {
+    const { churn, noted } = decide([pr()], { heldBy: () => 'project #500 is held' });
+    expect(churn).toEqual([]);
+    expect(noted).toEqual([{ number: 1659, sha: HEAD, why: expect.stringMatching(HELD_WHY) }]);
+  });
+
+  it('holds the RA-2519 retry too, not only the first re-delivery', () => {
+    const runs = () => [run({ id: 51, event: 'workflow_run', conclusion: 'failure', createdAt: ago(8) })];
+    const retryable = () => ({ classification: 'unreachable', at: ago(6) });
+    const open = reviewRecovery([pr()], { runsFor: runs, ciSettled: () => true, heldBy: () => null, evidenceOf: retryable, retryHours: HOURS, now: NOW, hours: HOURS });
+    expect(open.churn).toHaveLength(1);
+    const held = reviewRecovery([pr()], { runsFor: runs, ciSettled: () => true, heldBy: () => 'project #500 is held', evidenceOf: retryable, retryHours: HOURS, now: NOW, hours: HOURS });
+    expect(held.churn).toEqual([]);
+    expect(held.noted[0].why).toMatch(HELD_WHY);
+  });
+
+  it('asks about the hold only for a PR it would otherwise churn, so a healthy PR costs no read', () => {
+    const asked: number[] = [];
+    decide([pr({ number: 1, reviews: [review()] }), pr({ number: 2, pushedAt: ago(1) }), pr({ number: 3 })],
+      { heldBy: (p) => { asked.push(p.number); return null; } });
+    expect(asked).toEqual([3]);
+  });
+
+  /** A `gh` stub: each read is keyed by its argv, and a missing key is a failed read. */
+  const ghStub = (answers: Record<string, unknown>) => {
+    const calls: string[] = [];
+    const json = (args: string[]) => {
+      const key = args.slice(0, 3).join(' ') + (args.includes('labels') ? ' labels' : args.includes('body') ? ' body' : '');
+      calls.push(key);
+      if (!(key in answers)) throw new Error(`gh: ${key} failed`);
+      return answers[key];
+    };
+    return { json, calls };
+  };
+  const ref = (number: number, repo = REPO) => {
+    const [login, name] = repo.split('/');
+    return { number, repository: { name, owner: { login } } };
+  };
+  const member = (project: number) => ({ body: `Some work.\n\nPart of #${project}.\n\n<!-- qa:project ${project} -->\n` });
+  const labels = (...names: string[]) => ({ labels: names.map((name) => ({ name })) });
+
+  it('reads a PR as held when an issue it closes is a member of a project carrying `needs:human`', () => {
+    const { json } = ghStub({
+      'pr view 1659': { closingIssuesReferences: [ref(42)] },
+      'issue view 42 body': member(500),
+      'issue view 500 labels': labels('needs:human', 'enhancement'),
+    });
+    expect(projectHoldReader({ json, repo: REPO })(pr())).toMatch(HELD_WHY);
+  });
+
+  it('reads it as not held when the project carries no hold', () => {
+    const { json } = ghStub({
+      'pr view 1659': { closingIssuesReferences: [ref(42)] },
+      'issue view 42 body': member(500),
+      'issue view 500 labels': labels('enhancement', 'lead:file-only'),
+    });
+    expect(projectHoldReader({ json, repo: REPO })(pr())).toBeNull();
+  });
+
+  it('reads it as not held when what it closes belongs to no project, or it closes nothing', () => {
+    const { json } = ghStub({
+      'pr view 1659': { closingIssuesReferences: [ref(42)] },
+      'pr view 7': { closingIssuesReferences: [] },
+      // A marker that is not the last line is not membership (RA-1069).
+      'issue view 42 body': { body: '<!-- qa:project 500 -->\n\nA note appended below it.' },
+    });
+    const read = projectHoldReader({ json, repo: REPO });
+    expect(read(pr())).toBeNull();
+    expect(read(pr({ number: 7 }))).toBeNull();
+  });
+
+  it('treats a tracking issue whose labels cannot be read as held, as `readWorld` does', () => {
+    const { json } = ghStub({
+      'pr view 1659': { closingIssuesReferences: [ref(42)] },
+      'issue view 42 body': member(500),
+    });
+    expect(projectHoldReader({ json, repo: REPO })(pr())).toMatch(/could not read #500's labels/);
+  });
+
+  it('does not churn a PR whose closing issues, or a closing issue\'s body, cannot be read', () => {
+    const unreadablePr = ghStub({});
+    expect(projectHoldReader({ json: unreadablePr.json, repo: REPO })(pr())).toMatch(/could not read which issues PR #1659 closes/);
+    const unreadableIssue = ghStub({ 'pr view 1659': { closingIssuesReferences: [ref(42)] } });
+    expect(projectHoldReader({ json: unreadableIssue.json, repo: REPO })(pr())).toMatch(/could not read #42/);
+  });
+
+  it('never reads an issue from another repository by its number here', () => {
+    const { json, calls } = ghStub({
+      'pr view 1659': { closingIssuesReferences: [ref(42, 'someone-else/other-repo')] },
+    });
+    expect(projectHoldReader({ json, repo: REPO })(pr())).toBeNull();
+    expect(calls).toEqual(['pr view 1659']);
+  });
+
+  it('reads each tracking issue once per tick, however many of its PRs are parked', () => {
+    const { json, calls } = ghStub({
+      'pr view 1': { closingIssuesReferences: [ref(42)] },
+      'pr view 2': { closingIssuesReferences: [ref(43)] },
+      'issue view 42 body': member(500),
+      'issue view 43 body': member(500),
+      'issue view 500 labels': labels('needs:human'),
+    });
+    const read = projectHoldReader({ json, repo: REPO });
+    expect(read(pr({ number: 1 }))).toMatch(HELD_WHY);
+    expect(read(pr({ number: 2 }))).toMatch(HELD_WHY);
+    expect(calls.filter((c) => c === 'issue view 500 labels')).toHaveLength(1);
+  });
+
+  it('is what the CLI decides with', () => {
+    // A seam the entry point never passes protects nothing.
+    const src = readFileSync(join(ROOT, 'scripts/review-recovery.mjs'), 'utf8');
+    const main = src.slice(src.indexOf('function main()'));
+    expect(main).toContain('heldBy: projectHoldReader({ json: ghJson })');
   });
 });

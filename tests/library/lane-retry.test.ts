@@ -269,7 +269,7 @@ describe('the brief and standalone review lanes (RA-2519)', () => {
     };
     const runs = () => [{ id: 51, actor: 'example-implementer', event: 'workflow_run', status: 'completed', conclusion: 'failure', createdAt: ago(8) }];
     const out = standaloneReviewRecovery([pr], {
-      runsFor: runs, ciSettled: () => true, now: NOW, hours: 4, evidenceOf: evidence('unreachable'), retryHours: HOURS,
+      runsFor: runs, ciSettled: () => true, heldBy: () => null, now: NOW, hours: 4, evidenceOf: evidence('unreachable'), retryHours: HOURS,
     });
     expect(out.churn).toEqual([{ number: 1659, sha: HEAD, retry: { runId: 51, classification: 'unreachable', at: ago(6) } }]);
     expect(reviewReport(out, { apply: true })).toContain('run 51');
@@ -304,7 +304,7 @@ describe('a review that exited zero with no verdict is retried once (kanon#622)'
 
   it('re-churns the head once the cool-down has passed, and says why', () => {
     const out = standaloneReviewRecovery([pr], {
-      runsFor: () => [run(38032817618)], ciSettled: () => true, now: NOW, hours: 4, evidenceOf: evidence('no_verdict'), retryHours: HOURS,
+      runsFor: () => [run(38032817618)], ciSettled: () => true, heldBy: () => null, now: NOW, hours: 4, evidenceOf: evidence('no_verdict'), retryHours: HOURS,
     });
     expect(out.churn).toEqual([{ number: 2836, sha: HEAD, retry: { runId: 38032817618, classification: 'no_verdict', at: ago(6) } }]);
     expect(reviewReport(out, { apply: true })).toMatch(/run 38032817618, which died retryably \(`no_verdict`\)/);
@@ -312,7 +312,7 @@ describe('a review that exited zero with no verdict is retried once (kanon#622)'
 
   it('retries it once: a second silent run on the same head is reported, never retried', () => {
     const out = standaloneReviewRecovery([pr], {
-      runsFor: () => [run(2), run(1)], ciSettled: () => true, now: NOW, hours: 4, evidenceOf: evidence('no_verdict'), retryHours: HOURS,
+      runsFor: () => [run(2), run(1)], ciSettled: () => true, heldBy: () => null, now: NOW, hours: 4, evidenceOf: evidence('no_verdict'), retryHours: HOURS,
     });
     expect(out.churn).toEqual([]);
     expect(out.noted).toHaveLength(1);
