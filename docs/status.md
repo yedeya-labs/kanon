@@ -346,6 +346,8 @@ It speaks MCP's Streamable HTTP transport at protocol version `2025-11-25`, at o
 
 The handler isn't deployed yet. Signing in, its deploy and how to connect to it follow in the items after it in project #1327.
 
+The server's code is more than its own directory: it links the status core, and the core calls the deciders the lanes run, the Lead's reconciler, review recovery, workflow health, the brief guard and what they import, rather than copying them. On Kanon's repository every module it links, directly or through another, is the Owner's merge: each matches an `always` entry in [`docs/qa/escalation-paths.md`](qa/escalation-paths.md), and `tests/unit/hosted-function-closure.test.ts` fails on a new import that reaches one that doesn't ([kanon#1345](https://github.com/yedeya-labs/kanon/issues/1345)).
+
 ## The hosted server's tools
 
 A test holds this list to the server's own tools (`[STAT-12]`, `[MCP-2]`). Every tool takes `repo`, the repository as `owner/name`, and is annotated read-only.

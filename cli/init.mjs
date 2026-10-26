@@ -88,6 +88,7 @@ import { hookKind, HOOK_PATH as NOTIFY_HOOK_PATH } from '../actions/notify/notif
 import { ADOPTION_RECORD as DEPLOY_RECORD, CHAIN_LABELS, CHOICES_HEADING, DeclarationError, DEPLOY_HEADING, LABELS as REFERENCE_LABELS, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
 import { LABEL as OVERSEER_LABEL, OVERSEER_CALLER, parseOverseerInstall } from '../scripts/lib/overseer-install.mjs';
 import { fencedLines } from '../scripts/spec-lib.mjs';
+import { HOLDER_LABEL } from '../scripts/lib/waivers.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
 /** @typedef {{ status: number | null, stdout: string, stderr: string }} GhResult */
@@ -549,8 +550,9 @@ export const parseArgs = (argv, req, declaredOf = () => []) => {
  * @typedef {{ workflow: string, job: string, reason: string }} AcceptedHolder
  */
 
-/** The bullet's bold label that accepts an id-token holder, under the adoption record's `## Choices` (`K-LAYOUT-10`). */
-export const HOLDER_LABEL = 'Accepted id-token holder';
+// The bullet's bold label that accepts an id-token holder, under the adoption record's `## Choices`
+// (`K-LAYOUT-10`). It lives with doctor's waiver reader in `scripts/lib/waivers.mjs` (kanon#1345).
+export { HOLDER_LABEL };
 
 /** The adoption record's bullet that accepts a holder, as `kanon doctor` reads it. @param {string} file the workflow's file name @param {string} job @param {string} reason */
 export const holderBullet = (file, job, reason) => `- **${HOLDER_LABEL}:** \`${file}\` job \`${job}\` (${reason})`;
