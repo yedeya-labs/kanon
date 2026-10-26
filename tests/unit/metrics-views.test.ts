@@ -408,6 +408,139 @@ describe('the configuration A/B view (§6.1, decision 11)', () => {
   });
 });
 
+describe('the release comparison (kanon#1451)', () => {
+  const SIZES = [100, 300, 800, 2000];
+  /**
+   * One release: `n` items closed evenly over `days` ago, each pinned to `version`, with an
+   * implement and a review run on it. Cost grows with the diff, times `scale`, with a spread.
+   */
+  const release = (version: string, prFrom: number, n: number, o: { days: [number, number]; scale: number; size?: (k: number) => number | null; escaped?: (k: number) => boolean; unmerged?: (k: number) => boolean }) =>
+    Array.from({ length: n }, (_, k) => {
+      const pr = prFrom + k;
+      const closed = o.days[0] + ((o.days[1] - o.days[0]) * k) / n;
+      const lines = o.size ? o.size(k) : (SIZES[k % 4] as number);
+      const cost = (o.scale * Math.sqrt(1 + (lines ?? 300)) * (0.8 + (k % 5) * 0.1)) / 10;
+      const sized = lines === null ? {} : { changed_lines: lines, changed_files: 1, changed_dirs: 1 };
+      return [
+        itemRow(pr, { closed: ago(closed), fate: o.unmerged?.(k) ? 'closed_unmerged' : 'merged', fields: { ...sized, kanon_version: version }, ...(o.escaped?.(k) ? { fixDays: 5 } : {}) }),
+        runRow('implement', { pr, at: ago(closed + 1), cost: cost * 0.8, fields: { kanon_version: version } }),
+        runRow('review', { pr, at: ago(closed + 0.5), cost: cost * 0.2, fields: { kanon_version: version } }),
+      ];
+    }).flat();
+  const only = (v: Cells) => {
+    expect(v.releaseComparison.comparisons).toHaveLength(1);
+    return v.releaseComparison.comparisons[0] as Cells;
+  };
+  const text = (rows: unknown[]) => renderViews(views(rows)).join('\n');
+
+  it('calls a release a win only when it is cheaper at equal size and its quality holds within the margins', () => {
+    const rows = [
+      ...release('0.39.0', 1, 100, { days: [100, 160], scale: 1, escaped: (k) => k % 5 === 0 }),
+      ...release('0.40.0', 1001, 100, { days: [31, 95], scale: 0.7 }),
+    ];
+    const c = only(views(rows));
+    expect(c).toMatchObject({ old: { version: '0.39.0', items: 100 }, new: { version: '0.40.0', items: 100 } });
+    expect(c.costAtEqualSize.pct).toBeCloseTo(-30, 0);
+    expect(c.costAtEqualSize.hiPct).toBeLessThan(0);
+    expect(c.yieldDifference.low).toBeGreaterThan(AB_MARGINS.yield);
+    expect(c.escapeDifference.high).toBeLessThan(AB_MARGINS.escape30);
+    expect(c.verdict).toBe('win');
+    expect(text(rows)).toMatch(/\| 0\.39\.0 → 0\.40\.0 \| −30\.\d% \([^|]*\), n 200 \| [^|]* \| [^|]* \| win \|/);
+  });
+
+  it('never calls a release a win on cost alone: cheaper with the escape rate not shown within +2 points', () => {
+    const rows = [
+      ...release('0.39.0', 1, 100, { days: [100, 160], scale: 1 }),
+      ...release('0.40.0', 1001, 100, { days: [31, 95], scale: 0.7 }),
+    ];
+    const c = only(views(rows));
+    expect(c.costAtEqualSize.hiPct).toBeLessThan(0);
+    expect(c.escapeDifference.high).toBeGreaterThan(AB_MARGINS.escape30);
+    expect(c.verdict).toBe('cheaper-quality-not-shown');
+    expect(text(rows)).toMatch(/\| cheaper, quality not shown to hold \|/);
+    expect(text(rows)).not.toMatch(/\| win \|/);
+  });
+
+  it('holds yield to its margin: a cheaper release that merges less is not a win', () => {
+    const rows = [
+      ...release('0.39.0', 1, 100, { days: [100, 160], scale: 1, escaped: (k) => k % 5 === 0 }),
+      ...release('0.40.0', 1001, 100, { days: [31, 95], scale: 0.7, unmerged: (k) => k % 4 === 1 }),
+    ];
+    const c = only(views(rows));
+    expect(c.escapeDifference.high).toBeLessThan(AB_MARGINS.escape30);
+    expect(c.yieldDifference.low).toBeLessThan(AB_MARGINS.yield);
+    expect(c.verdict).toBe('cheaper-quality-not-shown');
+  });
+
+  it('says "no measurable change" when the interval holds zero, though a release handed smaller work costs less raw', () => {
+    const rows = [
+      ...release('0.39.0', 1, 100, { days: [100, 160], scale: 1, size: (k) => SIZES[2 + (k % 2)] as number }),
+      ...release('0.40.0', 1001, 100, { days: [31, 95], scale: 1, size: (k) => SIZES[k % 2] as number }),
+    ];
+    const c = only(views(rows));
+    expect(c.new.cost.median.value).toBeLessThan(c.old.cost.median.value);
+    expect(c.costAtEqualSize.loPct).toBeLessThan(0);
+    expect(c.costAtEqualSize.hiPct).toBeGreaterThan(0);
+    expect(c.verdict).toBe('no-measurable-change');
+    expect(text(rows)).toMatch(/\| no measurable change \|/);
+  });
+
+  it('says "dearer" when cost at equal size has an interval entirely above zero, whatever quality does', () => {
+    const rows = [
+      ...release('0.39.0', 1, 100, { days: [100, 160], scale: 1 }),
+      ...release('0.40.0', 1001, 100, { days: [31, 95], scale: 1.4, escaped: () => false }),
+    ];
+    const c = only(views(rows));
+    expect(c.costAtEqualSize.loPct).toBeGreaterThan(0);
+    expect(c.verdict).toBe('dearer');
+    expect(text(rows)).toMatch(/\| dearer \|/);
+  });
+
+  it('says "not enough data", naming the minimum, when a release has too few merged items with a cost and a diff size', () => {
+    // Twelve merged items each, enough to compare, but only eight of the new release's carry a diff size.
+    const rows = [
+      ...release('0.39.0', 1, 12, { days: [100, 160], scale: 1 }),
+      ...release('0.40.0', 1001, 12, { days: [31, 95], scale: 0.5, size: (k) => (k < 8 ? SIZES[k % 4] as number : null) }),
+    ];
+    const c = only(views(rows));
+    expect(c.verdict).toBe('not-enough-data');
+    expect(c.costAtEqualSize).toMatchObject({ ok: false });
+    expect(c.costAtEqualSize.reason).toMatch(/each release needs 10 merged items with a cost and a diff size, and they have 12 and 8/);
+    expect(text(rows)).toMatch(/\| not enough data \|/);
+  });
+
+  it('compares each release with the one before it that has enough items, skips and lists the rest, and never pools them', () => {
+    const rows = [
+      ...release('0.38.0', 1, 40, { days: [130, 160], scale: 1 }),
+      ...release('0.39.0', 501, 5, { days: [115, 125], scale: 3 }),
+      ...release('0.40.0', 1001, 40, { days: [80, 110], scale: 1 }),
+      ...release('0.41.0', 1501, 40, { days: [31, 75], scale: 1 }),
+      ...release('dev', 2001, 12, { days: [10, 20], scale: 1 }),
+    ];
+    const r = views(rows).releaseComparison as Cells;
+    expect(r.minimum).toBe(MINIMUM.median);
+    expect(r.comparisons.map((c: Cells) => [c.old.version, c.new.version])).toEqual([['0.38.0', '0.40.0'], ['0.40.0', '0.41.0']]);
+    // 0.39.0's five items are in neither arm.
+    expect(r.comparisons[0].old.items).toBe(40);
+    expect(r.comparisons[0].new.items).toBe(40);
+    expect(r.comparisons[0].costAtEqualSize.n).toBe(80);
+    expect(r.fewer).toEqual([{ version: '0.39.0', items: 5 }]);
+    expect(r.dev).toBe(12);
+    // Each release's items and the dates they closed between.
+    expect(r.comparisons[0].old).toMatchObject({ from: ago(130 + (30 * 39) / 40).slice(0, 10), until: ago(130).slice(0, 10) });
+    const t = text(rows);
+    expect(t).toMatch(/Releases with fewer than 10 merged items, not compared and not pooled: 0\.39\.0 \(5\)\./);
+    expect(t).toMatch(/\| 0\.38\.0 \| 40 \| \d{4}-\d{2}-\d{2} \| \d{4}-\d{2}-\d{2} \|/);
+    expect(t).toMatch(/Merged items on `dev`, not a release: 12\./);
+  });
+
+  it('says so when fewer than two releases have enough items', () => {
+    const rows = release('0.40.0', 1, 40, { days: [31, 75], scale: 1 });
+    expect(views(rows).releaseComparison.comparisons).toEqual([]);
+    expect(text(rows)).toMatch(/Fewer than two Kanon releases have 10 merged items in the span, so none is compared\./);
+  });
+});
+
 describe('the difference intervals (§6.1)', () => {
   it("Newcombe's hybrid score interval for a difference of two proportions", () => {
     // Newcombe (1998), method 10: 56/70 − 48/80 = 0.2000, 95% interval 0.0524 to 0.3339.
@@ -730,6 +863,7 @@ describe('kanon metrics report prints the views', () => {
     const named: Record<string, string> = {
       'Trend': 'trend',
       'By Kanon version': 'by-version',
+      'Release comparison': 'release comparison',
       'Configuration A/B': 'A/B',
       'Deploys to production': '[the deploy views](#the-deploy-views)',
     };
@@ -747,6 +881,7 @@ describe('kanon metrics report prints the views', () => {
     const named: Record<string, RegExp> = {
       'Trend': /trend/,
       'By Kanon version': /by[- ]version/,
+      'Release comparison': /release comparison/,
       'Configuration A/B': /A\/B/,
       'Deploys to production': /deploy views/,
     };

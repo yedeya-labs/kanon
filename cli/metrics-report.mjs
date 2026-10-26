@@ -1,5 +1,5 @@
 // `kanon metrics report` (plan 0003 §7, M6, kanon#659 and kanon#669): the three headline
-// indicators by band, their secondary measures, the trend, by-version and A/B views, and, given
+// indicators by band, their secondary measures, the trend, by-version, release comparison and A/B views, and, given
 // deploy rows, the deploy views (plan 0010 §11), from one adopter's stored rows. It reads the rows from local files, and prints Markdown, or one JSON
 // document with `--json` (docs/cli-json.md). It calls nothing: no GitHub, no store. The Overseer's
 // `telemetry` job reads the rows through the store's `GET /v1/rows/self` and runs it; a caller by
@@ -35,8 +35,9 @@ human-correction rate beside it, and their secondary measures: cost per acceptan
 cache savings, review rounds, lead time by stage and human wait. Each with its 95% interval; a
 cell below its minimum sample says "not enough data (N)". When cost doesn't rise with the band,
 the pooled view replaces the banded one, with a warning. Then the views (plan 0003 §6.1): the
-trend over consecutive windows of --days, the indicators by Kanon version, and the configuration
-A/B per lane. Given deploy rows, the deploy views (plan 0010 §11) follow: deployment frequency,
+trend over consecutive windows of --days, the indicators by Kanon version, the release comparison
+(each Kanon release against the one before it, cost at equal size with quality held), and the
+configuration A/B per lane. Given deploy rows, the deploy views (plan 0010 §11) follow: deployment frequency,
 change-failure rate, time to restore and release lead time, over the ${DEPLOY_WEEKS} weeks that end at
 --until, whatever --days and --windows say. Reads only the files it is given; calls nothing.
 
@@ -46,8 +47,8 @@ Options:
                          files
   --until <YYYY-MM-DD>   the window's end, 00:00 UTC, not included (default: now)
   --days <n>             the window's length in days, by close date (default: ${WINDOW_DAYS})
-  --windows <n>          the trend's windows, ending at --until; the by-version and A/B views
-                         read the same span (default: ${TREND_WINDOWS})
+  --windows <n>          the trend's windows, ending at --until; the by-version, release
+                         comparison and A/B views read the same span (default: ${TREND_WINDOWS})
   --json                 print one JSON document (docs/metrics.md) instead of Markdown
   -h, --help             this text
 
