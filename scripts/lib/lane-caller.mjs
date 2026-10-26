@@ -26,7 +26,7 @@
 // One read per repository per process: the workflows and the adoption record in one GraphQL
 // query against the default branch (`HEAD:`), memoised on the `json` seam that made it.
 
-import { kanonCall, readWaivers } from '../../cli/doctor.mjs';
+import { kanonCall, readWaivers } from './waivers.mjs';
 import { parseYaml } from '../../cli/workflow-yaml.mjs';
 
 /** Where workflows live, and the record whose waivers name a misplaced caller. */
