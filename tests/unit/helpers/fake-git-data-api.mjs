@@ -7,6 +7,10 @@
 // arrived by `git push` is a person's and unverified. Each can be overridden, and an answer can
 // be replaced, as a rate limit's, before the double handles the request.
 //
+// It reads a request's path as GitHub's server does (kanon#1392): what follows a `#` is the URL's
+// fragment, which is never sent, what follows a `?` is the query, and each `/`-separated segment
+// is percent-decoded. So a branch name put into a path unencoded names the ref GitHub would read.
+//
 // Imported, `fakeGitHub` returns the `request` the helper takes. Run as a script, it serves the
 // same double over HTTP for a workflow step's test:
 //   node fake-git-data-api.mjs <remote.git> <owner/name> <app-login> <dir>
@@ -20,17 +24,17 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 
 /**
  * @typedef {{method: string, path: string, body?: any}} Call
  * @typedef {{status: number, headers: Record<string, string>, json: any}} Answer
  * @param {{remote: string, repo: string, appLogin: string,
- *          authors?: Record<string, string>,
+ *          authors?: Record<string, string>, defaultBranch?: string,
  *          verification?: (sha: string, byApi: boolean) => {verified: boolean, reason: string} | undefined,
  *          before?: (call: Call, calls: Call[]) => Answer | undefined}} opts
  */
-export function fakeGitHub({ remote, repo, appLogin, authors = {}, verification = () => undefined, before = () => undefined }) {
+export function fakeGitHub({ remote, repo, appLogin, authors = {}, defaultBranch = 'main', verification = () => undefined, before = () => undefined }) {
   /** @type {Call[]} */
   const calls = [];
   /** @type {Set<string>} */
@@ -51,6 +55,14 @@ export function fakeGitHub({ remote, repo, appLogin, authors = {}, verification 
       return '';
     }
   };
+  /** The path the server receives: no fragment or query, each segment decoded; `null` if it can't be. */
+  const received = (/** @type {string} */ path) => {
+    try {
+      return new URL(path, 'http://fake.invalid/').pathname.slice(1).split('/').map(decodeURIComponent).join('/');
+    } catch {
+      return null;
+    }
+  };
   const answer = (/** @type {number} */ status, /** @type {any} */ json) => ({ status, headers: {}, json });
   const prefix = `repos/${repo}`;
 
@@ -60,9 +72,11 @@ export function fakeGitHub({ remote, repo, appLogin, authors = {}, verification 
     calls.push(call);
     const replaced = before(call, calls);
     if (replaced) return replaced;
-    if (path === prefix && method === 'GET') return answer(200, { default_branch: 'main' });
-    if (!path.startsWith(`${prefix}/`)) return answer(404, { message: 'Not Found' });
-    const p = path.slice(prefix.length + 1);
+    const served = received(path);
+    if (served === null) return answer(400, { message: 'Bad Request' });
+    if (served === prefix && method === 'GET') return answer(200, { default_branch: defaultBranch });
+    if (!served.startsWith(`${prefix}/`)) return answer(404, { message: 'Not Found' });
+    const p = served.slice(prefix.length + 1);
     let m;
     if (method === 'GET' && (m = /^git\/commits\/(\w+)$/.exec(p))) {
       return has(m[1] ?? '', 'commit') ? answer(200, { sha: m[1], tree: { sha: git(['rev-parse', `${m[1]}^{tree}`]) } }) : answer(404, { message: 'Not Found' });

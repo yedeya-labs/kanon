@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { SPAWNS } from './helpers/spawns.js';
 import { fakeGitHub, serveFake } from './helpers/fake-git-data-api.mjs';
-import { MAX_WAIT_MS, PACE_MS, READBACK, RETRIES, UNNAMED_WAIT_MS, pushVerified } from '../../scripts/lib/verified-commits.mjs';
+import { MAX_WAIT_MS, PACE_MS, READBACK, RETRIES, UNNAMED_WAIT_MS, pushVerified, validBranch } from '../../scripts/lib/verified-commits.mjs';
 
 // Every case builds real repositories with `git`, so every case takes the spawn budget (#436).
 vi.setConfig({ testTimeout: SPAWNS.timeout });
@@ -291,6 +291,96 @@ describe('the verified-commit helper (kanon#1382)', () => {
       f.commit('one', () => f.w('a.txt', 'one\n'));
       await expect(f.push({ branch: 'main', replace: true })).rejects.toThrow(/never moves the default branch/);
       expect(f.writes()).toEqual([]);
+    });
+
+    // kanon#1392: the double reads a path as GitHub's server does, so a name sent unencoded is
+    // cut at a `#` or decoded at a `%`, and names another branch.
+    describe('[LANE-10] reads and moves exactly the branch it was named, whatever characters git allows', () => {
+      it("[LANE-10] replace mode never force-moves the default branch for a name that starts with the default's and a '#'", async () => {
+        const f = fixture();
+        f.commit('one', () => f.w('a.txt', 'one\n'));
+        const r = await f.push({ branch: 'main#x', replace: true });
+        expect(r.move).toBe('created');
+        expect(f.onRemote('rev-parse', 'refs/heads/main#x')).toBe(r.head);
+        expect(f.onRemote('rev-parse', 'main')).toBe(f.base);
+        expect(f.calls.some((c) => (c.body as { force?: boolean } | undefined)?.force === true)).toBe(false);
+        expect(f.calls.filter((c) => c.path.includes('/heads/')).map((c) => `${c.method} ${c.path}`)).toEqual([
+          `GET repos/${REPO}/git/ref/heads/main`, `GET repos/${REPO}/git/ref/heads/main%23x`, `GET repos/${REPO}/git/ref/heads/main%23x`,
+        ]);
+      });
+
+      it("[LANE-10] reads and fast-forwards the '#' branch, never the branch its name starts with", async () => {
+        const f = fixture();
+        f.sh(f.work, 'push', '-q', 'origin', `${f.base}:refs/heads/feat/x#y`);
+        // `feat/x` is elsewhere: read in place of `feat/x#y`, it would refuse the push.
+        const elsewhere = f.commit('elsewhere', () => f.w('a.txt', 'elsewhere\n'));
+        f.sh(f.work, 'push', '-q', 'origin', 'HEAD:refs/heads/feat/x');
+        f.sh(f.work, 'reset', '-q', '--hard', f.base);
+        f.commit('one', () => f.w('a.txt', 'one\n'));
+        const r = await f.push({ branch: 'feat/x#y' });
+        expect(r.move).toBe('moved');
+        expect(refMoves(f.calls)).toEqual([{ method: 'PATCH', path: `repos/${REPO}/git/refs/heads/feat/x%23y`, body: { sha: r.head, force: false } }]);
+        expect(f.onRemote('rev-parse', 'refs/heads/feat/x#y')).toBe(r.head);
+        expect(f.onRemote('rev-parse', 'feat/x')).toBe(elsewhere);
+      });
+
+      it("[LANE-10] creates the '#' branch when only the branch its name starts with exists", async () => {
+        const f = fixture();
+        f.sh(f.work, 'push', '-q', 'origin', `${f.base}:refs/heads/feat/x`);
+        f.commit('one', () => f.w('a.txt', 'one\n'));
+        const r = await f.push({ branch: 'feat/x#y' });
+        expect(r.move).toBe('created');
+        expect(refMoves(f.calls)).toEqual([{ method: 'POST', path: `repos/${REPO}/git/refs`, body: { ref: 'refs/heads/feat/x#y', sha: r.head } }]);
+        expect(f.onRemote('rev-parse', 'feat/x')).toBe(f.base);
+      });
+
+      it("[LANE-10] sends a '%' in the name as itself, never as the character it would decode to", async () => {
+        const f = fixture();
+        // `a%62` decodes to `ab`, which is elsewhere.
+        const elsewhere = f.commit('elsewhere', () => f.w('a.txt', 'elsewhere\n'));
+        f.sh(f.work, 'push', '-q', 'origin', 'HEAD:refs/heads/ab');
+        f.sh(f.work, 'reset', '-q', '--hard', f.base);
+        f.commit('one', () => f.w('a.txt', 'one\n'));
+        const r = await f.push({ branch: 'a%62' });
+        expect(r.move).toBe('created');
+        expect(f.onRemote('rev-parse', 'refs/heads/a%62')).toBe(r.head);
+        expect(f.onRemote('rev-parse', 'ab')).toBe(elsewhere);
+      });
+
+      it("[LANE-10] in replace mode builds over the default branch's head when its name has a '#'", async () => {
+        const f = fixture({ defaultBranch: 'dev#2' });
+        f.sh(f.work, 'push', '-q', 'origin', `${f.base}:refs/heads/dev#2`);
+        // `dev` is elsewhere: read in place of `dev#2`, the tip would not be built on it.
+        f.commit('elsewhere', () => f.w('a.txt', 'elsewhere\n'));
+        f.sh(f.work, 'push', '-q', 'origin', 'HEAD:refs/heads/dev');
+        f.sh(f.work, 'reset', '-q', '--hard', f.base);
+        f.commit('fresh', () => f.w('a.txt', 'fresh\n'));
+        const r = await f.push({ branch: 'split', replace: true });
+        expect(r).toMatchObject({ base: f.base, move: 'created' });
+        expect(f.calls.some((c) => c.path === `repos/${REPO}/git/ref/heads/dev%232`)).toBe(true);
+      });
+
+      it.each(['HEAD', '-x', 'a..b', 'a?b', 'a b', 'a~1', 'a^', 'a:b', '@{-1}', 'x.lock', 'a//b', '/a', 'a/', 'a\\b'])(
+        '[LANE-10] refuses %j, which is not a valid branch name, before it sends any request',
+        async (branch) => {
+          const calls: string[] = [];
+          const request = async (method: string, path: string): Promise<Answer> => { calls.push(`${method} ${path}`); return { status: 500, headers: {}, json: null }; };
+          const opts = { gitDir: join(tmpdir(), 'no-such-store'), tip: 'HEAD', branch, appLogin: APP, repo: REPO, request };
+          await expect(pushVerified({ ...opts, head: 'a'.repeat(40) })).rejects.toThrow(`--branch ${JSON.stringify(branch)} is not a valid branch name`);
+          await expect(pushVerified({ ...opts, replace: true })).rejects.toThrow(`--branch ${JSON.stringify(branch)} is not a valid branch name`);
+          expect(calls).toEqual([]);
+        },
+      );
+
+      it("[LANE-10] refuses '@{-1}' inside a repository too, where git expands it to the branch checked out before", () => {
+        const f = fixture();
+        f.sh(f.work, 'checkout', '-q', '-b', 'earlier');
+        f.sh(f.work, 'checkout', '-q', 'main');
+        // git accepts it there, as the name of another branch.
+        expect(f.sh(f.work, 'check-ref-format', '--branch', '@{-1}')).toBe('earlier');
+        expect(validBranch('@{-1}', f.work)).toBe(false);
+        expect(validBranch('earlier', f.work)).toBe(true);
+      });
     });
 
     it('[LANE-10] the command line writes the new head, its base and the commits it created', SPAWNS, async () => {

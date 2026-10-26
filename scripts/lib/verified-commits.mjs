@@ -23,6 +23,9 @@
 //   author, before any branch moves.
 // - The branch is created, moved without force from the head it was given, or refused. Only
 //   replace mode forces, and it builds over the default branch's head.
+// - It reads and moves exactly the branch it was named: each ref path carries the name
+//   percent-encoded, so a `#` or a `%` in it can't name another branch (kanon#1392), and a name
+//   git doesn't allow for a branch is refused before any request.
 // - A blob already in a parent's tree is not uploaded again. Requests that create objects are
 //   paced, and a rate limit is waited out within the bounds below. The ref moves last, so a run
 //   that can't finish has moved nothing.
@@ -103,6 +106,29 @@ const namedWait = (/** @type {Response} */ r, /** @type {number} */ now) => {
 };
 
 /**
+ * `branch` as a ref path's tail, each `/`-separated segment percent-encoded, so GitHub receives the
+ * whole name (kanon#1392): unencoded, a `#` would end the path, as the start of the URL's fragment,
+ * and a `%` would be decoded into another name.
+ */
+export const branchPath = (/** @type {string} */ branch) => branch.split('/').map(encodeURIComponent).join('/');
+
+/**
+ * Whether `branch` is a name git allows for a branch, as `git check-ref-format --branch` decides,
+ * and not one it expands into another: run inside a repository (`cwd`, the process's own by
+ * default), it turns `@{-1}` into the branch checked out before.
+ *
+ * @param {string} branch
+ * @param {string} [cwd]
+ */
+export function validBranch(branch, cwd) {
+  try {
+    return execFileSync('git', ['check-ref-format', '--branch', branch], { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString('utf8').trim() === branch;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Re-create `--tip`'s commits that the repository lacks, verify each, and move `branch` to them.
  *
  * @param {{gitDir: string, tip: string, branch: string, head?: string, replace?: boolean,
@@ -116,11 +142,12 @@ export async function pushVerified({
 }) {
   if (!appLogin) throw new Error('no --app-login: the read-back has no bot account to require');
   if (!branch) throw new Error('no --branch to move');
+  if (!validBranch(branch)) throw new Error(`--branch ${JSON.stringify(branch)} is not a valid branch name, so nothing was sent`);
   if (replace === Boolean(head)) throw new Error('give either --head, the commit the branch is expected at, or --replace');
   const git = (/** @type {string[]} */ a) => execFileSync('git', ['--git-dir', gitDir, ...a], { maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   const gitText = (/** @type {string[]} */ a) => git(a).toString('utf8').trim();
   const resolve = (/** @type {string} */ rev) => gitText(['rev-parse', '--verify', '--end-of-options', `${rev}^{commit}`]);
-  const refPath = `git/refs/heads/${branch}`;
+  const refPath = `git/refs/heads/${branchPath(branch)}`;
 
   let lastCreate = -Infinity;
   /** Send a request, pacing the ones that create something, and waiting out a rate limit. */
@@ -146,7 +173,7 @@ export async function pushVerified({
   };
   /** The branch's head on GitHub, or `''` when it doesn't exist. */
   const remoteRef = async () => {
-    const r = await call('GET', `git/ref/heads/${branch}`);
+    const r = await call('GET', `git/ref/heads/${branchPath(branch)}`);
     if (r.status === 404) return '';
     return String(ok(r, `reading ${branch}`).object.sha);
   };
@@ -156,7 +183,7 @@ export async function pushVerified({
   if (replace) {
     const def = String(ok(await call('GET', ''), `reading ${repo}`).default_branch);
     if (def === branch) throw new Error(`replace mode never moves the default branch, ${def}`);
-    const r = await call('GET', `git/ref/heads/${def}`);
+    const r = await call('GET', `git/ref/heads/${branchPath(def)}`);
     base = String(ok(r, `reading ${def}`).object.sha);
   }
   const tipSha = resolve(tip);
