@@ -129,13 +129,14 @@ const isReviewEventRacer = (c) =>
  */
 export const MERGER_LOGIN = /** @type {string} */ (appLoginAtLoad('Merger')); // the register's `Merger` row (RA-2701)
 
-// THE LOGINS ARE READ AT LOAD, BUT AN ABSENT REGISTER DOESN'T STOP THE LOAD (kanon#1396). The
-// status core loads this file for `mergeVerdict` in a process with no checkout, and passes the
-// logins it read from the default branch. Every read below goes through these, which throw the
-// register's own error when there was none to read, so a lane with no register still stops
-// before it compares a login, and its CLI entry asserts all three first (the end of this file).
-// The exports are typed as the string they are wherever there is a register; they are
-// `undefined` only in a process with none, which never reads them.
+// THE LOGINS ARE READ AT LOAD, BUT A REGISTER THAT CAN'T GIVE ONE DOESN'T STOP THE LOAD (kanon#1396):
+// none, a partial one or a malformed one (`appLoginAtLoad`). The status core loads this file for
+// `mergeVerdict` with every `kanon` command and on the hosted server, and passes the logins it read
+// from the default branch. Every read below goes through these, which throw the register's own
+// error when the constant is unset, so a lane with no usable register still stops before it
+// compares a login, and its CLI entry asserts all three first (the end of this file). The exports
+// are typed as the string they are wherever the register lists the role; they are
+// `undefined` only where the register can't give them, and nothing in this file reads them there.
 const mergerLogin = () => MERGER_LOGIN ?? appLogin('Merger');
 const implementerLogin = () => IMPLEMENTER_LOGIN ?? appLogin('Implementer');
 const reviewerLogin = () => REVIEWER_LOGIN ?? appLogin('Reviewer');

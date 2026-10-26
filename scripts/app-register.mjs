@@ -56,7 +56,7 @@
 // is the PR's and a PR must not choose the login it is judged by. The Merger's lane checks
 // out the default branch for the same reason (`agent-merge.yml`, kanon#210).
 
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { PERMISSION_COLUMNS } from '../cli/app-register.mjs';
@@ -347,23 +347,33 @@ export function appLogin(role, path = APP_REGISTER) {
 }
 
 /**
- * The login of the App that plays `role`, read when a module loads: `appLogin`'s answer, or
- * `undefined` when there is no register at `path` at all (kanon#1396).
+ * The login of the App that plays `role`, read when a module loads: the register's row, or
+ * `undefined` when the register can't give one: there is none at `path`, it has no row for
+ * `role`, or it is malformed (kanon#1396).
  *
  * WHY A SECOND READ. A lane module that keeps a login as a constant reads it when it is
- * imported, and the status core imports the merge gate in a process with no checkout (the hosted
- * status server), where that import would throw before the core read anything. The core passes
- * the logins it read from the default branch instead. So only an ABSENT register is soft here: a
- * register that is there and malformed, or lists no such role, still throws at import, as before.
- * Code that compares the login when it runs falls back to `appLogin` while the constant is
- * `undefined`, which throws the register's own error, so no comparison runs against nobody.
+ * imported. The status core imports the merge gate in a process with no checkout (the hosted
+ * status server), and `kanon` loads the status core with every command, in a checkout whose
+ * register may list only some roles (an install with no Author lane has no Implementer row, and
+ * `kanon apps` writes each App's rows as it creates that App) or be malformed (which `kanon
+ * doctor` is there to report). An import that threw there would stop the command before it read
+ * its arguments, so nothing is thrown here.
+ *
+ * NOTHING COMPARES AGAINST `undefined`. Code that compares the login when it runs falls back to
+ * `appLogin` while the constant is `undefined`, which throws the register's own error, and each
+ * lane's CLI entry asserts its logins before it reads anything, so a lane still stops on a
+ * register it can't use, with the error it gave when the logins were read at load.
  *
  * @param {typeof ROLES[number]} role
  * @param {string} [path]
  * @returns {string | undefined}
  */
 export function appLoginAtLoad(role, path = APP_REGISTER) {
-  return existsSync(resolve(path)) ? appLogin(role, path) : undefined;
+  try {
+    return loadAppRegister(path).get(role);
+  } catch {
+    return undefined;
+  }
 }
 
 // ── PERSONAS (plan 0005 §3.3; decided by the Owner, 2026-10-05) ───────────────────────────

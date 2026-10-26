@@ -47,7 +47,7 @@ const REPO = process.env.GITHUB_REPOSITORY;
  *  minted `app-slug` in the workflow: a renamed App would make the author check below
  *  match nothing, which is what keeps this lane off human branches. */
 export const IMPLEMENTER_LOGIN = /** @type {string} */ (appLoginAtLoad('Implementer'));
-// An absent register doesn't stop the load (kanon#1396): the merge gate, which the status core
+// A register that can't give the login doesn't stop the load (kanon#1396, `appLoginAtLoad`): the merge gate, which the status core
 // loads where there is no checkout, imports this file's marker. A read with no login passed
 // throws the register's own error then, and the CLI entry asserts it first.
 const implementerLogin = () => IMPLEMENTER_LOGIN ?? appLogin('Implementer');

@@ -82,7 +82,7 @@ const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
 /** The reviewer's login, normalised — one identity, three spellings. Read from the
  *  register's `Reviewer` row (RA-2701). */
 export const REVIEWER_LOGIN = /** @type {string} */ (appLoginAtLoad('Reviewer'));
-// An absent register doesn't stop the load (kanon#1396): the status core loads this file for
+// A register that can't give the login doesn't stop the load (kanon#1396, `appLoginAtLoad`): the status core loads this file for
 // `verdictOnHead` where there is no checkout, and passes the default branch's Reviewer. A read
 // with none passed throws the register's own error then, and the CLI entry asserts it first.
 const reviewerLogin = () => REVIEWER_LOGIN ?? appLogin('Reviewer');
