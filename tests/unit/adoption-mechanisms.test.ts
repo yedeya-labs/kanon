@@ -249,7 +249,7 @@ export const DETECTORS: Array<[string, Detector]> = [
   ['The pull-request milestone backstop', all(calls('agent-issue-backstop.yml'), shipped(1259))],
   ['`tests/unit/search-scope.test.ts`', test('tests/unit/search-scope.test.ts')],
   ["`kanon doctor`'s `label.github-default` finding", shipped(1259)],
-  ["The brief guard's warning on a person's decision the Lead answered", all(runs('brief-guard.mjs'), shipped(1235))],
+  ["The brief guard's warning on a person's decision the Lead answered", all(runs('brief-guard.mjs'), shipped(1444))],
   ["The brief guard's tracking-issue check", all(runs('brief-guard.mjs'), shipped(1259))],
   ['The worktree script', unbuilt('Kanon ships no worktree script')],
   ['The ship command', runs('ship-review-scope.mjs')],
