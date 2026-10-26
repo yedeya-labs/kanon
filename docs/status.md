@@ -44,7 +44,7 @@ For a tracking issue, `--project` reads its brief, `docs/projects/<n>.md`, on th
   - the issue's open and merged pull requests;
   - the items it depends on;
   - each acceptance criterion it cites, with the clause's status in the spec layer and the test files that cite it in a test's title;
-- **why an item can't proceed**: a dependency still open or not filed, `qa:needs-info`, `qa:needs-split`, `blocked`, `qa:human-action`, or a hold on the project (`needs:human`), which is the Lead's when the Lead's hold comment is there beside it.
+- **why an item can't proceed**: a dependency still open or not filed, `qa:needs-info`, `qa:needs-split`, `blocked`, `qa:human-action`, or a hold on the project (`needs:human`), which is the Lead's when the Lead's hold comment is there beside it. The hold comment is the Lead's own, as the reconciler counts it: a comment the App register's Lead App wrote with the Lead's role marker, carrying the hold marker. A copy of the marker in anyone else's comment leaves the hold a person's.
 
 A tracking issue with no brief, or a brief whose decomposition doesn't parse, is reported as that. It is never reported as a project with no items.
 
@@ -149,7 +149,7 @@ A path names a field inside its parent: `project.items[].key` is the `key` of ea
 | `project.gating` | array | The numbers of the open issues the project's closure waits on. |
 | `project.hold` | object or null | The hold on the tracking issue, or null when it carries none. |
 | `project.hold.label` | string | `needs:human`. |
-| `project.hold.by` | string | `lead` when the Lead's hold comment is beside the label, `person` otherwise. |
+| `project.hold.by` | string | `lead` when the Lead's own hold comment, by its App with its role marker, is beside the label, `person` otherwise. |
 | `project.environment` | string or null | The reference environment the adoption record's `## Deploy` declares, or null. |
 | `project.items` | array or null | Each item of the brief's decomposition, in the brief's order; null when the brief is missing or doesn't parse. |
 | `project.items[].key` | string | The item's key in the brief, `A` for `Issue A`. |

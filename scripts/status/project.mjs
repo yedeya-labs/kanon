@@ -16,7 +16,7 @@ import { APP_REGISTER, parseAppRegister } from '../app-register.mjs';
 import { classify as classifyLane, norm, registerBotLogins } from '../dispatch-sweep.mjs';
 import { defaultBranchReader } from '../lib/declarations.mjs';
 import { declaredEnvironmentAt, referenceDeployAt } from '../lib/deploy-declaration.mjs';
-import { HELD, HELD_MARKER, HUMAN_ACTION, NEEDS_INFO, issueComments, phaseOf, readProjectWorld } from '../lead-reconcile.mjs';
+import { HELD, HELD_MARKER, HUMAN_ACTION, NEEDS_INFO, issueComments, leadComments, phaseOf, readProjectWorld } from '../lead-reconcile.mjs';
 import { openGatingWork } from '../project-closure.mjs';
 import { SPLIT_LABEL } from '../split-lineage.mjs';
 import { acsFromBrief } from '../verify-acs.mjs';
@@ -109,7 +109,7 @@ async function view(project, { reader, repo, failures }) {
   const phase = phaseOf(world);
   /** @type {string[] | undefined} */
   const residue = /** @type {any} */ (world.proposed).residue;
-  const hold = world.projectHeld ? await holdOf(project, { reader, repo }) : null;
+  const hold = world.projectHeld ? await holdOf(project, register.get('Lead') ?? null, { reader, repo }) : null;
   const briefState = brief === null ? 'missing' : !world.proposed.length || residue?.length ? 'unparseable' : 'parsed';
   const items = brief !== null && briefState === 'parsed' ? await itemsOf(world, brief, { reader, repo, files, hold }) : null;
   const failed = failures();
@@ -129,14 +129,18 @@ async function view(project, { reader, repo, failures }) {
 
 /**
  * Whose hold the tracking issue carries: the Lead's when its hold comment is there beside the
- * label, a person's otherwise.
+ * label, a person's otherwise. The hold comment is the Lead's own, as the reconciler counts it
+ * (`leadComments`, kanon#1415): the Lead's App wrote it with the Lead's role marker. A copy of
+ * the marker in anyone else's comment would send the reader to the Lead for a person's hold. A
+ * register with no Lead row names no login, and no comment is the Lead's then.
  * @param {number | string} project
+ * @param {string | null} lead the Lead's login, from the default branch's register
  * @param {{ reader: import('./reader.mjs').Reader, repo: string }} io
  */
-async function holdOf(project, io) {
+async function holdOf(project, lead, io) {
   const comments = await issueComments(project, io);
-  const lead = comments.some((c) => (c.body ?? '').includes(HELD_MARKER));
-  return { label: HELD, by: lead ? 'lead' : 'person' };
+  const leads = leadComments(comments, lead).some((c) => (c.body ?? '').includes(HELD_MARKER));
+  return { label: HELD, by: leads ? 'lead' : 'person' };
 }
 
 /**

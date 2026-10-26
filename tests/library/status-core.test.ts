@@ -268,7 +268,7 @@ describe('the project view', () => {
     expect(reasons(view.items[2])).toEqual(['dependency']);
 
     // The Lead's hold: `needs:human` and its hold comment. The label alone is a person's.
-    const held = adopterProject({ issues: [], tracking: { state: 'OPEN', labels: [HELD] }, trackingComments: [{ author: { login: 'x' }, body: `held\n${HELD_MARKER}`, createdAt: '2026-10-01T00:00:00Z' }] });
+    const held = adopterProject({ issues: [], tracking: { state: 'OPEN', labels: [HELD] }, trackingComments: [{ author: { login: 'example-lead[bot]' }, body: `${headerLine('Lead')}\n\nheld\n${HELD_MARKER}`, createdAt: '2026-10-01T00:00:00Z' }] });
     const hv: Any = await projectView({ reader: held.reader, repo: held.repo, project: PROJECT });
     expect(hv.hold).toEqual({ label: HELD, by: 'lead' });
     expect(hv.items.map((i: Any) => reasons(i).at(-1))).toEqual(['lead-hold', 'lead-hold', 'lead-hold']);
@@ -328,6 +328,44 @@ describe('a retro counts as a close only when the Lead posted it (kanon#1399)', 
     expect(await phase('shop-lead')).toBe('reopened');
     expect(await phase(LEAD), 'the checkout\'s Lead is not this project\'s').toBe('close');
     expect(await phase('stranger'), 'a stranger\'s retro closes nothing').toBe('close');
+  });
+});
+
+describe('`kanon status` takes the hold marker only from the Lead\'s own comment (kanon#1415)', () => {
+  // A hold the view calls the Lead's sends the reader to the Lead to release it, so the marker
+  // counts only on a comment the Lead's App wrote with the Lead's role marker
+  // (`scripts/lib/role-marker.mjs`, `asRole`, through the reconciler's `leadComments`).
+  const at = '2026-10-01T00:00:00Z';
+  const held = `held\n- why\n${HELD_MARKER}`;
+  const holdBy = async (trackingComments: Array<Record<string, unknown>>, files?: Record<string, string>) => {
+    const w = adopterProject({ ...(files ? { files } : {}), issues: [], tracking: { state: 'OPEN', labels: [HELD] }, trackingComments });
+    const v: Any = await projectView({ reader: w.reader, repo: w.repo, project: PROJECT });
+    return [v.hold.by, v.items.map((i: Any) => i.stops.at(-1).reason)];
+  };
+
+  it('reads the Lead\'s signed hold comment as the Lead\'s hold', async () => {
+    expect(await holdBy([{ author: { login: 'example-lead[bot]' }, body: `${headerLine('Lead')}\n\n${held}`, createdAt: at }]))
+      .toEqual(['lead', ['lead-hold', 'lead-hold', 'lead-hold']]);
+  });
+
+  it('reads a copy of the marker from anyone else, or from the Lead\'s login without its role marker, as a person\'s hold', async () => {
+    const person = ['person', ['held', 'held', 'held']];
+    expect(await holdBy([{ author: { login: 'stranger' }, body: `${headerLine('Lead')}\n\n${held}`, createdAt: at }]), 'a stranger').toEqual(person);
+    expect(await holdBy([{ author: { login: 'example-lead[bot]' }, body: `${headerLine('Implementer')}\n\n${held}`, createdAt: at }]), 'another role of the App').toEqual(person);
+    expect(await holdBy([{ author: { login: 'example-lead[bot]' }, body: held, createdAt: at }]), 'no role marker').toEqual(person);
+  });
+
+  it('judges by the Lead the default branch\'s register names, and by none when it has no Lead row', async () => {
+    const register = 'docs/qa/agent-identities.md';
+    const files = adopterFiles(ADOPTER, { [`docs/projects/${PROJECT}.md`]: BRIEF });
+    const renamed = { ...files, [register]: files[register]!.replace('`example-lead`', '`shop-lead`') };
+    expect(renamed[register]).toContain('`shop-lead`');
+    const signedBy = (login: string) => [{ author: { login }, body: `${headerLine('Lead')}\n\n${held}`, createdAt: at }];
+    expect((await holdBy(signedBy('shop-lead[bot]'), renamed))[0]).toBe('lead');
+    expect((await holdBy(signedBy('example-lead[bot]'), renamed))[0], 'the checkout\'s Lead is not this repository\'s').toBe('person');
+    const noLead = { ...files, [register]: files[register]!.split('\n').filter((l) => !/^\| Lead \|/.test(l)).join('\n') };
+    expect(noLead[register]).not.toMatch(/^\| Lead \|/m);
+    expect((await holdBy(signedBy('example-lead[bot]'), noLead))[0], 'no Lead row names no login').toBe('person');
   });
 });
 

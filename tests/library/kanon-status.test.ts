@@ -70,7 +70,7 @@ function paths(value: unknown, at = ''): string[] {
 /** The worlds that, between them, make the command emit every field it has. */
 const held = () => adopterProject({
   tracking: { state: 'OPEN', labels: [HELD] },
-  trackingComments: [{ author: { login: 'lead' }, body: `held\n${HELD_MARKER}`, createdAt: '2026-10-01T00:00:00Z' }],
+  trackingComments: [{ author: { login: 'example-lead' }, body: `**Lead** <!-- kanon:role=lead -->\n\nheld\n${HELD_MARKER}`, createdAt: '2026-10-01T00:00:00Z' }],
 });
 const unparseable = () => repoWorld({ files: { ...adopterFiles(), [`docs/projects/${PROJECT}.md`]: '# Project 7\n\n## Decomposition\n\nJust prose.\n' } });
 const refusedLanes = () => laneWorld({

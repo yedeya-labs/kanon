@@ -16,7 +16,7 @@ const { ineligible } = await import('../../scripts/rebase-lane.mjs');
 const { reviewerVerdicts } = await import('../../scripts/incremental-review.mjs');
 const { verdictOnHead } = await import('../../scripts/review-recovery.mjs');
 const { agentSpokeSince } = await import('../../scripts/implement-crash.mjs');
-const { byImplementer, classifyDispatch } = await import('../../scripts/project-digest.mjs');
+const { byImplementer, classifyDispatch, holdReason, HELD_MARKER } = await import('../../scripts/project-digest.mjs');
 
 /**
  * Plan 0005 steps L3 and L4: every reader in §3.3's table reads the role marker beside the
@@ -129,6 +129,11 @@ const READERS: Record<string, Reader> = {
     role: 'Lead',
     read: (body) => holdSaid([{ author: { login: appLogin('Lead') }, body: `${body}\n${holdMarker(['why'])}` }], ['why']),
   },
+  // kanon#1415: the digest's hold reason, which a person reads to decide what the hold owes them.
+  'project-digest: the Lead\'s hold reason (holdReason)': {
+    role: 'Lead',
+    read: (body) => holdReason([{ user: { login: login('Lead') }, body: `${body}\n- why\n${HELD_MARKER}` }]),
+  },
   'brief-revise-recovery: the Lead\'s brief PRs (briefPrs)': {
     role: 'Lead',
     read: (body) => briefPrs([{ state: 'OPEN', author: { login: `app/${appLogin('Lead')}` }, body, files: [{ path: 'docs/projects/p.md' }] }]).length,
@@ -169,8 +174,8 @@ describe('plan 0005 L4: each reader of §3.3 requires the role marker beside the
   });
 
   it('covers every reader §3.3 names that has a body to carry a marker', () => {
-    // §3.3's ten, the #312 readers, and kanon#1399's two.
-    expect(Object.keys(READERS)).toHaveLength(15);
+    // §3.3's ten, the #312 readers, kanon#1399's two, and kanon#1415's one.
+    expect(Object.keys(READERS)).toHaveLength(16);
   });
 });
 
