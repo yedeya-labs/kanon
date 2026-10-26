@@ -223,7 +223,6 @@ export { HOLDER_LABEL, holderBullet };
 // so the hosted status server links them without doctor; doctor's exports are unchanged.
 export { ADOPTION_RECORD, FINDINGS, ITEMIZED, kanonCall, readWaivers, UNWAIVABLE, WAIVER_LABEL };
 
-/** The bullet's bold label that waives one finding, under `## Choices`. */
 /** The dispatch sweep's backlog feeder's valve, a repository variable (#609). */
 export const BACKLOG_FEED = 'QA_BACKLOG_FEED';
 
