@@ -31,10 +31,12 @@ export const comparePatch = ({ content, churn = 'aaaaaaa' }: { content: string; 
  *
  * A sha with no entry in `STUB_DIFFS` is an UNREADABLE diff (a 404, a compare truncated
  * at 300 files), and the stub fails the way `gh` does so the SHA fallback is exercised
- * rather than assumed. Interpolated into a shell script, so `${...}` is escaped for the
- * template literal that carries it.
+ * rather than assumed. With `STUB_COMPARE_LOG` set, it appends each path it was asked for there,
+ * so a suite can check the base the lane sent (kanon#1432). Interpolated into a shell script, so
+ * `${...}` is escaped for the template literal that carries it.
  */
 export const GH_COMPARE_ARM = `if [ "\${1:-}" = "api" ]; then
+  [ -z "\${STUB_COMPARE_LOG:-}" ] || printf '%s\\n' "$2" >> "$STUB_COMPARE_LOG"
   sha="\${2##*...}"
   out="$(printf '%s' "\${STUB_DIFFS:-null}" | jq -r --arg sha "$sha" 'if type == "object" then (.[$sha] // "") else "" end')"
   [ -n "$out" ] || exit 1

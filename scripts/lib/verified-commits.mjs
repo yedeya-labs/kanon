@@ -39,6 +39,7 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
+import { branchPath } from './branch-path.mjs';
 import { isCliEntry } from './cli-entry.mjs';
 
 /** The wait between two requests that create something: GitHub asks for about a second. */
@@ -105,12 +106,8 @@ const namedWait = (/** @type {Response} */ r, /** @type {number} */ now) => {
   return UNNAMED_WAIT_MS;
 };
 
-/**
- * `branch` as a ref path's tail, each `/`-separated segment percent-encoded, so GitHub receives the
- * whole name (kanon#1392): unencoded, a `#` would end the path, as the start of the URL's fragment,
- * and a `%` would be decoded into another name.
- */
-export const branchPath = (/** @type {string} */ branch) => branch.split('/').map(encodeURIComponent).join('/');
+/** `branch` as a ref path's tail (kanon#1392): `scripts/lib/branch-path.mjs`, shared with the lanes. */
+export { branchPath };
 
 /**
  * Whether `branch` is a name git allows for a branch, as `git check-ref-format --branch` decides,
