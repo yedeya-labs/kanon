@@ -402,7 +402,7 @@ jobs:
           // release-please force-pushed the branch earlier in this job, and GitHub records a
           // PR's new head asynchronously, so the PR list can still name the head before it. A
           // guard that judged that one would pass the PR an Owner is about to merge unchecked.
-          const branchHead = (ref) => api(`repos/${repo}/git/ref/heads/${ref}`).object.sha;
+          const branchHead = (ref) => api(`repos/${repo}/git/ref/heads/${ref.split('/').map(encodeURIComponent).join('/')}`).object.sha;
           const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
           // Set only by the guard's own tests, so they don't wait.
           const WAIT_MS = Number(process.env.RELEASE_PR_GUARD_WAIT_MS ?? 5000);

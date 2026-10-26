@@ -185,6 +185,19 @@ describe('#73 the release workflow refuses a release PR that changes more than v
       expect(result.calls).toContain(`api repos/${REPO}/git/ref/heads/${BRANCH}`);
       expect(result.calls).not.toMatch(new RegExp(`api repos/${REPO}/pulls/68\\n`));
     });
+
+    // kanon#1432: the branch is release-please's, named after the adopter's target branch, which
+    // can carry a `#` or a `%`. Unencoded, the `#` began the URL's fragment and read another ref.
+    it.each([
+      ['release-please--branches--main#x--components--widget', 'release-please--branches--main%23x--components--widget'],
+      ['release-please--branches--rel/1.0%2f--components--widget', 'release-please--branches--rel/1.0%252f--components--widget'],
+    ])('reads the head of the branch %j by its whole name', (ref, path) => {
+      const rest = responses({ prs: [releasePr(68, ref)], files: clean });
+      delete rest[`repos/${REPO}/git/ref/heads/${BRANCH}`];
+      const result = runGuard({ ...rest, [`repos/${REPO}/git/ref/heads/${path}`]: { object: { sha: SHA } } });
+      expect(result.calls).toContain(`api repos/${REPO}/git/ref/heads/${path}`);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    });
   });
 
   // #246: `pulls/<n>/files` names no SHA, and GitHub recomputes it asynchronously after a

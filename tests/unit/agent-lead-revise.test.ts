@@ -135,6 +135,8 @@ const runFilter = ({
   resetEnv,
   register = REGISTER_FIXTURE,
   workflowRef = 'example-org/example-repo/.github/workflows/agent-lead-revise.yml@refs/heads/main',
+  // The PR's base branch, which the fingerprint's compare is rooted at (kanon#1432).
+  baseRefName = 'main',
 }: {
   author: string;
   rounds?: number;
@@ -158,6 +160,7 @@ const runFilter = ({
   register?: string;
   /** The run's top-level workflow, as the runner sets `GITHUB_WORKFLOW_REF`: the lane's caller; `null`, none set. */
   workflowRef?: string | null;
+  baseRefName?: string;
 }) => {
   // ONE HEAD PER CHANGES-REQUEST, because a review is filed against a commit and a
   // healthy loop reviews a new one each round (RA-1841). The old fixture put every review
@@ -179,10 +182,14 @@ const runFilter = ({
   const dir = mkdtempSync(join(tmpdir(), 'lead-revise-filter-'));
   writeStub(join(dir, 'gh'), GH_STUB);
   const posted = join(dir, 'posted');
+  const compareLog = join(dir, 'compare.log');
   const r = runWorkflowStep(filter, {
     dir,
     env: {
       PATH: `${dir}:${process.env.PATH}`,
+      // The checkout the lane's scripts run from, `scripts/lib/branch-path.mjs` among them.
+      KANON: process.cwd(),
+      STUB_COMPARE_LOG: compareLog,
       STUB_POSTED: posted,
       GITHUB_WORKFLOW_REF: workflowRef ?? undefined,
       // What GitHub interpolates into `env:` at run time.
@@ -219,7 +226,7 @@ const runFilter = ({
         // stands on it.
         headRefOid,
         // ...and for its base, which the compare the fingerprint reads is rooted at.
-        baseRefName: 'main',
+        baseRefName,
       }),
       // The effective patch at each commit the PR's reviews name, keyed by sha (RA-1841).
       STUB_DIFFS: readableDiffs ? JSON.stringify(diffs) : '',
@@ -248,7 +255,9 @@ const runFilter = ({
   const { outputs } = r;
 
   const comment = existsSync(posted) ? readFileSync(posted, 'utf8') : null;
-  return { act: outputs.act === 'true', outputs, stdout: r.stdout, summary: r.summary, status: r.status, comment };
+  // The paths the compare arm was asked for (kanon#1432).
+  const compares = existsSync(compareLog) ? readFileSync(compareLog, 'utf8').split('\n').filter((l) => l.includes('/compare/')) : [];
+  return { act: outputs.act === 'true', outputs, stdout: r.stdout, summary: r.summary, status: r.status, comment, compares };
 };
 
 describe('what it refuses to act on', () => {
@@ -808,7 +817,25 @@ describe('a content-free rebase is neither an answer nor a round (RA-1841)', () 
     // the base has since moved past still read as it was reviewed. Without
     // `baseRefName` in the META query the ref is empty and every fingerprint degrades.
     expect(filter.run).toContain('baseRefName');
-    expect(filter.run).toContain('$BASE_REF...$sha');
+    expect(filter.run).toContain('"$BASE_REF")...$sha');
+  });
+
+  // kanon#1432: unencoded, a `#` in the base began the URL's fragment, so the compare lost its
+  // `...sha` half, and a `%` was decoded into another branch's name.
+  it.each([
+    ['main', 'main'],
+    ['main#x', 'main%23x'],
+    ['feat/a%2fb', 'feat/a%252fb'],
+    ['rel/1.0', 'rel/1.0'],
+  ])('sends the base %j whole, each segment percent-encoded', (baseRefName, path) => {
+    const r = runFilter({ author: 'app/example-author', changesRequested: 2, baseRefName });
+    expect(r.status, r.stdout).toBe(0);
+    expect(r.compares.length).toBeGreaterThan(0);
+    const prefix = `repos/example-org/example-repo/compare/${path}...`;
+    for (const c of r.compares) {
+      expect(c.startsWith(prefix), c).toBe(true);
+      expect(c.slice(prefix.length)).toMatch(/^[0-9a-z-]+$/);
+    }
   });
 });
 
