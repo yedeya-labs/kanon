@@ -47,8 +47,10 @@ describe("the status server's closure", () => {
     }
   });
 
-  // `views.mjs` loads the readiness and the needs-owner views lazily; PR #1424 imports them
-  // statically. Either way they are linked.
+  // Since #1424 views.mjs loads nothing lazily, and the closure's other literal import()s
+  // (split-lineage.mjs, role-marker.mjs) reach modules it also links statically. So this case adds
+  // a lazy import of an unlinked module to views.mjs in a test tree: a future lazy view must still
+  // be followed.
   it('follows a literal dynamic import()', () => {
     const LAZY = 'scripts/lib/cache-ttl.mjs';
     const tree = withLine('scripts/status/views.mjs', "const lazy = () => import('../lib/cache-ttl.mjs');");
