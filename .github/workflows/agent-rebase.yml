@@ -260,6 +260,12 @@ jobs:
   # run: entries run one at a time for up to 90 minutes each, and a token lives an hour, so
   # a token minted once would expire under the second PR. A matrix job's outputs keep only
   # one entry's value, so the mint cannot be a matrix job of this file either.
+  #
+  # THE IMPLEMENTER STATUS IS SET IN THE SAME CALL, after the entry's agent (#1379). Here, after
+  # the whole matrix, every PR's status waited for every entry to finish, and a matrix keeps one
+  # entry's outputs, so in a run that resolved several only the last kept its status. Each head
+  # sat unstamped in the meantime, and the revise lane skipped every changes-request filed on it.
+  # `start-head` is the PR's head the filter recorded before any agent ran.
   resolve:
     needs: filter
     # The gate's verdict FIRST: a refused event leaves `prs` empty, and `'' != '[]'` is
@@ -289,41 +295,9 @@ jobs:
       max_turns: ${{ inputs.max_turns }}
       reason: ${{ inputs.reason }}
       pr: ${{ matrix.pr }}
+      start-head: ${{ fromJson(needs.filter.outputs.heads || '{}')[format('{0}', matrix.pr)] }}
     secrets:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-
-  # THE IMPLEMENTER STATUS IS A CHAIN (plan 0005 §3.3, question 6; step L3). A fixed job after
-  # the agent's, never the agent, one per PR the lane resolved: it moves `kanon/role:
-  # implementer` to the resolved head only when the head recorded before the agent ran carried
-  # one created by the Implementer's App, and every commit on the first-parent path between
-  # them is the App's (the merge's second parent is the default branch). And only to a head
-  # the entry's agent job held, made on the head it fetched, which must be the one recorded
-  # before the agent (#1263): `resolve`'s `checked`. A matrix keeps ONE entry's outputs, so
-  # `checked` names its pull request, and an entry whose own was overwritten carries nothing
-  # and says so: in a run that resolved several, only the last keeps the status.
-  # Otherwise it sets none and says why. It never reds the lane. Since L4 the Merger requires the status, and this
-  # lane's filter refuses a pull request whose head lacks it (`rebase-lane.mjs`, `ineligible`).
-  implementer-status:
-    needs: [filter, resolve]
-    if: ${{ !cancelled() && needs.filter.outputs.member == 'true' && needs.filter.outputs.prs != '[]' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        pr: ${{ fromJson(needs.filter.outputs.prs) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: $/actions/kanon-path
-      - uses: $/actions/implementer-status
-        continue-on-error: true
-        with:
-          mode: carry
-          app-id: ${{ secrets.AUTHOR_APP_ID }}
-          app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
-          pr: ${{ matrix.pr }}
-          start-head: ${{ fromJson(needs.filter.outputs.heads || '{}')[format('{0}', matrix.pr)] }}
-          heads: ${{ fromJson(needs.resolve.outputs.checked || '{}').pr == matrix.pr && fromJson(needs.resolve.outputs.checked || '{}').heads || '' }}
-          base: ${{ fromJson(needs.resolve.outputs.checked || '{}').pr == matrix.pr && fromJson(needs.resolve.outputs.checked || '{}').base || '' }}

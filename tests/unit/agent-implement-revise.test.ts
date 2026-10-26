@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import { callsSpine } from './helpers/spine.js';
@@ -51,6 +52,46 @@ describe('what it acts on', () => {
     it('still honours the round cap on the label path', () => {
       // A re-delivery must not become a way around the cap.
       expect(runFilter({ isLabel: true, rounds: 2 }).act).toBe(false);
+    });
+
+    // #1379: the implementer status job re-delivers a changes-request filed before it stamped
+    // the head. If the review's own run acted anyway (the stamp landed before its filter read),
+    // that run answered it, and the re-delivery must not spend a second round on it.
+    describe('a changes-request the implementer already answered is not re-delivered (#1379)', () => {
+      const REQUESTED = '2026-10-23T14:31:42Z';
+
+      it('skips when the implementer\'s marker is newer than the standing changes-request', () => {
+        const r = runFilter({ isLabel: true, rounds: 1, changesRequested: 1, reviewAt: REQUESTED, markerAt: '2026-10-23T14:40:00Z' });
+        expect(r.act).toBe(false);
+        expect(r.summary).toMatch(/already answered/);
+      });
+
+      it('acts when the marker is older: an earlier request\'s answer is not this one\'s', () => {
+        expect(runFilter({ isLabel: true, rounds: 1, changesRequested: 1, reviewAt: REQUESTED, markerAt: '2026-10-23T14:00:00Z' }).act).toBe(true);
+      });
+
+      it('acts when either time is unknown, so a missing field never stalls a request', () => {
+        expect(runFilter({ isLabel: true, rounds: 1, changesRequested: 1, markerAt: '2026-10-23T14:40:00Z' }).act).toBe(true);
+        expect(runFilter({ isLabel: true, rounds: 1, changesRequested: 1, reviewAt: REQUESTED }).act).toBe(true);
+      });
+
+      it('counts only the implementer\'s own marker, not a quote of it', () => {
+        const quote = { author: { login: 'a-developer' }, body: 'about <!-- qa:implement-revise -->', createdAt: '2026-10-23T14:40:00Z' };
+        expect(runFilter({ isLabel: true, changesRequested: 1, reviewAt: REQUESTED, extraComments: [quote] }).act).toBe(true);
+      });
+
+      it('hands the round record the body it read, as a hash, for the body-only re-request', () => {
+        const body = 'Closes #7\n\nThe body as the reviewer read it.';
+        const hash = createHash('sha256').update(body).digest('hex');
+        expect(runFilter({ body }).outputs.body_sha).toBe(hash);
+        expect(runFilter({ body: '' }).outputs.body_sha).toBe(createHash('sha256').update('').digest('hex'));
+      });
+
+      it('leaves the review event and a dispatch alone: each is a request of its own', () => {
+        const answered = { rounds: 1, changesRequested: 2, reviewAt: REQUESTED, markerAt: '2026-10-23T14:40:00Z' };
+        expect(runFilter(answered).act).toBe(true);
+        expect(runFilter({ ...answered, isDispatch: true }).act).toBe(true);
+      });
     });
   });
 

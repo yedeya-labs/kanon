@@ -31,21 +31,37 @@
 //          person's push breaks the chain, and so does a head that never had the status: the
 //          lane says so, and sets none.
 //
+// A CHANGES-REQUEST FILED BEFORE THE STATUS IS RE-DELIVERED, ONCE (#1379). The revise lane
+// refuses a head without the status, and it can't tell "not the Implementer's" from "not stamped
+// yet": a review that lands between the run's push and this job's write is skipped, and nothing
+// fired it again (#1374 sat six hours). So after the write, the job reads the pull request's
+// reviews, and when the verdict deciding the new head, as the revise lane's label path reads it,
+// is a changes-request submitted before the status, it removes and re-adds `agent:revise` with a
+// third token, narrowed to Pull requests write. A review submitted after the write saw the status
+// and needs nothing. The revise lane skips a re-delivered request the Implementer already
+// answered, so a run that acted on it anyway costs no second round.
+//
 // NEVER FAILS THE LANE. Every outcome, the App lacking the permission included, is a line in
 // the run's summary; the action's call is `continue-on-error` besides.
 //
 // Inputs, by environment: MODE, GITHUB_REPOSITORY, READ_TOKEN (contents and pull requests
-// read), STATUS_TOKEN (Commit statuses write), APP_SLUG, RUN_URL, and SINCE + BRANCHES_BEFORE
-// + HEADS (open) or PR + START_HEAD + HEADS + BASE + FIX_SHA (carry).
+// read), STATUS_TOKEN (Commit statuses write), PR_TOKEN (pull requests write), APP_SLUG,
+// RUN_URL, and SINCE + BRANCHES_BEFORE + HEADS (open) or PR + START_HEAD + HEADS + BASE +
+// FIX_SHA (carry).
 
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
+import { ensureLabels } from '../../scripts/lib/labels.mjs';
 import { IMPLEMENTER_STATUS, implementerStatusOn } from '../../scripts/lib/role-marker.mjs';
 
 /** The status context the Merger requires on the head since L4 (`mergeVerdict`). */
 export const CONTEXT = IMPLEMENTER_STATUS;
+
+/** The label that starts the Implementer's revise lane on a pull request (`K-WORK-12`). */
+export const REVISE_LABEL = 'agent:revise';
 
 /** What a GitHub API commit says about its author, as this module reads it. */
 /** @typedef {{ sha: string, parents?: Array<{ sha: string }>, commit?: { author?: { email?: string } } }} ApiCommit */
@@ -148,6 +164,51 @@ export function carryDecision({ startHead, head, slug, email, startStatuses, com
   return { carry: head };
 }
 
+/**
+ * A pull request's effective patch, as the revise lane's filter fingerprints it (RA-1841): the
+ * three-dot diff against its base with `index` lines, hunk headers, context lines and blank
+ * lines dropped, so a merge of the base branch that changes nothing the reviewer read moves
+ * nothing.
+ * @param {string} diff
+ */
+export function patchFingerprint(diff) {
+  const kept = String(diff).split('\n').filter((l) => !/^(index |@@| )/.test(l) && l.trim() !== '');
+  return createHash('sha256').update(kept.join('\n')).digest('hex');
+}
+
+/**
+ * Whether the run that just stamped `head` must re-deliver a changes-request to the revise lane
+ * (#1379). The deciding verdict is the revise lane's label path's: the last APPROVED or
+ * CHANGES_REQUESTED review on the head or on a commit carrying its content. Only a
+ * changes-request submitted before the status was written was skipped for the head's lack of it.
+ *
+ * @param {{
+ *   reviews: unknown, head: string, statusAt: string,
+ *   sameContent: (sha: string) => boolean,
+ * }} input  `reviews` as the REST API lists them, oldest first
+ * @returns {{ redeliver: string } | { none: string }}
+ */
+export function redeliverDecision({ reviews, head, statusAt, sameContent }) {
+  const stamped = Date.parse(statusAt);
+  if (Number.isNaN(stamped)) return { none: 'the time the status was written is unknown' };
+  if (!Array.isArray(reviews)) return { none: 'the pull request\'s reviews could not be read' };
+  /** @type {{ state?: string, commit_id?: string, submitted_at?: string } | undefined} */
+  let deciding;
+  for (const r of /** @type {Array<{ state?: string, commit_id?: string, submitted_at?: string }>} */ (reviews)) {
+    if (r?.state !== 'APPROVED' && r?.state !== 'CHANGES_REQUESTED') continue;
+    const at = String(r.commit_id ?? '').toLowerCase();
+    // A review carrying no commit decides nothing, as in the label path.
+    if (at && (at === head.toLowerCase() || sameContent(at))) deciding = r;
+  }
+  const short = head.slice(0, 7);
+  if (!deciding) return { none: `no verdict stands on \`${short}\`` };
+  if (deciding.state !== 'CHANGES_REQUESTED') return { none: `the verdict deciding \`${short}\` is ${deciding.state}` };
+  const submitted = Date.parse(String(deciding.submitted_at ?? ''));
+  if (Number.isNaN(submitted)) return { none: `the changes-request on \`${short}\` has no time it was submitted` };
+  if (submitted >= stamped) return { none: `the changes-request on \`${short}\` was submitted after the status, so its own event saw it` };
+  return { redeliver: `the changes-request on \`${short}\` was submitted at ${deciding.submitted_at}, before the status, so the revise lane skipped it for the status it lacked` };
+}
+
 /* c8 ignore start -- the GitHub half; the decisions above are what the tests hold. */
 /** @param {string[]} args @param {string} token */
 function gh(args, token) {
@@ -211,9 +272,57 @@ function main() {
   } else {
     throw new Error(`MODE is \`${env.MODE}\`, not \`open\` or \`carry\``);
   }
-  gh(['api', '-X', 'POST', `repos/${repo}/statuses/${target.sha}`, '-f', 'state=success', '-f', `context=${CONTEXT}`,
+  const posted = ghJson(['api', '-X', 'POST', `repos/${repo}/statuses/${target.sha}`, '-f', 'state=success', '-f', `context=${CONTEXT}`,
     '-f', 'description=Set by a fixed step of the Implementer\'s lane, never its agent', '-f', `target_url=${env.RUN_URL ?? ''}`], write);
   say(`${lead} set on PR #${target.pr} at \`${target.sha.slice(0, 7)}\`.`);
+  // After the write only: a failed write threw above, and a head without the status is one the
+  // revise lane refuses whatever the label says.
+  try {
+    redeliver({ repo, pr: target.pr, head: target.sha, statusAt: String(posted?.created_at ?? ''), read, prToken: String(env.PR_TOKEN ?? '') });
+  } catch (e) {
+    say(`**Re-delivery** (#1379): the status is set, but whether a changes-request filed before it needs re-delivering could not be settled: ${String(e instanceof Error ? e.message : e).split('\n')[0]}`);
+  }
+}
+
+/**
+ * Re-add `agent:revise` when a changes-request was filed on `head` before its status (#1379).
+ * @param {{ repo: string, pr: number, head: string, statusAt: string, read: string, prToken: string }} input
+ */
+function redeliver({ repo, pr, head, statusAt, read, prToken }) {
+  const lead = '**Re-delivery** (#1379):';
+  const reviews = ghJson(['api', '--paginate', '--slurp', `repos/${repo}/pulls/${pr}/reviews?per_page=100`], read).flat();
+  /** @type {Map<string, string>} */
+  const prints = new Map();
+  let base = '';
+  const fingerprint = (/** @type {string} */ sha) => {
+    if (!prints.has(sha)) {
+      try {
+        base ||= String(ghJson(['api', `repos/${repo}/pulls/${pr}`], read).base?.ref ?? '');
+        prints.set(sha, base ? patchFingerprint(gh(['api', `repos/${repo}/compare/${base}...${sha}`, '-H', 'Accept: application/vnd.github.v3.diff'], read)) : '');
+      } catch {
+        prints.set(sha, '');
+      }
+    }
+    return /** @type {string} */ (prints.get(sha));
+  };
+  // An unreadable patch matches nothing but its own commit, so it re-delivers nothing on a guess.
+  const sameContent = (/** @type {string} */ sha) => { const a = fingerprint(head); return a !== '' && a === fingerprint(sha); };
+  const verdict = redeliverDecision({ reviews, head, statusAt, sameContent });
+  if ('none' in verdict) return say(`${lead} nothing to re-deliver on PR #${pr}: ${verdict.none}.`);
+  if (!prToken) {
+    return say(`${lead} not re-delivered on PR #${pr}, though ${verdict.redeliver}: the Author App could not mint a token with Pull requests write. Add \`${REVISE_LABEL}\` to the pull request by hand.`);
+  }
+  ensureLabels([REVISE_LABEL], { repo, run: (a) => gh(a, prToken) });
+  // Remove, then add: a label already on the pull request adds no event, so the removal is what
+  // makes the add start the lane. The removal fails when the label isn't there; the add is still
+  // the event.
+  try {
+    gh(['api', '-X', 'DELETE', `repos/${repo}/issues/${pr}/labels/${encodeURIComponent(REVISE_LABEL)}`], prToken);
+  } catch {
+    // not labelled
+  }
+  gh(['api', '-X', 'POST', `repos/${repo}/issues/${pr}/labels`, '-f', `labels[]=${REVISE_LABEL}`], prToken);
+  say(`${lead} re-delivered PR #${pr} to the revise lane with \`${REVISE_LABEL}\`: ${verdict.redeliver}.`);
 }
 
 if (isCliEntry(import.meta.url)) {

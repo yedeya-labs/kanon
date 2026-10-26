@@ -113,6 +113,9 @@ const STATUS: Record<string, Perms> = {
   'actions/implementer-status/action.yml#read-token': { contents: 'read', 'pull-requests': 'read' },
   // Sets the status, and reads the statuses of the head the chain starts from.
   'actions/implementer-status/action.yml#status-token': { statuses: 'write' },
+  // Re-delivers a changes-request filed before the status, by removing and re-adding
+  // `agent:revise` (#1379). Within the Implementer's row: the Owner approved it on 2026-10-26.
+  'actions/implementer-status/action.yml#pr-token': { 'pull-requests': 'write' },
 };
 /** Each lane that calls the spine, and the token its agent gets there. */
 const SPINE_CALLERS: Record<string, Perms> = {

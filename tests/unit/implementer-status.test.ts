@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { SPAWNS } from './helpers/spawns.js';
+import { writeStub } from './helpers/stub-bin.js';
 
-const { CONTEXT, byApp, carryDecision, pickOpened } = await import('../../actions/implementer-status/implementer-status.mjs');
+const { CONTEXT, byApp, carryDecision, patchFingerprint, pickOpened, redeliverDecision } = await import('../../actions/implementer-status/implementer-status.mjs');
 
 /**
  * The implementer commit status, `kanon/role: implementer` (plan 0005 §3.3, question 6; step
@@ -202,24 +203,164 @@ describe('carry: the status is a chain, not a stamp', () => {
   });
 });
 
-/** The four Implementer lanes, the job each runs its agent in, and the mode their status step uses. */
+// #1379: a changes-request that lands on a head before its status does is skipped by the revise
+// filter ("not provably the Implementer's"), and nothing retried it. After writing the status the
+// job re-delivers it, once, by re-adding `agent:revise`.
+describe('re-delivery: a changes-request filed before the status is written reaches the revise lane (#1379)', () => {
+  const H = sha('3');
+  const STAMPED = '2026-10-23T14:32:20Z';
+  const review = (state: string, commit: string, at: string) => ({ state, commit_id: commit, submitted_at: at });
+  const decide = (reviews: unknown, over: Record<string, unknown> = {}) =>
+    redeliverDecision({ reviews, head: H, statusAt: STAMPED, sameContent: () => false, ...over });
+
+  it('re-delivers a changes-request on the head submitted before the status (#1374\'s race)', () => {
+    expect(decide([review('CHANGES_REQUESTED', H, '2026-10-23T14:31:42Z')])).toMatchObject({ redeliver: expect.stringMatching(/before the status/) });
+  });
+
+  it('re-delivers one on another commit carrying the head\'s content, as the label path reads it', () => {
+    const other = sha('2');
+    expect(decide([review('CHANGES_REQUESTED', other, '2026-10-23T14:31:42Z')], { sameContent: (s: string) => s === other })).toHaveProperty('redeliver');
+  });
+
+  it('not an approval, and not a changes-request an approval since superseded', () => {
+    expect(decide([review('APPROVED', H, '2026-10-23T14:31:42Z')])).toMatchObject({ none: expect.stringMatching(/APPROVED/) });
+    expect(decide([review('CHANGES_REQUESTED', H, '2026-10-23T14:30:00Z'), review('APPROVED', H, '2026-10-23T14:31:42Z')])).toHaveProperty('none');
+    // A COMMENTED review decides nothing: the changes-request before it still stands.
+    expect(decide([review('CHANGES_REQUESTED', H, '2026-10-23T14:30:00Z'), review('COMMENTED', H, '2026-10-23T14:31:42Z')])).toHaveProperty('redeliver');
+  });
+
+  it('not a changes-request submitted after the status: its own event saw the status', () => {
+    expect(decide([review('CHANGES_REQUESTED', H, '2026-10-23T14:33:00Z')])).toMatchObject({ none: expect.stringMatching(/after the status/) });
+    expect(decide([review('CHANGES_REQUESTED', H, STAMPED)])).toHaveProperty('none');
+  });
+
+  it('not a changes-request on other content', () => {
+    expect(decide([review('CHANGES_REQUESTED', sha('2'), '2026-10-23T14:31:42Z')])).toMatchObject({ none: expect.stringMatching(/no verdict stands/) });
+  });
+
+  it('nothing on an unknown time, unread reviews, or a review with no commit or time', () => {
+    expect(decide([review('CHANGES_REQUESTED', H, '2026-10-23T14:31:42Z')], { statusAt: '' })).toHaveProperty('none');
+    expect(decide(null)).toMatchObject({ none: expect.stringMatching(/could not be read/) });
+    expect(decide([review('CHANGES_REQUESTED', '', '2026-10-23T14:31:42Z')])).toHaveProperty('none');
+    expect(decide([review('CHANGES_REQUESTED', H, '')])).toHaveProperty('none');
+  });
+
+  it('fingerprints a patch as the revise filter does: base churn moves nothing, content does', () => {
+    const diff = (content: string, churn: string) => [
+      'diff --git a/x.mjs b/x.mjs', `index ${churn}..abc 100644`, '--- a/x.mjs', '+++ b/x.mjs',
+      `@@ -1,3 +1,3 @@ ${churn}`, ` context ${churn}`, '-old', `+${content}`, '',
+    ].join('\n');
+    expect(patchFingerprint(diff('new', 'aaa'))).toBe(patchFingerprint(diff('new', 'bbb')));
+    expect(patchFingerprint(diff('new', 'aaa'))).not.toBe(patchFingerprint(diff('other', 'aaa')));
+  });
+});
+
+// The GitHub half, run against a stub `gh`: what the job writes, and with which token.
+describe('re-delivery: the job re-adds `agent:revise` with its third token, and only after a status write (#1379)', SPAWNS, () => {
+  const START = sha('1');
+  const H = sha('3');
+  const STUB = `#!/usr/bin/env bash
+printf '%s|%s\\n' "$GH_TOKEN" "$*" >> "$CALLS"
+case "$*" in
+  "api users/"*) echo '{"id":42}' ;;
+  "api -X POST repos/acme/widgets/statuses/"*) [ -n "\${STATUS_FAILS:-}" ] && { echo 'HTTP 403' >&2; exit 1; }; echo '{"created_at":"2026-10-23T14:32:20Z"}' ;;
+  "api --paginate --slurp repos/acme/widgets/commits/"*) printf '[%s]' "$STATUSES" ;;
+  "api --paginate --slurp repos/acme/widgets/pulls/7/reviews"*) printf '[%s]' "$REVIEWS" ;;
+  "api repos/acme/widgets/pulls/7") printf '{"head":{"sha":"%s"},"base":{"ref":"main"}}' "$HEAD_SHA" ;;
+  "api repos/acme/widgets/compare/main..."*) printf 'diff --git a/x b/x\\n+%s\\n' "\${2##*...}" ;;
+  "api repos/acme/widgets/compare/"*) printf '%s' "$COMPARE" ;;
+  "label list"*) echo '[{"name":"agent:revise"}]' ;;
+  "api -X DELETE "*|"api -X POST repos/acme/widgets/issues/"*) echo '{}' ;;
+  *) echo "unexpected: $*" >&2; exit 3 ;;
+esac
+`;
+  const run = ({ reviews = [{ state: 'CHANGES_REQUESTED', commit_id: H, submitted_at: '2026-10-23T14:31:42Z' }] as unknown[], statusFails = false, prToken = 'pr-tok' } = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'implementer-redeliver-'));
+    try {
+      writeStub(join(dir, 'gh'), STUB);
+      const calls = join(dir, 'calls');
+      const out = execFileSync('node', ['actions/implementer-status/implementer-status.mjs'], {
+        encoding: 'utf8',
+        env: {
+          PATH: `${dir}:${process.env.PATH ?? ''}`, CALLS: calls, GITHUB_REPOSITORY: REPO, MODE: 'carry', PR: '7',
+          APP_SLUG: SLUG, READ_TOKEN: 'read-tok', STATUS_TOKEN: 'status-tok', PR_TOKEN: prToken,
+          START_HEAD: START, HEAD_SHA: H, BASE: START, FIX_SHA: '', HEADS: JSON.stringify([{ ref: 'feat/7-x', sha: H }]),
+          STATUSES: JSON.stringify([{ context: CONTEXT, state: 'success', creator: { login: `${SLUG}[bot]` } }]),
+          COMPARE: JSON.stringify({ status: 'ahead', commits: [commitBy(H, EMAIL, [START])] }),
+          REVIEWS: JSON.stringify(reviews), STATUS_FAILS: statusFails ? '1' : '',
+        },
+      });
+      const log = (() => { try { return readFileSync(calls, 'utf8').trim().split('\n'); } catch { return []; } })();
+      return { out, log, labels: log.filter((l) => /issues\/7\/labels/.test(l)) };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('removes and re-adds `agent:revise` with the Pull requests token after the status is set', () => {
+    const r = run();
+    expect(r.out).toMatch(/set on PR #7/);
+    expect(r.labels).toEqual([
+      'pr-tok|api -X DELETE repos/acme/widgets/issues/7/labels/agent%3Arevise',
+      'pr-tok|api -X POST repos/acme/widgets/issues/7/labels -f labels[]=agent:revise',
+    ]);
+    expect(r.out).toMatch(/re-delivered/i);
+  });
+
+  it('adds nothing when the status write failed', () => {
+    const r = run({ statusFails: true });
+    expect(r.labels).toEqual([]);
+    expect(r.log.some((l) => /reviews/.test(l))).toBe(false);
+  });
+
+  it('adds nothing on an approval, and says so', () => {
+    const r = run({ reviews: [{ state: 'APPROVED', commit_id: H, submitted_at: '2026-10-23T14:31:42Z' }] });
+    expect(r.labels).toEqual([]);
+    expect(r.out).toMatch(/nothing to re-deliver/);
+  });
+
+  it('adds nothing, and says why, when the third token could not be minted', () => {
+    const r = run({ prToken: '' });
+    expect(r.labels).toEqual([]);
+    expect(r.out).toMatch(/set on PR #7/);
+    expect(r.out).toMatch(/Pull requests write/);
+  });
+
+  it('the action mints the third token with Pull requests write alone, never failing the caller, and hands it to the script', () => {
+    type A = { runs: { steps: Array<{ id?: string; uses?: string; with?: Record<string, string>; env?: Record<string, string>; 'continue-on-error'?: boolean }> } };
+    const action = parse(readFileSync('actions/implementer-status/action.yml', 'utf8')) as A;
+    const mint = action.runs.steps.find((s) => s.id === 'pr-token')!;
+    expect(mint.uses).toMatch(/^actions\/create-github-app-token@/);
+    expect(mint['continue-on-error']).toBe(true);
+    expect(Object.entries(mint.with ?? {}).filter(([k]) => k.startsWith('permission-'))).toEqual([['permission-pull-requests', 'write']]);
+    expect(action.runs.steps.at(-1)!.env?.PR_TOKEN).toBe('${{ steps.pr-token.outputs.token }}');
+  });
+});
+
+/**
+ * The four Implementer lanes: the workflow their status job is in, the job each runs its agent
+ * in, and the mode their status step uses. The rebase lane's status job runs once per entry, in
+ * `rebase-run.yml` after that entry's agent (#1379), so each pull request it resolved is stamped
+ * when its own entry ends, not after every entry has, and keeps its status.
+ */
 const LANES = {
-  'agent-implement.yml': { agent: 'implement', mode: 'open' },
-  'agent-triage.yml': { agent: 'triage-fix', mode: 'open' },
-  'agent-implement-revise.yml': { agent: 'revise', mode: 'carry' },
-  'agent-rebase.yml': { agent: 'resolve', mode: 'carry' },
+  'agent-implement.yml': { agent: 'implement', mode: 'open', file: 'agent-implement.yml' },
+  'agent-triage.yml': { agent: 'triage-fix', mode: 'open', file: 'agent-triage.yml' },
+  'agent-implement-revise.yml': { agent: 'revise', mode: 'carry', file: 'agent-implement-revise.yml' },
+  'agent-rebase.yml': { agent: 'resolve', mode: 'carry', file: 'rebase-run.yml' },
 } as const;
 type Step = { uses?: string; run?: string; with?: Record<string, string>; id?: string; 'continue-on-error'?: boolean };
-type Job = { needs?: string | string[]; if?: string; uses?: string; steps?: Step[]; with?: Record<string, unknown>; outputs?: Record<string, string> };
+type Job = { needs?: string | string[]; if?: string; uses?: string; steps?: Step[]; with?: Record<string, unknown>; outputs?: Record<string, string>; secrets?: Record<string, string> };
 const wf = (f: string) => parse(readFileSync(`.github/workflows/${f}`, 'utf8')) as { jobs: Record<string, Job> };
 
 describe('every Implementer lane sets it in a fixed job after its agent\'s, never in it', () => {
-  it.each(Object.entries(LANES))('%s', (file, { agent, mode }) => {
+  it.each(Object.entries(LANES))('%s', (lane, { agent, mode, file }) => {
     const { jobs } = wf(file);
     const job = jobs['implementer-status']!;
     expect(job, 'the lane has an implementer-status job').toBeDefined();
-    // The revise lane's `fix-push` too, whose fix commit the carry binds to (#1263).
-    expect([job.needs].flat()).toEqual(file === 'agent-implement-revise.yml' ? ['filter', 'fix-push', agent] : ['filter', agent]);
+    // The revise lane's `fix-push` too, whose fix commit the carry binds to (#1263). The rebase
+    // lane's runs in its entry's own call, after that entry's agent alone (#1379).
+    expect([job.needs].flat()).toEqual(lane === 'agent-implement-revise.yml' ? ['filter', 'fix-push', agent] : lane === 'agent-rebase.yml' ? [agent] : ['filter', agent]);
     expect(job.if).toMatch(/!cancelled\(\)/);
     const steps = job.steps ?? [];
     // Nothing but Kanon's Node and the action: no agent, no `./` action, no checkout.
@@ -227,8 +368,15 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
     const call = steps[1]!;
     expect(call['continue-on-error']).toBe(true);
     expect(call.with?.mode).toBe(mode);
-    expect(call.with?.['app-id']).toBe('${{ secrets.AUTHOR_APP_ID }}');
-    expect(call.with?.['app-private-key']).toBe('${{ secrets.AUTHOR_APP_PRIVATE_KEY }}');
+    if (lane === 'agent-rebase.yml') {
+      // The entry's call holds the key its lane maps from the Author App's secrets.
+      expect(call.with?.['app-id']).toBe('${{ secrets.app-id }}');
+      expect(call.with?.['app-private-key']).toBe('${{ secrets.app-private-key }}');
+      expect(wf(lane).jobs.resolve!.secrets).toMatchObject({ 'app-id': '${{ secrets.AUTHOR_APP_ID }}', 'app-private-key': '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}' });
+    } else {
+      expect(call.with?.['app-id']).toBe('${{ secrets.AUTHOR_APP_ID }}');
+      expect(call.with?.['app-private-key']).toBe('${{ secrets.AUTHOR_APP_PRIVATE_KEY }}');
+    }
     // What the chain or the pick reads was recorded by the filter job, before any agent ran.
     const inputs = Object.values(call.with ?? {}).join(' ');
     if (mode === 'open') {
@@ -240,10 +388,11 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
       const rest = Object.entries(call.with ?? {}).filter(([k]) => k !== 'heads').map(([, v]) => v).join(' ');
       expect(rest).not.toMatch(new RegExp(`needs\\.${agent}\\.`));
     } else {
-      expect(inputs).toMatch(/needs\.filter\.outputs\.(head_sha|heads)/);
+      // The rebase lane's start is the filter's record too, handed into the entry's call.
+      expect(inputs).toMatch(lane === 'agent-rebase.yml' ? /inputs\.start-head/ : /needs\.filter\.outputs\.(head_sha|heads)/);
       // #1263: the binding to what the agent's job checked out and left, and nothing else of it.
       const read = [...inputs.matchAll(new RegExp(`needs\\.${agent}\\.outputs\\.([\\w-]+)`, 'g'))].map((m) => m[1]);
-      expect([...new Set(read)].sort()).toEqual(file === 'agent-rebase.yml' ? ['checked'] : ['push-base', 'push-heads']);
+      expect([...new Set(read)].sort()).toEqual(lane === 'agent-rebase.yml' ? ['checked'] : ['push-base', 'push-heads']);
     }
   });
 
@@ -302,17 +451,26 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
       }
     });
 
-    it('the rebase lane: one `{ pr, base, heads }` per entry, through rebase-run, used only for its own pull request', () => {
+    it('the rebase lane: one `{ pr, base, heads }` per entry, read in that entry\'s call, used only for its own pull request', () => {
       const { jobs } = wf('agent-rebase.yml');
       expect(jobs.resolve!.uses).toBe('$/.github/workflows/rebase-run.yml');
-      const call = jobs['implementer-status']!.steps![1]!;
+      // #1379: no status job after the whole matrix; each entry's call stamps its own pull request.
+      expect(jobs['implementer-status']).toBeUndefined();
+      expect(jobs.resolve!.with).toMatchObject({
+        pr: '${{ matrix.pr }}',
+        'start-head': "${{ fromJson(needs.filter.outputs.heads || '{}')[format('{0}', matrix.pr)] }}",
+      });
+      const run = called('rebase-run.yml');
+      const status = run.jobs['implementer-status']!;
+      const call = status.steps![1]!;
       const C = "fromJson(needs.resolve.outputs.checked || '{}')";
       expect(call.with).toMatchObject({
-        heads: `\${{ ${C}.pr == matrix.pr && ${C}.heads || '' }}`,
-        base: `\${{ ${C}.pr == matrix.pr && ${C}.base || '' }}`,
+        pr: '${{ inputs.pr }}',
+        'start-head': '${{ inputs.start-head }}',
+        heads: `\${{ ${C}.pr == inputs.pr && ${C}.heads || '' }}`,
+        base: `\${{ ${C}.pr == inputs.pr && ${C}.base || '' }}`,
       });
       expect(call.with?.['fix-sha']).toBeUndefined();
-      const run = called('rebase-run.yml');
       expect(run.on.workflow_call.outputs?.checked?.value).toBe('${{ jobs.resolve.outputs.checked }}');
       expect(run.jobs.resolve!.uses).toBe('$/.github/workflows/rebase-agent-job.yml');
       const agentJob = called('rebase-agent-job.yml');
@@ -381,9 +539,9 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
   });
 
   it('and no other job of any workflow calls the action', () => {
-    const all = ['agent-implement.yml', 'agent-triage.yml', 'agent-implement-revise.yml', 'agent-rebase.yml', 'agent-lane.yml', 'lane-agent-job.yml', 'agent-lead.yml', 'agent-review.yml'];
-    const callers = all.flatMap((f) => Object.entries(wf(f).jobs).filter(([, j]) => (j.steps ?? []).some((s) => s.uses === '$/actions/implementer-status')).map(([n]) => `${f}:${n}`));
-    expect(callers.sort()).toEqual(Object.keys(LANES).map((f) => `${f}:implementer-status`).sort());
+    const all = readdirSync('.github/workflows').filter((f) => /\.ya?ml$/.test(f));
+    const callers = all.flatMap((f) => Object.entries(wf(f).jobs ?? {}).filter(([, j]) => (j.steps ?? []).some((s) => s.uses === '$/actions/implementer-status')).map(([n]) => `${f}:${n}`));
+    expect(callers.sort()).toEqual(Object.values(LANES).map(({ file }) => `${file}:implementer-status`).sort());
   });
 
   it.each(['agent-implement.yml', 'agent-triage.yml'])('%s snapshots the start and the branches in its filter job, never failing it', (file) => {

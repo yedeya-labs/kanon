@@ -55,6 +55,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** The Merger applies `agent:revise` too, to hand an approved head whose checks failed back to the Implementer's revise lane; the label's description says so. [#1100](https://github.com/yedeya-labs/kanon/issues/1100)
 - **2026-10-20.** The taxonomy gained `lead:file-only`, which a person puts on a project's tracking issue so that the Lead files and reconciles the project's issues but dispatches none of them; `needs:human` keeps its meaning as the escalation that stops the whole tick. [#1113](https://github.com/yedeya-labs/kanon/issues/1113)
 - **2026-10-21.** Deleting GitHub's defaults is no longer prose only: `kanon init` already deleted them with the person's consent, and `kanon doctor` now reports each one a repository still has, without blocking. Kanon itself still had all seven. [#1246](https://github.com/yedeya-labs/kanon/issues/1246)
+- **2026-10-26.** The Owner decided that the Implementer applies `agent:revise` too: the fixed job that sets its status re-adds the label when a changes-request was filed on the head before the status, which the revise lane had skipped for the status the head lacked. The label's description names the Implementer among its appliers. [#1379](https://github.com/yedeya-labs/kanon/issues/1379)
 
 ## `K-WORK-14`
 

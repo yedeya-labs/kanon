@@ -913,6 +913,36 @@ jobs:
                      | select(role == "reviewer")]
                 | last | if . == null then "" else ((stamped // .commit_id // "") | ascii_downcase) end')"
           evidence LAST_REVIEWED "$LAST"
+
+          # AN ANSWER THE REVIEWER HAS NOT READ IS A REQUEST TOO (#1379, the Owner's addition of
+          # 2026-10-26). An Implementer revise round that changes only the pull request's body
+          # pushes nothing, so no CI run and no new head reach this filter, and the PR kept its
+          # changes-request until a person re-applied the label (#1374, #1413). The round's record
+          # re-applies `review:please` as the Implementer's App, which the arm above refuses as
+          # an App's echo. This arm honours it only while the head carries an answer the Reviewer
+          # has not read: the last verdict on the head is a changes-request, and the App that
+          # applied the label has since posted a comment carrying the revise marker. A verdict
+          # posted by the re-review is newer than that answer, so each answer is reviewed once,
+          # and the revise lane's round cap bounds the answers. A failed read honours nothing.
+          if [ -n "$LAST" ] && [ "$LAST" = "$HEAD" ] && [ "$EVENT" = "pull_request" ] && [ "$ACTION" = "labeled" ] \
+             && [ "$LABEL" = "review:please" ] && [ "$SENDER_IS_HUMAN" = "false" ] && [ -n "$SENDER" ] \
+             && [ "${CI_DONE:-0}" -gt 0 ]; then
+            LAST_CR_AT="$(printf '%s' "$REVIEWS" \
+              | jq -r --arg login "${REVIEWER_LOGIN}[bot]" '
+                  def role: [(.body // "") | scan("<!--[[:space:]]*kanon:role=([a-z]+)[[:space:]]*-->")] | (.[0] // [])[0];
+                  [.[] | select(.user.login == $login)
+                       | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
+                       | select(role == "reviewer")]
+                  | last | if . != null and .state == "CHANGES_REQUESTED" then (.submitted_at // "") else "" end')"
+            if [ -n "$LAST_CR_AT" ] \
+               && COMMENTS="$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments?per_page=100" 2>/dev/null)" \
+               && ANSWER_AT="$(printf '%s' "$COMMENTS" | jq -er --arg login "$SENDER" --arg after "$LAST_CR_AT" '
+                    [.[][] | select(.user.login == $login) | select((.body // "") | contains("<!-- qa:implement-revise -->"))
+                           | select((.created_at // "") > $after) | .created_at] | last // empty' 2>/dev/null)"; then
+              EXPLICIT=true
+              decide true "\`$LABEL\` re-applied by \`$SENDER\`, which answered at $ANSWER_AT after the changes-request on ${HEAD:0:7} (${LAST_CR_AT}): an answer the Reviewer has not read (#1379)"
+            fi
+          fi
           [ -n "$LAST" ] && [ "$LAST" = "$HEAD" ] && decide false "already reviewed ${HEAD:0:7}"
 
           # A read failure here must NOT read as "no marker": that is the same defect as

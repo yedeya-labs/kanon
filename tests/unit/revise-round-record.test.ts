@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -70,6 +71,9 @@ if [ "$1 $2" = "pr view" ]; then
   [ -n "\${STUB_STATE:-}" ] || { echo "HTTP 502" >&2; exit 1; }
   printf '%s' "$STUB_STATE"; exit 0
 fi
+if [ "$1 $2" = "pr edit" ]; then
+  printf '%s\n' "$*" >> "$EDIT_LOG"; [ -n "\${EDIT_FAILS:-}" ] && [[ "$*" == *--add-label* ]] && exit 1; exit 0
+fi
 if [ "$1 $2" = "pr comment" ]; then
   while [ $# -gt 0 ]; do [ "$1" = "--body" ] && { printf '%s\\n<<END>>\\n' "$2" >> "$COMMENT_LOG"; }; shift; done
   exit 0
@@ -86,10 +90,11 @@ for (const lane of LANES) {
   const idx = steps.findIndex((s) => s.name?.startsWith('Record the round'));
   const record = steps[idx]!;
   const run = ({ head = AFTER, comments = [] as { author: { login: string }; body: string }[],
-    marked = '0', before = BEFORE, readable = true, outcome = 'failure' } = {}) => {
+    marked = '0', before = BEFORE, readable = true, outcome = 'failure', body = 'the body', beforeBody = 'the body', mode = 'review', editFails = false } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'round-record-'));
     writeStub(join(dir, 'gh'), GH_STUB);
     const log = join(dir, 'comments.log');
+    const edits = join(dir, 'edits.log');
     const env = { ...(record as { env: Record<string, string> }).env };
     const r = runWorkflowStep(record, {
       dir,
@@ -100,12 +105,16 @@ for (const lane of LANES) {
         [lane.loginVar]: lane.login,
         BEFORE_SHA: before, BEFORE_MARKED: marked, OUTCOME: outcome,
         RUN_URL: 'https://github.com/example-org/example-repo/actions/runs/1',
-        STUB_STATE: readable ? JSON.stringify({ headRefOid: head, comments }) : '',
+        STUB_STATE: readable ? JSON.stringify({ headRefOid: head, comments, body }) : '',
         COMMENT_LOG: log,
+        // #1379: the body the filter read, as its hash, and the mode it opened.
+        BEFORE_BODY: createHash('sha256').update(beforeBody).digest('hex'), MODE: mode,
+        EDIT_LOG: edits, EDIT_FAILS: editFails ? '1' : '',
       },
     });
     const posted = existsSync(log) ? readFileSync(log, 'utf8').split('<<END>>\n').filter(Boolean) : [];
-    return { ...r, posted };
+    const edited = existsSync(edits) ? readFileSync(edits, 'utf8').trim().split('\n') : [];
+    return { ...r, posted, edited };
   };
 
   describe(`the ${lane.name} lane records a round the agent did not (RA-1981)`, () => {
@@ -211,6 +220,57 @@ for (const lane of LANES) {
       expect(r.posted).toEqual([]);
       // …and a crashed run that pushed nothing is still not this (the crash is already red).
       expect(run({ head: BEFORE, outcome: 'failure' }).status).toBe(0);
+    });
+
+    // #1379, the Owner's addition of 2026-10-26: a round that answered the review by changing only
+    // the pull request's body pushed nothing, so nothing fired a new review and the PR kept its
+    // CHANGES_REQUESTED until a person re-applied `review:please` (#1374 round 2, #1413 round 1).
+    describe.runIf(lane.name === 'implementer')('a round that changed only the body re-requests review (#1379)', () => {
+      const answered = { head: BEFORE, outcome: 'success', marked: '0', beforeBody: 'the body', body: 'the body, revised',
+        comments: [{ author: { login: `app/${lane.login}` }, body: `Fixed the body.\n${lane.marker}` }] };
+
+      it('removes and re-adds `review:please` when the head did not move, the body changed and the implementer answered', () => {
+        const r = run(answered);
+        expect(r.status, r.output).toBe(0);
+        expect(r.edited).toEqual([
+          'pr edit 1822 --repo example-org/example-repo --remove-label review:please',
+          'pr edit 1822 --repo example-org/example-repo --add-label review:please',
+        ]);
+        expect(r.posted).toEqual([]);
+        expect(r.output).toMatch(/re-requested review/);
+      });
+
+      it('not when the body did not change: a disagreement or a bail is a person\'s to read', () => {
+        expect(run({ ...answered, body: 'the body' }).edited).toEqual([]);
+      });
+
+      it('not when the run pushed: the push fires the review', () => {
+        expect(run({ ...answered, head: AFTER, marked: '0' }).edited).toEqual([]);
+      });
+
+      it('not when the implementer left no new marker', () => {
+        expect(run({ ...answered, comments: [], outcome: 'failure' }).edited).toEqual([]);
+      });
+
+      it('not on a hand-back: the approval stands, and only a push asks for a new one', () => {
+        expect(run({ ...answered, mode: 'handback' }).edited).toEqual([]);
+      });
+
+      it('compares against the body and mode the FILTER read, and creates the label with the agent\'s', () => {
+        const env = (record as { env: Record<string, string> }).env;
+        expect(env.BEFORE_BODY).toBe('${{ needs.filter.outputs.body_sha }}');
+        expect(env.MODE).toBe('${{ needs.filter.outputs.mode }}');
+        expect(wf.jobs.filter.outputs?.body_sha).toBe('${{ steps.filter.outputs.body_sha }}');
+        // The spine creates the label before the agent runs, so the record never applies one the
+        // repository lacks (`K-WORK-12`).
+        expect(String((wf.jobs.revise as unknown as { with: Record<string, string> }).with.labels).split(/\s+/)).toContain('review:please');
+      });
+
+      it('fails loud when the label cannot be added, so the stall is visible', () => {
+        const r = run({ ...answered, editFails: true });
+        expect(r.status).not.toBe(0);
+        expect(r.output).toMatch(/review:please/);
+      });
     });
 
     it('fails LOUD when it cannot read the PR, rather than skipping the record', () => {

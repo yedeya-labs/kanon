@@ -141,7 +141,7 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 | | `agent:implement` | `6f42c1` | Dispatches the Implementer's build lane; marks the PRs it opens |
 | | `agent:reviewer` | `6f42c1` | Filed or reviewed by the Reviewer |
 | | `agent:overseer` | `6f42c1` | Filed by the Overseer |
-| | `agent:revise` | `5319e7` | Re-delivers a lost review or a red approved head to the Implementer's revise lane (Lead, Merger) |
+| | `agent:revise` | `5319e7` | Re-delivers a skipped review or a red approved head to the revise lane (Lead, Merger, Implementer) |
 | | `agent:lead-revise` | `5319e7` | Re-delivers a lost review to the Lead's brief-revise lane; applied by the Lead only |
 | Triage state | `qa:needs-triage` | `1d76db` | Bug filed, awaiting the Implementer's triage |
 | | `qa:reproduced` | `0e8a16` | Independently reproduced: confirmed real |
@@ -187,7 +187,7 @@ Two families have no members at installation. A `signal:<name>` label is created
 | Role | Its `agent:` labels | Why |
 |---|---|---|
 | Explorer | `agent:explorer` | What it files. |
-| Implementer | `agent:triage`, `agent:implement` | Two lanes of one role under one App: fixing a reported bug, and building a planned item. Each label dispatches its lane. |
+| Implementer | `agent:triage`, `agent:implement` | Two lanes of one role under one App: fixing a reported bug, and building a planned item. Each label dispatches its lane. The fixed job that sets its status also applies `agent:revise`, to re-deliver a changes-request filed on a head before that head had the status, which the revise lane skipped then. |
 | Reviewer | `agent:reviewer` | What it files or reviews. |
 | Overseer | `agent:overseer` | What it files. |
 | Lead | none of its own | Its issues are marked by `project:<n>`. It applies `agent:revise` and `agent:lead-revise`, which are recovery labels: each re-delivers a lost review event to a revise lane (the Implementer's, or the Lead's own), and marks no author. It reads `needs:human` and `lead:file-only` on a tracking issue and applies only the first. |
