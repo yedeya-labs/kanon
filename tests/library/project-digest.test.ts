@@ -35,7 +35,10 @@ const {
 } = await import('../../scripts/project-digest.mjs');
 const { validate, measure, renderText, LIMITS } = await import('../../scripts/lib/notify-contract.mjs');
 const { payload: slackPayload } = await import('../../actions/notify/slack/slack.mjs');
-const { signed } = await import('../../scripts/lib/role-marker.mjs');
+const { headerLine, signed } = await import('../../scripts/lib/role-marker.mjs');
+const { appLogin } = await import('../../scripts/app-register.mjs');
+/** A comment as the REST API returns it, by the Lead's App and signed with the Lead's role marker. */
+const byLeadApp = (body: string) => ({ user: { login: `${appLogin('Lead')}[bot]` }, body: signed(body, 'Lead') });
 const { CONFLICT_SHORT } = await import('../../scripts/conflict-state.mjs');
 const { SEARCH_READS } = await import('../../scripts/lib/search.mjs');
 const { agentLogin, classify: sweepClassify, LANES } = await import('../../scripts/dispatch-sweep.mjs');
@@ -798,7 +801,7 @@ describe('buildMessage: one Kanon notification (plan 0011 §3, step N7)', () => 
     const dispositions = [...STOPPED, 'building', 'authorised', 'verify', 'needs-split', 'dispatched', null];
     const hostile = 'Array<string> **x** _y_ `z` [a](https://e) \\ <!here> &amp;';
     const projects = ['active', 'complete', 'unfiled', 'held', 'starved'].map((status, i) => ({
-      ...project, number: i + 1, status, title: hostile, heldReason: holdReason([{ body: `- ${hostile}\n\n${HELD_MARKER}` }]),
+      ...project, number: i + 1, status, title: hostile, heldReason: holdReason([byLeadApp(`- ${hostile}\n\n${HELD_MARKER}`)]),
       carriedOut: [{ number: 9, url: 'https://github.com/o/r/issues/9' }],
       members: dispositions.map((disposition, n) => member({ number: n + 100, title: hostile, disposition, reason: stopReason(`## ${hostile}`), unmarked: n % 2 })),
     }));
@@ -832,17 +835,15 @@ describe('a held project says WHY it is held (RA-1469)', () => {
   // cause is least guessable — a brief naming a nonexistent milestone, an unparseable
   // decomposition, a dependency matching nothing, or a terminal phase-5 stop. The
   // reader should be able to tell what has to be fixed without leaving the chat channel.
-  const holdComment = (reason: string) => ({
-    body: [
-      '🛑 **The Lead is holding this project.** A tick took an action that failed…',
-      '',
-      `- ${reason}`,
-      '',
-      'Ticks take no actions while `needs:human` is on this issue.',
-      '',
-      HELD_MARKER,
-    ].join('\n'),
-  });
+  const holdComment = (reason: string) => byLeadApp([
+    '🛑 **The Lead is holding this project.** A tick took an action that failed…',
+    '',
+    `- ${reason}`,
+    '',
+    'Ticks take no actions while `needs:human` is on this issue.',
+    '',
+    HELD_MARKER,
+  ].join('\n'));
 
   it('reads the reason off the hold comment, not off prose', () => {
     // Through `literal` (plan 0011 §3.1): the comment's backticks arrive as written.
@@ -858,7 +859,7 @@ describe('a held project says WHY it is held (RA-1469)', () => {
     expect(holdReason([])).toBeNull();
     expect(holdReason([{ body: 'a human wrote this' }])).toBeNull();
     // Marked, but no bullet — a hand-edited comment. Say nothing rather than scrape.
-    expect(holdReason([{ body: `no bullets here\n\n${HELD_MARKER}` }])).toBeNull();
+    expect(holdReason([byLeadApp(`no bullets here\n\n${HELD_MARKER}`)])).toBeNull();
   });
 
   it('the marker this file filters on is the one the RECONCILER writes (RA-1673)', () => {
@@ -871,7 +872,8 @@ describe('a held project says WHY it is held (RA-1469)', () => {
     // Asserted against what `renderHoldComment` ACTUALLY writes rather than against the
     // reconciler's constant, because the constant is not the contract: the comment is.
     expect(renderHoldComment(['because'])).toContain(HELD_MARKER);
-    expect(holdReason([{ body: renderHoldComment(['because']) }])).toBe('because');
+    // Signed as the reconciler's `hold()` posts it.
+    expect(holdReason([byLeadApp(renderHoldComment(['because']))])).toBe('because');
   });
 
   it('escapes what Kanon text would read as markup, and bounds the length', () => {
@@ -899,11 +901,11 @@ describe('a held project says WHY it is held (RA-1469)', () => {
 });
 
 describe('the digest reads the NEWEST hold comment, not the newest of the first page (RA-1673)', () => {
-  const held = (reason: string) => ({ body: `x\n\n- ${reason}\n\n${HELD_MARKER}` });
+  const held = (reason: string) => byLeadApp(`x\n\n- ${reason}\n\n${HELD_MARKER}`);
   const plain = { body: 'a human wrote this' };
 
   /** Pages as the API serves them: ascending, `page=1` oldest. */
-  const apiOver = (pages: { body: string }[][]) => {
+  const apiOver = (pages: Array<Array<{ body: string, user?: { login: string } }>>) => {
     const seen: number[] = [];
     const api = async (path: string) => {
       const page = Number(new URL(path, 'https://api.github.com').searchParams.get('page'));
@@ -932,7 +934,7 @@ describe('the digest reads the NEWEST hold comment, not the newest of the first 
     // A hand-edited newest hold comment says nothing rather than resurrecting the
     // cause it replaced — `holdReason`'s own "degrade to nothing rather than guessing",
     // which a walk that stopped at the first non-null reason would have quietly undone.
-    const { api } = apiOver([[held('the old cause')], [{ body: `no bullets here\n\n${HELD_MARKER}` }]]);
+    const { api } = apiOver([[held('the old cause')], [byLeadApp(`no bullets here\n\n${HELD_MARKER}`)]]);
     expect(await holdReasonOf(api, 'o/r', 7, 150)).toBeNull();
   });
 
@@ -948,6 +950,42 @@ describe('the digest reads the NEWEST hold comment, not the newest of the first 
     await holdReasonOf(api, 'o/r', 7, 101);
     expect(paths[0]).toContain('per_page=100');
     expect(paths[0]).toContain('page=2');
+  });
+});
+
+describe('the hold reason is the Lead\'s own, never a copy of its marker (kanon#1415)', () => {
+  // RA-1469's reason lets a person tell a one-line brief edit from a decision they owe, so it is
+  // read only off a comment the Lead's App wrote with the Lead's role marker (`asRole`, the
+  // contract `scripts/lib/role-marker.mjs` states), as the reconciler's `leadComments` reads it.
+  const lead = `${appLogin('Lead')}[bot]`;
+  const marked = (reason: string) => `x\n\n- ${reason}\n\n${HELD_MARKER}`;
+
+  it('a later marked comment from anyone else does not replace the Lead\'s reason', () => {
+    const leads = byLeadApp(marked('the Lead\'s cause'));
+    expect(holdReason([leads, { user: { login: 'stranger' }, body: signed(marked('a stranger\'s cause'), 'Lead') }]), 'a stranger').toBe('the Lead\'s cause');
+    expect(holdReason([leads, { user: { login: lead }, body: `${headerLine('Implementer')}\n\n${marked('another role\'s cause')}` }]), 'another role of the App').toBe('the Lead\'s cause');
+    expect(holdReason([leads, { user: { login: lead }, body: marked('an unsigned cause') }]), 'no role marker').toBe('the Lead\'s cause');
+  });
+
+  it('gives no reason when only someone else carries the marker, or no Lead is named', () => {
+    expect(holdReason([{ user: { login: 'stranger' }, body: signed(marked('a stranger\'s cause'), 'Lead') }])).toBeNull();
+    expect(holdReason([byLeadApp(marked('the Lead\'s cause'))], 160, null), 'a register with no Lead row').toBeNull();
+    expect(holdReason([{ user: null, body: signed(marked('a deleted account\'s cause'), 'Lead') }], 160, null), 'no Lead row, and a comment with no author').toBeNull();
+    expect(holdReason([{ user: { login: 'shop-lead[bot]' }, body: signed(marked('this Lead\'s cause'), 'Lead') }], 160, 'shop-lead')).toBe('this Lead\'s cause');
+  });
+
+  it('walks past a newer page whose only marked comment is someone else\'s', async () => {
+    const seen: number[] = [];
+    const pages = [[byLeadApp(marked('the Lead\'s cause'))], [{ user: { login: 'stranger' }, body: signed(marked('a stranger\'s cause'), 'Lead') }]];
+    const api = async (path: string) => {
+      const page = Number(new URL(path, 'https://api.github.com').searchParams.get('page'));
+      seen.push(page);
+      return pages[page - 1] ?? [];
+    };
+    expect(await holdReasonOf(api, 'o/r', 7, 150)).toBe('the Lead\'s cause');
+    expect(seen).toEqual([2, 1]);
+    // The Lead it is handed is the one it reads by, on every page.
+    expect(await holdReasonOf(api, 'o/r', 7, 150, 160, 'stranger')).toBe('a stranger\'s cause');
   });
 });
 

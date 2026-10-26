@@ -434,11 +434,21 @@ export const HELD_MARKER = '<!-- qa:lead-held -->';
 /** Comments per page — the API maximum, so the fewest requests. */
 const PER_PAGE = 100;
 
-/** The hold comments in one page of comments, oldest first. */
-const marked = (comments) => (comments ?? []).filter((c) => (c.body ?? '').includes(HELD_MARKER));
+/**
+ * The Lead's hold comments in one page of REST comments, oldest first: each carries the hold
+ * marker and is the Lead's own, its App's login (`user.login`) and the Lead's role marker
+ * (`asRole`, as the reconciler's `leadComments` reads it; kanon#1415). A copy of the marker in
+ * anyone else's comment is not a hold comment. With no Lead login, no comment is the Lead's.
+ * @param {{user?: {login?: string}|null, body?: string|null}[]} comments
+ * @param {string|null} lead
+ */
+const marked = (comments, lead) => (comments ?? []).filter((c) => lead != null
+  && (c.body ?? '').includes(HELD_MARKER)
+  && asRole('Lead', { login: norm(c.user?.login), expected: lead, body: c.body }));
 
 /**
- * Why the reconciler is holding this project, from its own hold comments (RA-1469).
+ * Why the reconciler is holding this project, from its own hold comments (RA-1469): the Lead's,
+ * by the register's Lead login, never a copy of the marker in anyone else's (kanon#1415).
  *
  * THE LAST MARKED COMMENT WINS. `hold()` is idempotent per distinct reason set, so a
  * project held for one cause and later stopped for another carries both — and the
@@ -447,12 +457,13 @@ const marked = (comments) => (comments ?? []).filter((c) => (c.body ?? '').inclu
  * Truncated, then made Kanon text with `literal` (plan 0011 §3.1), here rather than at the
  * call site: this string is assembled from an issue comment, so it is text nobody controls.
  *
- * @param {{body?: string}[]} comments  newest last, as the REST API returns them
+ * @param {{user?: {login?: string}|null, body?: string|null}[]} comments  newest last, as the REST API returns them
  * @param {number} [max]
+ * @param {string|null} [lead]  the Lead's login; the register's Lead row by default
  * @returns {string|null}
  */
-export function holdReason(comments, max = 160) {
-  const body = marked(comments).at(-1)?.body;
+export function holdReason(comments, max = 160, lead = listedLogin('Lead')) {
+  const body = marked(comments, lead).at(-1)?.body;
   if (!body) return null;
   const bullet = body.split(/\r?\n/).map((l) => l.trim()).find((l) => l.startsWith('- '));
   if (!bullet) return null;
@@ -481,7 +492,7 @@ export function holdReason(comments, max = 160) {
  * already in hand from the read that decided the project is held, so finding the last
  * page costs no request and no `Link`-header parsing (`api` returns parsed JSON and
  * drops headers). Pages are walked backwards and the walk STOPS at the first page
- * carrying a hold comment — not at the first page that yields a REASON, so a newest
+ * carrying the Lead's hold comment — not at the first page that yields a REASON, so a newest
  * hold comment somebody hand-edited the bullet out of says nothing rather than
  * resurrecting an older cause, which is the same "degrade to nothing rather than
  * guessing" `holdReason` already promises.
@@ -494,14 +505,15 @@ export function holdReason(comments, max = 160) {
  * @param {number} issue
  * @param {number} commentCount  the issue's own `comments` field
  * @param {number} [max]
+ * @param {string|null} [lead]  the Lead's login; the register's Lead row by default
  * @returns {Promise<string|null>}
  */
-export async function holdReasonOf(api, repo, issue, commentCount, max = 160) {
+export async function holdReasonOf(api, repo, issue, commentCount, max = 160, lead = listedLogin('Lead')) {
   const pages = Math.max(1, Math.ceil((commentCount ?? 0) / PER_PAGE));
   for (let page = pages; page >= 1; page--) {
     const comments = await api(`/repos/${repo}/issues/${issue}/comments?per_page=${PER_PAGE}&page=${page}`);
-    if (!marked(comments).length) continue;
-    return holdReason(comments, max);
+    if (!marked(comments, lead).length) continue;
+    return holdReason(comments, max, lead);
   }
   return null;
 }
