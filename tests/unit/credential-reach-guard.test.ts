@@ -32,7 +32,7 @@ const escalates = (file: string) => ESCALATIONS.some(([re]) => re.test(file));
 const reached = (reaches: readonly Reach[]) => reaches.map((r) => `${r.workflow}:${r.job} ${r.file}`);
 
 // A library file the green zone holds, which no credential-holding run reaches today.
-const GREEN = 'scripts/lib/labels.mjs';
+const GREEN = 'scripts/lib/token-trend.mjs';
 const withImport = (file: string, line: string) => ({ [file]: `${line}\n${readFileSync(file, 'utf8')}` });
 
 describe("this tree's credential-holding runs", () => {
@@ -108,7 +108,7 @@ describe('the guard goes red', { timeout: 30_000 }, () => {
   });
 
   it('when the metrics page imports one, through the library it reaches', () => {
-    const problems = credentialProblems(credentialReach(withImport('scripts/metrics/indicators.mjs', `export { LABELS } from '../lib/labels.mjs';`)), ESCALATIONS);
+    const problems = credentialProblems(credentialReach(withImport('scripts/metrics/indicators.mjs', `export { DAY_MS } from '../lib/token-trend.mjs';`)), ESCALATIONS);
     expect(problems.map((p) => p.split(',')[0])).toEqual([`${GREEN}: metrics-page.yml`]);
   });
 
@@ -210,7 +210,7 @@ describe('the guard goes red', { timeout: 30_000 }, () => {
     const unset = /(implement-revise:[\s\S]*?CLAUDE_CODE_OAUTH_TOKEN: \$\{\{ secrets\.)KANON_SMOKE_UNSET/;
     expect(text).toMatch(unset);
     const problems = credentialProblems(credentialReach({ [file]: text.replace(unset, '$1CLAUDE_CODE_OAUTH_TOKEN') }), ESCALATIONS);
-    expect(problems.some((p) => p.startsWith('scripts/lib/labels.mjs: agent-lanes-smoke.yml, job implement-revise,') && p.includes('lane-agent-job.yml:run'))).toBe(true);
+    expect(problems.some((p) => p.startsWith('scripts/ensure-labels.mjs: agent-lanes-smoke.yml, job implement-revise,') && p.includes('lane-agent-job.yml:run'))).toBe(true);
   });
 
   // kanon#831: a lane spine hands its agent job the App token its mint job seals into an output,
