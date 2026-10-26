@@ -866,7 +866,9 @@ describe('the store keys every row by repository (kanon#1346)', SPAWNS, () => {
     expect(UNMARKED).toBe('attribute_not_exists(migratedTo)');
     expect(section).toContain(`\`${UNMARKED}\``);
     expect(section).toContain('**The fallback skips what the migration marked**');
-    expect(doc).toContain(`\`${MIGRATED_TAG}\``);
+    // kanon#1389: the tag is named where the Upgrade section says what the migration marks.
+    const upgrade = doc.slice(doc.indexOf('### Upgrade a store written before rows carried the repository'), doc.indexOf('### Maintenance'));
+    expect(upgrade).toContain(`S3 tag \`${MIGRATED_TAG}\``);
     expect(readFileSync('infra/qa-store/aws/last-green.sh', 'utf8')).toContain(`AND ${UNMARKED}"`);
   });
 
