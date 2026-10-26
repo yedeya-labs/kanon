@@ -33,7 +33,7 @@ import { HANDBACK, isEscalation, mergerMarker, mergerMarkerSpellings, mergerMark
 import { ADOPTION_RECORD } from '../lib/reference-deploy.mjs';
 import { asRole, slugOf } from '../lib/role-marker.mjs';
 import { isSpecFile, specPromotions } from '../lib/spec-promotions.mjs';
-import { IMPLEMENTER_LOGIN, LAPSES_WITH_HEAD, MERGER_LOGIN, REVIEWER_LOGIN, checkPartition, mergeVerdict } from '../merge-gate.mjs';
+import { LAPSES_WITH_HEAD, checkPartition, mergeVerdict } from '../merge-gate.mjs';
 import { marker as rebaseMarker } from '../rebase-lane.mjs';
 import { verdictOnHead } from '../review-recovery.mjs';
 import { evidenceSha, readTrailer } from '../review-trailer.mjs';
@@ -143,9 +143,10 @@ function wholeConnection(conn, name, reader) {
  * @param {import('./reader.mjs').Reader} reader
  * @param {string} repo `owner/name`
  * @param {number} number
- * @param {{ merger?: string }} [logins] the Merger's login, whose comments say what it did
+ * @param {{ merger: string }} logins the Merger's login, whose comments say what it did: the
+ *   default branch's register's, never the working directory's (kanon#1396)
  */
-export async function readPullRequest(reader, repo, number, { merger = MERGER_LOGIN } = {}) {
+export async function readPullRequest(reader, repo, number, { merger }) {
   const data = /** @type {any} */ (await reader.graphql(Q_PR, { ...ownerAndName(repo), number }));
   const node = data?.repository?.pullRequest;
   if (!node) throw new ReadError(graphqlRead(Q_PR), `${repo} has no pull request #${number}`);
@@ -367,14 +368,18 @@ export async function readinessView({ reader: given, repo, pr: number, now = Dat
 export async function readinessContext(reader, repo) {
   const files = await defaultBranchReader(reader, repo);
   const registerText = await files.read(APP_REGISTER);
-  const register = registerText === null ? new Map() : parseAppRegister(registerText, `${APP_REGISTER} on \`${files.branch}\``);
-  // The logins the gate compares, from the default branch's register; the gate's own, read where
-  // it runs, only for a role the register doesn't list.
-  const logins = {
-    implementer: register.get('Implementer') ?? IMPLEMENTER_LOGIN,
-    reviewer: register.get('Reviewer') ?? REVIEWER_LOGIN,
-    merger: register.get('Merger') ?? MERGER_LOGIN,
+  const where = `${APP_REGISTER} on \`${files.branch}\``;
+  const register = registerText === null ? new Map() : parseAppRegister(registerText, where);
+  // The logins the gate compares, from the default branch's register and from nowhere else: the
+  // view may run where there is no checkout, and a checkout's register is a branch's, not the
+  // repository's (kanon#1396). A role the register doesn't list has no login to judge by, so the
+  // view stops, naming it, as the gate's own read of the register does.
+  const login = (/** @type {'Implementer' | 'Reviewer' | 'Merger'} */ role) => {
+    const slug = register.get(role);
+    if (!slug) throw new Error(`${registerText === null ? `${repo} has no App register (${where})` : `${where} lists no ${role} App`}, so the merge gate has no ${role} login to judge ${repo}'s pull requests by (K-LAYOUT-6).`);
+    return slug;
   };
+  const logins = { implementer: login('Implementer'), reviewer: login('Reviewer'), merger: login('Merger') };
   const escalations = await escalationsAt(files, reader, repo);
   return { files, register, logins, escalations };
 }
@@ -388,7 +393,7 @@ export async function readinessContext(reader, repo) {
 export async function readinessOf(number, { reader, repo, now, context }) {
   const { files, logins, escalations } = context;
   const { pr, node, changed } = await readPullRequest(reader, repo, number, { merger: logins.merger });
-  const gate = { escalations, now, implementer: logins.implementer, reviewer: logins.reviewer };
+  const gate = { escalations, now, implementer: logins.implementer, reviewer: logins.reviewer, merger: logins.merger };
   const verdict = mergeVerdict(pr, gate);
   const parts = checkPartition(pr.checks);
 

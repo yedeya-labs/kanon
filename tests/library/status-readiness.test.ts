@@ -7,14 +7,14 @@
  * verdict on its head and, for a brief, the brief guard's open-decision read.
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ADOPTER, ROOT } from './helpers/adopter.js';
+import { ROOT } from './helpers/adopter.js';
 import { ESCALATE_PATHS } from './helpers/escalations.js';
 import {
-  HEAD, MERGER_HEADER, NUMBER, OLD, READ_AT, REPO, approval, briefPr, briefText, ci, ghFor, implementerPr, personPr, readerFor, type PrWorld,
+  DEFAULT_FILES, HEAD, MERGER_HEADER, NUMBER, OLD, READ_AT, REPO, approval, briefPr, briefText, ci, ghFor, implementerPr, personPr, readerFor, type PrWorld,
 } from './helpers/pr-world.js';
 
 const { readinessView, readPullRequest } = await import('../../scripts/status/pull-request.mjs');
@@ -23,6 +23,7 @@ const { ReadError } = await import('../../scripts/status/reader.mjs');
 const { checkPartition, mergeVerdict, readPr } = await import('../../scripts/merge-gate.mjs');
 const { verdictOnHead } = await import('../../scripts/review-recovery.mjs');
 const { ESCALATION_HEADER, HANDBACK, mergerMarker } = await import('../../scripts/lib/protocol-spellings.mjs');
+const { IMPLEMENTER_STATUS } = await import('../../scripts/lib/role-marker.mjs');
 const { marker: rebaseMarker } = await import('../../scripts/rebase-lane.mjs');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -142,11 +143,8 @@ describe('what the readiness view gives', () => {
     for (const q of queries) expect(q.trimStart(), q.slice(0, 60)).toMatch(/^query\s/);
 
     // In a process of its own, every write, child process and fetch replaced once the core is
-    // loaded. Loading the merge gate reads the App register from the working directory, so the
-    // directory holds that and nothing else.
+    // loaded, in an empty working directory: the core reads no App register from it (kanon#1396).
     const dir = mkdtempSync(join(tmpdir(), 'status-readiness-'));
-    mkdirSync(join(dir, 'docs/qa'), { recursive: true });
-    cpSync(join(ADOPTER, 'docs/qa/agent-identities.md'), join(dir, 'docs/qa/agent-identities.md'));
     const answers: Record<string, unknown> = {};
     const record = readerFor(w);
     for (const s of seen) {
@@ -182,7 +180,7 @@ describe('what the readiness view gives', () => {
     expect(out.calls, 'no file read or written, no process started, no other network').toEqual([]);
     expect(out.view.error, 'and the view was answered').toBeUndefined();
     expect(out.view.readiness).toEqual(v.readiness);
-    expect(readdirSync(dir), 'nothing left behind').toEqual(['docs']);
+    expect(readdirSync(dir), 'nothing left behind').toEqual([]);
   });
 
   it('[STAT-3] answers a read that failed with an error naming it, never a partial view', async () => {
@@ -347,5 +345,93 @@ describe("any other pull request is a person's to merge", () => {
     expect(approvedThenChanged.review).toMatchObject({ state: 'CHANGES_REQUESTED', current: true });
     expect(approvedThenChanged.readiness).toMatchObject({ by: 'person', ready: false, lacks: ['approval'] });
     expect(approvedThenChanged.readiness.why).toMatch(/requested changes/);
+  });
+});
+
+describe('the readiness view judges by the default branch\'s register, and loads where there is none (kanon#1396)', () => {
+  // The default branch's register names other Apps than the checkout's: this tier runs inside the
+  // fixture adopter, whose register names `example-*`. So a view that compared any login of the
+  // working directory's would not read this pull request as the Implementer's, or its hold as
+  // the Merger's.
+  const REGISTER = 'docs/qa/agent-identities.md';
+  const shopFiles = () => {
+    const files = DEFAULT_FILES();
+    files[REGISTER] = files[REGISTER]!.replaceAll('`example-', '`shop-');
+    return files;
+  };
+  /** The Implementer's pull request as the shop's Apps made it, held by the shop's Merger for a check that failed on an old head. */
+  const shopPr = (over: Partial<PrWorld> = {}) => implementerPr({
+    author: { type: 'Bot', login: 'shop-implementer' },
+    statuses: [{ context: IMPLEMENTER_STATUS, state: 'success', creator: 'shop-implementer[bot]' }],
+    reviews: [{ ...approval(1), login: 'shop-reviewer[bot]' }],
+    labels: ['agent:implement', 'needs:human'],
+    events: heldBy('shop-merger[bot]'),
+    comments: [{ ...escalation('checks-failed', OLD), login: 'shop-merger[bot]' }],
+    defaultFiles: shopFiles(),
+    ...over,
+  });
+
+  /** The view of `w`, answered in a process of its own whose working directory is an empty temp directory. */
+  const inBareDirectory = (w: PrWorld) => {
+    const dir = mkdtempSync(join(tmpdir(), 'status-bare-'));
+    const record = readerFor(w);
+    const seen = readerFor(w);
+    // The reads the view makes, answered from the world: run it once here to learn them.
+    return readinessView({ reader: seen.reader, repo: REPO, pr: w.number, now: READ_AT }).catch(() => null).then(() => {
+      const answers: Record<string, unknown> = {};
+      const asked = (fn: () => unknown) => { try { return fn(); } catch { return null; } };
+      for (const s of seen.seen) {
+        const [kind, ...rest] = s.split(' ');
+        const path = rest.join(' ');
+        if (kind === 'GET') answers[`GET ${path}`] = asked(() => record.reader.get(path));
+        if (kind === 'PAGES') answers[`PAGES ${path}`] = asked(() => record.reader.pages(path));
+      }
+      answers.graphql = record.reader.graphql('query PullRequestGate { x }', { number: w.number });
+      const script = `
+        const { readinessView } = await import(${JSON.stringify(join(ROOT, 'scripts/status/pull-request.mjs'))});
+        const answers = JSON.parse(process.argv[1]);
+        const answer = (key) => { const r = answers[key]; if (r === undefined || r === null) throw Object.assign(new Error('not found'), { status: 404 }); return r; };
+        const reader = { get: (p) => answer('GET ' + p), pages: (p) => answer('PAGES ' + p), graphql: () => answers.graphql };
+        let view;
+        try { view = await readinessView({ reader, repo: ${JSON.stringify(REPO)}, pr: ${w.number}, now: ${READ_AT} }); } catch (e) { view = { error: e.message }; }
+        console.log(JSON.stringify(view));
+      `;
+      const run = spawnSync(process.execPath, ['--input-type=module', '-e', script, JSON.stringify(answers)], { cwd: dir, encoding: 'utf8' });
+      expect(readdirSync(dir), 'the working directory stays empty').toEqual([]);
+      return { run, view: run.stdout ? JSON.parse(run.stdout) : null };
+    });
+  };
+
+  it('[STAT-2] loads and answers with no App register in its working directory, by the default branch\'s logins, read through the reader', async () => {
+    const { run, view: bare } = await inBareDirectory(shopPr());
+    expect(run.stderr).toBe('');
+    expect(bare.error, 'the view loaded and answered').toBeUndefined();
+    // The shop's Implementer's pull request, approved by the shop's Reviewer, held by the shop's
+    // Merger for a failure on a head that is gone: the gate lifts that hold.
+    expect(bare.verdict).toMatchObject({ action: 'release' });
+    expect(bare.review).toEqual({ state: 'APPROVED', commit: HEAD, current: true });
+    // The same answer the view gives in the checkout, whose register names other Apps.
+    expect(bare.verdict).toEqual((await view(shopPr())).v.verdict);
+  });
+
+  it("[STAT-2] reads a needs:human hold as the Merger's only by the default branch's Merger, not the checkout's", async () => {
+    // The shop's Merger's hold lapses with its head; the checkout's Merger's label is a stranger's
+    // to the shop, so it is a person's hold and stays.
+    expect((await view(shopPr())).v.verdict).toMatchObject({ action: 'release' });
+    const byCheckoutsMerger = shopPr({ events: heldBy('example-merger[bot]'), comments: [escalation('checks-failed', OLD)] });
+    expect((await view(byCheckoutsMerger)).v.verdict).toMatchObject({ action: 'escalate', rule: 'escalating-label' });
+    const bare = (await inBareDirectory(byCheckoutsMerger)).view;
+    expect(bare.verdict).toMatchObject({ action: 'escalate', rule: 'escalating-label' });
+  });
+
+  it('stops, naming the role, when the default branch\'s register lists no login for one the gate compares', async () => {
+    const files = shopFiles();
+    files[REGISTER] = files[REGISTER]!.split('\n').filter((l) => !l.startsWith('| Merger |')).join('\n');
+    await expect(readinessView({ reader: readerFor(shopPr({ defaultFiles: files })).reader, repo: REPO, pr: NUMBER, now: READ_AT }))
+      .rejects.toThrow(/docs\/qa\/agent-identities\.md on `main` lists no Merger App/);
+    const none = shopFiles();
+    delete none[REGISTER];
+    await expect(readinessView({ reader: readerFor(shopPr({ defaultFiles: none })).reader, repo: REPO, pr: NUMBER, now: READ_AT }))
+      .rejects.toThrow(/acme\/shop has no App register/);
   });
 });

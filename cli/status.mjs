@@ -15,12 +15,10 @@
 // complete answers with an error naming each read (`[STAT-3]`), never a partial answer, and the
 // command exits 4.
 //
-// THE READINESS VIEW IS LOADED ONLY WHEN ASKED FOR. It runs the merge gate's verdict function, and
-// loading `merge-gate.mjs` reads the App register from the working directory, as every lane that
-// loads it does in the adopter's checkout. So `--project`, `--release` and `--lanes` keep working
-// from any directory, and `--pr` and `--needs-owner`, which judges every open pull request with it,
-// need the checkout's register to load; the logins they judge by are still the default branch's
-// (docs/status.md). `scripts/status/views.mjs` builds each section, for the hosted server too.
+// EVERY VIEW RUNS FROM ANY DIRECTORY. `--pr` and `--needs-owner` run the merge gate's verdict
+// function, and judge by the logins in the default branch's App register, never the checkout's
+// (kanon#1396, docs/status.md). `scripts/status/views.mjs` builds each section, for the hosted
+// server too.
 import { spawn, spawnSync } from 'node:child_process';
 import { ghReader } from '../scripts/status/reader.mjs';
 import { VIEWS, section } from '../scripts/status/views.mjs';

@@ -1,10 +1,12 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ADOPTER, ROOT } from './helpers/adopter.js';
 
 import { readVerdict } from '../../scripts/agent-quality-columns.mjs';
-import { APP_OF, OTHER_APP, ROLES, appLogin, appShape, loadAppRegister, parseAppRegister, parseOtherApps, parsePersonas } from '../../scripts/app-register.mjs';
+import { APP_OF, OTHER_APP, ROLES, appLogin, appLoginAtLoad, appShape, loadAppRegister, parseAppRegister, parseOtherApps, parsePersonas } from '../../scripts/app-register.mjs';
 
 /**
  * RA-2701 (Kanon move plan P4) — the bot logins every pipeline script compares against are
@@ -45,6 +47,77 @@ describe('every consumer reads the login it compared before the move', () => {
     expect((await import('../../scripts/review-run-evidence.mjs')).recoveryLogin()).toBe('example-lead');
     expect((await import('../../scripts/brief-revise-recovery.mjs')).LEAD_LOGIN).toBe('example-lead');
     expect((await import('../../scripts/lead-reconcile.mjs')).explorerLogin()).toBe('example-explorer');
+  });
+
+  // The fixture adopter's register cut to some of its rows: the Judge's (Reviewer, Merger), as a
+  // review-only install has, or the Author's, as `kanon apps` leaves it after the Author App alone.
+  const FIXTURE_REGISTER = readFileSync(join(ADOPTER, 'docs/qa/agent-identities.md'), 'utf8');
+  const JUDGE_ONLY = ['Reviewer', 'Merger'];
+  const AUTHOR_ONLY = ['Implementer', 'Lead', 'Explorer', 'Overseer'];
+  /** A Merger row whose slug isn't one, which the register's parse refuses. */
+  const MALFORMED = 'malformed';
+  /** A temp directory whose register holds only `roles`' rows, a malformed register, or none at all. */
+  const checkout = (roles: string[] | typeof MALFORMED | null) => {
+    const dir = mkdtempSync(join(tmpdir(), 'partial-register-'));
+    if (roles === null) return dir;
+    if (roles === MALFORMED) {
+      mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+      writeFileSync(join(dir, 'docs/qa/agent-identities.md'), FIXTURE_REGISTER.replace('| Merger | **`example-merger`**', '| Merger | `Example Merger!`'));
+      expect(() => loadAppRegister(join(dir, 'docs/qa/agent-identities.md'))).toThrow(/App slug .* is malformed/);
+      return dir;
+    }
+    const kept = FIXTURE_REGISTER.split('\n').filter((l) => !/^\| [A-Z][a-z]+ \| /.test(l) || l.startsWith('| Role |') || roles.some((r) => l.startsWith(`| ${r} |`)));
+    mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+    writeFileSync(join(dir, 'docs/qa/agent-identities.md'), kept.join('\n'));
+    expect(parseAppRegister(kept.join('\n')).size).toBe(roles.length);
+    return dir;
+  };
+
+  // Loading is soft so the status core can run where there is no checkout, and `kanon` where the
+  // register lists only some roles; running the lane asserts its logins first, so it fails as it
+  // did when they were read at load.
+  it.each([
+    ['merge-gate', null, /App register docs\/qa\/agent-identities\.md is unreadable/],
+    ['review-recovery', null, /App register docs\/qa\/agent-identities\.md is unreadable/],
+    ['rebase-lane', null, /App register docs\/qa\/agent-identities\.md is unreadable/],
+    ['merge-gate', JUDGE_ONLY, /lists no Implementer App/],
+    ['review-recovery', AUTHOR_ONLY, /lists no Reviewer App/],
+    ['rebase-lane', JUDGE_ONLY, /lists no Implementer App/],
+    ['merge-gate', MALFORMED, /App slug .* is malformed/],
+    ['review-recovery', MALFORMED, /App slug .* is malformed/],
+    ['rebase-lane', MALFORMED, /App slug .* is malformed/],
+  ] as const)('%s loads with the register %j, and its lane still stops before it reads anything (kanon#1396)', (lane, roles, error) => {
+    const dir = checkout(roles === null || roles === MALFORMED ? roles : [...roles]);
+    const before = readdirSync(dir);
+    const file = join(ROOT, `scripts/${lane}.mjs`);
+    const loaded = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(file)}); console.log('loaded');`], { cwd: dir, encoding: 'utf8' });
+    expect(loaded.stderr).toBe('');
+    expect(loaded.stdout.trim()).toBe('loaded');
+    const ran = spawnSync(process.execPath, [file], { cwd: dir, encoding: 'utf8', env: { PATH: '', HOME: dir } });
+    expect(ran.status).toBe(1);
+    expect(ran.stderr).toMatch(error);
+    expect(ran.stdout).toBe('');
+    expect(readdirSync(dir)).toEqual(before);
+  });
+
+  it.each([['holds only the Judge\'s rows', JUDGE_ONLY], ['is malformed', MALFORMED]] as const)('`kanon` runs a command, and `kanon status --project`, in a checkout whose register %s (kanon#1396)', (_, roles) => {
+    // `kanon` loads the status core, and with it the merge gate, whatever the command. A
+    // review-only install's register has no Implementer row, and a malformed one is what
+    // `kanon doctor` reports: neither may stop the command at import.
+    const dir = checkout(roles === MALFORMED ? roles : [...roles]);
+    const kanon = (...args: string[]) => spawnSync(process.execPath, [join(ROOT, 'cli/kanon.mjs'), ...args], { cwd: dir, encoding: 'utf8', env: { PATH: '', HOME: dir } });
+    const doctor = kanon('doctor', '--help');
+    expect(doctor.stderr).toBe('');
+    expect(doctor.status).toBe(0);
+    expect(doctor.stdout).toMatch(/^Usage: kanon doctor/);
+    // No `gh` on PATH, so the project view's first read fails: the command loaded, ran and
+    // answered with that view's error, rather than stopping at import on the register.
+    const project = kanon('status', '--project', '7', '--repo', 'acme/shop', '--json');
+    expect(project.stderr).not.toMatch(/App register/);
+    expect(project.status).toBe(4);
+    const doc = JSON.parse(project.stdout);
+    expect(doc).toMatchObject({ schema: 'kanon-status/v1', status: 'incomplete', repo: 'acme/shop' });
+    expect(doc.project.error).toMatch(/project #7 couldn't be read whole.*gh ENOENT/);
   });
 
   it('incremental-review matches the reviewer by exact login, decorated or not, and nothing else', async () => {
@@ -207,6 +280,18 @@ describe('appLogin / loadAppRegister', () => {
     const path = join(dir, 'bad.md');
     writeFileSync(path, '# no table\n');
     expect(() => appLogin('Lead', path)).toThrow(/no App register table/);
+  });
+
+  it('appLoginAtLoad gives `undefined` for an absent register or role and for a malformed register, where appLogin throws (kanon#1396)', () => {
+    expect(appLoginAtLoad('Lead', join(dir, 'absent.md'))).toBeUndefined();
+    const ok = join(dir, 'at-load.md');
+    writeFileSync(ok, table('| Lead | `example-lead` | x |'));
+    expect(appLoginAtLoad('Lead', ok)).toBe('example-lead');
+    expect(appLoginAtLoad('Reviewer', ok), 'a register that lists no such role').toBeUndefined();
+    const bad = join(dir, 'at-load-bad.md');
+    writeFileSync(bad, '# no table\n');
+    expect(appLoginAtLoad('Lead', bad), 'a malformed register').toBeUndefined();
+    expect(() => appLogin('Lead', bad), 'which appLogin, behind every read, still refuses').toThrow(/no App register table/);
   });
 });
 

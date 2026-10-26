@@ -6,11 +6,11 @@
  * view's for a red lane.
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ADOPTER, ROOT } from './helpers/adopter.js';
+import { ROOT } from './helpers/adopter.js';
 import { IMPLEMENTER_HEADER, LEAD_HEADER, READ_AT, REPO, briefPr, ci, implementerPr, personPr } from './helpers/pr-world.js';
 import { liveRun, numbered, ownerWorld, type OwnerIssue } from './helpers/owner-world.js';
 import { fail, failedJob, laneCaller, ok } from './helpers/status-world.js';
@@ -157,11 +157,9 @@ describe('the needs-the-Owner view', () => {
     for (const q of w.queries) expect(q.trimStart(), q.slice(0, 60)).toMatch(/^query\s/);
 
     // In a process of its own, every write, child process and fetch replaced once the core is
-    // loaded, over the answers the recording reader gave. Loading the merge gate reads the App
-    // register from the working directory, so the directory holds that and nothing else.
+    // loaded, over the answers the recording reader gave, in an empty working directory: the core
+    // reads no App register from it (kanon#1396).
     const dir = mkdtempSync(join(tmpdir(), 'status-owner-'));
-    mkdirSync(join(dir, 'docs/qa'), { recursive: true });
-    cpSync(join(ADOPTER, 'docs/qa/agent-identities.md'), join(dir, 'docs/qa/agent-identities.md'));
     const record = world();
     const answers: Record<string, unknown> = {};
     const asked = (fn: () => unknown) => { try { return fn(); } catch { return null; } };
@@ -202,7 +200,7 @@ describe('the needs-the-Owner view', () => {
     const out = JSON.parse(run.stdout);
     expect(out.calls, 'no file read or written, no process started, no other network').toEqual([]);
     expect(out.view, 'and the view was answered, the same').toEqual(v);
-    expect(readdirSync(dir), 'nothing left behind').toEqual(['docs']);
+    expect(readdirSync(dir), 'nothing left behind').toEqual([]);
   });
 
   it('[STAT-3] makes the view an error when any of its reads fails or comes back cut short, never a shorter list', async () => {
