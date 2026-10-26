@@ -49,12 +49,11 @@ describe("the status server's closure", () => {
 
   // `views.mjs` loads the readiness and the needs-owner views lazily; PR #1424 imports them
   // statically. Either way they are linked.
-  it("follows a literal dynamic import(), which is how views.mjs loads two of its views", () => {
-    const lazy = importClosure(STATUS_ENTRIES, { dynamicImports: false });
-    expect(STATUS.modules).toContain('scripts/status/pull-request.mjs');
-    expect(STATUS.modules).toContain('scripts/status/needs-owner.mjs');
-    expect(lazy.modules).not.toContain('scripts/status/needs-owner.mjs');
-    expect(STATUS.modules.length).toBeGreaterThan(lazy.modules.length);
+  it('follows a literal dynamic import()', () => {
+    const LAZY = 'scripts/lib/cache-ttl.mjs';
+    const tree = withLine('scripts/status/views.mjs', "const lazy = () => import('../lib/cache-ttl.mjs');");
+    expect(importClosure(STATUS_ENTRIES, { tree }).modules).toContain(LAZY);
+    expect(importClosure(STATUS_ENTRIES, { tree, dynamicImports: false }).modules).not.toContain(LAZY);
   });
 
   it("follows a worker's new URL(…, import.meta.url) script", () => {
