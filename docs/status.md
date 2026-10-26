@@ -344,7 +344,7 @@ It speaks MCP's Streamable HTTP transport at protocol version `2025-11-25`, at o
   - a request carrying an `Origin` header comes from a browser page, and gets 403.
 - **An unknown tool** is a protocol error. **Arguments a tool can't take** are the tool's own error, which says what is wrong.
 
-Every request to `/mcp` needs a token the server issued when the person signed in ([Signing in](#signing-in)). Without one, or with one that has expired, it gets 401, and no tool runs. The server isn't deployed yet: its template and deploy follow in the items after this one in project #1327, and its address is a placeholder below until then.
+Every request to `/mcp` needs a token the server issued when the person signed in ([Signing in](#signing-in)). Without one, or with one that has expired, it gets 401, and no tool runs. Its address is a placeholder below until the Owner's first deploy ([Deploy](#deploy)).
 
 The server's code is more than its own directory: it links the status core, and the core calls the deciders the lanes run, the Lead's reconciler, review recovery, workflow health, the brief guard and what they import, rather than copying them. On Kanon's repository every module it links, directly or through another, is the Owner's merge: each matches an `always` entry in [`docs/qa/escalation-paths.md`](qa/escalation-paths.md), and `tests/unit/hosted-function-closure.test.ts` fails on a new import that reaches one that doesn't ([kanon#1345](https://github.com/yedeya-labs/kanon/issues/1345)).
 
@@ -399,7 +399,7 @@ Every read is sent to GitHub. The server keeps a per-person cache in the warm fu
 
 ### What the server logs
 
-One line per request, a JSON object of exactly these fields: the route, the MCP method, the tool, the outcome, the duration, the number of GitHub requests it made, and GitHub's remaining rate limit. Each value is a number or from a closed list, so a line never holds a token, a login, an error's message or anything GitHub answered. A tool's error may quote GitHub's own message, such as "Not Found": it is returned to the person and never logged.
+One line per request, a JSON object of exactly these fields: the route, the MCP method, the tool, the outcome, the duration, the number of GitHub requests it made, and GitHub's remaining rate limit. Each value is a number or from a closed list, so a line never holds a token, a login, an error's message or anything GitHub answered. A tool's error may quote GitHub's own message, such as "Not Found": it is returned to the person and never logged. When a container can't read the App's client secret, it also logs `{"startup":"client_secret","code":…}`, whose code is AWS's error code, such as `ParameterNotFound`, or `Unconfigured` or `unknown`, and nothing of AWS's message.
 
 ## Connecting
 
@@ -408,3 +408,68 @@ Use the server's address, `<server-url>/mcp`. The first call opens the consent p
 - **Claude Code:** `claude mcp add --transport http kanon-status <server-url>/mcp`, then run `/mcp` in Claude Code, choose `kanon-status` and authenticate.
 - **claude.ai:** in Settings, under Connectors, add a custom connector with that address, and connect it.
 - **The Claude app on a phone:** add the connector on claude.ai first. The app then lists it among a chat's tools, and connecting it there opens the same sign-in.
+
+## Deploy
+
+**The server is the stack `kanon-status`, in Kanon's AWS account in `eu-central-1`, beside the telemetry store** (project #1327, decision 2). Its template is [`infra/status/template.yaml`](../infra/status/template.yaml), and it creates exactly these resources, as `tests/unit/status-template.test.ts` holds it (`[MCP-10]`):
+
+- the function, `kanon-status`: Node 24 on arm64, 256 MB, a 60-second timeout and no VPC. Its reserved concurrency is always set, 4 by default and never below 1, because its URL is public and the reservation bounds what a flood can cost;
+- its function URL, with no IAM auth because the server does its own sign-in, and the two public grants such a URL needs;
+- its role, which may write the function's log and read the one SSM parameter holding the App's client secret, and nothing else;
+- its log group, `/aws/lambda/kanon-status`, kept 30 days;
+- its KMS key, which seals everything the sign-in hands out. Its policy lets only the function's role use it, and only with the encryption context `service=kanon-status`; the account administers it through IAM and can't use it. It isn't rotated, and it is deleted with the stack after KMS's shortest wait, 7 days: nothing at rest depends on it, so replacing it only makes everyone sign in again.
+
+No table and no bucket. The outputs are `McpUrl`, the server's address, and `LogGroupName`.
+
+**It is deployed by the operator's repository, through Kanon's deploy lane,** as the telemetry store is ([the telemetry store's Deploy](telemetry.md#deploy)): the operator's repository pins a released Kanon, declares `production`, and holds the account's inputs as that environment's variables. Production is the Owner's dispatch. Kanon's repository has no deploy caller and no AWS-credentialed job. The operator's three hooks call the scripts beside the template, at the pinned tree that [`kanon-path`](../actions/kanon-path/README.md) puts in `$KANON`:
+
+- **build,** with no credential: `node "$KANON/infra/status/build.mjs" --output "<output>"`. It copies the template, and the function's import closure with the repository's layout kept, which is where the template's `Code` and `Handler` point. The closure is the list in [`infra/status/closure.json`](../infra/status/closure.json), which `tests/unit/status-build.test.ts` holds equal to the walk the escalation test holds to the `always` paths, so what is deployed is what the Owner merged. It refuses a tree that doesn't load on its own, with no `node_modules` above it.
+- **deploy,** with the environment's role: `node "$KANON/infra/status/deploy.mjs" --artifact "<artifact>" --bucket <artifacts bucket> --role-arn <service role> --release "<release>" --client-id <the App's client id>`, and, when the environment sets them, `--redirects`, `--reserved-concurrency` and `--permissions-boundary-arn`. It packages into the artifacts bucket, deploys `kanon-status` through the CloudFormation service role, and prints the stack's status and the server's address, and nothing else. Every parameter is passed on every deploy, so a variable removed resets its parameter. No secret passes through it, so the hook maps no `KANON_DEPLOY_SECRET`.
+- **smoke:** `node "$KANON/infra/status/smoke.mjs" --stack`. It passes only when the stack is `CREATE_COMPLETE` or `UPDATE_COMPLETE`, an unauthenticated `tools/list` at `/mcp` gets 401 naming the server's own protected-resource metadata, and that metadata names the server as its resource and its authorisation server (`[MCP-11]`). It signs nobody in and needs no secret. A server whose secret can't be read answers that `tools/list` with 500, so it fails too. A failed deploy or smoke files `Deploy to production failed` in the operator's repository, and the next success closes it.
+
+### Before the first deploy
+
+These are the Owner's, once:
+
+1. **The App's client secret.** Put it as a `SecureString` under the AWS-managed `aws/ssm` key. The function reads it at a container's first request and keeps it in memory, so it is in no template, stack parameter, function configuration, deploy or log:
+
+   ```sh
+   read -rs SECRET   # paste the status App's client secret
+   aws ssm put-parameter --profile kanon --region eu-central-1 \
+     --name /kanon-status/github-client-secret --type SecureString --value "$SECRET"
+   unset SECRET
+   ```
+
+2. **Widen the bootstrap stack,** which stays the Owner's. Its deploy role may also create and execute change sets on `kanon-status`. Its service role may also manage resources named `kanon-status*`, and may create a KMS key only when the request tags it `kanon:stack=kanon-status`, and administer only a key carrying that tag (`aws:RequestTag` and `aws:ResourceTag`); the template tags its key that way. The boundary rule for roles doesn't change. Then check that the service role is still denied an untagged key, and allowed a tagged one:
+
+   ```sh
+   aws iam simulate-principal-policy --profile kanon --policy-source-arn <service role> \
+     --action-names kms:CreateKey --query 'EvaluationResults[0].EvalDecision'
+   # implicitDeny
+   aws iam simulate-principal-policy --profile kanon --policy-source-arn <service role> \
+     --action-names kms:CreateKey --query 'EvaluationResults[0].EvalDecision' \
+     --context-entries ContextKeyName=aws:RequestTag/kanon:stack,ContextKeyValues=kanon-status,ContextKeyType=string
+   # allowed
+   ```
+
+   A grant of `kms:TagResource` held only to the request's tag would let the service role tag someone else's key and then administer it, so check that it is denied on a key without the tag too.
+
+3. **The `production` environment's variables** for the hooks above: the App's client id, and, if they aren't the defaults, the redirect allow-list and the reserved concurrency.
+
+### Rotating the client secret
+
+GitHub lets an App hold two client secrets. Generate a new one on the App's page, overwrite the parameter with `aws ssm put-parameter … --overwrite`, and deploy again: new containers read it. Then delete the old one on GitHub.
+
+### By hand: break-glass
+
+Only when GitHub Actions is down. From a Kanon checkout at the release tag being deployed, with your profile:
+
+```sh
+OUT=$(mktemp -d)
+node infra/status/build.mjs --output "$OUT"
+AWS_PROFILE=kanon node infra/status/deploy.mjs --artifact "$OUT" --bucket <artifacts bucket> \
+  --role-arn <service role> --release <tag> --client-id <the App's client id>
+AWS_PROFILE=kanon node infra/status/smoke.mjs --stack
+```
+
+**If the first deploy fails,** the stack rolls back and deletes what it made. The key waits 7 days for deletion, which costs nothing and blocks nothing: the next deploy makes a new one. A key policy naming a role IAM hasn't finished creating can fail that first deploy; deploy again.

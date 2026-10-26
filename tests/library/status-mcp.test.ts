@@ -230,7 +230,7 @@ describe('[MCP-2] exactly the listed tools, read-only, each equal to its view\'s
 describe('[MCP-3] no write and no store', () => {
   it('[MCP-3] the handler holds no write to a table, a bucket or a file, and no route or method that writes', async () => {
     const files = readdirSync(FUNCTION_DIR).filter((f) => f.endsWith('.mjs'));
-    expect(files.sort()).toEqual(['auth.mjs', 'cache.mjs', 'index.mjs', 'kms.mjs', 'log.mjs', 'reader.mjs', 'seal.mjs']);
+    expect(files.sort()).toEqual(['auth.mjs', 'aws.mjs', 'cache.mjs', 'handler.mjs', 'index.mjs', 'kms.mjs', 'log.mjs', 'reader.mjs', 'seal.mjs', 'ssm.mjs']);
     for (const f of files) {
       const text = readFileSync(join(FUNCTION_DIR, f), 'utf8');
       const code = text.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l)).join('\n');
