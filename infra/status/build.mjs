@@ -56,25 +56,25 @@ export function stage({ root = ROOT, files = readClosure(root), output }) {
     const p = join(root, f);
     if (!existsSync(p) || !statSync(p).isFile()) throw new Error(`'${f}' isn't a file in Kanon's tree`);
   }
-  const staging = mkdtempSync(join(tmpdir(), 'kanon-status-build-'));
+  const scratch = mkdtempSync(join(tmpdir(), 'kanon-status-build-'));
   try {
     for (const f of files) {
-      mkdirSync(dirname(join(staging, 'function', f)), { recursive: true });
-      cpSync(join(root, f), join(staging, 'function', f));
+      mkdirSync(dirname(join(scratch, 'function', f)), { recursive: true });
+      cpSync(join(root, f), join(scratch, 'function', f));
     }
-    cpSync(join(root, TEMPLATE_PATH), join(staging, 'template.yaml'));
+    cpSync(join(root, TEMPLATE_PATH), join(scratch, 'template.yaml'));
     try {
-      execFileSync(process.execPath, ['--input-type=module', '-e', 'await import(process.argv.at(-1));', pathToFileURL(join(staging, 'function', HANDLER_PATH)).href], {
-        cwd: staging, env: { PATH: process.env.PATH ?? '' }, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8', timeout: 60_000,
+      execFileSync(process.execPath, ['--input-type=module', '-e', 'await import(process.argv.at(-1));', pathToFileURL(join(scratch, 'function', HANDLER_PATH)).href], {
+        cwd: scratch, env: { PATH: process.env.PATH ?? '' }, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8', timeout: 60_000,
       });
     } catch (e) {
-      const stderr = String(/** @type {any} */ (e)?.stderr ?? '').replaceAll(staging, '<staged>');
+      const stderr = String(/** @type {any} */ (e)?.stderr ?? '').replaceAll(scratch, '<staged>');
       throw new Error(`the staged function doesn't load: ${stderr.trim() || String(e)}`, { cause: e });
     }
     mkdirSync(output, { recursive: true });
-    cpSync(staging, output, { recursive: true });
+    cpSync(scratch, output, { recursive: true });
   } finally {
-    rmSync(staging, { recursive: true, force: true });
+    rmSync(scratch, { recursive: true, force: true });
   }
   return files.length;
 }

@@ -17,7 +17,7 @@ import { writeStub } from './helpers/stub-bin.js';
  * client secret is the SSM parameter the Owner puts by hand, and only its name is a parameter.
  */
 
-const ROLE = 'arn:aws:iam::123456789012:role/kanon-deploy-cloudformation';
+const ROLE = `arn:aws:iam::${'1'.repeat(12)}:role/kanon-deploy-cloudformation`;
 const OPTIONS = {
   artifact: '/runner/build', packaged: '/runner/tmp/packaged.yaml', bucket: 'kanon-deploy-artifacts', roleArn: ROLE, region: 'eu-central-1',
   release: 'v0.43.0', clientId: 'Iv23liStatusApp', secretParameter: '/kanon-status/github-client-secret', redirects: '', reservedConcurrency: '4', permissionsBoundaryArn: '',
