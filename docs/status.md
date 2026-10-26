@@ -417,7 +417,7 @@ Use the server's address, `<server-url>/mcp`. The first call opens the consent p
 - its function URL, with no IAM auth because the server does its own sign-in, and the two public grants such a URL needs;
 - its role, which may write the function's log and read the one SSM parameter holding the App's client secret, and nothing else;
 - its log group, `/aws/lambda/kanon-status`, kept 30 days;
-- its KMS key, which seals everything the sign-in hands out. Its policy lets only the function's role use it, and only with the encryption context `service=kanon-status`; the account administers it through IAM and can't use it. It isn't rotated, and it is deleted with the stack after KMS's shortest wait, 7 days: nothing at rest depends on it, so replacing it only makes everyone sign in again.
+- its KMS key, which seals everything the sign-in hands out. Its policy lets only the function's role use it, and only with the encryption context `service=kanon-status`; the account administers it through IAM and can't use it without rewriting its policy. It isn't rotated, and it is deleted with the stack after KMS's shortest wait, 7 days: nothing at rest depends on it, so replacing it only makes everyone sign in again.
 
 No table and no bucket. The outputs are `McpUrl`, the server's address, and `LogGroupName`.
 
@@ -440,7 +440,22 @@ These are the Owner's, once:
    unset SECRET
    ```
 
-2. **Widen the bootstrap stack,** which stays the Owner's. Its deploy role may also create and execute change sets on `kanon-status`. Its service role may also manage resources named `kanon-status*`, and may create a KMS key only when the request tags it `kanon:stack=kanon-status`, and administer only a key carrying that tag (`aws:RequestTag` and `aws:ResourceTag`); the template tags its key that way. The boundary rule for roles doesn't change. Then check that the service role is still denied an untagged key, and allowed a tagged one:
+2. **Widen the bootstrap stack,** which stays the Owner's. Its deploy role may also create and execute change sets on `kanon-status`. Its service role may also manage resources named `kanon-status*`, and may create a KMS key only when the request tags it `kanon:stack=kanon-status`, and administer only a key carrying that tag (`aws:RequestTag` and `aws:ResourceTag`); the template tags its key that way. The boundary rule for roles doesn't change, so the function's role carries the boundary, and the boundary policy must allow `kms:GenerateDataKey`, `kms:Decrypt` and `ssm:GetParameter`. The key policy grants the KMS actions to the role's ARN, and an implicit deny in a role's boundary limits such a grant too. Without `ssm:GetParameter`, every request gets 500 and the smoke fails. Without the KMS actions, the smoke passes, because a 401 seals nothing, and every sign-in fails ([#1450](https://github.com/yedeya-labs/kanon/issues/1450)). Check the boundary allows all three:
+
+   ```sh
+   VERSION=$(aws iam get-policy --profile kanon --policy-arn <boundary policy> \
+     --query Policy.DefaultVersionId --output text)
+   aws iam simulate-custom-policy --profile kanon \
+     --policy-input-list "$(aws iam get-policy-version --profile kanon --policy-arn <boundary policy> \
+       --version-id "$VERSION" --query PolicyVersion.Document --output json)" \
+     --action-names kms:GenerateDataKey kms:Decrypt ssm:GetParameter \
+     --query 'EvaluationResults[].EvalDecision' --output text
+   # allowed allowed allowed
+   ```
+
+   A boundary that scopes these actions to resources needs `--resource-arns` too: the parameter's ARN for `ssm:GetParameter`, and a key's ARN for the two KMS actions.
+
+   Then check that the service role is still denied an untagged key, and allowed a tagged one:
 
    ```sh
    aws iam simulate-principal-policy --profile kanon --policy-source-arn <service role> \
@@ -472,4 +487,11 @@ AWS_PROFILE=kanon node infra/status/deploy.mjs --artifact "$OUT" --bucket <artif
 AWS_PROFILE=kanon node infra/status/smoke.mjs --stack
 ```
 
-**If the first deploy fails,** the stack rolls back and deletes what it made. The key waits 7 days for deletion, which costs nothing and blocks nothing: the next deploy makes a new one. A key policy naming a role IAM hasn't finished creating can fail that first deploy; deploy again.
+**If the first deploy fails,** the stack rolls back, deletes what it made, and stays as `ROLLBACK_COMPLETE`. CloudFormation won't update a stack in that state, so every later deploy, by the lane or by hand, fails until you delete it:
+
+```sh
+aws cloudformation delete-stack --profile kanon --region eu-central-1 --stack-name kanon-status
+aws cloudformation wait stack-delete-complete --profile kanon --region eu-central-1 --stack-name kanon-status
+```
+
+Then deploy again. The key waits 7 days for deletion, which costs nothing and blocks nothing: the next deploy makes a new one. A key policy naming a role IAM hasn't finished creating can fail that first deploy the same way: delete the stack, and deploy again.
