@@ -127,7 +127,19 @@ const isReviewEventRacer = (c) =>
  * than the unlucky one — which is why the register now records slugs and this is
  * read from its `Merger` row (RA-2701).
  */
-export const MERGER_LOGIN = appLogin('Merger'); // the register's `Merger` row (RA-2701)
+export const MERGER_LOGIN = /** @type {string} */ (appLoginAtLoad('Merger')); // the register's `Merger` row (RA-2701)
+
+// THE LOGINS ARE READ AT LOAD, BUT A REGISTER THAT CAN'T GIVE ONE DOESN'T STOP THE LOAD (kanon#1396):
+// none, a partial one or a malformed one (`appLoginAtLoad`). The status core loads this file for
+// `mergeVerdict` with every `kanon` command and on the hosted server, and passes the logins it read
+// from the default branch. Every read below goes through these, which throw the register's own
+// error when the constant is unset, so a lane with no usable register still stops before it
+// compares a login, and its CLI entry asserts all three first (the end of this file). The exports
+// are typed as the string they are wherever the register lists the role; they are
+// `undefined` only where the register can't give them, and nothing in this file reads them there.
+const mergerLogin = () => MERGER_LOGIN ?? appLogin('Merger');
+const implementerLogin = () => IMPLEMENTER_LOGIN ?? appLogin('Implementer');
+const reviewerLogin = () => REVIEWER_LOGIN ?? appLogin('Reviewer');
 
 /**
  * Labels that always mean a human decides.
@@ -188,11 +200,11 @@ export const PROJECT_BRIEFS = [/^docs\/projects\//, 'a project brief: the Lead\'
 /** The implementer whose PRs the Merger merges — the same App the rebase lane authors as.
  *  Exported so the parity between the two gates is asserted against one constant each
  *  rather than against a literal re-spelled in a test (RA-2218). */
-export const IMPLEMENTER_LOGIN = appLogin('Implementer');
+export const IMPLEMENTER_LOGIN = /** @type {string} */ (appLoginAtLoad('Implementer'));
 
 /** The reviewer whose verdict the gate reads — `mergeVerdict`'s default. It was an inline
  *  literal in that signature; since RA-2701 it is the register's `Reviewer` row. */
-export const REVIEWER_LOGIN = appLogin('Reviewer');
+export const REVIEWER_LOGIN = /** @type {string} */ (appLoginAtLoad('Reviewer'));
 
 /**
  * Runs on a commit that are WORKFLOW STARTUP FAILURES rather than job failures (RA-2222).
@@ -499,16 +511,20 @@ export function checkPartition(checks) {
  * projects both via `CONFLICT_JSON`; this typedef is the only place a future caller
  * learns it must too.
  *
- * @param {{escalations: Array<readonly [RegExp, string]>, implementer?: string, reviewer?: string, now?: number, ownRunId?: string|number|null}} who
- * `now` is injected for the `UNSTABLE` settle window, so the decision stays a function of
- * its arguments. `ownRunId` is injected the same way: the Actions run this decision runs in
+ * @param {{escalations: Array<readonly [RegExp, string]>, implementer?: string, reviewer?: string, merger?: string, now?: number, ownRunId?: string|number|null}} who
+ * `implementer`, `reviewer` and `merger` are the logins it compares: the register's rows in the
+ * working directory by default, as a lane runs it in its checkout of the default branch. The
+ * status core passes the ones it read from the default branch over the API, since it may run
+ * where there is no register at all (kanon#1396). `merger` decides whose `needs:human` hold
+ * this is, and is read only when that label is on the pull request. `now` is injected for the
+ * `UNSTABLE` settle window, so the decision stays a function of its arguments. `ownRunId` is injected the same way: the Actions run this decision runs in
  * (`GITHUB_RUN_ID`), whose jobs are never an unsettled check about the PR (kanon#812).
  * `escalations` is REQUIRED: `escalatingPaths` of the escalation file as the default branch
  * has it (kanon#54). There is no default, because a default would be a list
  * of paths the adopter never declared, and a missing list is a caller's bug that must throw
  * rather than merge a PR no path rule was applied to.
  */
-export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN, reviewer = REVIEWER_LOGIN, now = Date.now(), ownRunId = null } = /** @type {any} */ ({})) {
+export function mergeVerdict(pr, { escalations, implementer = implementerLogin(), reviewer = reviewerLogin(), merger, now = Date.now(), ownRunId = null } = /** @type {any} */ ({})) {
   if (!Array.isArray(escalations) || escalations.length === 0) {
     throw new Error('mergeVerdict needs the escalating paths (`escalatingPaths` of docs/qa/escalation-paths.md), and was given none');
   }
@@ -580,7 +596,7 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
   const head12 = String(pr.headSha).slice(0, 12);
   const mergersHold = () => {
     const h = pr.hold;
-    if (!h || slug(h.labeledBy) !== MERGER_LOGIN) return [];
+    if (!h || slug(h.labeledBy) !== (merger ?? mergerLogin())) return [];
     return Array.isArray(h.escalations) ? h.escalations : [];
   };
   const held = pr.labels.includes('needs:human') ? mergersHold() : [];
@@ -1126,7 +1142,7 @@ import { analyse } from './closing-refs.mjs';
 import { evidenceSha, readTrailer } from './review-trailer.mjs';
 import { CONFLICT_JSON, CONFLICT_WHY, conflictState } from './conflict-state.mjs';
 import { marker as rebaseMarker } from './rebase-lane.mjs';
-import { appLogin, appPersona } from './app-register.mjs';
+import { appLogin, appLoginAtLoad, appPersona } from './app-register.mjs';
 import { IMPLEMENTER_STATUS, asRole, implementerStatusOn, signed } from './lib/role-marker.mjs';
 import { escalatingPaths, printDefaults, readEscalationFileAt } from './lib/escalation-paths.mjs';
 import { defaultBranchFile } from './lib/declarations.mjs';
@@ -1384,7 +1400,7 @@ function mergeQueueOn(number, repo, gh, head) {
       '.[] | {login: .user.login, body: .body} | @json'])
       .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
     const spellings = mergerMarkerSpellings(QUEUED, head);
-    found.queuedHere = said.some((c) => asRole('Merger', { login: c.login, expected: MERGER_LOGIN, body: c.body })
+    found.queuedHere = said.some((c) => asRole('Merger', { login: c.login, expected: mergerLogin(), body: c.body })
       && spellings.some((m) => String(c.body).includes(m)));
   } catch {
     found.queuedHere = null;
@@ -1436,7 +1452,7 @@ export function holdOn(number, repo, gh) {
       '.[] | {login: .user.login, body: .body} | @json'])
       .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
     const escalations = comments
-      .filter((c) => asRole('Merger', { login: c.login, expected: MERGER_LOGIN, body: c.body }) && isEscalation(c.body))
+      .filter((c) => asRole('Merger', { login: c.login, expected: mergerLogin(), body: c.body }) && isEscalation(c.body))
       .flatMap((c) => mergerMarkersIn(c.body));
     return { labeledBy, escalations };
   } catch {
@@ -1459,7 +1475,7 @@ export function handbackOn(number, repo, gh, head) {
       '.[] | {login: .user.login, body: .body, at: .created_at} | @json'])
       .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
     const mark = marker(HANDBACK, head);
-    const found = said.find((c) => asRole('Merger', { login: c.login, expected: MERGER_LOGIN, body: c.body })
+    const found = said.find((c) => asRole('Merger', { login: c.login, expected: mergerLogin(), body: c.body })
       && String(c.body).includes(mark));
     return found ? { at: String(found.at) } : false;
   } catch {
@@ -1978,7 +1994,8 @@ export function followQueueMerges(repo, { run = gh, verify = verifyClosed, now =
   if (!Array.isArray(listed)) throw new Error(`the merged PRs could not be listed: ${JSON.stringify(listed).slice(0, 200)}`);
   const slug = (s) => String(s ?? '').replace(/^app\//, '').replace(/\[bot\]$/, '');
   const recent = listed.filter((p) => Date.parse(p?.mergedAt) >= since);
-  const ours = recent.filter((p) => slug(p?.mergedBy?.login) === MERGER_LOGIN);
+  const merger = mergerLogin();
+  const ours = recent.filter((p) => slug(p?.mergedBy?.login) === merger);
   // SAID EVERY TIME, matched or not (kanon#1117). The rule above that a queue merge is recorded
   // as its enqueuer's was measured only for a person who queued. If GitHub records an App's as
   // another actor, nothing here matches, so the line names who merged the rest: an empty check
@@ -1990,7 +2007,7 @@ export function followQueueMerges(repo, { run = gh, verify = verifyClosed, now =
   }
   const rest = others.size === 0 ? ''
     : `; the other${recent.length - ours.length === 1 ? '' : 's'} by ${[...others].map(([by, n]) => `${by} (${n})`).join(', ')}`;
-  say(`${recent.length} PR${recent.length === 1 ? '' : 's'} merged in the last day, ${ours.length} as the Merger (${MERGER_LOGIN}): ${ours.length === 0 ? 'nothing to check' : `checking ${ours.map((p) => `#${p.number}`).join(', ')}`}${rest}`);
+  say(`${recent.length} PR${recent.length === 1 ? '' : 's'} merged in the last day, ${ours.length} as the Merger (${merger}): ${ours.length === 0 ? 'nothing to check' : `checking ${ours.map((p) => `#${p.number}`).join(', ')}`}${rest}`);
   for (const p of ours) {
     verify({ number: p.number, headSha: p.headRefOid, closing: { willClose: (p.closingIssuesReferences ?? []).map((r) => r.number) } },
       repo, (m) => say(`#${p.number}: ${m}`), { retries: 0 });
@@ -2100,6 +2117,9 @@ async function main() {
 }
 
 // Importing this module with no argv[1] must not crash (RA-1071); `isCliEntry` holds that.
+// The lane stops on a register it can't read before it reads anything, as it did when the
+// logins were read only at load (kanon#1396): each throws the register's own error.
 if (isCliEntry(import.meta.url)) {
+  mergerLogin(); implementerLogin(); reviewerLogin();
   main().catch((e) => { console.error(e.message); process.exit(1); });
 }

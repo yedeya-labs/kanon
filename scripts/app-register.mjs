@@ -346,6 +346,36 @@ export function appLogin(role, path = APP_REGISTER) {
   return slug;
 }
 
+/**
+ * The login of the App that plays `role`, read when a module loads: the register's row, or
+ * `undefined` when the register can't give one: there is none at `path`, it has no row for
+ * `role`, or it is malformed (kanon#1396).
+ *
+ * WHY A SECOND READ. A lane module that keeps a login as a constant reads it when it is
+ * imported. The status core imports the merge gate in a process with no checkout (the hosted
+ * status server), and `kanon` loads the status core with every command, in a checkout whose
+ * register may list only some roles (an install with no Author lane has no Implementer row, and
+ * `kanon apps` writes each App's rows as it creates that App) or be malformed (which `kanon
+ * doctor` is there to report). An import that threw there would stop the command before it read
+ * its arguments, so nothing is thrown here.
+ *
+ * NOTHING COMPARES AGAINST `undefined`. Code that compares the login when it runs falls back to
+ * `appLogin` while the constant is `undefined`, which throws the register's own error, and each
+ * lane's CLI entry asserts its logins before it reads anything, so a lane still stops on a
+ * register it can't use, with the error it gave when the logins were read at load.
+ *
+ * @param {typeof ROLES[number]} role
+ * @param {string} [path]
+ * @returns {string | undefined}
+ */
+export function appLoginAtLoad(role, path = APP_REGISTER) {
+  try {
+    return loadAppRegister(path).get(role);
+  } catch {
+    return undefined;
+  }
+}
+
 // ── PERSONAS (plan 0005 §3.3; decided by the Owner, 2026-10-05) ───────────────────────────
 //
 // An optional `Persona` column, anywhere after `App slug`, gives a role the display name its

@@ -7,11 +7,14 @@
 // answer: its section is `{ error, reads }`, naming each read and why. Any other failure throws,
 // and the surface says it stopped.
 //
-// THE READINESS AND NEEDS-THE-OWNER VIEWS ARE LOADED ONLY WHEN ASKED FOR. Each runs the merge
-// gate's verdict function, and loading `merge-gate.mjs` reads the App register from the working
-// directory (docs/status.md), so the other three views keep working from any directory.
+// EVERY VIEW LOADS FROM ANY DIRECTORY. The readiness and needs-the-Owner views run the merge gate's
+// verdict function, whose module reads no App register from the working directory when there is
+// none, and judge by the logins in the default branch's register (kanon#1396). So the hosted
+// server, which has no checkout, serves all five.
 
+import { needsOwnerView } from './needs-owner.mjs';
 import { IncompleteRead, projectView } from './project.mjs';
+import { readinessView } from './pull-request.mjs';
 import { ReadError } from './reader.mjs';
 import { laneHealthView } from './lanes.mjs';
 import { releaseView } from './release.mjs';
@@ -29,15 +32,9 @@ import { releaseView } from './release.mjs';
 export const VIEWS = {
   project: ({ reader, repo, n }) => projectView({ reader, repo, project: /** @type {number} */ (n) }),
   release: ({ reader, repo, readAt }) => releaseView({ reader, repo, now: new Date(readAt) }),
-  pr: async ({ reader, repo, n, readAt }) => {
-    const { readinessView } = await import('./pull-request.mjs');
-    return readinessView({ reader, repo, pr: /** @type {number} */ (n), now: Date.parse(readAt) });
-  },
+  pr: ({ reader, repo, n, readAt }) => readinessView({ reader, repo, pr: /** @type {number} */ (n), now: Date.parse(readAt) }),
   lanes: ({ reader, repo }) => laneHealthView({ reader, repo }),
-  needsOwner: async ({ reader, repo, readAt }) => {
-    const { needsOwnerView } = await import('./needs-owner.mjs');
-    return needsOwnerView({ reader, repo, now: Date.parse(readAt) });
-  },
+  needsOwner: ({ reader, repo, readAt }) => needsOwnerView({ reader, repo, now: Date.parse(readAt) }),
 };
 
 /**
