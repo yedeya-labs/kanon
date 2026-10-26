@@ -526,9 +526,10 @@ describe('RA-1517 — a dispatch that never reached the model is not an attempt'
   it('the store read is bounded and read-only', () => {
     // The query moved into Kanon's AWS store action at P9 (`queryCostRows`), and the sweep's
     // direct read calls it; `qa-store-aws.test.ts` asserts its exact argv. This holds the
-    // bound on the source: projected, windowed, and never a write.
+    // bound on the source: projected, windowed, and never a write. Since #1372 the read and its
+    // unkeyed fallback live in `readCostPartition`, so the slice starts there (kanon#1380).
     const src = readFileSync(join(ROOT, 'infra/qa-store/aws/cost-rows.mjs'), 'utf8');
-    const fn = src.slice(src.indexOf('export function queryCostRows'), src.indexOf('const cause ='));
+    const fn = src.slice(src.indexOf('export function readCostPartition'), src.indexOf('const cause ='));
     expect(fn).toContain("'dynamodb', 'query'");
     expect(fn, 'projected, and to the constant').toMatch(/'--projection-expression', COST_PROJECTION/);
     expect(fn, 'and windowed, since the partition grows without bound').toMatch(/sk > :s/);

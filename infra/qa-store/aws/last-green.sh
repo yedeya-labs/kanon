@@ -94,7 +94,8 @@ fi
 # door: the gate never skips again, every run is green, and a benign line
 # says so. The `^[0-9a-f]{40}$` tripwire below cannot see it — `-z` exits first.
 #
-# So look at the partition's NEWEST row, unfiltered. This second request is
+# So look at the partition's NEWEST row, filtered only on the migration's mark
+# (in the unkeyed partition; see below). This second request is
 # made only on this branch, never on the skip/changed paths.
 #   - no row at all                → a fresh store: quiet `ok`. In this
 #     repository's own partition, it is instead the cue to read the unkeyed one.
