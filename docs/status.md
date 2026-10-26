@@ -70,7 +70,7 @@ For a pull request, `--pr` reads it as the Merger would on its next sweep, throu
 
 Whether it is ready is never the view's own judgement:
 
-- **The Implementer's pull request** is the Merger's. It is ready when the merge gate answers `merge`. It is ready for a person's merge when the gate escalates it for an escalation path alone: the gate, asked again with the declared paths lifted, answers `merge`. Any other answer isn't ready, and the gate's rule is what it lacks.
+- **The Implementer's pull request** is the Merger's, except when the merge gate escalates it, for any reason, or answers that it is a draft or not open: then it is a person's. It is ready when the merge gate answers `merge`. It is ready for a person's merge when the gate escalates it for an escalation path alone: the gate, asked again with the declared paths lifted, answers `merge`. Any other answer isn't ready, and the gate's rule is what it lacks.
 - **Any other pull request** is a person's to merge, never the Merger's. That is one the gate skips as not provably the Implementer's: a person's, a Lead's brief, a dependency bump, the release pull request. It is ready when three things hold, and the view names each one it lacks:
   - `checks`: the gate's check partition finds at least one check that counts, and none running, cancelled or failed;
   - `approval`: the Reviewer's verdict on its head, as the review-recovery lane reads it, is an approval;
