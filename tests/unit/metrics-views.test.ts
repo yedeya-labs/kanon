@@ -505,7 +505,7 @@ describe('the release comparison (kanon#1451)', () => {
     const c = only(views(rows));
     expect(c.verdict).toBe('not-enough-data');
     expect(c.costAtEqualSize).toMatchObject({ ok: false });
-    expect(c.costAtEqualSize.reason).toMatch(/each release needs 10 merged items with a cost and a diff size, and they have 12 and 8/);
+    expect(c.costAtEqualSize.reason).toMatch(/each release needs 10 merged items with a cost above zero and a diff size, and they have 12 and 8/);
     expect(text(rows)).toMatch(/\| not enough data \|/);
   });
 

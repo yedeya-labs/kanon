@@ -135,7 +135,9 @@ export function releaseComparisonOf(ctx, { start, end, fit }) {
 
 /**
  * Cost new against old at equal size (§6.1): the reference adopter's log-linear fit, log cost on
- * log(1 + changed lines) and the configuration, over merged items with a cost and a diff size.
+ * log(1 + changed lines) and the configuration, over merged items with a cost above zero and a
+ * diff size: the rows the fit can use, so each arm's minimum counts exactly what the fit runs on
+ * (a $0 item counted here and dropped by the fit published a fit from too few rows, #1456).
  * The percentage is the configuration's effect, new against old, with its 95% interval. Each arm
  * needs the median's minimum of such items.
  * Below that, `not-enough-data` with the smaller count and the minimum; a fit the rows can't
@@ -146,11 +148,11 @@ export function releaseComparisonOf(ctx, { start, end, fit }) {
  * @returns {{ ok: true, n: number, pct: number, loPct: number, hiPct: number } | { ok: false, status: 'not-enough-data', n: number, minimum: number, reason: string } | { ok: false, status: 'no-fit', n: number, reason: string }}
  */
 function sizeControlledCost(older, newer, { noun, fit }) {
-  const sized = (/** @type {typeof older} */ cs, /** @type {boolean} */ current) => cs.filter((c) => isCount(c.item.changed_lines)).map((c) => ({ cost: c.cost, lines: c.item.changed_lines, current }));
+  const sized = (/** @type {typeof older} */ cs, /** @type {boolean} */ current) => cs.filter((c) => c.cost > 0 && isCount(c.item.changed_lines)).map((c) => ({ cost: c.cost, lines: c.item.changed_lines, current }));
   const a = sized(older, false);
   const b = sized(newer, true);
   const n = Math.min(a.length, b.length);
-  if (n < MINIMUM.median) return { ok: false, status: 'not-enough-data', n, minimum: MINIMUM.median, reason: `not enough data (${n}): each ${noun} needs ${MINIMUM.median} merged items with a cost and a diff size, and they have ${a.length} and ${b.length}` };
+  if (n < MINIMUM.median) return { ok: false, status: 'not-enough-data', n, minimum: MINIMUM.median, reason: `not enough data (${n}): each ${noun} needs ${MINIMUM.median} merged items with a cost above zero and a diff size, and they have ${a.length} and ${b.length}` };
   const e = fit(/** @type {any} */ ([...a, ...b]));
   return e.ok ? { ok: true, n: e.n, pct: e.pct, loPct: e.loPct, hiPct: e.hiPct } : { ok: false, status: 'no-fit', n: a.length + b.length, reason: e.reason };
 }

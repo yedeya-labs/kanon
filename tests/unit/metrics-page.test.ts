@@ -9,7 +9,7 @@ import {
 import { pageView } from '../../infra/telemetry/function/aggregate.mjs';
 import { checkPage } from '../../scripts/aggregate-read.mjs';
 import { IDLE_DAYS, MINIMUM } from '../../scripts/metrics/indicators.mjs';
-import { winRows } from './helpers/release-rows.js';
+import { releaseRows, winRows } from './helpers/release-rows.js';
 
 /**
  * Plan 0003 M7 (kanon#661), §6.3: the public metrics page and its generator. The page shows the
@@ -270,6 +270,21 @@ describe('the release comparison on the page (kanon#1453)', () => {
       forge(rcOf(p));
       expect(() => render(p), String(refusal)).toThrow(refusal);
     }
+  });
+
+  it('counts toward the fit\'s minimum only items with a cost above zero, as the fit does, so a $0 item never makes the page refuse (#1456)', () => {
+    // Ten items in 0.39.0, three of them $0 (a delivery run that failed at its first turn), and
+    // twelve in 0.40.0. Counting the $0 items, each release has its 10 and the fit runs on the 19
+    // it can use, which the page refuses, writing no page. Counting usable rows, 0.39.0 has 7.
+    const zero = new Set([1, 2, 3]);
+    const stored = [
+      ...releaseRows('alpha', '0.39.0', 1, 10, { now: NOW, days: [100, 160], scale: 1 }).map((r) => (r.row_kind === 'run' && zero.has(r.pr_number as number) ? { ...r, total_cost_usd: 0 } : r)),
+      ...releaseRows('alpha', '0.40.0', 1001, 12, { now: NOW, days: [31, 95], scale: 0.7 }),
+    ];
+    const p = checkPage(JSON.parse(JSON.stringify(pageView(stored, { now: NOW, own: { alpha: 'kanon' } }))));
+    expect(rcOf(p).comparisons[0].costAtEqualSize).toEqual({ status: 'not-enough-data', n: 7, minimum: MINIMUM.median });
+    expect(rcOf(p).comparisons[0].verdict).toBe('not-enough-data');
+    expect(() => render(p)).not.toThrow();
   });
 
   it("refuses a verdict its figures don't give: never a win without cost below zero and quality held", () => {
