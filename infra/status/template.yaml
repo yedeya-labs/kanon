@@ -1,0 +1,224 @@
+# The hosted status server (project #1327, Issue I): one function behind a public function URL,
+# its log group, its role and its KMS key, and nothing else (`[MCP-10]`). It stores nothing, so
+# it has no table and no bucket. Deployed as the stack `kanon-status`, beside the telemetry store,
+# by the operator's repository through Kanon's deploy lane (decision 2), with production
+# dispatched by the Owner. `docs/status.md`'s "Deploy" section has the hooks and the commands.
+#
+# Intrinsics are written in their long form (`Ref:`, `Fn::GetAtt:`) so the file parses as plain
+# YAML, for the unit test that checks it (`tests/unit/status-template.test.ts`).
+#
+# THE CODE. `infra/status/build.mjs` copies the function's import closure into `function/`, beside
+# this file, with the repository's layout kept, since the function imports the status core and
+# the deciders the lanes run. So `Code` is that directory and the handler is named by its path in
+# it. `cloudformation package` zips and uploads it.
+#
+# THE SECRET (the Owner's Q1, 2026-10-26). The status App's client secret is an SSM `SecureString`
+# the Owner puts by hand, under the AWS-managed `aws/ssm` key. This template takes only its name,
+# and the function reads it at a container's first request. So it is in no template, stack
+# parameter, function configuration, deploy or log.
+#
+# COST (decision 2, under a $5 a month ceiling): one 256 MB function with no schedule, a 30-day
+# log group and one customer-managed key, at $1 a month, unrotated (Q2). No VPC, no NAT, no alarm.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Kanon's hosted status MCP server (project 1327).
+
+Parameters:
+  GitHubClientId:
+    Type: String
+    Description: The status App's client id, which is not a secret.
+    AllowedPattern: '^[A-Za-z0-9.]{1,64}$'
+  GitHubClientSecretParameter:
+    Type: String
+    Description: The name of the SSM SecureString holding the status App's client secret, which the Owner puts by hand. Its value never passes through this stack.
+    # Under /kanon-status/ alone, so the role's one grant can't name another stack's parameter.
+    AllowedPattern: '^/kanon-status/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$'
+    Default: /kanon-status/github-client-secret
+  Redirects:
+    Type: String
+    Description: The redirects a client may register, comma-separated. Empty takes the server's defaults (docs/status.md, Signing in).
+    Default: ''
+  Release:
+    Type: String
+    Description: The Kanon release deployed, which the server's initialize answer names.
+    AllowedPattern: '^[A-Za-z0-9._+-]{1,64}$'
+    Default: unreleased
+  ReservedConcurrency:
+    Type: Number
+    Description: The function's reserved concurrency. Its URL is public, so the reservation bounds what a flood can cost, and it is always set.
+    MinValue: 1
+    Default: 4
+  PermissionsBoundaryArn:
+    Type: String
+    Description: A managed policy the function's role carries as its permissions boundary (plan 0010, decision 15), for a deploy whose service role may create roles only with it. Empty sets none.
+    AllowedPattern: '^$|^arn:aws:iam::(\d{12}|aws):policy/(?:[\w+=,.@-]+/)*[\w+=,.@-]+$'
+    Default: ''
+
+# Beside the telemetry store, in Frankfurt (decision 2).
+Rules:
+  Frankfurt:
+    Assertions:
+      - Assert:
+          Fn::Equals: [{ Ref: AWS::Region }, eu-central-1]
+        AssertDescription: The hosted status server is deployed to eu-central-1 only (decision 2).
+
+Conditions:
+  HasPermissionsBoundary: { 'Fn::Not': [{ 'Fn::Equals': [{ Ref: PermissionsBoundaryArn }, ''] }] }
+
+Resources:
+  # It may write its own log and read the one secret parameter. Its use of the key is the key
+  # policy's grant, below, held to the encryption context: naming the key here too would make the
+  # role and the key each need the other first.
+  StatusRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: kanon-status
+      PermissionsBoundary: { 'Fn::If': [HasPermissionsBoundary, { Ref: PermissionsBoundaryArn }, { Ref: AWS::NoValue }] }
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: log-and-read-the-client-secret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: WriteItsLog
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: { 'Fn::GetAtt': [StatusLogGroup, Arn] }
+              # A SecureString under aws/ssm: that key's own policy lets SSM decrypt it for any
+              # principal in the account allowed this read, so no kms: grant is needed for it.
+              - Sid: ReadTheClientSecret
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${GitHubClientSecretParameter}
+
+  # One line per request, of closed lists and numbers (`[MCP-8]`), kept 30 days.
+  StatusLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/kanon-status
+      RetentionInDays: 30
+
+  # Every value the sign-in hands out is sealed under a data key this key wraps (`seal.mjs`), so
+  # its policy decides who can open every token the server issues: the function's role, and only
+  # with the context `seal.mjs` sends. The account administers it through IAM, and can't use it.
+  # Nothing at rest depends on it, so it goes with the stack, after KMS's shortest wait, and
+  # everyone signs in again (Q2). Tagged for the bootstrap stack's service role, which may create
+  # and administer only a key carrying the tag (Q3).
+  StatusKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Description: Seals what Kanon's hosted status server hands out (docs/status.md, Signing in).
+      KeySpec: SYMMETRIC_DEFAULT
+      KeyUsage: ENCRYPT_DECRYPT
+      # Rotation would add $1 a month for each of the first two years, and the longest-lived thing
+      # sealed is a 30-day refresh token (Q2).
+      EnableKeyRotation: false
+      PendingWindowInDays: 7
+      Tags:
+        - Key: kanon:stack
+          Value: kanon-status
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TheAccountAdministersIt
+            Effect: Allow
+            Principal:
+              AWS: { 'Fn::Sub': 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root' }
+            Action:
+              - kms:DescribeKey
+              - kms:GetKeyPolicy
+              - kms:GetKeyRotationStatus
+              - kms:ListResourceTags
+              - kms:ListGrants
+              - kms:ListKeyPolicies
+              - kms:PutKeyPolicy
+              - kms:UpdateKeyDescription
+              - kms:EnableKey
+              - kms:DisableKey
+              - kms:EnableKeyRotation
+              - kms:DisableKeyRotation
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:RevokeGrant
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: '*'
+          - Sid: TheFunctionSealsUnderIt
+            Effect: Allow
+            Principal:
+              AWS: { 'Fn::GetAtt': [StatusRole, Arn] }
+            Action: [kms:GenerateDataKey, kms:Decrypt]
+            Resource: '*'
+            Condition:
+              StringEquals:
+                kms:EncryptionContext:service: kanon-status
+
+  StatusFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: kanon-status
+      Description: Kanon's hosted status MCP server (docs/status.md).
+      Runtime: nodejs24.x
+      Architectures: [arm64]
+      Handler: infra/status/function/handler.handler
+      Code: function
+      MemorySize: 256
+      # A view reads several pages of GitHub, and an MCP client waits longer than this.
+      Timeout: 60
+      Role: { 'Fn::GetAtt': [StatusRole, Arn] }
+      # Its URL is public: the reservation bounds what a flood can cost, and an unauthenticated
+      # request is answered 401 in milliseconds. 4, not the telemetry functions' 2, since a client
+      # calls tools in parallel and a sign-in makes several requests in a row (Q4).
+      ReservedConcurrentExecutions: { Ref: ReservedConcurrency }
+      LoggingConfig:
+        LogGroup: { Ref: StatusLogGroup }
+        LogFormat: Text
+      # handler.mjs's ENV. The secret parameter's name, never the secret.
+      Environment:
+        Variables:
+          KEY_ID: { Ref: StatusKey }
+          GITHUB_CLIENT_ID: { Ref: GitHubClientId }
+          CLIENT_SECRET_PARAMETER: { Ref: GitHubClientSecretParameter }
+          REDIRECTS: { Ref: Redirects }
+          RELEASE: { Ref: Release }
+
+  # The server does its own OAuth (Issue H), so its URL takes no IAM auth.
+  StatusUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: { 'Fn::GetAtt': [StatusFunction, Arn] }
+      AuthType: NONE
+      InvokeMode: BUFFERED
+
+  # A public URL needs both grants: InvokeFunctionUrl held to the URL's NONE auth, and
+  # InvokeFunction held to calls through a function URL (since October 2025).
+  StatusUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: { Ref: StatusFunction }
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  StatusInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: { Ref: StatusFunction }
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+
+Outputs:
+  # The address a client connects to, and the smoke checks.
+  McpUrl:
+    Value: { 'Fn::Sub': '${StatusUrl.FunctionUrl}mcp' }
+  # Issue K reads the server's log lines here.
+  LogGroupName:
+    Value: { Ref: StatusLogGroup }
