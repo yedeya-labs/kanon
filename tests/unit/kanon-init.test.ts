@@ -12,6 +12,7 @@ import { parseUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { unreached } from '../../actions/lane-check/dependabot-reach.mjs';
 import { ROOT, hasYq, REQ, TAXONOMY, REPO, checkout, ok, no, fakeGitHub, writes, run, changing, laneCheck, read, parse } from './helpers/kanon-init.js';
+import { readDocs, scanDoc } from '../../scripts/doc-pins.mjs';
 
 // Its cases run `kanon init` against a real git checkout, and several run lane-check, so every
 // case takes the spawn budget (#436).
@@ -476,10 +477,14 @@ describe('kanon init and telemetry (#428)', () => {
     return github;
   };
 
+  // The docs name the latest stable release, not the one this tree releases (scripts/doc-pins.mjs),
+  // so the block is `init`'s file at the release the docs name: byte for byte, apart from the release.
   it("writes docs/telemetry.md's caller, byte for byte, pinned to the release it runs from", () => {
     const doc = read(ROOT, 'docs/telemetry.md');
     const block = doc.split('**The caller.**')[1]!.split('```yaml\n')[1]!.split('```')[0]!;
-    expect(telemetryCallerFile(RELEASE)).toBe(block);
+    const named = [...new Set(readDocs(ROOT).flatMap((d) => scanDoc(d.text).flatMap((l) => l.refs)))];
+    expect(named).toHaveLength(1);
+    expect(telemetryCallerFile(named[0]!)).toBe(block);
     expect(TELEMETRY_CALLER_PATH).toBe('.github/workflows/telemetry.yml');
     expect(REQ.telemetry?.collector).toBe('telemetry-collect');
     for (const v of REQ.telemetry!.variables) expect(telemetryCallerFile(RELEASE)).toContain(`\${{ vars.${v} }}`);
