@@ -1,13 +1,18 @@
 # Rebase — one conflicting PR's resolution (kanon#279).
 #
-# CALLED ONLY BY `agent-rebase.yml`, once per matrix entry. Three jobs, for `K-AGENT-49`:
+# CALLED ONLY BY `agent-rebase.yml`, once per matrix entry. Four jobs, for `K-AGENT-49`:
 #   • `mint` holds the Author App's private key and runs nothing else: no checkout, no
 #     project code, no agent. It mints this PR's narrowed token with `skip-token-revoke` and
 #     hands it on hex-encoded, because GitHub drops a job output holding a masked value.
 #   • `resolve` is `rebase-agent-job.yml`, which checks out the PR, runs the project's hook
 #     and the agent with the token, never the key, and revokes the token as its last step.
-#     A called workflow, because its `secrets:` is the one channel that arrives masked.
-#   • `implementer-status` holds the key too, after the agent's job, and runs only Kanon's Node
+#     A called workflow, because its `secrets:` is the one channel that arrives masked. The
+#     token can't write code (`[LANE-13]`, kanon#1384): the agent commits its merge locally,
+#     and the job hands the commits on as an artifact.
+#   • `push` holds the key too, after the agent's job, and runs only Kanon's Node: it re-creates
+#     the merge through GitHub with the verified-commit helper and moves the PR's branch without
+#     force (`[LANE-14]`, `[LANE-17]`).
+#   • `implementer-status` holds the key too, after the push, and runs only Kanon's Node
 #     and `actions/implementer-status`: it carries the status to the head this entry pushed
 #     (#1379), so a PR is stamped when its own entry ends, not when the whole matrix has.
 # The lane's own header says what the resolution does.
@@ -45,11 +50,11 @@ on:
       anthropic-api-key:
         required: false
     outputs:
-      # `rebase-agent-job.yml`'s `{ pr, base, heads }`, passed up for the lane's implementer
-      # status (#1263).
+      # The push job's `{ pr, base, heads }`, the branch it moved and the head it built on (#1263,
+      # `[LANE-16]`): never the agent's, whose commits GitHub re-creates.
       checked:
         description: "`{ pr, base, heads }` as JSON, or empty."
-        value: ${{ jobs.resolve.outputs.checked }}
+        value: ${{ jobs.push.outputs.checked }}
 
 # NO `permissions:` BLOCK: the lane's matrix job sets this call's ceiling, and without a block
 # here each job gets exactly what that job was given.
@@ -75,11 +80,10 @@ jobs:
           private-key: ${{ secrets.app-private-key }}
           # The agent's job revokes it when it ends. The default would revoke it as THIS job ends.
           skip-token-revoke: "true"
-          # Narrowed to what this step uses (#48, `K-AGENT-46`): it pushes the merge (which may carry the default branch's workflow changes, so `workflows`), and comments and labels the pull request.
-          permission-contents: write
+          # Narrowed to what this step uses (#48, `K-AGENT-46`): it reads the tree and fetches, and comments and labels the pull request. No `contents: write` and no `workflows: write` (`[LANE-13]`): the push job pushes the merge.
+          permission-contents: read
           permission-issues: write
           permission-pull-requests: write
-          permission-workflows: write
       - name: Seal the token for the agent's job
         id: seal
         env:
@@ -103,25 +107,86 @@ jobs:
       claude-token: ${{ secrets.claude-token }}
       anthropic-api-key: ${{ secrets.anthropic-api-key }}
 
+  # THE PUSH JOB (kanon#1384, `[LANE-14]`, `[LANE-17]`). The agent merged the default branch into
+  # the PR's branch on its runner, and its job handed the commits on as an artifact. This job holds
+  # the key and mints its own token, narrowed to the push, as the spine's push job does, so the
+  # mint-and-agent pair above stays two jobs (`K-AGENT-49`). It runs no agent and no project code,
+  # and checks nothing out: Kanon's scripts at the release the lane pinned, and `git` on a bare
+  # store. It reads the PR itself, and moves only its branch, the one the agent's job read before
+  # the agent ran, from the head that job fetched, without force (`K-AGENT-34`). And only to one
+  # merge commit whose parents are that head and the default branch's head the job fetched: the
+  # helper re-creates that merge through the API with both parents, keeps every commit GitHub
+  # already has, and uploads only the blobs the resolution changed (`[LANE-6]`, `[LANE-11]`).
+  # `scripts/lane-push.mjs --merged` says what it refuses.
+  #
+  # AFTER THE AGENT'S JOB, WHATEVER IT DID, whenever it left commits. `!cancelled()` because a
+  # failed `resolve` would otherwise skip it. A refusal fails this job, so the entry is red, and
+  # the step summary names the commit created, its verification, the branch moved, or why none.
+  push:
+    needs: [resolve]
+    if: ${{ !cancelled() && needs.resolve.outputs.commits == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      heads: ${{ steps.push.outputs.heads }}
+      base: ${{ steps.push.outputs.base }}
+      # ONE JSON value `{ pr, base, heads }`, as the implementer status reads it: `toJSON` quotes
+      # each value, so the heads text adds no key. Empty when nothing moved, which carries nothing.
+      checked: ${{ steps.push.outputs.base && format('{{"pr":{0},"base":{1},"heads":{2}}}', toJSON(inputs.pr), toJSON(steps.push.outputs.base), toJSON(steps.push.outputs.heads)) || '' }}
+    steps:
+      - uses: $/actions/kanon-path
+      # Narrowed to what this job uses (`K-AGENT-46`): the commits and the branch (`contents`),
+      # `workflows` because the merge brings the default branch's changes to `.github/workflows/`,
+      # and reading the PR (`pull_requests: read`). Revoked by the action's own post step.
+      - name: Mint the push token
+        id: push-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          permission-contents: write
+          permission-pull-requests: read
+          permission-workflows: write
+      - uses: actions/download-artifact@v8
+        with:
+          name: kanon-push-${{ inputs.pr }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kanon-push
+      - name: Push the agent's merge
+        id: push
+        env:
+          GH_TOKEN: ${{ steps.push-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          APP_LOGIN: ${{ steps.push-token.outputs.app-slug }}[bot]
+          PR: ${{ inputs.pr }}
+          START: ${{ needs.resolve.outputs.start }}
+          MERGED: ${{ needs.resolve.outputs.merged }}
+          REF: ${{ needs.resolve.outputs.head-ref }}
+        run: |
+          set -euo pipefail
+          in="$RUNNER_TEMP/kanon-push"
+          node "$KANON/scripts/lane-push.mjs" --bundle "$in/commits.bundle" --start "$START" --ref "$REF" \
+            --pr "$PR" --merged "$MERGED" --app-login "$APP_LOGIN"
+
   # THE IMPLEMENTER STATUS IS A CHAIN (plan 0005 §3.3, question 6; step L3). A fixed job after
   # this entry's agent, never the agent: it moves `kanon/role: implementer` to the resolved head
   # only when the head recorded before the agent ran (`start-head`) carried one created by the
   # Implementer's App, and every commit on the first-parent path between them is the App's (the
-  # merge's second parent is the default branch). And only to a head the agent's job held, made
-  # on the head it fetched, which must be the one recorded before the agent (#1263): `resolve`'s
-  # `checked`, which names its pull request. Otherwise it sets none and says why. It never reds
+  # merge's second parent is the default branch). And only to a head the push job moved, built
+  # on the head the agent's job fetched, which must be the one recorded before the agent (#1263):
+  # `push`'s `checked`, which names its pull request, never the agent's job (`[LANE-16]`). With no
+  # push, as when the agent left no commit, it sets none and says why. It never reds
   # the lane. Since L4 the Merger requires the status, and the lane's filter refuses a pull
   # request whose head lacks it (`rebase-lane.mjs`, `ineligible`).
   #
   # IN THIS CALL, PER ENTRY (#1379). After the whole matrix, the stamp waited for every entry and
   # only the last entry's record survived. Here each entry's own job reads its own record, as soon
-  # as its agent's job ends. After the write, the action re-delivers a changes-request filed on the
+  # as its push ends. After the write, the action re-delivers a changes-request filed on the
   # head before the status (`actions/implementer-status`).
   #
   # HOLDS THE KEY (`K-AGENT-49`): nothing here but Kanon's Node and the action. No checkout, no
   # project code, no agent (`tests/unit/app-key-isolation.test.ts`).
   implementer-status:
-    needs: [resolve]
+    needs: [push]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -135,5 +200,5 @@ jobs:
           app-private-key: ${{ secrets.app-private-key }}
           pr: ${{ inputs.pr }}
           start-head: ${{ inputs.start-head }}
-          heads: ${{ fromJson(needs.resolve.outputs.checked || '{}').pr == inputs.pr && fromJson(needs.resolve.outputs.checked || '{}').heads || '' }}
-          base: ${{ fromJson(needs.resolve.outputs.checked || '{}').pr == inputs.pr && fromJson(needs.resolve.outputs.checked || '{}').base || '' }}
+          heads: ${{ fromJson(needs.push.outputs.checked || '{}').pr == inputs.pr && fromJson(needs.push.outputs.checked || '{}').heads || '' }}
+          base: ${{ fromJson(needs.push.outputs.checked || '{}').pr == inputs.pr && fromJson(needs.push.outputs.checked || '{}').base || '' }}

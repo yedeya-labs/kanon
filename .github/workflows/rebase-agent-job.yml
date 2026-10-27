@@ -10,8 +10,10 @@
 # the lane's inputs arrives as inputs of the same name. The lane's header says what the job
 # does, and `tests/unit/app-key-isolation.test.ts` holds its token steps to the spine's.
 #
-# WHAT THE AGENT CAN STILL REACH HERE: the token it was always given, for at most the hour it
-# lives, and the Claude token. Rewriting a cached action in this job reaches only those.
+# WHAT THE AGENT CAN STILL REACH HERE: the token it was given, for at most the hour it lives, and
+# the Claude token. Rewriting a cached action in this job reaches only those. The token can't
+# write code (`[LANE-13]`, kanon#1384): the agent commits its merge on its runner, and this job
+# hands the commits to `rebase-run.yml`'s push job as a git bundle.
 name: Rebase — the agent's job
 
 on:
@@ -53,15 +55,24 @@ on:
       anthropic-api-key:
         required: false
     outputs:
-      # WHAT THE IMPLEMENTER STATUS'S `carry` BINDS TO (#1263), as ONE JSON value
-      # `{ pr, base, heads }`: the pull request, its head as this job fetched it before the
-      # agent, and the branch heads the job held after, as the JSON array text the spine's
-      # `heads` output is. One value, because the lane calls this once per matrix entry and
-      # keeps only one entry's outputs; the status job uses it only when its `pr` is the
-      # entry's own. The `resolve` job's `checked` output below says where it is built, and why.
-      checked:
-        description: "`{ pr, base, heads }` as JSON, `heads` a JSON array as text, or empty."
-        value: ${{ jobs.resolve.outputs.checked }}
+      # WHAT THE PUSH JOB BUILDS ON (kanon#1384, `[LANE-17]`): the pull request's head and branch,
+      # and the default branch's head, each as this job fetched it before the agent. The `resolve`
+      # job's outputs below say where each is recorded, and why. No head the agent left: GitHub
+      # re-creates the agent's commits, so the implementer status reads the push job's (`[LANE-16]`).
+      start:
+        description: The pull request's head as this job fetched it, before the agent, or empty.
+        value: ${{ jobs.resolve.outputs.start }}
+      head-ref:
+        description: The pull request's branch, read before the agent, or empty.
+        value: ${{ jobs.resolve.outputs.head-ref }}
+      merged:
+        description: The default branch's head as this job fetched it, before the agent, or empty.
+        value: ${{ jobs.resolve.outputs.merged }}
+      # WHETHER THIS JOB HANDED COMMITS ON: `true` when the agent left commits GitHub lacks and
+      # their bundle was uploaded, which is when the push job runs.
+      commits:
+        description: "`true` when the agent's commits were handed to the push job."
+        value: ${{ jobs.resolve.outputs.commits }}
 
 jobs:
   resolve:
@@ -70,13 +81,14 @@ jobs:
     env:
       PR_NUMBER: ${{ inputs.pr }}
     outputs:
-      # Built HERE, from `inputs.pr` and `steps.base.outputs.base`, a step output written
-      # before the agent, never from a step after it (#1357): code the agent runs can rewrite
-      # `$GITHUB_PATH` and `BASH_ENV`, so a later step's `jq` or `sed` can print anything, but
-      # no step can rewrite an earlier step's output. `toJSON` quotes each value, `heads`
-      # included, so the post-agent heads text can add no key beside `pr` and `base`. Empty
-      # when either record is, which carries nothing.
-      checked: ${{ steps.base.outputs.base && steps.heads.outputs.heads && format('{{"pr":{0},"base":{1},"heads":{2}}}', toJSON(inputs.pr), toJSON(steps.base.outputs.base), toJSON(steps.heads.outputs.heads)) || '' }}
+      # Each from `steps.base`, a step written before the project's code and the agent, never from
+      # a step after them (#1357): code the agent runs can rewrite `$GITHUB_PATH` and `BASH_ENV`,
+      # so a later step's `jq` or `sed` can print anything, but no step can rewrite an earlier
+      # step's output. An empty one makes the push job refuse, which moves nothing.
+      start: ${{ steps.base.outputs.base }}
+      head-ref: ${{ steps.base.outputs.ref }}
+      merged: ${{ steps.base.outputs.merged }}
+      commits: ${{ steps.upload.outcome == 'success' }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
       # it is as close to the job's start as a step can be.
@@ -84,8 +96,8 @@ jobs:
         id: job
         run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
-      # The token FIRST so checkout persists it as the git credential — the resolution
-      # is a push, and the default token is `contents: read` here.
+      # The token FIRST so checkout persists it as the git credential. It reads the repository
+      # and fetches; it can't push (`[LANE-13]`), and the push job pushes the resolution.
       # THE TOKEN, RECEIVED WHERE IT WAS MINTED (kanon#279, `K-AGENT-49`): `rebase-run.yml`'s `mint` job
       # holds the key and mints it; this step decodes and masks it, and the job never sees the key.
       - name: Receive the App token
@@ -121,11 +133,15 @@ jobs:
           # refuses a fork's head before this job starts, and only the agent runs the tree.
           fetch-depth: 0
 
-      # THE PULL REQUEST'S HEAD AS THIS JOB FETCHED IT, BEFORE THE AGENT (#1263): the checkout
-      # above brought every branch in as `refs/remotes/origin/*`, and the agent merges into this
-      # one. The implementer status's `carry` moves only when it is the head the lane's filter
-      # read, so nothing landed in between. A fixed step before the agent, so the agent cannot
-      # write it; `continue-on-error`, and a failed read leaves it empty, which carries nothing.
+      # THE PULL REQUEST'S HEAD AND THE DEFAULT BRANCH'S, AS THIS JOB FETCHED THEM, BEFORE THE
+      # AGENT (#1263, kanon#1384): the checkout above brought every branch in as
+      # `refs/remotes/origin/*`, and the agent merges the second into the first. The push job moves
+      # the pull request's branch from `base` without force, and only to one merge whose parents
+      # are `base` and `merged` (`[LANE-17]`), so a merge of a newer default branch is refused. The
+      # implementer status's `carry` moves only when `base` is the head the lane's filter read, so
+      # nothing landed in between. A fixed step before the project's code and the agent, so
+      # neither can write it; `continue-on-error`, and a failed read leaves all three empty, which
+      # moves nothing and carries nothing.
       - name: Record the pull request's head as this job fetched it
         id: base
         continue-on-error: true
@@ -135,7 +151,14 @@ jobs:
         run: |
           set -euo pipefail
           REF="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName --jq .headRefName)"
-          echo "base=$(git -c core.fsmonitor=false rev-parse --verify -q "refs/remotes/origin/$REF^{commit}")" >> "$GITHUB_OUTPUT"
+          DEFAULT="$(gh repo view "$REPO" --json defaultBranchRef --jq .defaultBranchRef.name)"
+          BASE="$(git -c core.fsmonitor=false rev-parse --verify -q "refs/remotes/origin/$REF^{commit}")"
+          MERGED="$(git -c core.fsmonitor=false rev-parse --verify -q "refs/remotes/origin/$DEFAULT^{commit}")"
+          {
+            echo "base=$BASE"
+            echo "ref=$REF"
+            echo "merged=$MERGED"
+          } >> "$GITHUB_OUTPUT"
 
       # THIS LANE CALLS THE AGENT-LANE BLOCKS DIRECTLY (RA-2659), not the reusable spine,
       # because "Record the attempt" below must run INSIDE this matrix job, between the
@@ -253,7 +276,17 @@ jobs:
 
             WHAT TO DO. Check out the PR's branch, merge `origin/main` into it (a MERGE,
             never a rebase — a rebase force-pushes, which detaches the Reviewer's review from
-            the commits it cites), resolve every conflict, verify, commit and push.
+            the commits it cites) with `git merge --no-ff --no-commit origin/main`, resolve
+            every conflict, verify, then commit the merge on the PR's branch. You do NOT
+            push: your token can't, and a job after yours pushes what you committed on the
+            PR's branch through GitHub, which re-creates your merge as a new commit. So:
+              · merge exactly the `origin/main` you were checked out with. Never `git fetch`
+                or `git pull`: the push refuses a merge of any other head of `main`;
+              · one merge commit, its first parent the PR's head and its second
+                `origin/main`. A fix for a test the merged tree broke may follow it as an
+                ordinary commit. Never rebase, amend or squash;
+              · commit nothing on the PR's branch you would not push: whatever is committed
+                on it when you stop is pushed, even if your run fails.
 
             RESOLVE, DO NOT REDECIDE. Both sides are already-reviewed intent. A
             resolution keeps BOTH: `main`'s change and this PR's change, combined so each
@@ -276,11 +309,11 @@ jobs:
               · `CHANGELOG.md` — release-please's. Take `main`'s and drop your side's
                 entry; the release PR regenerates it from the commits.
 
-            VERIFY BEFORE YOU PUSH, and verify the MERGED tree, not your side of it:
+            VERIFY BEFORE YOU COMMIT, and verify the MERGED tree, not your side of it:
             every command the stack document's `## Gates` section lists. If the PR
             touched the schema, also follow its `## Schema changes` section and run the
             checks its `## Data isolation` section names — a resolution that loses an
-            isolation rule is the worst outcome available here. Do not push a tree whose
+            isolation rule is the worst outcome available here. Do not commit a tree whose
             gates you have not run.
 
             WHEN TO STOP AND ASK — and this is the ONLY thing that reaches the developer.
@@ -293,18 +326,22 @@ jobs:
             awkward merge, a test you must update, a rename on both sides — is yours.
 
             IF YOU CANNOT RESOLVE IT for any other reason, the same shape applies minus
-            the label: abort, comment with what defeated you, STOP. Never push a tree
-            with conflict markers in it, and never push one whose tests you did not run.
+            the label: abort, comment with what defeated you, STOP. Never commit a tree
+            with conflict markers in it, and never commit one whose tests you did not run.
+            If you already committed on the PR's branch and then give up, put it back
+            first: `git reset --hard origin/<the PR's branch>`, or the job after yours
+            pushes what you committed.
 
-            NEVER: merge the PR (a human merges), force-push, close anything,
+            NEVER: merge the PR (a human merges), push or force-push, close anything,
             touch a branch other than this PR's, or edit `.github/workflows/**` as part of
             a resolution unless that is where the conflict actually is.
 
             OUTPUT: a comment on PR #${{ env.PR_NUMBER }} saying what conflicted, how you
-            resolved each one, which gates you ran and their results. The push re-runs CI
-            and dismisses the Reviewer's approval, so he re-reviews your resolution — say
-            plainly what you want him to look at hardest. ALWAYS leave a comment, even if
-            you did nothing.
+            resolved each one, which gates you ran and their results. Name no commit id of
+            your own: GitHub re-creates your merge as a new commit when it is pushed. The
+            push re-runs CI and dismisses the Reviewer's approval, so he re-reviews your
+            resolution — say plainly what you want him to look at hardest. ALWAYS leave a
+            comment, even if you did nothing.
           claude_args: |
             --model claude-opus-5-5
             --effort high
@@ -330,21 +367,45 @@ jobs:
             echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
           fi
 
-      # THE BRANCH HEADS THE AGENT LEFT (#1263), the spine's step of the same name (#324), which
-      # says why local branches only and what the agent could rewrite. It writes the heads
-      # alone: the job's `checked` output pairs them with the pull request and the head
-      # recorded before the agent, which this step, running after the agent, never handles.
-      - name: Record the branch heads the agent left
-        id: heads
+      # THE AGENT'S COMMITS GO TO THE PUSH JOB, NOT TO GITHUB (kanon#1384, `[LANE-13]`, `[LANE-14]`),
+      # as the spine's step of the same name hands them on (`lane-agent-job.yml`, which says why
+      # local branches only, and why the push job trusts none of it). This job's token can't push.
+      # So after the agent, whatever it did, this bundles every local branch's commits that no
+      # remote-tracking branch holds, which are the merge and any fix after it. An agent that
+      # aborted, or reset its branch, leaves none, hands on nothing, and the push job doesn't run.
+      # There is no request: this lane opens no pull request. `core.fsmonitor` off, so no hook the
+      # agent configured runs here.
+      - name: Hand the agent's commits to the push job
+        id: handoff
         if: always() && steps.agent.outcome != 'skipped'
-        continue-on-error: true
+        env:
+          START: ${{ steps.base.outputs.base }}
         run: |
           set -euo pipefail
-          {
-            git -c core.fsmonitor=false for-each-ref --count=100 --format='%(objectname) %(refname:strip=2)' refs/heads
-            if sha="$(git -c core.fsmonitor=false rev-parse --verify -q HEAD)"; then echo "$sha HEAD"; fi
-          } | jq -Rsc 'split("\n") | map(select(length > 0) | capture("^(?<sha>[0-9a-f]{40}) (?<ref>.+)$"))' \
-            | sed 's/^/heads=/' >> "$GITHUB_OUTPUT"
+          out="$RUNNER_TEMP/kanon-push"
+          rm -rf "$out"
+          mkdir -p "$out"
+          if ! git -c core.fsmonitor=false bundle create "$out/commits.bundle" --branches --not --remotes ${START:+"$START"} 2>"$out/bundle.err"; then
+            if grep -q 'empty bundle' "$out/bundle.err"; then
+              rm -rf "$out"
+              echo "The agent left no commit GitHub lacks, so there is nothing to push"
+              exit 0
+            fi
+            cat "$out/bundle.err"
+            exit 1
+          fi
+          rm -f "$out/bundle.err"
+          echo "commits=true" >> "$GITHUB_OUTPUT"
+      # One artifact per pull request: every entry of the lane's matrix runs in the same run.
+      - name: Upload the agent's commits for the push job
+        id: upload
+        if: always() && steps.handoff.outputs.commits == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-push-${{ inputs.pr }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kanon-push/
+          retention-days: 1
+          if-no-files-found: error
 
       # Explain a red run (`classify-agent-result.mjs --arm 'rebase lane'`) and record what
       # it cost. `always()` and `continue-on-error` for the reasons in the block's header;

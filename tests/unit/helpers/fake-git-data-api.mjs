@@ -15,7 +15,7 @@
 // same double over HTTP for a workflow step's test:
 //   node fake-git-data-api.mjs <remote.git> <owner/name> <app-login> <dir>
 // It writes the port it listens on to `<dir>/port`, and each request, one JSON line each, to
-// `<dir>/calls.jsonl`.
+// `<dir>/calls.jsonl`. It answers the pull requests `<dir>/pulls.json` holds, when there is one.
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -32,9 +32,10 @@ import { URL, fileURLToPath, pathToFileURL } from 'node:url';
  * @param {{remote: string, repo: string, appLogin: string,
  *          authors?: Record<string, string>, defaultBranch?: string,
  *          verification?: (sha: string, byApi: boolean) => {verified: boolean, reason: string} | undefined,
+ *          pulls?: Record<string, any>,
  *          before?: (call: Call, calls: Call[]) => Answer | undefined}} opts
  */
-export function fakeGitHub({ remote, repo, appLogin, authors = {}, defaultBranch = 'main', verification = () => undefined, before = () => undefined }) {
+export function fakeGitHub({ remote, repo, appLogin, authors = {}, defaultBranch = 'main', verification = () => undefined, pulls = {}, before = () => undefined }) {
   /** @type {Call[]} */
   const calls = [];
   /** @type {Set<string>} */
@@ -78,6 +79,10 @@ export function fakeGitHub({ remote, repo, appLogin, authors = {}, defaultBranch
     if (!served.startsWith(`${prefix}/`)) return answer(404, { message: 'Not Found' });
     const p = served.slice(prefix.length + 1);
     let m;
+    // A pull request, as the `pulls` it was given hold it: its head branch and repository.
+    if (method === 'GET' && (m = /^pulls\/(\d+)$/.exec(p))) {
+      return pulls[m[1] ?? ''] ? answer(200, pulls[m[1] ?? '']) : answer(404, { message: 'Not Found' });
+    }
     if (method === 'GET' && (m = /^git\/commits\/(\w+)$/.exec(p))) {
       return has(m[1] ?? '', 'commit') ? answer(200, { sha: m[1], tree: { sha: git(['rev-parse', `${m[1]}^{tree}`]) } }) : answer(404, { message: 'Not Found' });
     }
@@ -168,7 +173,8 @@ export async function serveFake({ remote, repo, appLogin, dir }) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [remote = '', repo = '', appLogin = '', dir = ''] = process.argv.slice(2);
-  const { request } = fakeGitHub({ remote, repo, appLogin });
+  const pulls = existsSync(join(dir, 'pulls.json')) ? JSON.parse(readFileSync(join(dir, 'pulls.json'), 'utf8')) : {};
+  const { request } = fakeGitHub({ remote, repo, appLogin, pulls });
   const server = createServer((req, res) => {
     let text = '';
     req.on('data', (chunk) => { text += chunk; });

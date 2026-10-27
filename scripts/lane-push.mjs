@@ -12,7 +12,12 @@
 // WHICH BRANCHES MOVE:
 // - On a lane that revises a branch (`--ref`), that branch alone, from the commit the agent's job
 //   checked out, without force: it existed before the run, and is the one exception to the rule
-//   below. The helper refuses it if it moved, or if the agent rewrote it (`K-AGENT-34`).
+//   below. The helper refuses it if it moved, or if the agent rewrote it (`K-AGENT-34`). With
+//   `--pr`, the pull request's head must be that branch, of this repository, never a fork's.
+// - On the rebase lane (`--merged`, kanon#1384), that branch moves only to a resolution of its
+//   conflict (`[LANE-17]`): one merge commit, whose first parent is `--start` and whose second is
+//   `--merged`, the default branch's head as the agent's job fetched it, before its agent ran. A
+//   commit after the merge, such as a fix for a test the merged tree broke, has one parent.
 // - Otherwise, with a request, the request's branch alone (`[LANE-15]`); with none, as a failed
 //   agent leaves, each branch the bundle carries, so a crashed run's work survives as it did when
 //   the agent pushed mid-run. Each is built on the first commit GitHub has on its first-parent path,
@@ -26,8 +31,8 @@
 // body, and labelled with the request's labels, each of which must be one of the lane's own. A
 // request that breaks a rule is refused whole: nothing of it is pushed or opened.
 //
-// Usage: node scripts/lane-push.mjs --bundle <file> [--request <file>] --start <sha> [--ref <branch>]
-//          --before <JSON array> --labels "<names>" --app-login <slug>[bot]
+// Usage: node scripts/lane-push.mjs --bundle <file> [--request <file>] --start <sha> [--ref <branch>
+//          [--pr <n>] [--merged <sha>]] --before <JSON array> --labels "<names>" --app-login <slug>[bot]
 // Reads `GH_TOKEN`, `REPO`, `GITHUB_SERVER_URL` and `GITHUB_API_URL`. Writes `heads=<JSON [{ref, sha}]
 // of the branches it moved>`, `base=<the head it built on>` and `pr=<the pull request it opened>` to
 // `$GITHUB_OUTPUT`, and what it did to the step summary. A refusal fails the step, after the outputs.
@@ -125,16 +130,58 @@ export function prepareStore({ store, bundle, start, server, repo, token }) {
 }
 
 /**
+ * Why the commits from `tip` back to `start` are not the rebase lane's resolution, or `''`
+ * (`[LANE-17]`): exactly one merge commit on the first-parent path, whose parents are `start` and
+ * `merged` in that order, and one parent for every other commit on it. A merge's first parent is
+ * where its first-parent path goes on, so a merge whose first parent is `start` is the path's oldest.
+ *
+ * @param {{gitDir: string, tip: string, start: string, merged: string}} opts
+ */
+export function mergeShape({ gitDir, tip, start, merged }) {
+  const path = execFileSync('git', ['--git-dir', gitDir, 'rev-list', '--first-parent', '--parents', tip, '--not', start], { maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
+    .toString('utf8').trim().split('\n').filter(Boolean).map((line) => {
+      const [sha = '', ...parents] = line.split(' ');
+      return { sha, parents };
+    });
+  const merges = path.filter((c) => c.parents.length > 1);
+  if (!merges.length) return `it holds no merge commit: the rebase lane resolves a conflict by merging ${merged} into ${start}`;
+  if (merges.length > 1) return `it holds ${merges.length} merge commits on its first-parent path (${merges.map((c) => c.sha).join(', ')}); the rebase lane makes one`;
+  const [merge] = merges;
+  const [first, second, ...more] = merge?.parents ?? [];
+  if (first !== start) return `its merge ${merge?.sha}'s first parent is ${first}, not the pull request's head as the job fetched it (${start})`;
+  if (second !== merged || more.length) return `its merge ${merge?.sha}'s other parents are ${[second, ...more].join(', ')}, not the default branch's head recorded before the agent ran (${merged})`;
+  const other = path.find((c) => c !== merge && c.parents.length !== 1);
+  if (other) return `${other.sha}, after its merge, has ${other.parents.length} parents, not one`;
+  return '';
+}
+
+/**
+ * Why `ref` is not `pr`'s head branch in `repo`, or `''`: read from GitHub with the push job's own
+ * token, so a pull request whose head is a fork's branch, or another branch, moves nothing.
+ *
+ * @param {{api: Api, repo: string, pr: number, ref: string}} opts
+ */
+export async function pullHeadProblem({ api, repo, pr, ref }) {
+  const r = await api('GET', `repos/${repo}/pulls/${pr}`);
+  if (r.status !== 200) return `reading #${pr}: GitHub answered ${r.status}`;
+  const from = r.json?.head?.repo?.full_name;
+  if (typeof from !== 'string' || from.toLowerCase() !== repo.toLowerCase()) return `#${pr}'s head is a branch of ${from ? `\`${from}\`` : 'no repository'}, not of ${repo}`;
+  if (r.json?.head?.ref !== ref) return `#${pr}'s head is \`${r.json?.head?.ref}\`, not \`${ref}\``;
+  return '';
+}
+
+/**
  * Move the branches the rules allow, through the helper, and open the request's pull request.
  *
- * @param {{gitDir: string, prereqs: string[], start: string, ref?: string,
+ * @param {{gitDir: string, prereqs: string[], start: string, ref?: string, merged?: string, pr?: number,
  *          request: {request: PullRequest} | {problem: string} | null, before: string[] | null,
  *          labels: string[], appLogin: string, repo: string, api: Api,
  *          push?: typeof pushVerified, sleep?: (ms: number) => Promise<void>, log?: (line: string) => void}} opts
  */
 export async function pushLane({
-  gitDir, prereqs, start, ref = '', request, before, labels, appLogin, repo, api, push = pushVerified, sleep, log = () => {},
+  gitDir, prereqs, start, ref = '', merged = '', pr: pullNumber, request, before, labels, appLogin, repo, api, push = pushVerified, sleep, log = () => {},
 }) {
+  if (!ref && (merged || pullNumber !== undefined)) throw new Error('--merged and --pr name the branch a lane revises, and come only with --ref');
   const gitText = (/** @type {string[]} */ a) => execFileSync('git', ['--git-dir', gitDir, ...a], { maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }).toString('utf8').trim();
   const lines = /** @type {string[]} */ ([]);
   /** @type {Refusal[]} */
@@ -162,6 +209,11 @@ export async function pushLane({
   if (ref) {
     wanted = [ref];
     if (request) lines.push(`A lane that revises \`${ref}\` opens no pull request, so ${REQUEST_PATH} was not read.`);
+    const why = pullNumber === undefined ? '' : await pullHeadProblem({ api, repo, pr: pullNumber, ref });
+    if (why) {
+      refused.push({ branch: ref, why });
+      wanted = [];
+    }
   } else if (request && 'problem' in request) {
     refused.push({ branch: '', why: `the request is refused: ${request.problem}` });
     wanted = [];
@@ -214,6 +266,12 @@ export async function pushLane({
     const own = gitText(['rev-list', tip, '--not', ...known]).split('\n').filter(Boolean);
     if (own.some((c) => gitText(['ls-tree', '--name-only', c, '--', REQUEST_PATH]) !== '')) {
       refused.push({ branch, why: `a commit on it carries ${REQUEST_PATH}, which the spine keeps out of every commit` });
+      continue;
+    }
+    // The rebase lane's resolution is one merge of the recorded default branch, and nothing else.
+    const shape = merged ? mergeShape({ gitDir, tip, start, merged }) : '';
+    if (shape) {
+      refused.push({ branch, why: shape });
       continue;
     }
     // The head it builds on: the checked-out commit on a revise lane, else the first commit on the
@@ -269,6 +327,10 @@ if (isCliEntry(import.meta.url)) {
     if (!token) throw new Error('no GH_TOKEN, the push job\'s token');
     const start = arg('--start');
     if (!SHA.test(start)) throw new Error(`--start ${JSON.stringify(start)} is not the commit the agent's job checked out`);
+    const merged = arg('--merged');
+    if (merged && !SHA.test(merged)) throw new Error(`--merged ${JSON.stringify(merged)} is not the default branch's head the agent's job fetched`);
+    const prText = arg('--pr');
+    if (prText && !/^[1-9]\d*$/.test(prText)) throw new Error(`--pr ${JSON.stringify(prText)} is not a pull request's number`);
     const store = join(mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), 'kanon-push-store-')), 'store.git');
     const { prereqs } = prepareStore({
       store, bundle: arg('--bundle'), start, server: process.env.GITHUB_SERVER_URL || 'https://github.com', repo, token,
@@ -281,7 +343,7 @@ if (isCliEntry(import.meta.url)) {
       before = Array.isArray(b) && b.every((x) => typeof x === 'string') ? b : null;
     } catch { /* unknown: a new branch can't be told from an old one, and none moves */ }
     const r = await pushLane({
-      gitDir: store, prereqs, start, ref: arg('--ref'), request, before, labels: arg('--labels').split(/\s+/).filter(Boolean),
+      gitDir: store, prereqs, start, ref: arg('--ref'), merged, ...(prText ? { pr: Number(prText) } : {}), request, before, labels: arg('--labels').split(/\s+/).filter(Boolean),
       appLogin: arg('--app-login'), repo, api: githubRequest({ token, api: process.env.GITHUB_API_URL || undefined }), log: (line) => console.log(line),
     });
     report(r);

@@ -465,3 +465,322 @@ describe('the spine\'s push job holds the key and runs nothing else (kanon#1383)
     expect(Object.values(job.outputs ?? {}).join(' ')).not.toMatch(/token/);
   });
 });
+
+// ── The rebase lane's push job (kanon#1384, docs/projects/1373.md Issue C) ─────────────────────
+
+const rebaseRun = parse(readFileSync('.github/workflows/rebase-run.yml', 'utf8'));
+const rebaseAgent = parse(readFileSync('.github/workflows/rebase-agent-job.yml', 'utf8'));
+const rebaseSteps = rebaseAgent.jobs.resolve.steps as WorkflowStep[];
+const rebaseHandoff = rebaseSteps.find((s) => s.id === 'handoff')!;
+const rebasePush = (rebaseRun.jobs.push?.steps as WorkflowStep[] | undefined)?.find((s) => s.id === 'push');
+
+const PR = 7;
+const PR_BRANCH = 'feat/7-thing';
+/** The pull request as GitHub answers it: its head is a branch of this repository. */
+const PULL = { number: PR, head: { ref: PR_BRANCH, repo: { full_name: REPO } } };
+
+/**
+ * A pull request that conflicts with the default branch, as the rebase lane's checkout finds it:
+ * the pull request changed `one.txt`, then the default branch changed it too and added `three.txt`.
+ * Every branch is fetched (`fetch-depth: 0`), and the pull request's branch is checked out.
+ */
+const conflicting = () => {
+  const f = fixture({ depth: 0, branch: PR_BRANCH });
+  const person = join(f.root, 'person');
+  f.sh(f.root, 'clone', '-q', f.remote, person);
+  const as = ['-c', 'user.name=Pat', '-c', 'user.email=pat@example.invalid'];
+  f.sh(person, 'switch', '-q', PR_BRANCH);
+  writeFileSync(join(person, 'one.txt'), "one, the pull request's\n");
+  f.sh(person, 'add', '.');
+  f.sh(person, ...as, 'commit', '-qm', 'the pull request changes one');
+  f.sh(person, 'push', '-q', 'origin', `HEAD:refs/heads/${PR_BRANCH}`);
+  f.sh(person, 'switch', '-q', 'main');
+  writeFileSync(join(person, 'one.txt'), "one, the default branch's\n");
+  writeFileSync(join(person, 'three.txt'), 'three\n');
+  f.sh(person, 'add', '.');
+  f.sh(person, ...as, 'commit', '-qm', 'the default branch changes one');
+  f.sh(person, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
+  f.sh(f.work, 'fetch', '-q', 'origin');
+  f.sh(f.work, 'reset', '-q', '--hard', `origin/${PR_BRANCH}`);
+  const start = f.sh(f.work, 'rev-parse', 'HEAD');
+  const merged = f.sh(f.work, 'rev-parse', 'refs/remotes/origin/main');
+  /** Another commit on the default branch, pushed after the agent's job recorded its head. */
+  const advanceMain = () => {
+    f.sh(person, ...as, 'commit', '-q', '--allow-empty', '-m', 'main moves on');
+    f.sh(person, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
+    return f.sh(person, 'rev-parse', 'HEAD');
+  };
+  /** A person's commit on the pull request's branch, pushed after the agent's job fetched it. */
+  const advanceBranch = () => {
+    f.sh(person, 'switch', '-q', PR_BRANCH);
+    f.sh(person, 'pull', '-q', 'origin', PR_BRANCH);
+    f.sh(person, ...as, 'commit', '-q', '--allow-empty', '-m', 'a person pushes to the branch');
+    f.sh(person, 'push', '-q', 'origin', `HEAD:refs/heads/${PR_BRANCH}`);
+  };
+  /** The agent's resolution: merge `what` without committing, keep both sides, commit the merge. */
+  const resolve = (what = 'origin/main') => {
+    spawnSync('git', ['merge', '--no-ff', '--no-commit', what], { cwd: f.work, env: CLEAN_ENV });
+    writeFileSync(join(f.work, 'one.txt'), "one, the pull request's and the default branch's\n");
+    f.sh(f.work, 'add', '-A');
+    f.sh(f.work, 'commit', '-q', '--no-edit');
+    return f.sh(f.work, 'rev-parse', 'HEAD');
+  };
+  return { ...f, start, merged, advanceMain, advanceBranch, resolve };
+};
+type Conflicting = ReturnType<typeof conflicting>;
+
+/** The rebase lane's agent's job's handoff, run in its checkout after the agent. */
+const rebaseAgentJob = (f: Conflicting, agent: () => void) => {
+  agent();
+  const handed = runWorkflowStep(rebaseHandoff, { cwd: f.work, env: { ...CLEAN_ENV, RUNNER_TEMP: f.temp, START: f.start } });
+  expect(handed.status, handed.output).toBe(0);
+  return handed;
+};
+
+/** The rebase lane's push, in process, given what the agent's job recorded before its agent ran. */
+const pushRebase = async (f: Conflicting, { merged = f.merged, pull = PULL as unknown }: { merged?: string; pull?: unknown } = {}) => {
+  const gh = fakeGitHub({ remote: f.remote, repo: REPO, appLogin: APP, pulls: { [PR]: pull } });
+  const store = join(f.root, `store-${Math.random().toString(36).slice(2)}`);
+  const { prereqs } = prepareStore({ store, bundle: join(f.temp, 'kanon-push', 'commits.bundle'), start: f.start, server: `file://${f.root}`, repo: REPO, token: 'x' });
+  const r = await pushLane({
+    gitDir: store, prereqs, start: f.start, ref: PR_BRANCH, merged, pr: PR, request: null, before: null, labels: [],
+    appLogin: APP, repo: REPO, api: gh.request, sleep: async () => {},
+  });
+  return { ...r, calls: gh.calls as Call[] };
+};
+const created = (calls: Call[], what: string) => calls.filter((c) => c.method === 'POST' && c.path === `repos/${REPO}/git/${what}`);
+
+describe('the rebase lane\'s push (kanon#1384)', () => {
+  it('[LANE-17] creates the merge commit through the helper, with both parents, and moves the branch without force', async () => {
+    const f = conflicting();
+    let local = '';
+    rebaseAgentJob(f, () => { local = f.resolve(); });
+    const r = await pushRebase(f);
+    expect(r.refused).toEqual([]);
+    const head = f.onRemote('rev-parse', `refs/heads/${PR_BRANCH}`);
+    // GitHub's merge is a new commit, the App's, whose first parent is the head the job fetched
+    // and whose second is the default branch's head it merged.
+    expect(head).not.toBe(local);
+    expect(f.onRemote('log', '-1', '--format=%an', head)).toBe(APP);
+    expect(f.onRemote('rev-list', '--parents', '-n', '1', head).split(' ').slice(1)).toEqual([f.start, f.merged]);
+    expect(f.onRemote('rev-parse', `${head}^{tree}`)).toBe(f.sh(f.work, 'rev-parse', `${local}^{tree}`));
+    // Only the merge is created, and only the blob the resolution changed is uploaded (`[LANE-6]`, `[LANE-11]`).
+    const commits = created(r.calls, 'commits');
+    expect(commits).toHaveLength(1);
+    expect(commits[0]!.body?.parents).toEqual([f.start, f.merged]);
+    expect(created(r.calls, 'blobs')).toHaveLength(1);
+    expect(Buffer.from(String(created(r.calls, 'blobs')[0]!.body?.content), 'base64').toString('utf8')).toBe("one, the pull request's and the default branch's\n");
+    // Moved from the head the job fetched, without force (`K-AGENT-34`).
+    const moves = r.calls.filter((c) => c.method === 'PATCH');
+    expect(moves).toEqual([expect.objectContaining({ path: `repos/${REPO}/git/refs/heads/${PR_BRANCH}`, body: expect.objectContaining({ force: false }) })]);
+    expect(r.calls.some((c) => c.method === 'POST' && c.path === `repos/${REPO}/git/refs`)).toBe(false);
+    expect(r.heads).toEqual([{ ref: PR_BRANCH, sha: head }]);
+    expect(r.base).toBe(f.start);
+    expect(at(r.calls, 'POST', 'pulls')).toBe(-1);
+  });
+
+  it('[LANE-17] keeps a fix committed after the merge, on top of the merge GitHub created', async () => {
+    const f = conflicting();
+    rebaseAgentJob(f, () => {
+      f.resolve();
+      f.commit('one.test.txt', 'the test the merged tree needed\n', 'fix the test the merge broke');
+    });
+    const r = await pushRebase(f);
+    expect(r.refused).toEqual([]);
+    const head = f.onRemote('rev-parse', `refs/heads/${PR_BRANCH}`);
+    expect(f.onRemote('rev-list', '--parents', '-n', '1', `${head}~1`).split(' ').slice(1)).toEqual([f.start, f.merged]);
+    expect(created(r.calls, 'commits')).toHaveLength(2);
+  });
+
+  it('[LANE-17] refuses a range that holds no merge commit, and creates nothing', async () => {
+    const f = conflicting();
+    rebaseAgentJob(f, () => { f.commit('one.txt', 'only my side\n', 'not a merge'); });
+    const r = await pushRebase(f);
+    expect(r.refused).toEqual([expect.objectContaining({ branch: PR_BRANCH, why: expect.stringMatching(/no merge commit/) })]);
+    expect(writes(r.calls)).toEqual([]);
+    expect(f.onRemote('rev-parse', `refs/heads/${PR_BRANCH}`)).toBe(f.start);
+  });
+
+  it('[LANE-17] refuses a merge of a newer default branch than the one recorded before the agent, and creates nothing', async () => {
+    const f = conflicting();
+    const newer = f.advanceMain();
+    rebaseAgentJob(f, () => {
+      f.sh(f.work, 'fetch', '-q', 'origin');
+      f.resolve();
+    });
+    const r = await pushRebase(f);
+    expect(r.refused).toEqual([expect.objectContaining({ branch: PR_BRANCH, why: expect.stringContaining(newer) })]);
+    expect(r.refused[0]!.why).toContain(f.merged);
+    expect(writes(r.calls)).toEqual([]);
+  });
+
+  it('[LANE-17] refuses a merge whose first parent is not the pull request\'s head as the job fetched it', async () => {
+    const f = conflicting();
+    rebaseAgentJob(f, () => {
+      // The default branch, with the pull request merged into it, put on the pull request's branch.
+      f.sh(f.work, 'reset', '-q', '--hard', 'origin/main');
+      f.resolve(f.start);
+    });
+    const r = await pushRebase(f);
+    expect(r.refused).toEqual([expect.objectContaining({ branch: PR_BRANCH, why: expect.stringMatching(/first parent/) })]);
+    expect(writes(r.calls)).toEqual([]);
+  });
+
+  it('[LANE-17] refuses two merge commits, and creates nothing', async () => {
+    const f = conflicting();
+    rebaseAgentJob(f, () => {
+      f.sh(f.work, 'switch', '-q', '-c', 'side', f.start);
+      f.commit('side.txt', 'side\n');
+      f.sh(f.work, 'switch', '-q', PR_BRANCH);
+      f.resolve();
+      f.sh(f.work, 'merge', '-q', '--no-ff', '--no-edit', 'side');
+    });
+    const r = await pushRebase(f);
+    expect(r.refused).toEqual([expect.objectContaining({ branch: PR_BRANCH, why: expect.stringMatching(/2 merge commits/) })]);
+    expect(writes(r.calls)).toEqual([]);
+  });
+
+  it('[LANE-17] refuses a branch that moved since the job fetched it: nothing is forced', async () => {
+    const f = conflicting();
+    rebaseAgentJob(f, () => { f.resolve(); });
+    f.advanceBranch();
+    const moved = f.onRemote('rev-parse', `refs/heads/${PR_BRANCH}`);
+    const r = await pushRebase(f);
+    expect(r.refused).toEqual([expect.objectContaining({ branch: PR_BRANCH })]);
+    expect(r.calls.some((c) => c.method === 'PATCH' && c.body?.force === true)).toBe(false);
+    expect(f.onRemote('rev-parse', `refs/heads/${PR_BRANCH}`)).toBe(moved);
+  });
+
+  it('refuses a pull request whose head is another branch, or a fork\'s, before it creates anything', async () => {
+    for (const pull of [
+      { ...PULL, head: { ...PULL.head, ref: 'feat/other' } },
+      { ...PULL, head: { ...PULL.head, repo: { full_name: 'someone/fork' } } },
+      { ...PULL, head: { ...PULL.head, repo: null } },
+    ]) {
+      const f = conflicting();
+      rebaseAgentJob(f, () => { f.resolve(); });
+      const r = await pushRebase(f, { pull });
+      expect(r.refused, JSON.stringify(pull.head)).toEqual([expect.objectContaining({ branch: PR_BRANCH, why: expect.stringMatching(/#7/) })]);
+      expect(writes(r.calls)).toEqual([]);
+    }
+  });
+
+  it('the agent\'s job hands on nothing when the agent left no commit, as an aborted resolution leaves', () => {
+    const f = conflicting();
+    const handed = rebaseAgentJob(f, () => {
+      spawnSync('git', ['merge', '--no-ff', '--no-commit', 'origin/main'], { cwd: f.work, env: CLEAN_ENV });
+      f.sh(f.work, 'merge', '--abort');
+    });
+    expect(handed.outputs.commits).toBeUndefined();
+    expect(existsSync(join(f.temp, 'kanon-push', 'commits.bundle'))).toBe(false);
+  });
+
+  it('[LANE-17] the push job\'s own step: pushes the merge from what the agent\'s job recorded, and writes its outputs', async () => {
+    const f = conflicting();
+    rebaseAgentJob(f, () => { f.resolve(); });
+    const served = join(f.root, 'served');
+    mkdirSync(served);
+    writeFileSync(join(served, 'pulls.json'), JSON.stringify({ [PR]: PULL }));
+    const api = await serveFake({ remote: f.remote, repo: REPO, appLogin: APP, dir: served });
+    try {
+      expect(rebasePush, 'rebase-run.yml has a push job with a `push` step').toBeDefined();
+      const r = runWorkflowStep(rebasePush!, {
+        env: {
+          ...CLEAN_ENV, KANON: process.cwd(), RUNNER_TEMP: f.temp, GH_TOKEN: 'x', REPO,
+          GITHUB_SERVER_URL: `file://${f.root}`, GITHUB_API_URL: api.url, APP_LOGIN: APP,
+          PR: String(PR), START: f.start, MERGED: f.merged, REF: PR_BRANCH,
+        },
+      });
+      expect(r.status, r.output).toBe(0);
+      const head = f.onRemote('rev-parse', `refs/heads/${PR_BRANCH}`);
+      expect(f.onRemote('rev-list', '--parents', '-n', '1', head).split(' ').slice(1)).toEqual([f.start, f.merged]);
+      expect(JSON.parse(r.outputs.heads ?? '')).toEqual([{ ref: PR_BRANCH, sha: head }]);
+      expect(r.outputs.base).toBe(f.start);
+    } finally {
+      api.stop();
+    }
+  });
+});
+
+describe('the rebase lane\'s push job holds the key and runs nothing else (kanon#1384)', () => {
+  type Job = { needs?: string | string[]; if?: string; steps?: WorkflowStep[]; outputs?: Record<string, string> };
+  const job = (rebaseRun.jobs.push ?? {}) as Job;
+  const steps = job.steps ?? [];
+  /** The job's `if:`, for these needs. Only the forms it uses. */
+  const gate = (expr: string, { commits = 'true', result = 'success' }: { commits?: string; result?: string }) => {
+    const js = String(expr).replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+      .replace(/!cancelled\(\)/g, 'true')
+      .replace(/needs\.resolve\.result/g, JSON.stringify(result))
+      .replace(/needs\.resolve\.outputs\.commits/g, JSON.stringify(commits))
+      .replace(/'([^']*)'/g, (_, s: string) => JSON.stringify(s));
+    expect(js, `an expression this evaluator doesn't read: ${expr}`).toMatch(/^[\s"\w!=&|()-]*$/);
+    return Boolean(new Function(`return (${js});`)());
+  };
+
+  it('[LANE-14] on the rebase lane: runs after the agent\'s job whenever it left commits, a failed run\'s included', () => {
+    expect([job.needs].flat()).toEqual(['resolve']);
+    expect(gate(job.if!, {})).toBe(true);
+    expect(gate(job.if!, { result: 'failure' })).toBe(true);
+    expect(gate(job.if!, { commits: '' })).toBe(false);
+    expect(gate(job.if!, { commits: 'false' })).toBe(false);
+    // The agent's job hands its commits on whatever the agent did: always(), never success().
+    for (const id of ['handoff', 'upload']) expect(rebaseSteps.find((s) => s.id === id)?.if, id).toMatch(/^always\(\)/);
+    expect(rebaseAgent.jobs.resolve.outputs.commits).toBe("${{ steps.upload.outcome == 'success' }}");
+    expect(rebaseAgent.on.workflow_call.outputs.commits.value).toBe('${{ jobs.resolve.outputs.commits }}');
+    // One artifact per matrix entry: every entry of the lane's matrix runs in the same run.
+    const upload = rebaseSteps.find((s) => s.id === 'upload')!;
+    const download = steps.find((s) => String(s.uses ?? '').startsWith('actions/download-artifact@'))!;
+    expect(upload.with?.name).toBe('kanon-push-${{ inputs.pr }}-${{ github.run_attempt }}');
+    expect(download.with?.name).toBe(upload.with?.name);
+  });
+
+  it('[LANE-14] on the rebase lane: runs no agent and no project code, checks nothing out, and moves the branch with the verified-commit helper', () => {
+    expect(steps.map((s) => s.uses ?? s.id)).toEqual(['$/actions/kanon-path', 'actions/create-github-app-token@v3', 'actions/download-artifact@v8', 'push']);
+    expect(JSON.stringify(job)).not.toMatch(/claude|npm|\bmake\b|actions\/checkout|"\.\//i);
+    expect(rebasePush?.run).toMatch(/node "\$KANON\/scripts\/lane-push\.mjs"/);
+    expect(rebasePush?.run).toMatch(/--merged "\$MERGED"/);
+    expect(rebasePush?.run).toMatch(/--ref "\$REF"/);
+    expect(rebasePush?.run).toMatch(/--pr "\$PR"/);
+    // What it builds on, merges and moves, each recorded by the agent's job before its agent ran.
+    expect(rebasePush?.env).toMatchObject({
+      PR: '${{ inputs.pr }}',
+      START: '${{ needs.resolve.outputs.start }}',
+      MERGED: '${{ needs.resolve.outputs.merged }}',
+      REF: '${{ needs.resolve.outputs.head-ref }}',
+    });
+    expect(rebaseAgent.jobs.resolve.outputs).toMatchObject({
+      start: '${{ steps.base.outputs.base }}', merged: '${{ steps.base.outputs.merged }}', 'head-ref': '${{ steps.base.outputs.ref }}',
+    });
+    for (const k of ['start', 'merged', 'head-ref']) expect(rebaseAgent.on.workflow_call.outputs[k].value, k).toBe(`\${{ jobs.resolve.outputs.${k} }}`);
+    const at = (id: string) => rebaseSteps.findIndex((s) => s.id === id);
+    expect(at('base')).toBeGreaterThan(at('checkout'));
+    // Before the project's own code, which runs before the agent.
+    expect(at('base')).toBeLessThan(at('project'));
+    expect(at('project')).toBeLessThan(at('agent'));
+  });
+
+  it('[LANE-14] on the rebase lane: mints the Author App\'s token in the job, narrowed to the push, and never hands it on', () => {
+    const mint = steps.find((s) => s.id === 'push-token')!;
+    expect(mint.with).toEqual({
+      'client-id': '${{ secrets.app-id }}',
+      'private-key': '${{ secrets.app-private-key }}',
+      'permission-contents': 'write',
+      'permission-pull-requests': 'read',
+      'permission-workflows': 'write',
+    });
+    expect(rebasePush?.env?.GH_TOKEN).toBe('${{ steps.push-token.outputs.token }}');
+    expect(Object.values(job.outputs ?? {}).join(' ')).not.toMatch(/token/);
+  });
+
+  it('the rebase agent\'s job records the pull request\'s head, its branch and the default branch\'s head as it fetched them', () => {
+    const step = rebaseSteps.find((s) => s.id === 'base')!;
+    const f = conflicting();
+    const bin = join(f.root, 'bin');
+    mkdirSync(bin);
+    // `gh` answers the pull request's branch and the repository's default branch.
+    writeFileSync(join(bin, 'gh'), `#!/bin/sh\ncase "$*" in\n  *headRefName*) echo ${PR_BRANCH} ;;\n  *defaultBranchRef*) echo main ;;\n  *) exit 1 ;;\nesac\n`, { mode: 0o755 });
+    const r = runWorkflowStep(step, { cwd: f.work, env: { ...CLEAN_ENV, PATH: `${bin}:${process.env.PATH ?? ''}`, PR_NUMBER: String(PR), REPO } });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs).toMatchObject({ base: f.start, ref: PR_BRANCH, merged: f.merged });
+  });
+});

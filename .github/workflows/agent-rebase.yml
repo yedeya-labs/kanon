@@ -271,7 +271,8 @@ jobs:
   # a token minted once would expire under the second PR. A matrix job's outputs keep only
   # one entry's value, so the mint cannot be a matrix job of this file either.
   #
-  # THE IMPLEMENTER STATUS IS SET IN THE SAME CALL, after the entry's agent (#1379). Here, after
+  # THE IMPLEMENTER STATUS IS SET IN THE SAME CALL, after the entry's push (#1379, kanon#1384),
+  # which re-creates the agent's merge through GitHub and moves the PR's branch. Here, after
   # the whole matrix, every PR's status waited for every entry to finish, and a matrix keeps one
   # entry's outputs, so in a run that resolved several only the last kept its status. Each head
   # sat unstamped in the meantime, and the revise lane skipped every changes-request filed on it.

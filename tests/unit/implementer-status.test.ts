@@ -361,8 +361,9 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
     const job = jobs['implementer-status']!;
     expect(job, 'the lane has an implementer-status job').toBeDefined();
     // The revise lane's `fix-push` too, whose fix commit the carry binds to (#1263). The rebase
-    // lane's runs in its entry's own call, after that entry's agent alone (#1379).
-    expect([job.needs].flat()).toEqual(lane === 'agent-implement-revise.yml' ? ['filter', 'fix-push', agent] : lane === 'agent-rebase.yml' ? [agent] : ['filter', agent]);
+    // lane's runs in its entry's own call (#1379), after that entry's push, which runs after its
+    // agent (kanon#1384).
+    expect([job.needs].flat()).toEqual(lane === 'agent-implement-revise.yml' ? ['filter', 'fix-push', agent] : lane === 'agent-rebase.yml' ? ['push'] : ['filter', agent]);
     expect(job.if).toMatch(/!cancelled\(\)/);
     const steps = job.steps ?? [];
     // Nothing but Kanon's Node and the action: no agent, no `./` action, no checkout.
@@ -392,9 +393,12 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
     } else {
       // The rebase lane's start is the filter's record too, handed into the entry's call.
       expect(inputs).toMatch(lane === 'agent-rebase.yml' ? /inputs\.start-head/ : /needs\.filter\.outputs\.(head_sha|heads)/);
-      // #1263: the binding to what the agent's job checked out and left, and nothing else of it.
-      const read = [...inputs.matchAll(new RegExp(`needs\\.${agent}\\.outputs\\.([\\w-]+)`, 'g'))].map((m) => m[1]);
+      // #1263: the binding to what the push moved, and nothing else of it. The rebase lane's push
+      // job is in its entry's call, beside the agent's job, whose outputs it never reads (`[LANE-16]`).
+      const from = lane === 'agent-rebase.yml' ? 'push' : agent;
+      const read = [...inputs.matchAll(new RegExp(`needs\\.${from}\\.outputs\\.([\\w-]+)`, 'g'))].map((m) => m[1]);
       expect([...new Set(read)].sort()).toEqual(lane === 'agent-rebase.yml' ? ['checked'] : ['push-base', 'push-heads']);
+      if (lane === 'agent-rebase.yml') expect(inputs).not.toMatch(new RegExp(`needs\\.${agent}\\.`));
     }
   });
 
@@ -453,7 +457,7 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
       }
     });
 
-    it('the rebase lane: one `{ pr, base, heads }` per entry, read in that entry\'s call, used only for its own pull request', () => {
+    it('[LANE-16] on the rebase lane, the status reads heads and base only from the push job, never the agent\'s job', () => {
       const { jobs } = wf('agent-rebase.yml');
       expect(jobs.resolve!.uses).toBe('$/.github/workflows/rebase-run.yml');
       // #1379: no status job after the whole matrix; each entry's call stamps its own pull request.
@@ -464,8 +468,9 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
       });
       const run = called('rebase-run.yml');
       const status = run.jobs['implementer-status']!;
+      expect([status.needs].flat()).toEqual(['push']);
       const call = status.steps![1]!;
-      const C = "fromJson(needs.resolve.outputs.checked || '{}')";
+      const C = "fromJson(needs.push.outputs.checked || '{}')";
       expect(call.with).toMatchObject({
         pr: '${{ inputs.pr }}',
         'start-head': '${{ inputs.start-head }}',
@@ -473,31 +478,33 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
         base: `\${{ ${C}.pr == inputs.pr && ${C}.base || '' }}`,
       });
       expect(call.with?.['fix-sha']).toBeUndefined();
-      expect(run.on.workflow_call.outputs?.checked?.value).toBe('${{ jobs.resolve.outputs.checked }}');
+      expect(JSON.stringify(status)).not.toMatch(/needs\.resolve\./);
+      expect(run.on.workflow_call.outputs?.checked?.value).toBe('${{ jobs.push.outputs.checked }}');
+      // The push job builds it from the input and its own step's outputs: the branch it moved, with
+      // GitHub's commit id, and the head it built on. `toJSON` quotes each value, so the heads text
+      // adds no key; and it is empty unless the push moved a branch.
+      expect(run.jobs.push!.outputs).toMatchObject({
+        heads: '${{ steps.push.outputs.heads }}',
+        base: '${{ steps.push.outputs.base }}',
+        checked: `\${{ steps.push.outputs.base && format('{{"pr":{0},"base":{1},"heads":{2}}}', toJSON(inputs.pr), toJSON(steps.push.outputs.base), toJSON(steps.push.outputs.heads)) || '' }}`,
+      });
+      // The agent's job hands up no head and no `checked`: GitHub re-creates the agent's commits.
       expect(run.jobs.resolve!.uses).toBe('$/.github/workflows/rebase-agent-job.yml');
       const agentJob = called('rebase-agent-job.yml');
-      expect(agentJob.on.workflow_call.outputs?.checked?.value).toBe('${{ jobs.resolve.outputs.checked }}');
-      // #1357: the pull request and the base reach the job's output from the input and from a
-      // step before the agent, never through a step after it, which code the agent ran can
-      // steer (`$GITHUB_PATH`, `BASH_ENV`). Each value is `toJSON`-quoted, so the heads text
-      // adds no key; and the output is empty unless both records are there.
-      expect(agentJob.jobs.resolve!.outputs?.checked).toBe(
-        `\${{ steps.base.outputs.base && steps.heads.outputs.heads && format('{{"pr":{0},"base":{1},"heads":{2}}}', toJSON(inputs.pr), toJSON(steps.base.outputs.base), toJSON(steps.heads.outputs.heads)) || '' }}`,
-      );
+      expect(Object.keys(agentJob.on.workflow_call.outputs ?? {}).sort()).toEqual(['commits', 'head-ref', 'merged', 'start']);
+      expect(Object.keys(agentJob.jobs.resolve!.outputs ?? {}).sort()).toEqual(['commits', 'head-ref', 'merged', 'start']);
       type S = Step & { env?: Record<string, string>; if?: string };
       const steps = agentJob.jobs.resolve!.steps! as S[];
       const at = (id: string) => steps.findIndex((s) => s.id === id);
-      // The base before the agent, after the checkout; the heads after it, never handling the base.
+      expect(at('heads')).toBe(-1);
+      // The records before the agent, after the checkout, and before the project's own code.
       expect(at('checkout')).toBeLessThan(at('base'));
+      expect(at('base')).toBeLessThan(at('project'));
       expect(at('base')).toBeLessThan(at('agent'));
-      expect(at('heads')).toBeGreaterThan(at('agent'));
-      expect(at('heads')).toBeLessThan(at('finish'));
-      for (const id of ['base', 'heads']) expect(steps[at(id)]!['continue-on-error'], id).toBe(true);
-      for (const s of steps.slice(at('agent') + 1)) expect(JSON.stringify(s), s.id ?? s.uses).not.toMatch(/steps\.base\.outputs/);
-      expect(steps[at('heads')]!.if).toMatch(/^always\(\)/);
+      expect(steps[at('base')]!['continue-on-error']).toBe(true);
     });
 
-    it('the rebase lane\'s records read what the job fetched and left, and its expression keeps one entry\'s to that entry', () => {
+    it('the rebase lane\'s record reads what the job fetched, and the push job\'s `checked` is the shape the carry reads', () => {
       const steps = called('rebase-agent-job.yml').jobs.resolve!.steps!;
       const step = (id: string) => steps.find((s) => s.id === id)!.run!;
       const dir = mkdtempSync(join(tmpdir(), 'implementer-checked-'));
@@ -507,33 +514,28 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
         git('commit', '-q', '--allow-empty', '-m', 'base');
         const fetched = git('rev-parse', 'HEAD');
         git('update-ref', 'refs/remotes/origin/feat/7-mine', fetched);
+        git('commit', '-q', '--allow-empty', '-m', 'the default branch');
+        const merged = git('rev-parse', 'HEAD');
+        git('update-ref', 'refs/remotes/origin/main', merged);
         const bin = join(dir, '.bin');
         execFileSync('mkdir', ['-p', bin]);
-        execFileSync('bash', ['-c', `printf '#!/bin/sh\necho feat/7-mine\n' > "${bin}/gh" && chmod +x "${bin}/gh"`]);
+        execFileSync('bash', ['-c', `printf '#!/bin/sh\\ncase "$*" in *headRefName*) echo feat/7-mine ;; *defaultBranchRef*) echo main ;; *) exit 1 ;; esac\\n' > "${bin}/gh" && chmod +x "${bin}/gh"`]);
         const out = join(dir, '.out');
         const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`, GITHUB_OUTPUT: out, PR_NUMBER: '7', REPO: REPO };
         execFileSync('bash', ['-c', step('base')], { cwd: dir, env });
-        expect(readFileSync(out, 'utf8').trim()).toBe(`base=${fetched}`);
-        // The agent merges and commits on the branch; the record after it holds the heads alone.
-        git('checkout', '-q', '-b', 'feat/7-mine', 'origin/feat/7-mine');
-        git('commit', '-q', '--allow-empty', '-m', 'merge');
-        const left = git('rev-parse', 'HEAD');
-        execFileSync('bash', ['-c', step('heads')], { cwd: dir, env: { ...env, GITHUB_OUTPUT: `${out}2` } });
-        const line = readFileSync(`${out}2`, 'utf8').trim();
-        expect(line.startsWith('heads=')).toBe(true);
-        const headsText = line.slice('heads='.length);
-        const heads = JSON.parse(headsText) as Array<{ ref: string; sha: string }>;
-        expect(heads).toEqual(expect.arrayContaining([{ ref: 'feat/7-mine', sha: left }, { ref: 'HEAD', sha: left }]));
-        // The job's `checked`, as its `format` and `toJSON` build it, and the status job's read
-        // of it: `heads` arrives as the spine's JSON array text.
+        expect(readFileSync(out, 'utf8').trim().split('\n')).toEqual([`base=${fetched}`, 'ref=feat/7-mine', `merged=${merged}`]);
+        // The push job moved the branch to the merge GitHub created on the fetched head, and its
+        // `checked`, as its `format` and `toJSON` build it, carries `heads` as the spine's JSON array text.
+        const pushed = 'c'.repeat(40);
+        const headsText = JSON.stringify([{ ref: 'feat/7-mine', sha: pushed }]);
         const checked = JSON.parse(`{"pr":${JSON.stringify(7)},"base":${JSON.stringify(fetched)},"heads":${JSON.stringify(headsText)}}`) as { pr: number; base: string; heads: string };
         expect(checked).toEqual({ pr: 7, base: fetched, heads: headsText });
         // And the carry reads exactly that shape.
         const v = carryDecision({
-          startHead: fetched, head: left, slug: SLUG, email: EMAIL, startStatuses: [{ context: CONTEXT, state: 'success', creator: { login: `${SLUG}[bot]` } }],
-          compare: { status: 'ahead', commits: [commitBy(left, EMAIL, [fetched])] }, heads: JSON.parse(checked.heads), base: checked.base, fixSha: '',
+          startHead: fetched, head: pushed, slug: SLUG, email: EMAIL, startStatuses: [{ context: CONTEXT, state: 'success', creator: { login: `${SLUG}[bot]` } }],
+          compare: { status: 'ahead', commits: [commitBy(pushed, EMAIL, [fetched, merged])] }, heads: JSON.parse(checked.heads), base: checked.base, fixSha: '',
         });
-        expect(v).toEqual({ carry: left });
+        expect(v).toEqual({ carry: pushed });
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

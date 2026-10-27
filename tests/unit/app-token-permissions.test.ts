@@ -33,8 +33,9 @@ const DIRECT: Record<string, { step: string; perms: Perms }> = {
   'agent-explore.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write', 'pull-requests': 'read' } },
   // Pushes the split branch, opens its pull request, comments on the issue.
   'agent-lead-split.yml': { step: 'app-token', perms: { contents: 'write', issues: 'write', 'pull-requests': 'write' } },
-  // Pushes a merge that can carry the default branch's workflow changes; comments and labels.
-  'agent-rebase.yml': { step: 'app-token', perms: { contents: 'write', issues: 'write', 'pull-requests': 'write', workflows: 'write' } },
+  // Reads the tree and fetches; comments and labels. Its merge goes to the push job, which pushes
+  // it (kanon#1384, `[LANE-13]`).
+  'agent-rebase.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write', 'pull-requests': 'write' } },
   // The round record reads the pull request and comments on it, which either permission allows.
   'agent-lead-revise.yml': { step: 'round-app-token', perms: { issues: 'write', 'pull-requests': 'write' } },
   'agent-implement-revise.yml': { step: 'round-app-token', perms: { issues: 'write', 'pull-requests': 'write' } },
@@ -82,6 +83,11 @@ const MORE: Record<string, Perms> = {
   // branch (`contents`), and comments the round marker, which either of the other two allows
   // (kanon#1173). Its job checks nothing out (`K-AGENT-49`).
   'agent-implement-revise.yml#fix-token': { contents: 'write', issues: 'write', 'pull-requests': 'write' },
+  // The rebase lane's push job (kanon#1384, `[LANE-14]`): re-creates the agent's merge and moves the
+  // pull request's branch (`contents`), which may carry the default branch's workflow changes
+  // (`workflows`), after it reads the pull request's head (`pull_requests: read`). Its job checks
+  // nothing out (`K-AGENT-49`).
+  'agent-rebase.yml#push-token': { contents: 'write', 'pull-requests': 'read', workflows: 'write' },
   // On a re-ask only, lists the caller's own runs and their jobs, to tell whether a sweep ran
   // in the last 20 hours (kanon#813, `scripts/reask-due.mjs`). Read-only.
   'agent-dispatch-sweep.yml#reask-token': { actions: 'read' },
@@ -339,6 +345,20 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     const w = mints.find((m) => m.name === SPINE && m.step.id === 'app-token')!.step.with ?? {};
     expect(String(w['permission-contents'])).toBe('${{ inputs.permission-contents }}');
     expect(String(w['permission-workflows'])).toBe('${{ inputs.permission-workflows }}');
+  });
+
+  it('[LANE-13] on the rebase lane, the agent\'s token holds neither contents: write nor workflows: write', () => {
+    const run = read('.github/workflows/rebase-run.yml');
+    // The token the agent's job is handed is the mint job's, and only it.
+    expect(run.jobs?.resolve?.secrets?.['app-token']).toBe('${{ needs.mint.outputs.sealed }}');
+    const agentMint = (run.jobs?.mint?.steps ?? []).filter((s) => String(s.uses ?? '').startsWith('actions/create-github-app-token@'));
+    expect(agentMint.map((s) => s.id)).toEqual(['app-token']);
+    const perms = requested(agentMint[0]!.with);
+    expect(perms.contents ?? 'none').not.toBe('write');
+    expect(perms.workflows ?? 'none').not.toBe('write');
+    // And the agent's job mints nothing of its own.
+    const agentJob = read('.github/workflows/rebase-agent-job.yml');
+    expect(Object.values(agentJob.jobs ?? {}).flatMap((j) => j.steps ?? []).some((s) => String(s.uses ?? '').startsWith('actions/create-github-app-token@'))).toBe(false);
   });
 
   it.each(Object.entries(SPINE_PUSH))('%s: the push job\'s token, and the push probe\'s, are its push list, within its role', (name, perms) => {
