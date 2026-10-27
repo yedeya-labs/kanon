@@ -18,8 +18,6 @@
 # the queue's push names `github-merge-queue[bot]`, which the lane's gate turns away (#79). So the
 # lane also starts on a merged pull request (`pull_request_target` closed on `main`, kanon#484,
 # #512), judged by the member who queued it (`merged_by`); it reads nothing of that pull request.
-# A pull request the implement or triage lane opens may already conflict, after the merges that
-# conflicted it started the lane, so the lane also starts when one of their runs finishes (#1427).
 # The cron is a sporadic floor (#397). A conflict on an Implementer pull request can still be
 # resolved at once by dispatching the lane for it (`gh workflow run rebase.yml -R
 # yedeya-labs/kanon -f pr_number=N`), never by rebasing it by hand, which takes the pull request
@@ -29,9 +27,8 @@
 name: Rebase (Implementer)
 
 on:
-  # CI, and a run of a lane that opens a pull request, which may conflict already (docs/lanes.md).
   workflow_run:
-    workflows: [CI, Implement, Triage (Implementer)]
+    workflows: [CI]
     types: [completed]
     branches: [main]
   # A merged pull request: through a merge queue, the CI run on a merge is the queue's, which

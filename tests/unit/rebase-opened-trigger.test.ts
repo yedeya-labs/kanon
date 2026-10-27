@@ -14,8 +14,9 @@ import { evaluate } from './helpers/expression.js';
  * opens an Implementer pull request: the implement and triage callers. No new permission and no
  * gate change: the gate judges a `workflow_run` by its triggering actor, the member or registered
  * App that started the implement run. This file holds the trigger to the lanes that open such
- * pull requests, the lane's filter to admitting only a run that did something, and Kanon's own
- * caller and docs to both.
+ * pull requests, the lane's filter to admitting only a run that did something, and the docs to
+ * both. Kanon's own caller gains the trigger only once its pin carries that filter (Owner,
+ * 2026-10-27, on #1427), so nothing here asserts it.
  */
 
 const WF = join(ROOT, '.github/workflows');
@@ -43,11 +44,6 @@ describe("the rebase lane starts after a run that opens an Implementer pull requ
     });
     // A caller the repository already has is named by its own name, as the re-ask's are (#1023).
     expect(on(new Map([['agent-implement', 'Build it']])).workflow_run?.workflows).toEqual(['Tests', 'Build it', TRIGGERS['agent-triage']!.name]);
-  });
-
-  it("Kanon's own rebase caller names its implement and triage callers as they are named", () => {
-    const run = read('rebase.yml').on!.workflow_run;
-    expect(run).toEqual({ workflows: ['CI', read('implement.yml').name, read('triage.yml').name], types: ['completed'], branches: ['main'] });
   });
 
   // An issue labelled anything but the lane's label starts an implement run whose jobs all skip
