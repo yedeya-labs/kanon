@@ -188,7 +188,7 @@ runs:
         BUCKET: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET }}
       run: |
         printf '%s %s' "$ROLE_ARN" "$BUCKET" | grep -oE '[0-9]+' | grep -xE '[0-9]{12}' | sort -u | sed 's/^/::add-mask::/' || true
-    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.42.0
+    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.40.2
       with:
         operation: ${{ inputs.operation }}
         kind: ${{ inputs.kind }}
@@ -275,7 +275,7 @@ permissions:
   id-token: write
 jobs:
   maintenance:
-    uses: yedeya-labs/kanon/.github/workflows/qa-store-aws-maintenance.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/qa-store-aws-maintenance.yml@v0.40.2
     with:
       task: ${{ inputs.task }}
       apply: ${{ inputs.apply }}

@@ -737,7 +737,7 @@ describe('promote.yml', () => {
     expect(Object.fromEntries(Object.entries(wf.on.workflow_dispatch.inputs).map(([k, v]) => [k, v.type]))).toEqual({ hold: 'boolean', urgent: 'boolean', reason: 'string' });
   });
 
-  it('reads with a read-only token, and mints the Releaser\'s, Contents write alone, only to promote', () => {
+  it('reads with a read-only token, and mints the Releaser\'s, Contents and Pull requests write, only to promote', () => {
     expect(wf.permissions).toEqual({});
     expect(Object.values(job.permissions).every((p) => p === 'read')).toBe(true);
     expect(step('gates').run).toBe('node scripts/promote.mjs check');
@@ -745,10 +745,22 @@ describe('promote.yml', () => {
     const mint = step('releaser');
     expect(mint.uses).toMatch(/^actions\/create-github-app-token@/);
     expect(mint.if).toBe("steps.gates.outputs.decision == 'promote'");
-    expect(mint.with).toEqual({ 'client-id': '${{ secrets.RELEASER_APP_ID }}', 'private-key': '${{ secrets.RELEASER_APP_PRIVATE_KEY }}', 'permission-contents': 'write' });
+    expect(mint.with).toEqual({ 'client-id': '${{ secrets.RELEASER_APP_ID }}', 'private-key': '${{ secrets.RELEASER_APP_PRIVATE_KEY }}', 'permission-contents': 'write', 'permission-pull-requests': 'write' });
     const write = step('Tag, publish and move the major tag');
     expect(write.if).toBe("steps.gates.outputs.decision == 'promote'");
     expect(write.run).toBe('node scripts/promote.mjs apply');
     expect(write.env!.GH_TOKEN).toBe('${{ steps.releaser.outputs.token }}');
+  });
+
+  // The docs follow the stable channel (scripts/doc-pins.mjs): only a promotion moves them, after
+  // its tag exists, and only to a release that is the latest.
+  it('after promoting, opens the pull request that points the docs at the release, when it is the latest', () => {
+    const docs = step('Open the pull request that points the docs at the new release');
+    expect(docs.if).toBe("steps.gates.outputs.decision == 'promote'");
+    expect(job.steps.indexOf(docs)).toBeGreaterThan(job.steps.indexOf(step('Tag, publish and move the major tag')));
+    expect(docs.env!.GH_TOKEN).toBe('${{ steps.releaser.outputs.token }}');
+    expect(docs.run).toContain('jq -r .latest "$PLAN"');
+    expect(docs.run).toContain('node scripts/doc-pins.mjs move "$tag"');
+    expect(docs.run).toContain('title="docs: point the docs at $tag"');
   });
 });
