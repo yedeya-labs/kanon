@@ -5,8 +5,9 @@ import { UNREACHABLE_TITLE as DOCTOR_UNREACHABLE_TITLE } from '../../cli/doctor.
 import {
   ApiError, apply, check, E2E_CHECK, EXPLAIN_MARKER, GATES, gate, gateSummary, HARNESS, HARNESS_WORKFLOW, HELD_LABEL, HELD_MILESTONE, heldTitle,
   laneCallers, notify, pinTitle, redIssueTitle, Refusal, REPORTER_APP_ID, RUN_LISTING_CAP, SOAK_MS, SPACING_MS, startJobName, summary,
-  UNREACHABLE_TITLE, VERDICT_JOB, VERDICT_STEPS,
+  HELD_AUTHOR, UNREACHABLE_TITLE, VERDICT_JOB, VERDICT_TITLES,
 } from '../../scripts/promote.mjs';
+import { VERDICT_TITLE as RED_TEST_VERDICT_TITLE, verdictCommand } from '../../scripts/red-test.mjs';
 
 /**
  * Plan 0009 §2, §3 and §7, step S5: the promotion, on fixtures of GitHub's answers. A candidate is
@@ -117,7 +118,7 @@ const github = (now: number, over: Record<string, Route> = {}) => {
     [pinSearch]: { items: [{ number: 110, title: pinTitle(VERSION), pull_request: { merged_at: PIN } }] },
     // Where an admin explains red runs (#1441): the pin pull request, and a held issue when one is open.
     [page(`repos/${REPO}/issues/110/comments`)]: [],
-    [page(`repos/${REPO}/issues?state=open`)]: [],
+    [page(`repos/${REPO}/issues?state=open&creator=${encodeURIComponent('github-actions[bot]')}`)]: [],
     [page(`repos/${REPO}/compare/${SHA}...main`)]: { commits: [commit(LATER, 'docs: c (#111)', '2026-10-20T10:00:00Z')] },
     [page(`repos/${REPO}/pulls/111/commits`)]: [commit('e'.repeat(40), 'docs: c', '2026-10-20T09:00:00Z')],
     [page(`repos/${REPO}/issues?state=open&labels=bug`)]: [
@@ -327,71 +328,79 @@ describe('the gates (plan 0009 §2)', () => {
 // #1441: a red the candidate didn't cause no longer holds it forever. A verdict on a pull request
 // isn't a lane dying, and a repository admin can explain the rest, on the record.
 describe('what explains a red run (#1441)', () => {
-  const VERIFY = VERDICT_STEPS['red-test.yml']![0]!;
+  const VERDICT = VERDICT_TITLES['red-test.yml']!;
   const RED_TEST_WORKFLOWS = [...WORKFLOWS, { file: 'red-test-check.yml', text: `jobs:\n  red-test:\n    uses: ${REPO}/.github/workflows/red-test.yml@${CANDIDATE}\n` }];
   const redTestListings = {
     [countPath('red-test-check.yml')]: { total_count: 1, workflow_runs: [] },
     ...Object.fromEntries(RED_STATUSES.map((s) => [runsPath('red-test-check.yml', s), { total_count: 0, workflow_runs: [] }])),
   };
-  /** A caller's red run whose one failed job failed at `steps`, with no `unavailable` notice. */
-  const failedRun = (file: string, id: number, steps: string[]) => ({
+  /** A caller's red run whose one failed job carries `titles` among its annotations, beside the exit code's. */
+  const failedRun = (file: string, id: number, titles: string[] = []) => ({
     [runsPath(file, 'failure')]: { total_count: 1, workflow_runs: [{ id, status: 'completed', conclusion: 'failure' }] },
-    [`repos/${REPO}/actions/runs/${id}/jobs?per_page=100`]: { jobs: [{ id: id * 10, conclusion: 'failure', steps: [{ name: 'Set up job', conclusion: 'success' }, ...steps.map((name) => ({ name, conclusion: 'failure' }))] }] },
-    [`repos/${REPO}/check-runs/${id * 10}/annotations?per_page=100`]: [{ title: 'Process completed with exit code 1' }],
+    [`repos/${REPO}/actions/runs/${id}/jobs?per_page=100`]: { jobs: [{ id: id * 10, conclusion: 'failure' }] },
+    [`repos/${REPO}/check-runs/${id * 10}/annotations?per_page=100`]: [{ title: 'Process completed with exit code 1' }, ...titles.map((title) => ({ title }))],
   });
   const STAMP = '2026-10-21T08:00:00Z';
   const comment = (login: string, body: string, edited = false) => ({ user: { login, type: 'User' }, created_at: STAMP, updated_at: edited ? '2026-10-21T09:00:00Z' : STAMP, body });
   const roles = { [`repos/${REPO}/collaborators/owner/permission`]: { permission: 'admin' }, [`repos/${REPO}/collaborators/helper/permission`]: { permission: 'write' } };
   const redGate = (o: ReturnType<typeof check>) => o.gates.find((g) => g.id === 'red')!;
 
-  it('names each verdict step exactly as its lane names it, so a renamed step is caught here', () => {
-    for (const [lane, steps] of Object.entries(VERDICT_STEPS)) {
-      const text = readFileSync(new URL(`../../.github/workflows/${lane}`, import.meta.url), 'utf8');
-      for (const s of steps) expect(text, lane).toContain(`- name: ${s}\n`);
-    }
+  it('reads the red-test check\'s own verdict title, which it prints only on a verdict, and with no comma for the runner to split', () => {
+    expect(VERDICT).toBe(RED_TEST_VERDICT_TITLE);
+    expect(VERDICT).not.toContain(',');
+    expect(verdictCommand(1)).toMatch(new RegExp(`^::error title=${VERDICT}::`));
+    expect(verdictCommand(0)).toBe('');
   });
 
-  it('a red-test run that failed its verification is a verdict on a pull request, not a lane dying (MUTATION: counting verdicts as red turns this red)', () => {
-    const { outcome } = run(4 * DAY, { workflows: RED_TEST_WORKFLOWS, over: { ...redTestListings, ...failedRun('red-test-check.yml', 3, [VERIFY]) } });
+  it('a red-test run carrying its verdict annotation is a verdict on a pull request, not a lane dying (MUTATION: counting verdicts as red turns this red)', () => {
+    const { outcome } = run(4 * DAY, { workflows: RED_TEST_WORKFLOWS, over: { ...redTestListings, ...failedRun('red-test-check.yml', 3, [VERDICT]) } });
     expect(verdicts(outcome).red).toBe('pass');
     expect(redGate(outcome).evidence).toContain('1 red as a verdict on a pull request');
   });
 
-  it('a red-test run that failed at any other step holds: the lane died (MUTATION: any failure of a verdict lane passing turns this red)', () => {
-    const { outcome } = run(4 * DAY, { workflows: RED_TEST_WORKFLOWS, over: { ...redTestListings, ...failedRun('red-test-check.yml', 3, ['Install the dependencies', VERIFY]) } });
+  it('a red-test run that failed without its verdict annotation holds: a script that throws fails the same step (#1441\'s first criterion; MUTATION: reading the step instead of the annotation turns this red)', () => {
+    const { outcome } = run(4 * DAY, { workflows: RED_TEST_WORKFLOWS, over: { ...redTestListings, ...failedRun('red-test-check.yml', 3) } });
     expect(verdicts(outcome).red).toBe('hold');
     expect(redGate(outcome).evidence).toContain('red-test-check.yml run 3 (failure)');
   });
 
-  it('the verification step\'s name in a caller of another lane is no verdict (MUTATION: matching the step without its lane turns this red)', () => {
-    expect(verdicts(run(4 * DAY, { over: failedRun('merge.yml', 3, [VERIFY]) }).outcome).red).toBe('hold');
+  it('the verdict title on a run of a caller of another lane is no verdict (MUTATION: matching the title without its lane turns this red)', () => {
+    expect(verdicts(run(4 * DAY, { over: failedRun('merge.yml', 3, [VERDICT]) }).outcome).red).toBe('hold');
   });
 
   it('an admin\'s explanation on the pin pull request explains the run, and the evidence quotes it (MUTATION: ignoring explanations turns this red)', () => {
-    const over = { ...failedRun('merge.yml', 2, ['Consider the PR(s)']), ...roles, [page(`repos/${REPO}/issues/110/comments`)]: [comment('owner', `${EXPLAIN_MARKER}\n- 2: GitHub answered 502 to one read; the next tick was green`)] };
+    const over = { ...failedRun('merge.yml', 2), ...roles, [page(`repos/${REPO}/issues/110/comments`)]: [comment('owner', `${EXPLAIN_MARKER}\n- 2: GitHub answered 502 to one read; the next tick was green`)] };
     const { outcome } = run(4 * DAY, { over });
     expect(verdicts(outcome)).toEqual(ALL_PASS);
     expect(redGate(outcome).evidence).toContain('merge.yml run 2, explained by @owner on #110: GitHub answered 502 to one read; the next tick was green');
   });
 
   it('the first line may be typed in any case, as on a phone', () => {
-    const over = { ...failedRun('merge.yml', 2, ['Consider the PR(s)']), ...roles, [page(`repos/${REPO}/issues/110/comments`)]: [comment('owner', 'explain red:\n- 2: transient')] };
+    const over = { ...failedRun('merge.yml', 2), ...roles, [page(`repos/${REPO}/issues/110/comments`)]: [comment('owner', 'explain red:\n- 2: transient')] };
     expect(verdicts(run(4 * DAY, { over }).outcome).red).toBe('pass');
   });
 
   it("an explanation by someone who isn't an admin, or edited after it was posted, counts for nothing, and the evidence says why (MUTATION: dropping either check turns this red)", () => {
     for (const [c, why] of [[comment('helper', `${EXPLAIN_MARKER}\n- 2: fine`), '@helper is not a repository admin'], [comment('owner', `${EXPLAIN_MARKER}\n- 2: fine`, true), "@owner's explanation was edited after it was posted"]] as const) {
-      const over = { ...failedRun('merge.yml', 2, ['Consider the PR(s)']), ...roles, [page(`repos/${REPO}/issues/110/comments`)]: [c] };
+      const over = { ...failedRun('merge.yml', 2), ...roles, [page(`repos/${REPO}/issues/110/comments`)]: [c] };
       const { outcome } = run(4 * DAY, { over });
       expect(verdicts(outcome).red).toBe('hold');
       expect(redGate(outcome).evidence).toContain(why);
     }
   });
 
+  it("an explanation whose author's permission can't be read holds, and says the read failed, not that they aren't an admin", () => {
+    const over = { ...failedRun('merge.yml', 2), [page(`repos/${REPO}/issues/110/comments`)]: [comment('owner', `${EXPLAIN_MARKER}\n- 2: fine`)] };
+    const { outcome } = run(4 * DAY, { over });
+    expect(verdicts(outcome).red).toBe('hold');
+    expect(redGate(outcome).evidence).toContain("@owner's permission could not be read");
+    expect(redGate(outcome).evidence).not.toContain('is not a repository admin');
+  });
+
   it('an explanation on the open held issue counts, as on the pin pull request', () => {
     const over = {
-      ...failedRun('merge.yml', 2, ['Consider the PR(s)']), ...roles,
-      [page(`repos/${REPO}/issues?state=open`)]: [{ number: 140, title: heldTitle(CANDIDATE), body: '' }],
+      ...failedRun('merge.yml', 2), ...roles,
+      [page(`repos/${REPO}/issues?state=open&creator=${encodeURIComponent(HELD_AUTHOR)}`)]: [{ number: 140, title: heldTitle(CANDIDATE), body: '', user: { login: HELD_AUTHOR } }],
       [page(`repos/${REPO}/issues/140/comments`)]: [comment('owner', `${EXPLAIN_MARKER}\n- 2: GitHub 502`)],
     };
     const { outcome } = run(4 * DAY, { over });
@@ -410,9 +419,9 @@ describe('a held promotion reaches the Owner (#1441)', () => {
     [`repos/${REPO}/pulls/110`]: { number: 110, merged_by: { login: 'owner' } },
     [page(`repos/${REPO}/milestones?state=open`)]: [{ number: 3, title: HELD_MILESTONE }, { number: 4, title: 'Product Backlog' }],
   };
-  const notified = (soak: number, { over = {}, env = {}, applied = '', open }: { over?: Record<string, Route>; env?: Record<string, string>; applied?: string; open?: { number: number; body: string } } = {}) => {
+  const notified = (soak: number, { over = {}, env = {}, applied = '', open }: { over?: Record<string, Route>; env?: Record<string, string>; applied?: string; open?: { number: number; body: string; title?: string; author?: string } } = {}) => {
     const issues = open ? {
-      [page(`repos/${REPO}/issues?state=open`)]: [{ number: open.number, title: heldTitle(CANDIDATE), body: open.body }],
+      [page(`repos/${REPO}/issues?state=open&creator=${encodeURIComponent(HELD_AUTHOR)}`)]: [{ number: open.number, title: open.title ?? heldTitle(CANDIDATE), body: open.body, user: { login: open.author ?? HELD_AUTHOR } }],
       [page(`repos/${REPO}/issues/${open.number}/comments`)]: [],
     } : {};
     const { outcome, now } = run(soak, { over: { ...over, ...issues }, env });
@@ -446,6 +455,17 @@ describe('a held promotion reaches the Owner (#1441)', () => {
   it('opens nothing for an expected hold: before the soak ends, or by a dispatch\'s `hold` (MUTATION: notifying every hold turns this red)', () => {
     expect(notified(71 * HOUR, { over: red }).writes).toEqual([]);
     expect(notified(4 * DAY, { env: { HOLD: 'true' } }).writes).toEqual([]);
+  });
+
+  it("never reads a same-titled issue someone else opened: it opens the workflow's own (MUTATION: dropping the author check turns this red)", () => {
+    const { writes } = notified(4 * DAY, { over: red, open: { number: 141, body: 'mine now', author: 'stranger' } });
+    expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([`POST repos/${REPO}/issues`]);
+  });
+
+  it("closes an older candidate's held issue once a newer candidate is the newest (MUTATION: reading only this candidate's issue turns this red)", () => {
+    const { writes } = notified(4 * DAY, { over: red, open: { number: 139, body: '<!-- kanon:promotion-held red -->', title: heldTitle('candidate-v0.40.1') } });
+    expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([`POST repos/${REPO}/issues/139/comments`, `PATCH repos/${REPO}/issues/139`, `POST repos/${REPO}/issues`]);
+    expect(writes[1]!.body).toEqual({ state: 'closed', state_reason: 'not_planned' });
   });
 
   it('closes the issue once the candidate is promoted, and not while the apply step failed', () => {

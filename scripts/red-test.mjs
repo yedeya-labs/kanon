@@ -364,6 +364,21 @@ export function classify(files, areas = UNDECLARED) {
 export const exitCodeFor = (r) => (r?.blocked || r?.inconclusive || r?.unverifiable || r?.weakOnUnrevertedHarness || r?.refused || r?.areasChanged ? 1 : 0);
 
 /**
+ * The title of the annotation the check leaves when it reached a verdict that fails the pull
+ * request (#1441), and only then: a throw, or a crash at import, exits 1 too but leaves none. Kanon's
+ * promotion counts a red run carrying it as a verdict on a pull request, not the lane dying, so a
+ * candidate whose red-test script crashes is still held. No comma: the runner splits a title on it.
+ */
+export const VERDICT_TITLE = 'Red-test verdict';
+
+/**
+ * The workflow command a finished run prints, on stderr (its stdout goes to the step summary), for
+ * its exit code: the verdict annotation on 1, nothing on 0.
+ * @param {number} code
+ */
+export const verdictCommand = (code) => (code === 1 ? `::error title=${VERDICT_TITLE}::the red-test check's verdict fails this pull request; the step summary says why` : '');
+
+/**
  * @param {{ expected: string[], results: Array<Partial<FileResult> & { file: string }>, ran?: boolean, unreverted?: string[], unrevertedTests?: string[] }} input
  */
 export function verdict({ expected, results, ran = true, unreverted = [], unrevertedTests = [] }) {
@@ -871,5 +886,8 @@ if (isCliEntry(import.meta.url)) {
     // is carried to the verifying job instead (`areas_changed`), which fails with its own message.
     process.exit(0);
   }
-  process.exit(exitCodeFor(r));
+  const code = exitCodeFor(r);
+  const command = verdictCommand(code);
+  if (command) console.error(command);
+  process.exit(code);
 }

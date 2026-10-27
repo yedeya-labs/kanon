@@ -61,6 +61,9 @@ export const PROMOTION_ROUTES = {
   [`search/issues?q=${encodeURIComponent(`repo:acme/shop is:pr is:merged in:title "${pinTitle('0.41.0')}"`)}&per_page=100`]: { items: [{ number: 110, title: pinTitle('0.41.0'), pull_request: { merged_at: PIN } }] },
   [page(`repos/acme/shop/compare/${SHA}...main`)]: { commits: [] },
   [page('repos/acme/shop/issues?state=open&labels=bug')]: [],
+  // Where an admin explains a red run (#1441): the open held issues, none, and the pin pull request's comments.
+  [page(`repos/acme/shop/issues?state=open&creator=${encodeURIComponent('github-actions[bot]')}`)]: [],
+  [page('repos/acme/shop/issues/110/comments')]: [],
   [runsOf('completed')]: { total_count: 2, workflow_runs: [] },
   ...Object.fromEntries(['failure', 'timed_out', 'startup_failure'].map((s) => [runsOf(s), { total_count: 0, workflow_runs: [] }])),
 };

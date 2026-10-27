@@ -28,8 +28,9 @@
 //   red      every run of Kanon's lane callers since the pins moved succeeded at its latest attempt
 //            (so a run re-run green passes), or is explained (#1441): it failed with agent-classify's
 //            `unavailable` notice (the model was never reached) on one of its failed jobs; or every
-//            step that failed is a verdict on a pull request (`VERDICT_STEPS`, the red-test check
-//            saying the changed tests pass without the source change), not the lane dying; or a
+//            failed job carries the verdict annotation of a lane its caller calls (`VERDICT_TITLES`,
+//            the red-test check saying the changed tests pass without the source change), which the
+//            lane leaves only once it reached a verdict, so a lane that crashed still holds; or a
 //            repository admin explained it, by run id and cause, in a comment starting with
 //            `EXPLAIN_MARKER` on the pin pull request or the held issue (`explanations`), which the
 //            evidence quotes. An edited explanation counts for nothing. Each red conclusion is listed
@@ -58,11 +59,13 @@
 // A FOURTH MODE, SO A HELD PROMOTION REACHES THE OWNER (#1441):
 //   notify reads the check's outcome (`OUTCOME`) with the workflow's token, Issues write. A
 //          candidate past its soak that a gate holds gets one issue, `Promotion held: <candidate>`,
+//          opened by the workflow token (`HELD_AUTHOR`; a same-titled issue anyone else opened is
+//          never read),
 //          assigned to whoever merged its pin pull request (the Owner, who starts each soak), with
 //          the gates and what unblocks each. Each later run rewrites its body, and comments only when
 //          the gates holding it change, so the Owner is told once per change, not daily. It closes
-//          when the candidate is promoted (`APPLIED=success`), promoted already or superseded. A
-//          hold before the soak ends, or by the spacing or a dispatch's `hold`, is expected and opens
+//          when the candidate is promoted (`APPLIED=success`), promoted already or superseded, and
+//          one for an older candidate closes once a newer candidate is the newest. A hold before the soak ends, or by the spacing or a dispatch's `hold`, is expected and opens
 //          nothing.
 //
 // A THIRD MODE, FOR THE PIN JOB (plan 0012 §8.1, decision 2):
@@ -128,13 +131,16 @@ const START_PREFIX = 'start (';
 export const redIssueTitle = (tag) => `e2e: ${tag} is red`;
 
 /**
- * The steps whose failure is a lane's verdict on a pull request, not the lane dying, by the lane
- * a caller calls (#1441). The red-test check failing its verification says the pull request's
- * changed tests pass without its source change: a re-run says it again, and no candidate caused it.
- * A test holds each name to the lane's workflow.
- * @type {Record<string, string[]>}
+ * The annotation a lane leaves only once it reached a verdict that fails a pull request, by the
+ * lane a caller calls (#1441): a red run whose every failed job carries it is a verdict, not the
+ * lane dying. The step's name is no evidence, since a script that throws fails the same step. The
+ * red-test check's says the pull request's changed tests pass without its source change, which a
+ * re-run says again (`scripts/red-test.mjs`'s `VERDICT_TITLE`, which a test holds this to; not
+ * imported, so the promotion runs no more of the tree with the Releaser's key). A candidate cut
+ * before its lane left one is explained by an admin instead.
+ * @type {Record<string, string>}
  */
-export const VERDICT_STEPS = { 'red-test.yml': ['Verify the changed tests fail without the source change'] };
+export const VERDICT_TITLES = { 'red-test.yml': 'Red-test verdict' };
 /**
  * What a repository admin's explanation of red runs starts with, then one `- <run id>: <cause>` a
  * line (#1441). Plain words, not a hidden marker, so the Owner can type it on a phone.
@@ -144,6 +150,11 @@ export const EXPLAIN_MARKER = 'Explain red:';
 const isExplanation = (body) => body.trimStart().toLowerCase().startsWith(EXPLAIN_MARKER.toLowerCase());
 /** The issue a held promotion opens for its candidate (#1441). @param {string} candidate */
 export const heldTitle = (candidate) => `Promotion held: ${candidate}`;
+/**
+ * Who opens the held issue: the workflow token. The repository is public, so anyone can open an
+ * issue with the same title, and only the workflow's own is read, rewritten or closed.
+ */
+export const HELD_AUTHOR = 'github-actions[bot]';
 /** What marks the held issue's body, with the gates holding it, so a change of gates is noticed. */
 const HELD_MARKER = '<!-- kanon:promotion-held';
 /** The held issue's label and bucket: Kanon's own release operation (`K-WORK-4`, `K-WORK-11`). */
@@ -594,8 +605,8 @@ export function laneRefOf(run, repo) {
 
 /**
  * Why a red run is red, from its latest attempt's failed jobs: `unreachable` when one carries
- * agent-classify's `unavailable` notice; `verdict` when every step that failed is a verdict step of
- * a lane its caller calls (`VERDICT_STEPS`); otherwise `red`. A read that fails is `red`, so the
+ * agent-classify's `unavailable` notice; `verdict` when every one carries the verdict annotation of
+ * a lane its caller calls (`VERDICT_TITLES`); otherwise `red`. A read that fails is `red`, so the
  * gate holds rather than guess.
  * @param {Api} api @param {string} repo @param {number} id @param {string[]} lanes
  * @returns {'unreachable' | 'verdict' | 'red'}
@@ -604,12 +615,10 @@ export function redKind(api, repo, id, lanes) {
   try {
     const jobs = api(`repos/${repo}/actions/runs/${id}/jobs?per_page=100`)?.jobs ?? [];
     const failed = jobs.filter((/** @type {any} */ job) => job?.conclusion === 'failure');
-    if (failed.some((/** @type {any} */ job) => (api(`repos/${repo}/check-runs/${Number(job.id)}/annotations?per_page=100`) ?? []).some((/** @type {any} */ a) => a?.title === UNREACHABLE_TITLE))) return 'unreachable';
-    const verdicts = new Set(lanes.flatMap((l) => VERDICT_STEPS[l] ?? []));
-    const steps = failed.flatMap((/** @type {any} */ job) => (job?.steps ?? []).filter((/** @type {any} */ s) => s?.conclusion === 'failure').map((/** @type {any} */ s) => String(s?.name ?? '')));
-    // A failed job with no failed step (cancelled mid-step, or a runner lost) is no verdict.
-    const everyJobHasOne = failed.every((/** @type {any} */ job) => (job?.steps ?? []).some((/** @type {any} */ s) => s?.conclusion === 'failure'));
-    if (failed.length > 0 && everyJobHasOne && steps.every((/** @type {string} */ s) => verdicts.has(s))) return 'verdict';
+    const titles = failed.map((/** @type {any} */ job) => new Set((api(`repos/${repo}/check-runs/${Number(job.id)}/annotations?per_page=100`) ?? []).map((/** @type {any} */ a) => String(a?.title ?? ''))));
+    if (titles.some((/** @type {Set<string>} */ s) => s.has(UNREACHABLE_TITLE))) return 'unreachable';
+    const verdicts = lanes.flatMap((l) => (VERDICT_TITLES[l] ? [VERDICT_TITLES[l]] : []));
+    if (titles.length > 0 && titles.every((/** @type {Set<string>} */ s) => verdicts.some((v) => s.has(v)))) return 'verdict';
     return 'red';
   } catch {
     return 'red';
@@ -630,21 +639,18 @@ export function explanations(api, repo, numbers) {
   const explained = new Map();
   /** @type {string[]} */
   const ignored = [];
-  /** @type {Map<string, boolean>} */
-  const admins = new Map();
-  /** @param {string} login */
-  const isAdmin = (login) => {
-    if (!admins.has(login)) {
-      let admin = false;
+  /** @type {Map<string, 'admin' | 'not' | 'unread'>} */
+  const roles = new Map();
+  /** A user's role, `unread` when the permission read failed, which holds like `not`. @param {string} login */
+  const roleOf = (login) => {
+    if (!roles.has(login)) {
       try {
-        const p = api(`repos/${repo}/collaborators/${encodeURIComponent(login)}/permission`);
-        admin = p?.permission === 'admin';
+        roles.set(login, api(`repos/${repo}/collaborators/${encodeURIComponent(login)}/permission`)?.permission === 'admin' ? 'admin' : 'not');
       } catch {
-        admin = false;
+        roles.set(login, 'unread');
       }
-      admins.set(login, admin);
     }
-    return admins.get(login) === true;
+    return roles.get(login);
   };
   for (const n of numbers) {
     /** @type {any[]} */
@@ -658,7 +664,12 @@ export function explanations(api, repo, numbers) {
       const body = String(c?.body ?? '');
       if (!isExplanation(body)) continue;
       const login = String(c?.user?.login ?? '');
-      if (c?.user?.type === 'Bot' || !login || !isAdmin(login)) {
+      const role = c?.user?.type === 'Bot' || !login ? 'not' : roleOf(login);
+      if (role === 'unread') {
+        ignored.push(`#${n}: @${login}'s permission could not be read, so the explanation can't be checked`);
+        continue;
+      }
+      if (role !== 'admin') {
         ignored.push(`#${n}: @${login} is not a repository admin`);
         continue;
       }
@@ -676,13 +687,23 @@ export function explanations(api, repo, numbers) {
 }
 
 /**
+ * The open issues held promotions opened, for any candidate: the workflow token's alone.
+ * @param {Api} api @param {string} repo
+ * @returns {Array<{ number: number, title: string, body: string }>}
+ */
+export function heldIssues(api, repo) {
+  return pages(api, `repos/${repo}/issues?state=open&creator=${encodeURIComponent(HELD_AUTHOR)}`)
+    .filter((i) => !i?.pull_request && i?.user?.login === HELD_AUTHOR && String(i?.title ?? '').startsWith(heldTitle('')))
+    .map((i) => ({ number: Number(i.number), title: String(i.title), body: String(i.body ?? '') }));
+}
+
+/**
  * The open issue a held promotion opened for `candidate`, if any.
  * @param {Api} api @param {string} repo @param {string} candidate
- * @returns {{ number: number, body: string } | null}
+ * @returns {{ number: number, title: string, body: string } | null}
  */
 export function heldIssue(api, repo, candidate) {
-  const found = pages(api, `repos/${repo}/issues?state=open`).find((i) => !i?.pull_request && i?.title === heldTitle(candidate));
-  return found ? { number: Number(found.number), body: String(found.body ?? '') } : null;
+  return heldIssues(api, repo).find((i) => i.title === heldTitle(candidate)) ?? null;
 }
 
 /** @param {unknown} v */
@@ -967,7 +988,15 @@ export function notify(o, { api = ghApi, repo, applied = '', runUrl = '' }) {
   /** @type {string[]} */
   const done = [];
   if (!o.candidate) return done;
-  const open = heldIssue(api, repo, o.candidate);
+  const all = heldIssues(api, repo);
+  // A held candidate's way out is often a newer one: its issue closes once that one is the newest.
+  for (const old of all.filter((i) => i.title !== heldTitle(String(o.candidate)))) {
+    const why = `Superseded: \`${o.candidate}\` is the newest candidate now, and its promotion is what this run reads.`;
+    api(`repos/${repo}/issues/${old.number}/comments`, { method: 'POST', body: { body: why } });
+    api(`repos/${repo}/issues/${old.number}`, { method: 'PATCH', body: { state: 'closed', state_reason: 'not_planned' } });
+    done.push(`Closed #${old.number}: ${why}`);
+  }
+  const open = all.find((i) => i.title === heldTitle(String(o.candidate))) ?? null;
   if ((o.decision === 'promote' && applied === 'success') || o.decision === 'none') {
     if (open) {
       const why = o.decision === 'promote' ? `Promoted: \`${o.plan?.tag ?? ''}\` is the stable release.` : `Closed: ${o.why}.`;

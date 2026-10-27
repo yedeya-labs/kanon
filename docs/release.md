@@ -192,27 +192,7 @@ The pull requests a candidate contains are the squash commits, `<title> (#N)`, b
 
 Each candidate's changelog starts at the previous candidate's tag, so a candidate that was held and never promoted lists its changes, breaking ones included, only in its own pre-release. An adopter's Dependabot pull request jumps from the last stable release to the new one and never shows that pre-release. So the stable Release carries the promoted candidate's notes, then those of each candidate it superseded, back to the last stable release; with a single candidate, they are that candidate's notes alone.
 
-#### Explaining a red run
-
-The gate exists to hold a candidate that breaks Kanon's lanes, so a red run the candidate didn't cause shouldn't hold it for good ([#1441](https://github.com/yedeya-labs/kanon/issues/1441); `candidate-v0.42.0` waited a week on fifteen). It accepts three explanations, and its evidence counts or quotes each:
-
-- **The model was unreachable:** a failed job carries `agent-classify`'s `unavailable` notice.
-- **A verdict on a pull request:** every step that failed is one that judges the pull request, by the lane its caller calls ([`VERDICT_STEPS`](../scripts/promote.mjs)). Today that is the red-test check's `Verify the changed tests fail without the source change`: it says the pull request's changed tests pass without its source change, which a re-run would say again. The same lane failing at any other step died, and holds.
-- **A repository admin explained it.** A comment on the candidate's pin pull request, or on its held issue (below), whose first line is `Explain red:`, then one run a line:
-
-  ```
-  Explain red:
-  - 39466300347: GitHub answered 502 to one read; the next tick was green
-  - 40392650561: the store's 503 jwks-unavailable (#1440)
-  ```
-
-  Only a user whose permission is `admin` counts, and only a comment never edited since it was posted, because anyone with write access, the agents' Apps among them, can edit another person's comment. Every other `Explain red:` comment is listed in the evidence with why it didn't count. Explain only what the candidate didn't cause: a red the candidate caused needs a fix and a new candidate.
-
-#### When a promotion is held
-
-A hold is a green run, so on its own it reaches nobody. Once a candidate has soaked and a gate still holds it, the run's last step (`promote.mjs notify`, with the workflow's token and Issues write) opens one issue, `Promotion held: candidate-vX.Y.Z`, assigned to whoever merged the pin pull request, the Owner, on the *Development Automation* bucket with `pipeline-improvement`. Its body is the gates, each one's evidence and what unblocks it. Each later run rewrites the body, and comments only when the gates holding it change, so the Owner is told once per change, not daily. It closes once the candidate is promoted, or is promoted already or superseded. A hold before the soak ends, by the six-day spacing or by a dispatch's `hold` is expected and opens nothing.
-
-It writes as the Releaser because that App is the one bypass actor of the `v*` tag ruleset (plan 0008), as the release workflow creates its tags and moves the major tag with the Releaser's token. The check itself runs with the workflow's token, which reads, and writes only the held issue. A run interrupted after the tag finishes the Release and the major tag on the next run, and one interrupted after the Release moves the major tag, unless a newer stable release already holds it. In that case the Release is published but not marked latest, and the major tag stays where it is. A run dispatched with `hold` finishes none of this: it says what is left to finish, and the next run without `hold` finishes it.
+It writes as the Releaser because that App is the one bypass actor of the `v*` tag ruleset (plan 0008), as the release workflow creates its tags and moves the major tag with the Releaser's token. The check itself runs with the workflow's token and only reads; the last step, which writes the held issue ([below](#when-a-promotion-is-held)), uses the same token's Issues write. A run interrupted after the tag finishes the Release and the major tag on the next run, and one interrupted after the Release moves the major tag, unless a newer stable release already holds it. In that case the Release is published but not marked latest, and the major tag stays where it is. A run dispatched with `hold` finishes none of this: it says what is left to finish, and the next run without `hold` finishes it.
 
 **It promotes nothing** when a stable release newer than the candidate exists, whether it was tagged by hand or by a fallback to plain releases. The candidate is superseded, and promoting it would move latest and the major tag back to an older release. This holds with `urgent` too.
 
@@ -222,6 +202,26 @@ It writes as the Releaser because that App is the one bypass actor of the `v*` t
 
 - **Hold:** dispatch with `hold`, which reports the gates and promotes nothing, nor finishes an interrupted promotion, or disable the workflow. A hold lasts one run: the daily run carries no `hold`, so to hold a candidate for longer, disable the workflow.
 - **Urgent** ([the urgent path](#urgent-fixes)): dispatch with `urgent` and a `reason`. It skips the soak and the six-day spacing; the other four gates still apply, the end-to-end gate among them, and a run of the review lane's caller since the pins moved must have called the review lane at the candidate's tag, as the run's own `referenced_workflows` records it (not the caller's copy at the run's head, which for `pull_request_target` is the pull request's), and run its `review` job to success (a run the filter declined reviewed nothing). The reason goes into the stable Release's notes. `urgent` without a reason is refused.
+
+#### Explaining a red run
+
+The gate exists to hold a candidate that breaks Kanon's lanes, so a red run the candidate didn't cause shouldn't hold it for good ([#1441](https://github.com/yedeya-labs/kanon/issues/1441); `candidate-v0.42.0` waited a week on fifteen). It accepts three explanations, and its evidence counts or quotes each:
+
+- **The model was unreachable:** a failed job carries `agent-classify`'s `unavailable` notice.
+- **A verdict on a pull request:** every failed job carries the annotation its lane leaves only once it reached a verdict, by the lane the run's caller calls ([`VERDICT_TITLES`](../scripts/promote.mjs)). Today that is the red-test check's `Red-test verdict`: the pull request's changed tests pass without its source change, which a re-run would say again. The step's name is no evidence, since the check's script exits 1 when it throws too, so a red-test run without the annotation died, and holds. A candidate cut before the check left it (0.42.0 and earlier) has its red-test verdicts explained by an admin instead.
+- **A repository admin explained it.** A comment on the candidate's pin pull request, or on its held issue (below), whose first line is `Explain red:`, then one run a line:
+
+  ```
+  Explain red:
+  - 39466300347: GitHub answered 502 to one read; the next tick was green
+  - 40392650561: the store's 503 jwks-unavailable (#1440)
+  ```
+
+  Only a user whose permission is `admin` counts, and only a comment never edited since it was posted, because anyone with write access, the agents' Apps among them, can edit another person's comment. Every other `Explain red:` comment is listed in the evidence with why it didn't count, a permission that couldn't be read apart from one that isn't admin. Explain only what the candidate didn't cause: a red the candidate caused needs a fix and a new candidate.
+
+#### When a promotion is held
+
+A hold is a green run, so on its own it reaches nobody. Once a candidate has soaked and a gate still holds it, the run's last step (`promote.mjs notify`, with the workflow's token and Issues write) opens one issue, `Promotion held: candidate-vX.Y.Z`, as the workflow token (an issue of the same title anyone else opens is never read), assigned to whoever merged the pin pull request, the Owner, on the *Development Automation* bucket with `pipeline-improvement`. Its body is the gates, each one's evidence and what unblocks it. Each later run rewrites the body, and comments only when the gates holding it change, so the Owner is told once per change, not daily. It closes once the candidate is promoted, or is promoted already or superseded, and one for an older candidate closes once a newer candidate is the newest, the usual way out of a hold. A hold before the soak ends, by the six-day spacing or by a dispatch's `hold` is expected and opens nothing.
 
 ### Urgent fixes
 
