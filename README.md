@@ -4,7 +4,16 @@
 [![Release](https://img.shields.io/github/v/release/yedeya-labs/kanon?sort=semver)](https://github.com/yedeya-labs/kanon/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Rules for AI agents on GitHub that fail the build when they're broken.** Kanon is an opinionated workflow for teams that let Claude Code agents write, review and merge code. Agents file the work, implement it and review it. The rules decide what they may do on their own and what a person must decide, and CI enforces them.
+**Let Claude review your pull requests, then merge the safe ones and implement your issues, under rules it can't talk its way around.**
+
+Kanon is a set of GitHub workflows and two GitHub Apps for teams that let Claude Code agents work on a real repository. Start with the Reviewer on every pull request, and hand over more when you trust it.
+
+- **About a dollar a reviewed pull request.** $1.13 at the median at API list price ($2.74 at the 90th percentile), over 360 pull requests on Kanon's own repository, on your own API key or Claude subscription. [What each lane costs](docs/lanes.md#what-a-model-run-costs).
+- **Rules that fail the build, not prompts.** Agents seldom read a repository's rules file, and in [RepoComplianceBench](https://arxiv.org/abs/2607.26819) none followed a "stop and hand off to a person" rule unaided. Kanon's rules are CI checks, tests and GitHub settings.
+- **An agent never approves its own work.** Writing and approving run under two separate GitHub Apps. A pull request can't change the rules it is judged by, and the Reviewer never runs its code.
+- **You decide how far it goes.** Review only, then low-risk pull requests merging on their own, then agents implementing issues. Anything on a path you mark always goes to a person.
+
+Kanon builds itself this way: [its own pull requests](https://github.com/yedeya-labs/kanon/pulls?q=is%3Apr+is%3Amerged) are reviewed by its own Reviewer, and nearly all are written by Claude Code agents.
 
 > **κανών** (*kanōn*): a measuring rod; the rule that work is checked against.
 
