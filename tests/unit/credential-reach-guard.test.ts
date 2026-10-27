@@ -32,7 +32,8 @@ const escalates = (file: string) => ESCALATIONS.some(([re]) => re.test(file));
 const reached = (reaches: readonly Reach[]) => reaches.map((r) => `${r.workflow}:${r.job} ${r.file}`);
 
 // A library file the green zone holds, which no credential-holding run reaches today.
-const GREEN = 'scripts/lib/token-trend.mjs';
+// (token-trend.mjs was it until #1453 linked it into the telemetry function, which escalated it.)
+const GREEN = 'scripts/lib/cache-ttl.mjs';
 const withImport = (file: string, line: string) => ({ [file]: `${line}\n${readFileSync(file, 'utf8')}` });
 
 describe("this tree's credential-holding runs", () => {
@@ -108,7 +109,7 @@ describe('the guard goes red', { timeout: 30_000 }, () => {
   });
 
   it('when the metrics page imports one, through the library it reaches', () => {
-    const problems = credentialProblems(credentialReach(withImport('scripts/metrics/indicators.mjs', `export { DAY_MS } from '../lib/token-trend.mjs';`)), ESCALATIONS);
+    const problems = credentialProblems(credentialReach(withImport('scripts/metrics/indicators.mjs', `export { IDLE_LIMIT_MS } from '../lib/cache-ttl.mjs';`)), ESCALATIONS);
     expect(problems.map((p) => p.split(',')[0])).toEqual([`${GREEN}: metrics-page.yml`]);
   });
 

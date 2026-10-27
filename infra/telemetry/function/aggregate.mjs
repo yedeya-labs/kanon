@@ -21,7 +21,11 @@
 // indicators the public page shows, cost per merged item, yield and the escape rates by band, with
 // their trend and their by-version view, computed by `indicators.mjs` (the report's own core,
 // linked into this package) over each DECLARING adopter's run partitions and its `#work`
-// partition, under its label. No other adopter's partitions are read for it, so it holds no
+// partition, under its label, with the release comparison (kanon#1453, `compare.mjs`, the
+// report's own code, its fit `token-trend.mjs` linked beside it): each Kanon release against the
+// one before it, published as its derived fields alone, the cost change and the yield and escape
+// differences with their intervals, the verdict code, and each release's merged items and dates
+// (the Owner's decision of 2026-10-27, ADR 0007). No other adopter's partitions are read for it, so it holds no
 // cross-adopter figure: the three-adopter rule holds by construction, and the subtraction guard
 // with it. A figure combining adopters (plan 0003 decision 19) is not computed yet. The default
 // answer is unchanged, so a reader pinned to an earlier release, which refuses any key it doesn't
@@ -58,10 +62,12 @@ import { BAND_VERSION } from './band.mjs';
 import {
   MINIMUM, TREND_WINDOWS, WINDOW_DAYS, byVersionOf, deliveryLanes, headlineCells, measure, prepareRows, trendOf,
 } from './indicators.mjs';
+import { releaseComparisonOf } from './compare.mjs';
 import { keyCache, verifyToken, WORKFLOW_REPOSITORY } from './oidc.mjs';
 import { AGGREGATE_GET, AGGREGATE_SCAN, REGISTER_TABLE, REGISTRATION_PREFIX } from './register-fields.mjs';
 import { LANES } from './schema.mjs';
 import { RESAMPLES, SEED } from './stats.mjs';
+import { fitPeriodEffect } from './token-trend.mjs';
 
 /** Plan 0002 decision 7: a cell that combines adopters is published only at this many or more. */
 export const MIN_ADOPTERS = 3;
@@ -351,6 +357,39 @@ const DAY_MS = 86_400_000;
 const DELIVERY = deliveryLanes(LANES);
 
 /**
+ * The release comparison as the page view publishes it (kanon#1453): the Owner's derived fields
+ * and nothing else. Each release's version, merged items and the dates they closed between; the
+ * cost change at equal size, in percent, with its interval and sample, or why there is none as a
+ * status and counts, never the report's sentence; the yield and escape differences; the verdict.
+ * Each release's own cost, yield and escape cells stay in the store.
+ * @param {ReturnType<typeof releaseComparisonOf>} rc
+ */
+export function publishedComparison(rc) {
+  const release = (/** @type {{ version: string, items: number, from: string, until: string }} */ a) => ({ version: a.version, items: a.items, from: a.from, until: a.until });
+  const cost = (/** @type {(typeof rc.comparisons)[number]['costAtEqualSize']} */ c) => (c.ok
+    ? { status: 'ok', n: c.n, value: c.pct, low: c.loPct, high: c.hiPct }
+    : c.status === 'not-enough-data' ? { status: c.status, n: c.n, minimum: c.minimum } : { status: c.status, n: c.n });
+  /** @param {{ status: string, n: number, value?: number, low?: number, high?: number, minimum?: number }} d */
+  const difference = (d) => (d.status === 'ok'
+    ? { status: d.status, n: d.n, value: d.value, low: d.low, high: d.high }
+    : d.status === 'not-enough-data' ? { status: d.status, n: d.n, minimum: d.minimum } : { status: d.status, n: d.n });
+  return {
+    minimum: rc.minimum,
+    margins: { yield: rc.margins.yield, escape30: rc.margins.escape30 },
+    comparisons: rc.comparisons.map((c) => ({
+      old: release(c.old),
+      new: release(c.new),
+      costAtEqualSize: cost(c.costAtEqualSize),
+      yieldDifference: difference(c.yieldDifference),
+      escapeDifference: difference(c.escapeDifference),
+      verdict: c.verdict,
+    })),
+    fewer: rc.fewer.map((f) => ({ version: f.version, items: f.items })),
+    dev: rc.dev,
+  };
+}
+
+/**
  * The page view (plan 0003 M7, §6.1's headline, trend and by-version views): for each adopter
  * that declared its own figures, under its label, the indicators over its rows alone, as one
  * adopter. Rows of any other adopter are not read, so nothing here combines adopters. The window
@@ -402,6 +441,7 @@ export function pageView(rows, { now, own = {}, keys: known = [] }) {
       },
       trend: trendOf(ctx, { end, days: WINDOW_DAYS, windows: TREND_WINDOWS }),
       by_version: byVersionOf(ctx, { start: end - TREND_WINDOWS * width, end }),
+      release_comparison: publishedComparison(releaseComparisonOf(ctx, { start: end - TREND_WINDOWS * width, end, fit: fitPeriodEffect })),
     };
   }).sort((a, b) => a.label.localeCompare(b.label));
   const result = {

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, normalize, relative, sep } from 'node:path';
 import ts from 'typescript';
 
@@ -115,7 +115,11 @@ export function importClosure(entries: readonly string[], options: { tree?: Tree
       else if (!seen.has(resolved)) queue.push(resolved);
     }
   }
-  return { modules: [...seen].sort(), problems };
+  // A link in a function's directory (`indicators.mjs -> ../../../scripts/metrics/indicators.mjs`)
+  // is resolved as the package has it, beside its siblings, and its target is linked too: a change
+  // to the target changes the deployed code, so the target is a module of the closure as well.
+  const targets = [...seen].filter((f) => existsSync(join(ROOT, f)) && lstatSync(join(ROOT, f)).isSymbolicLink()).map((f) => rel(realpathSync(join(ROOT, f))));
+  return { modules: [...new Set([...seen, ...targets])].sort(), problems };
 }
 
 /** Every code file under a directory, repository-relative: a hosted function's entries. */

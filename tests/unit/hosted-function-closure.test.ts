@@ -40,6 +40,18 @@ describe.each(FUNCTIONS)('the modules %s links', (dir) => {
   });
 });
 
+describe("the telemetry function's closure", () => {
+  const TELEMETRY = importClosure(codeFilesUnder('infra/telemetry/function'));
+
+  // The package is zipped with its links followed, so a link's target is deployed code: the
+  // closure lists it beside the link, and it must be escalated too (kanon#1453).
+  it("lists each linked file's target, the release comparison's core and its fit among them", () => {
+    for (const m of ['scripts/metrics/indicators.mjs', 'scripts/metrics/compare.mjs', 'scripts/lib/token-trend.mjs']) {
+      expect(TELEMETRY.modules, m).toContain(m);
+    }
+  });
+});
+
 describe("the status server's closure", () => {
   it('reaches the deciders the status core calls, through the status core', () => {
     for (const m of ['scripts/status/views.mjs', 'scripts/lead-reconcile.mjs', 'scripts/review-recovery.mjs', 'scripts/workflow-health.mjs', 'scripts/brief-guard.mjs', 'scripts/lib/lane-caller.mjs', 'scripts/lib/waivers.mjs']) {
