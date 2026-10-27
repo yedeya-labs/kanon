@@ -348,8 +348,15 @@ describe('what explains a red run (#1441)', () => {
   it('reads the red-test check\'s own verdict title, which it prints only on a verdict, and with no comma for the runner to split', () => {
     expect(VERDICT).toBe(RED_TEST_VERDICT_TITLE);
     expect(VERDICT).not.toContain(',');
-    expect(verdictCommand(1)).toMatch(new RegExp(`^::error title=${VERDICT}::`));
-    expect(verdictCommand(0)).toBe('');
+    expect(verdictCommand({ blocked: true })).toMatch(new RegExp(`^::error title=${VERDICT}::`));
+    expect(verdictCommand({})).toBe('');
+  });
+
+  // B3 on #1471: a candidate that breaks how red-test runs or reads its runner makes every PR
+  // `inconclusive`, so only results the PR's diff decides may carry the annotation.
+  it("prints the annotation only for a failure the pull request's diff decided, never for the lane's own (MUTATION: annotating on every exit 1 turns this red)", () => {
+    for (const r of [{ blocked: true }, { unverifiable: true }, { weakOnUnrevertedHarness: true }]) expect(verdictCommand(r), JSON.stringify(r)).not.toBe('');
+    for (const r of [{ inconclusive: true }, { refused: true }, { areasChanged: true }, { blocked: true, inconclusive: true }, { blocked: true, refused: true }]) expect(verdictCommand(r), JSON.stringify(r)).toBe('');
   });
 
   it('a red-test run carrying its verdict annotation is a verdict on a pull request, not a lane dying (MUTATION: counting verdicts as red turns this red)', () => {

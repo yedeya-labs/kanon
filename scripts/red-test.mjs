@@ -364,19 +364,31 @@ export function classify(files, areas = UNDECLARED) {
 export const exitCodeFor = (r) => (r?.blocked || r?.inconclusive || r?.unverifiable || r?.weakOnUnrevertedHarness || r?.refused || r?.areasChanged ? 1 : 0);
 
 /**
- * The title of the annotation the check leaves when it reached a verdict that fails the pull
- * request (#1441), and only then: a throw, or a crash at import, exits 1 too but leaves none. Kanon's
- * promotion counts a red run carrying it as a verdict on a pull request, not the lane dying, so a
- * candidate whose red-test script crashes is still held. No comma: the runner splits a title on it.
+ * The title of the annotation the check leaves when the pull request's diff decided its failure
+ * (#1441), and only then. Kanon's promotion counts a red run carrying it as a verdict on a pull
+ * request, not the lane dying, so whatever the candidate's runner does, a re-run must say the same.
+ * A throw, or a crash at import, exits 1 and leaves none, and so do the failures that are the lane's
+ * own: `inconclusive` (the runner produced no report, which looks the same as a broken runner) and
+ * `refused` (unreachable in CI, where the checkout is clean, unless the candidate broke it). No
+ * comma: the runner splits a title on it.
  */
 export const VERDICT_TITLE = 'Red-test verdict';
 
 /**
- * The workflow command a finished run prints, on stderr (its stdout goes to the step summary), for
- * its exit code: the verdict annotation on 1, nothing on 0.
- * @param {number} code
+ * Whether a result's failure is the pull request's diff's: its changed tests passed without the
+ * source change (`blocked`), or files in the diff were never reverted (`unverifiable`,
+ * `weakOnUnrevertedHarness`). Never with `inconclusive` or `refused` beside them. `areasChanged` is
+ * left out too: it rests on the candidate's reading of the stack document, so an admin explains it.
+ * @param {Record<string, unknown> | undefined | null} r
  */
-export const verdictCommand = (code) => (code === 1 ? `::error title=${VERDICT_TITLE}::the red-test check's verdict fails this pull request; the step summary says why` : '');
+export const isDiffVerdict = (r) => Boolean((r?.blocked || r?.unverifiable || r?.weakOnUnrevertedHarness) && !r?.inconclusive && !r?.refused);
+
+/**
+ * The workflow command a finished run prints, on stderr (its stdout goes to the step summary): the
+ * verdict annotation when the diff decided the failure, nothing otherwise.
+ * @param {Record<string, unknown> | undefined | null} r
+ */
+export const verdictCommand = (r) => (isDiffVerdict(r) ? `::error title=${VERDICT_TITLE}::the red-test check's verdict on this pull request's diff fails it; the step summary says why` : '');
 
 /**
  * @param {{ expected: string[], results: Array<Partial<FileResult> & { file: string }>, ran?: boolean, unreverted?: string[], unrevertedTests?: string[] }} input
@@ -887,7 +899,7 @@ if (isCliEntry(import.meta.url)) {
     process.exit(0);
   }
   const code = exitCodeFor(r);
-  const command = verdictCommand(code);
+  const command = verdictCommand(r);
   if (command) console.error(command);
   process.exit(code);
 }
