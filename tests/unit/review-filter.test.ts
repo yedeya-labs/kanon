@@ -103,6 +103,8 @@ type Opts = {
   treeFails?: boolean;
   reviewsFail?: boolean;    // kanon#88: the PR's reviews read failed
   reviews?: unknown[];      // kanon#88: the PR's reviews verbatim, in place of `lastReviewed`
+  comments?: unknown[];     // #1379: the PR's top-level comments, as the REST API lists them
+  commentsFail?: boolean;   // #1379: that read failed
 };
 
 const runDecide = ({
@@ -129,6 +131,8 @@ const runDecide = ({
   treeFails = false,
   reviewsFail = false,
   reviews: reviewsOverride,
+  comments = [],
+  commentsFail = false,
 }: Opts) => {
   // The payload agrees with the API read unless a test deliberately splits them.
   const headRepo =
@@ -171,6 +175,7 @@ case "$*" in
   *"/commits/"*"/pulls"*) printf '%s\\n' ${JSON.stringify(prForSha)} ;;
   *"/pulls/"*"/files"*)   ${partialFiles ? `printf '%s\\n' ${list(partialFiles)}; exit 1` : `printf '%s\\n' ${list(prFiles)}`} ;;
   *"/pulls/"*"/reviews"*) ${reviewsFail ? `printf '%s' '{"message":"Server Error","status":"500"}'; exit 1` : `printf '%s' ${JSON.stringify(reviews)}`} ;;
+  *"/issues/"*"/comments"*) ${commentsFail ? `printf '%s' '{"message":"Server Error","status":"500"}'; exit 1` : `printf '[%s]' ${JSON.stringify(JSON.stringify(comments))}`} ;;
   *compare*)              printf '%s\\n' ${list(pushed)} ;;
   *commits*)              cat "${dir}/message" ;;
 esac
@@ -1108,6 +1113,74 @@ describe('a human re-applying the review label outranks the already-reviewed ski
                           pushed: ['src/a.ts'], prFiles: ['src/a.ts'] });
     expect(r.review).toBe('false');
     expect(r.stdout).toMatch(/already reviewed/);
+  });
+});
+
+// #1379, the Owner's decisions of 2026-10-26: an Implementer revise round that answers without a
+// push (an edited body, or a reply disagreeing with a finding) pushes nothing, so no CI run and no new head fire a review, and the PR kept
+// its CHANGES_REQUESTED until a person re-applied the label. The round's record re-applies
+// `review:please` as the Implementer's App. That App's label still hits the already-reviewed
+// skip, unless the head carries an answer the Reviewer has not read: a revise marker posted by
+// the App that applied the label, after the changes-request standing on the head. Each verdict
+// the re-review posts is newer than that marker, so it re-reviews once per answer, and answers
+// are bounded by the revise lane's round cap.
+describe('an Implementer\'s answer the Reviewer has not read outranks the already-reviewed skip (#1379)', () => {
+  const IMPL = 'example-author[bot]';
+  const MARKER = '<!-- qa:implement-revise -->';
+  const requested = (at = '2026-10-25T13:00:00Z', state = 'CHANGES_REQUESTED') =>
+    [{ user: { login: 'example-reviewer[bot]' }, commit_id: HEAD, state, body: MARK, submitted_at: at }];
+  const answer = (at = '2026-10-25T13:10:00Z', login = IMPL) => ({ user: { login }, body: `Fixed the body.\n${MARKER}`, created_at: at });
+  const relabel = (o: Partial<Opts> = {}) => runDecide({
+    event: 'pull_request_target', action: 'labeled', sender: IMPL, label: 'review:please',
+    reviews: requested(), comments: [answer()], pushed: ['src/a.ts'], prFiles: ['src/a.ts'], ...o,
+  });
+
+  it('reviews the unchanged head again, as an explicit request', () => {
+    const r = relabel();
+    expect(r.review).toBe('true');
+    expect(r.explicit).toBe('true');
+    expect(r.stdout).toMatch(/answered .* after the changes-request/);
+  });
+
+  it('also when the answer is a reply disagreeing with a finding, with nothing else changed', () => {
+    const reply = { user: { login: IMPL }, body: `I disagree with finding 2: the guard already covers it.\n${MARKER}`, created_at: '2026-10-25T13:10:00Z' };
+    const r = relabel({ comments: [reply] });
+    expect(r.review).toBe('true');
+    expect(r.explicit).toBe('true');
+  });
+
+  it('not when the answer is older than the changes-request: the Reviewer read it', () => {
+    const r = relabel({ comments: [answer('2026-10-25T12:00:00Z')] });
+    expect(r.review).toBe('false');
+    expect(r.stdout).toMatch(/already reviewed/);
+  });
+
+  it('not when the answer is another account\'s, a person\'s quote of the marker included', () => {
+    for (const login of ['a-member', 'example-lead[bot]']) {
+      expect(relabel({ comments: [answer(undefined, login)] }).review, login).toBe('false');
+    }
+  });
+
+  it('not when the head\'s verdict is an approval', () => {
+    expect(relabel({ reviews: requested(undefined, 'APPROVED') }).review).toBe('false');
+  });
+
+  it('not on another label, nor on CI\'s completion: only the re-applied review label asks', () => {
+    expect(relabel({ label: 'sev:low' }).review).toBe('false');
+    const ci = runDecide({ event: 'workflow_run', reviews: requested(), comments: [answer()], pushed: ['src/a.ts'], prFiles: ['src/a.ts'] });
+    expect(ci.review).toBe('false');
+  });
+
+  it('not when the comments could not be read, and it says so', () => {
+    const r = relabel({ commentsFail: true });
+    expect(r.review).toBe('false');
+    expect(r.stdout).toMatch(/already reviewed/);
+  });
+
+  it('still defers to a CI run in progress', () => {
+    const r = relabel({ ciPending: true });
+    expect(r.review).toBe('false');
+    expect(r.stdout).toMatch(/CI still running/);
   });
 });
 

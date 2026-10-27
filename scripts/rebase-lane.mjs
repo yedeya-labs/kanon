@@ -295,8 +295,8 @@ const ghJson = (args) => JSON.parse(gh(args));
  * and `… / resolve (<n>) / resolve / resolve`, the second holding the breadcrumbs. So a name
  * is this PR's when one of its ` / ` segments is `resolve (<n>)`. Reading only the last would
  * find no breadcrumb in any Kanon run, so a head whose attempt died of its cause would never
- * be retried, silently. The mint job matches too and carries no breadcrumb, which is harmless:
- * every matching job is read.
+ * be retried, silently. The mint job matches too, and so does `… / implementer-status` (#1379),
+ * and neither carries a breadcrumb, which is harmless: every matching job is read.
  *
  * @param {string} name
  * @param {number|string} n

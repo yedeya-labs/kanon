@@ -52,6 +52,39 @@ describe('what it acts on', () => {
       // A re-delivery must not become a way around the cap.
       expect(runFilter({ isLabel: true, rounds: 2 }).act).toBe(false);
     });
+
+    // #1379: the implementer status job re-delivers a changes-request filed before it stamped
+    // the head. If the review's own run acted anyway (the stamp landed before its filter read),
+    // that run answered it, and the re-delivery must not spend a second round on it.
+    describe('a changes-request the implementer already answered is not re-delivered (#1379)', () => {
+      const REQUESTED = '2026-10-23T14:31:42Z';
+
+      it('skips when the implementer\'s marker is newer than the standing changes-request', () => {
+        const r = runFilter({ isLabel: true, rounds: 1, changesRequested: 1, reviewAt: REQUESTED, markerAt: '2026-10-23T14:40:00Z' });
+        expect(r.act).toBe(false);
+        expect(r.summary).toMatch(/already answered/);
+      });
+
+      it('acts when the marker is older: an earlier request\'s answer is not this one\'s', () => {
+        expect(runFilter({ isLabel: true, rounds: 1, changesRequested: 1, reviewAt: REQUESTED, markerAt: '2026-10-23T14:00:00Z' }).act).toBe(true);
+      });
+
+      it('acts when either time is unknown, so a missing field never stalls a request', () => {
+        expect(runFilter({ isLabel: true, rounds: 1, changesRequested: 1, markerAt: '2026-10-23T14:40:00Z' }).act).toBe(true);
+        expect(runFilter({ isLabel: true, rounds: 1, changesRequested: 1, reviewAt: REQUESTED }).act).toBe(true);
+      });
+
+      it('counts only the implementer\'s own marker, not a quote of it', () => {
+        const quote = { author: { login: 'a-developer' }, body: 'about <!-- qa:implement-revise -->', createdAt: '2026-10-23T14:40:00Z' };
+        expect(runFilter({ isLabel: true, changesRequested: 1, reviewAt: REQUESTED, extraComments: [quote] }).act).toBe(true);
+      });
+
+      it('leaves the review event and a dispatch alone: each is a request of its own', () => {
+        const answered = { rounds: 1, changesRequested: 2, reviewAt: REQUESTED, markerAt: '2026-10-23T14:40:00Z' };
+        expect(runFilter(answered).act).toBe(true);
+        expect(runFilter({ ...answered, isDispatch: true }).act).toBe(true);
+      });
+    });
   });
 
   describe("the Merger's hand-back of a red, approved head (kanon#1100)", () => {

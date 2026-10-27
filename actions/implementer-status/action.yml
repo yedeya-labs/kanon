@@ -6,11 +6,14 @@
 # `tests/unit/app-key-isolation.test.ts`), and `tests/unit/implementer-status.test.ts` holds
 # every caller to that shape.
 #
-# TWO TOKENS, EACH NARROWED (`K-AGENT-46`). The write is a token with Commit statuses write and
+# THREE TOKENS, EACH NARROWED (`K-AGENT-46`). The write is a token with Commit statuses write and
 # nothing else: no agent's token holds that permission, which is what makes the status a
 # signal no agent can forge once #279 keeps the key out of every agent's job. The reads (the
-# open pull requests, a commit, a comparison) are a second token with Contents and Pull
-# requests read, so the default token needs no grant an adopter's caller doesn't already give.
+# open pull requests, a commit, a comparison, the reviews) are a second token with Contents and
+# Pull requests read, so the default token needs no grant an adopter's caller doesn't already
+# give. The third holds Pull requests write alone: after the status is set, it re-adds
+# `agent:revise` when a changes-request was filed on the head before the status was, which the
+# revise lane skipped for the status the head lacked then (#1379).
 #
 # NEVER REDS THE LANE. The Author App may not hold Commit statuses (Kanon's own App didn't until
 # 2026-10-05): the mint then fails, the script says so in the summary, and nothing reds.
@@ -21,7 +24,8 @@ name: Implementer status
 description: >-
   Set the `kanon/role: implementer` commit status on the pull request this run opened, at a
   head its agent's job pushed (mode `open`), or carry it to a pull request's new head when the head the run started from had it
-  and the run pushed the new head on it (mode `carry`). Never fails the caller.
+  and the run pushed the new head on it (mode `carry`). Then re-deliver to the revise lane a
+  changes-request filed on that head before the status was. Never fails the caller.
 
 inputs:
   mode:
@@ -91,12 +95,22 @@ runs:
         private-key: ${{ inputs.app-private-key }}
         permission-statuses: write
 
+    - name: Mint the Implementer's re-delivery token
+      id: pr-token
+      continue-on-error: true
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        permission-pull-requests: write
+
     - name: Set or carry the implementer status
       shell: bash -e {0}
       env:
         MODE: ${{ inputs.mode }}
         READ_TOKEN: ${{ steps.read-token.outputs.token }}
         STATUS_TOKEN: ${{ steps.status-token.outputs.token }}
+        PR_TOKEN: ${{ steps.pr-token.outputs.token }}
         APP_SLUG: ${{ steps.read-token.outputs.app-slug }}
         SINCE: ${{ inputs.since }}
         BRANCHES_BEFORE: ${{ inputs.branches-before }}

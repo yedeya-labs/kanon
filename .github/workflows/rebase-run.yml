@@ -1,12 +1,15 @@
 # Rebase — one conflicting PR's resolution (kanon#279).
 #
-# CALLED ONLY BY `agent-rebase.yml`, once per matrix entry. Two jobs, for `K-AGENT-49`:
+# CALLED ONLY BY `agent-rebase.yml`, once per matrix entry. Three jobs, for `K-AGENT-49`:
 #   • `mint` holds the Author App's private key and runs nothing else: no checkout, no
 #     project code, no agent. It mints this PR's narrowed token with `skip-token-revoke` and
 #     hands it on hex-encoded, because GitHub drops a job output holding a masked value.
 #   • `resolve` is `rebase-agent-job.yml`, which checks out the PR, runs the project's hook
 #     and the agent with the token, never the key, and revokes the token as its last step.
 #     A called workflow, because its `secrets:` is the one channel that arrives masked.
+#   • `implementer-status` holds the key too, after the agent's job, and runs only Kanon's Node
+#     and `actions/implementer-status`: it carries the status to the head this entry pushed
+#     (#1379), so a PR is stamped when its own entry ends, not when the whole matrix has.
 # The lane's own header says what the resolution does.
 name: Rebase — one PR
 
@@ -27,6 +30,11 @@ on:
         description: The conflicting PR this entry resolves (one of the filter's `prs`).
         required: true
         type: number
+      start-head:
+        description: The PR's head as the lane's filter read it, before any agent ran (its `heads` record), where the implementer status's chain starts.
+        required: false
+        type: string
+        default: ""
     secrets:
       app-id:
         required: true
@@ -94,3 +102,38 @@ jobs:
       app-token: ${{ needs.mint.outputs.sealed }}
       claude-token: ${{ secrets.claude-token }}
       anthropic-api-key: ${{ secrets.anthropic-api-key }}
+
+  # THE IMPLEMENTER STATUS IS A CHAIN (plan 0005 §3.3, question 6; step L3). A fixed job after
+  # this entry's agent, never the agent: it moves `kanon/role: implementer` to the resolved head
+  # only when the head recorded before the agent ran (`start-head`) carried one created by the
+  # Implementer's App, and every commit on the first-parent path between them is the App's (the
+  # merge's second parent is the default branch). And only to a head the agent's job held, made
+  # on the head it fetched, which must be the one recorded before the agent (#1263): `resolve`'s
+  # `checked`, which names its pull request. Otherwise it sets none and says why. It never reds
+  # the lane. Since L4 the Merger requires the status, and the lane's filter refuses a pull
+  # request whose head lacks it (`rebase-lane.mjs`, `ineligible`).
+  #
+  # IN THIS CALL, PER ENTRY (#1379). After the whole matrix, the stamp waited for every entry and
+  # only the last entry's record survived. Here each entry's own job reads its own record, as soon
+  # as its agent's job ends. After the write, the action re-delivers a changes-request filed on the
+  # head before the status (`actions/implementer-status`).
+  #
+  # HOLDS THE KEY (`K-AGENT-49`): nothing here but Kanon's Node and the action. No checkout, no
+  # project code, no agent (`tests/unit/app-key-isolation.test.ts`).
+  implementer-status:
+    needs: [resolve]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: $/actions/kanon-path
+      - uses: $/actions/implementer-status
+        continue-on-error: true
+        with:
+          mode: carry
+          app-id: ${{ secrets.app-id }}
+          app-private-key: ${{ secrets.app-private-key }}
+          pr: ${{ inputs.pr }}
+          start-head: ${{ inputs.start-head }}
+          heads: ${{ fromJson(needs.resolve.outputs.checked || '{}').pr == inputs.pr && fromJson(needs.resolve.outputs.checked || '{}').heads || '' }}
+          base: ${{ fromJson(needs.resolve.outputs.checked || '{}').pr == inputs.pr && fromJson(needs.resolve.outputs.checked || '{}').base || '' }}

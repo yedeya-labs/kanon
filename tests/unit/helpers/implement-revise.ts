@@ -140,6 +140,11 @@ export const runFilter = ({
   extraComments = [] as { author: { login: string }; body: string }[],
   // The App register the filter reads; the hand-back path also reads the Merger's row.
   register = REGISTER_FIXTURE,
+  // When each changes-request was submitted, and when each of the implementer's round markers
+  // was posted (#1379): the label path skips a request the implementer already answered.
+  // Unset leaves the field out, as an unknown time.
+  reviewAt = '',
+  markerAt = '',
   // The PR's base branch, which the fingerprint's compare is rooted at (kanon#1432).
   baseRefName = 'main',
 }: Partial<{
@@ -147,8 +152,8 @@ export const runFilter = ({
   rounds: number; changesRequested: number; isDispatch: boolean; reset: boolean;
   isLabel: boolean; labelAdded: string; headVerdict: string;
   headMoved: false | 'content-free' | 'revised'; readableDiffs: boolean; statuses: string;
-  extraComments: { author: { login: string }; body: string }[]; register: string;
-  baseRefName: string;
+  extraComments: { author: { login: string }; body: string; createdAt?: string }[]; register: string;
+  reviewAt: string; markerAt: string; baseRefName: string;
 }> = {}) => {
   // ONE HEAD PER CHANGES-REQUEST, because a review is filed against a commit and a
   // healthy loop reviews a new one each round. The old fixture put every review on the
@@ -196,7 +201,7 @@ export const runFilter = ({
         // `commit.oid` decides both halves now: whether a verdict still stands on the
         // head's CONTENT, and how many distinct patches were faulted (RA-1841).
         reviews: [
-          ...crShas.map((oid) => ({ state: 'CHANGES_REQUESTED', commit: { oid } })),
+          ...crShas.map((oid) => ({ state: 'CHANGES_REQUESTED', commit: { oid }, ...(reviewAt ? { submittedAt: reviewAt } : {}) })),
           ...(headVerdict && headVerdict !== 'CHANGES_REQUESTED'
             ? [{ state: headVerdict, commit: { oid: HEAD_OID } }]
             : []),
@@ -208,6 +213,7 @@ export const runFilter = ({
           ...Array.from({ length: rounds }, () => ({
             author: { login: 'example-author' },
             body: '<!-- qa:implement-revise -->',
+            ...(markerAt ? { createdAt: markerAt } : {}),
           })),
           ...extraComments,
         ],

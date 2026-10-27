@@ -383,16 +383,21 @@ jobs:
             # does. `last` wins, as before: an APPROVE over the same content supersedes
             # an earlier changes-request.
             HEAD_FP="$(fingerprint "$HEAD_SHA")"
+            # The state's field leads, because `read` folds empty tab-separated fields together.
             DECIDING="$(gh pr view "$PR" --repo "$REPO" --json reviews \
-              --jq '.reviews[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED") | "\(.commit.oid // "")\t\(.state)"')"
+              --jq '.reviews[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED") | "\(.state)\t\(.commit.oid // "-")\t\(.submittedAt // "-")"')"
             VERDICT=""
-            while IFS=$'\t' read -r R_SHA R_STATE; do
+            # When the deciding verdict was submitted, for the answered-request skip below (#1379).
+            VERDICT_AT=""
+            while IFS=$'\t' read -r R_STATE R_SHA R_AT; do
               [ -n "$R_STATE" ] || continue
+              [ "$R_SHA" != "-" ] || R_SHA=""
               # A review carrying no commit decides nothing, exactly as the `.commit.oid
               # == $HEAD_SHA` jq it replaces: two unknowns are not a match.
               if [ -n "$R_SHA" ] \
                  && { [ "$R_SHA" = "$HEAD_SHA" ] || [ "$(fingerprint "$R_SHA")" = "$HEAD_FP" ]; }; then
                 VERDICT="$R_STATE"
+                VERDICT_AT="$R_AT"
               fi
             done <<< "$DECIDING"
             # A RED HEAD THE REVIEWER APPROVED, HANDED BACK BY THE MERGER (kanon#1100). An approval
@@ -532,6 +537,24 @@ jobs:
           REQUESTED="$(printf '%s' "$FPS" | awk 'NF' | sort -u | wc -l | tr -d ' ')"
           ROUNDS=$(( REQUESTED > 0 && REQUESTED - 1 > MARKED ? REQUESTED - 1 : MARKED ))
           echo "rounds=$ROUNDS (markers=$MARKED, changes-requested=$REQUESTED distinct of $RAW)"
+
+          # ── A RE-DELIVERED REQUEST THE IMPLEMENTER ALREADY ANSWERED IS NOT A NEW ROUND (#1379) ──
+          #
+          # The implementer status job re-adds `agent:revise` when a changes-request landed on a head
+          # before its status did, because this filter skipped that review's own run for the status
+          # the head lacked. If the status landed between the review and that run's read, the run
+          # acted, and runs here wait for each other per pull request: the re-delivered run then
+          # reads after the answer. So on the label path, a changes-request answered by an
+          # implementer marker posted after it was submitted skips here; the Lead's re-delivery of a
+          # LOST review is unanswered and still acts. An unknown time on either side acts: the cap
+          # bounds what that costs. A person who wants an answered request revised again
+          # dispatches the lane. The Merger's hand-back (an approval) is not this path.
+          if [ "${IS_LABEL:-}" = "true" ] && [ "$MODE" = "review" ] && [ -n "${VERDICT_AT:-}" ] && [ "$VERDICT_AT" != "-" ]; then
+            ANSWERED="$(gh pr view "$PR" --repo "$REPO" --json comments \
+              --jq "[.comments[] | select(((.author.login // \"\") | sub(\"^app/\";\"\") | sub(\"\\\\[bot\\\\]\$\";\"\")) == \"$IMPL_LOGIN\") | select(.body | contains(\"<!-- qa:implement-revise -->\")) | select((.createdAt // \"\") > \"$VERDICT_AT\")] | length")"
+            [ "${ANSWERED:-0}" -eq 0 ] \
+              || skip "the changes-request standing on ${HEAD_SHA:0:7}, submitted at $VERDICT_AT, was already answered by the implementer's marker after it: a re-delivery spends no second round on it (#1379). Dispatch the lane to revise it again"
+          fi
 
           # `reset` is honoured only on a manual dispatch — a review event cannot set
           # an input, so an automatic path can never clear its own cap (RA-1023).
@@ -846,7 +869,9 @@ jobs:
       agent: implementer-revise
       role: Implementer
       lane: implement-revise
-      labels: agent:revise
+      # `review:please` for the round record, which re-applies it after a round that answered
+      # without a push (#1379): the spine creates both before the agent runs (`K-WORK-12`).
+      labels: agent:revise review:please
       arm: implementer (revise) agent
       timeout-minutes: 180
       # The PR's own branch, with history: the agent commits on it and merges `main` into
@@ -1079,6 +1104,8 @@ jobs:
           HEADER: ${{ needs.filter.outputs.header }}
           BEFORE_SHA: ${{ needs.filter.outputs.head_sha }}
           BEFORE_MARKED: ${{ needs.filter.outputs.marked }}
+          # Whether the filter opened a review round (#1379).
+          MODE: ${{ needs.filter.outputs.mode }}
           OUTCOME: ${{ needs.revise.outputs.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -1105,6 +1132,25 @@ jobs:
             if [ "${OUTCOME:-}" = "success" ] && [ "$NOW_MARKED" -le "${BEFORE_MARKED:-0}" ]; then
               echo "::error title=revise run left nothing::PR #$PR: the revise run ended \`success\` but pushed nothing (head still ${AFTER_SHA:0:7}) and left no \`$MARKER\` comment, so the review is unanswered (kanon#181). Re-dispatch it, or answer the review by hand: $RUN_URL"
               exit 1
+            fi
+            # AN ANSWERED ROUND THAT PUSHED NOTHING RE-REQUESTS REVIEW (#1379; the Owner's decisions
+            # of 2026-10-26). It pushed nothing, so no CI run and no new head fire the Reviewer, and
+            # the pull request kept its changes-request until a person re-applied `review:please`
+            # (#1374, #1413). Any review round the implementer answered with its marker counts,
+            # whatever happened to the body: an edited body, or a reply disagreeing with a finding,
+            # is an answer the Reviewer has not read. A pushed round gets its review from the push,
+            # and a hand-back's approval stands until a push. The review lane honours this App's
+            # label only while its marker is newer than the head's changes-request, so each answer
+            # is reviewed once, and the round cap bounds the answers.
+            if [ "${MODE:-}" = "review" ] && [ "$NOW_MARKED" -gt "${BEFORE_MARKED:-0}" ]; then
+              # Remove, then add: a label already on the pull request adds no event.
+              gh pr edit "$PR" --repo "$REPO" --remove-label review:please >/dev/null 2>&1 || true
+              gh pr edit "$PR" --repo "$REPO" --add-label review:please >/dev/null || {
+                echo "::error title=revise re-review::PR #$PR: the round answered the review without a push, and \`review:please\` could not be re-applied, so nothing asks the Reviewer to read the answer. Re-apply \`review:please\` by hand: $RUN_URL"
+                exit 1
+              }
+              echo "::notice title=revise re-review::PR #$PR: the round answered the review without a push (head still ${AFTER_SHA:0:7}), so the workflow re-requested review with \`review:please\` (#1379)."
+              exit 0
             fi
             echo "head unchanged at ${AFTER_SHA:0:7} — this run pushed nothing, fires no review, and spends no round"
             exit 0

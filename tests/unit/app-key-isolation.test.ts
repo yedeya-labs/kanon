@@ -169,8 +169,16 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
   it('is called from exactly one place: a workflow that holds the mint and this call, and nothing else', () => {
     expect(call, `${agentFile} is called by no workflow`).toBeDefined();
     expect(more.map((c) => `${c.file}:${c.name}`)).toEqual([]);
-    // The spine's third job pushes the agent's commits with a token of its own (kanon#1383).
-    expect(Object.keys(run.jobs ?? {}).sort()).toEqual([call.name, 'mint', ...(runFile === 'agent-lane.yml' ? ['push'] : [])].sort());
+    // The spine's third job pushes the agent's commits with a token of its own (kanon#1383). The
+    // rebase lane's third sets the implementer status on the entry's pull request after its agent
+    // (#1379): it holds the key, so it runs only Kanon's Node and the action, never a checkout of
+    // the pull request or the agent (the check above, and `implementer-status.test.ts`).
+    const third = runFile === 'agent-lane.yml' ? ['push'] : runFile === 'rebase-run.yml' ? ['implementer-status'] : [];
+    expect(Object.keys(run.jobs ?? {}).sort()).toEqual([call.name, 'mint', ...third].sort());
+    for (const name of third.filter((n) => n === 'implementer-status')) {
+      expect(runsOthersCode(run.jobs![name]!), `${runFile}:${name}`).toBeUndefined();
+      expect(run.jobs![name]!.needs, `${runFile}:${name} runs after the agent's job`).toEqual([call.name]);
+    }
     expect(Object.keys(run.on?.workflow_call?.secrets ?? {})).toEqual(expect.arrayContaining(['app-id', 'app-private-key', 'claude-token', 'anthropic-api-key']));
   });
 
