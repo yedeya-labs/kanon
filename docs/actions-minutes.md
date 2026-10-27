@@ -42,7 +42,7 @@ The "Its short and skipped runs" column is held to the lanes' jobs by [`tests/un
 | `agent-weekly-digest` | A weekly schedule; a dispatch | No notify hook, or no `KANON_CHAT_WEEKLY_DIGEST`: a short gate job, and no model, since nothing would be posted (plan 0011 §8) | Weeks |
 | `agent-release-announce` | A release published; a dispatch | None: it runs no model, so every run is short | Published releases |
 | `agent-merge` | A review submitted; CI finishing on the default branch; an hourly schedule; a dispatch | None: it runs no model, so every run is short | Reviews, merges and hours |
-| `agent-rebase` | CI finishing on the default branch; a pull request merged; a daily schedule; a dispatch | A check that finds no agent pull request in conflict | Merges, and conflicts on agent pull requests |
+| `agent-rebase` | CI finishing on the default branch; a run of a lane that opens pull requests finishing; a pull request merged; a daily schedule; a dispatch | A check that finds no agent pull request in conflict | Merges, and conflicts on agent pull requests |
 | `agent-dispatch-sweep` | A daily schedule; a run of a lane it recovers completing; a dispatch | None: it runs no model, so every run is short | Days, and the implement and triage runs that re-ask it ([Schedules are best effort](lanes.md#schedules-are-best-effort)) |
 
 ## Kanon's own runs

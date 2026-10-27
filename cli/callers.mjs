@@ -93,7 +93,10 @@ export const releasePin = async (gh, release) => {
  * schedule (docs/lanes.md, "Schedules are best effort"). The lane admits no run that skipped and
  * none of its own caller, and acts only when it hasn't inside its window. `release` (kanon#1190) is a
  * `release` of the repository, `published` only: a stable release and a pre-release alike, never a draft.
- * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', merged?: boolean, schedule?: string, pinMoved?: boolean, deployRun?: boolean, reask?: string[], release?: boolean }>}
+ * `openers` (kanon#1427) adds the callers of the lanes it lists, named as `reask` names them, to the
+ * `ci` trigger's `workflow_run`: a pull request one of them opens may already conflict, and the merges
+ * that made it conflict started the lane before it existed. The lane admits no run that skipped.
+ * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', openers?: string[], merged?: boolean, schedule?: string, pinMoved?: boolean, deployRun?: boolean, reask?: string[], release?: boolean }>}
  */
 export const TRIGGERS = {
   'agent-triage': { name: 'Triage (Implementer)', job: 'triage', issues: ['labeled'], dispatch: { issue_number: true } },
@@ -105,7 +108,7 @@ export const TRIGGERS = {
   'agent-verify-acs': { name: 'Verify acceptance criteria (Explorer)', job: 'verify', issues: ['labeled'], dispatch: { project: false, ref: false } },
   'agent-lead': { name: 'Lead (Lead) — brief', job: 'brief', dispatch: { mandate: true, context: false } },
   'agent-lead-split': { name: 'Lead (Lead) — split', job: 'split', issues: ['labeled'], dispatch: { issue: true } },
-  'agent-rebase': { name: 'Rebase (Implementer)', job: 'rebase', ci: 'default', merged: true, schedule: '17 5 * * *', dispatch: { pr_number: false } },
+  'agent-rebase': { name: 'Rebase (Implementer)', job: 'rebase', ci: 'default', openers: ['agent-implement', 'agent-triage'], merged: true, schedule: '17 5 * * *', dispatch: { pr_number: false } },
   'agent-lead-reconcile': { name: 'Lead (Lead) — reconcile', job: 'reconcile', pr: ['closed'], issues: ['closed'], schedule: '7 * * * *', dispatch: { project: false, apply: false },
     reask: ['agent-review', 'agent-implement-revise', 'agent-lead-revise', 'agent-implement'] },
   'agent-merge': { name: 'Merge (Merger)', job: 'merge', review: true, ci: 'default', schedule: '37 * * * *', dispatch: { pr_number: false, apply: false } },
@@ -174,8 +177,15 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   out.push(`name: ${y(spec.callerName ?? t.name)}`, '');
   if (spec.callerRunNameEndsWith) out.push(`run-name: ${t.name.split(' ')[0]} ${spec.callerRunNameEndsWith}`, '');
   out.push('on:');
+  /** A covered lane's caller, by the name the repository already gives it, else the template's. @param {string} l */
+  const callerName = (l) => {
+    const covered = TRIGGERS[l];
+    if (!covered) throw new Error(`the caller template of ${lane} names ${l}, which has no caller template`);
+    return y(names.get(l) ?? covered.name);
+  };
   if (t.ci) {
-    out.push('  workflow_run:', `    workflows: [${y(ciName)}]`, '    types: [completed]');
+    if (t.openers) out.push('  # CI, and a run of a lane that opens a pull request, which may conflict already (docs/lanes.md).');
+    out.push('  workflow_run:', `    workflows: [${[y(ciName), ...(t.openers ?? []).map(callerName)].join(', ')}]`, '    types: [completed]');
     if (t.ci === 'default') out.push(`    branches: [${y(defaultBranch)}]`);
   }
   if (t.deployRun) {
@@ -196,11 +206,7 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   if (t.reask) {
     out.push('  # The re-ask: a real run of a lane this one recovers asks for it too, since a schedule runs late',
       '  # and drops ticks. The lane admits no run that skipped and none of this caller (docs/lanes.md).',
-      '  workflow_run:', `    workflows: [${t.reask.map((l) => {
-        const covered = TRIGGERS[l];
-        if (!covered) throw new Error(`the caller template of ${lane} re-asks on ${l}, which has no caller template`);
-        return y(names.get(l) ?? covered.name);
-      }).join(', ')}]`, '    types: [completed]');
+      '  workflow_run:', `    workflows: [${t.reask.map(callerName).join(', ')}]`, '    types: [completed]');
   }
   // A RAISED TURN LIMIT IS A DISPATCH INPUT, NEVER A SETTING (kanon#891; ADR 0005 §2, amended
   // 2026-10-15): a lane whose limit can be raised (`turns`) gets `max_turns` and the `reason` it

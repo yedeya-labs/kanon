@@ -190,6 +190,8 @@ export function checkAggregate(body) {
 
 const PAGE_TOP = ['computed_at', 'view', 'min_adopters', 'band_version', 'cost_basis', 'window_days', 'trend_windows', 'minimum', 'bootstrap', 'own'];
 const PAGE_ENTRY = ['label', 'adopters', 'window', 'headline', 'trend', 'by_version'];
+/** An entry's release comparison (kanon#1453), optional: a function deployed from an earlier release doesn't compute it. */
+const PAGE_COMPARISON = 'release_comparison';
 /** Every key the page view's figures use, at any depth below an entry: bands, indicators, estimates, windows and versions. */
 const PAGE_KEYS = new Set([
   'S', 'M', 'L', 'XL', 'none', 'noPr', 'pooled', 'bandMix',
@@ -224,6 +226,77 @@ function figuresOf(v, at) {
   return Object.fromEntries(Object.entries(o).map(([k, x]) => [k, figuresOf(x, `${at}.${k}`)]));
 }
 
+const RELEASE = /^\d+\.\d+\.\d+$/;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** The release comparison's verdict codes (`scripts/metrics/compare.mjs`, `RELEASE_VERDICTS`). */
+const VERDICTS = ['win', 'cheaper-quality-not-shown', 'no-measurable-change', 'dearer', 'not-enough-data'];
+
+/** @param {unknown} v @param {string} at */
+const signed = (v, at) => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) throw new AggregateError(`${at} is not a figure`);
+  return v;
+};
+
+/**
+ * One difference of the release comparison: `ok` with its sample, value and interval;
+ * `not-enough-data` with its sample and minimum; or, for the statuses `others` allows (`no-spend`
+ * for yield, `no-fit` for cost), its sample alone. Nothing else, and no text.
+ * @param {unknown} v @param {string} at @param {string[]} others
+ */
+function differenceOf(v, at, others) {
+  const status = isObject(v) ? /** @type {Record<string, unknown>} */ (v).status : undefined;
+  if (status === 'ok') {
+    const d = exactly(v, ['status', 'n', 'value', 'low', 'high'], at);
+    return { status, n: count(d.n, `${at}.n`), value: signed(d.value, `${at}.value`), low: signed(d.low, `${at}.low`), high: signed(d.high, `${at}.high`) };
+  }
+  if (status === 'not-enough-data') {
+    const d = exactly(v, ['status', 'n', 'minimum'], at);
+    return { status, n: count(d.n, `${at}.n`), minimum: count(d.minimum, `${at}.minimum`) };
+  }
+  if (typeof status === 'string' && others.includes(status)) return { status, n: count(exactly(v, ['status', 'n'], at).n, `${at}.n`) };
+  throw new AggregateError(`${at} is not an estimate`);
+}
+
+/** A compared release: its version, merged items and the dates they closed between. @param {unknown} v @param {string} at */
+function releaseOf(v, at) {
+  const r = exactly(v, ['version', 'items', 'from', 'until'], at);
+  if (typeof r.version !== 'string' || !RELEASE.test(r.version)) throw new AggregateError(`${at}.version is not a release`);
+  return { version: r.version, items: count(r.items, `${at}.items`), from: code(r.from, DATE, `${at}.from`), until: code(r.until, DATE, `${at}.until`) };
+}
+
+/**
+ * An entry's release comparison (kanon#1453), checked field by field: exactly the Owner's derived
+ * fields of 2026-10-27, and refused whole on anything else.
+ * @param {unknown} v @param {string} at
+ */
+function comparisonOf(v, at) {
+  const rc = exactly(v, ['minimum', 'margins', 'comparisons', 'fewer', 'dev'], at);
+  const margins = exactly(rc.margins, ['yield', 'escape30'], `${at}.margins`);
+  return {
+    minimum: count(rc.minimum, `${at}.minimum`),
+    margins: { yield: signed(margins.yield, `${at}.margins.yield`), escape30: signed(margins.escape30, `${at}.margins.escape30`) },
+    comparisons: list(rc.comparisons, `${at}.comparisons`).map((x, i) => {
+      const where = `${at}.comparisons[${i}]`;
+      const c = exactly(x, ['old', 'new', 'costAtEqualSize', 'yieldDifference', 'escapeDifference', 'verdict'], where);
+      if (typeof c.verdict !== 'string' || !VERDICTS.includes(c.verdict)) throw new AggregateError(`${where}.verdict is not a verdict`);
+      return {
+        old: releaseOf(c.old, `${where}.old`),
+        new: releaseOf(c.new, `${where}.new`),
+        costAtEqualSize: differenceOf(c.costAtEqualSize, `${where}.costAtEqualSize`, ['no-fit']),
+        yieldDifference: differenceOf(c.yieldDifference, `${where}.yieldDifference`, ['no-spend']),
+        escapeDifference: differenceOf(c.escapeDifference, `${where}.escapeDifference`, []),
+        verdict: c.verdict,
+      };
+    }),
+    fewer: list(rc.fewer, `${at}.fewer`).map((x, i) => {
+      const f = exactly(x, ['version', 'items'], `${at}.fewer[${i}]`);
+      if (typeof f.version !== 'string' || !RELEASE.test(f.version)) throw new AggregateError(`${at}.fewer[${i}].version is not a release`);
+      return { version: f.version, items: count(f.items, `${at}.fewer[${i}].items`) };
+    }),
+    dev: count(rc.dev, `${at}.dev`),
+  };
+}
+
 /**
  * The page view's answer, checked and rebuilt from what was checked. Throws `AggregateError`
  * naming the first problem, and never a value.
@@ -251,7 +324,8 @@ export function checkPage(body) {
     minimum: Object.fromEntries(Object.entries(minimum).map(([k, v]) => [k, count(v, `minimum.${k}`)])),
     bootstrap: { resamples: count(bootstrap.resamples, 'bootstrap.resamples'), seed: count(bootstrap.seed, 'bootstrap.seed') },
     own: list(a.own, '`own`').map((v, i) => {
-      const o = exactly(v, PAGE_ENTRY, `own[${i}]`);
+      const comparison = isObject(v) && Object.hasOwn(/** @type {object} */ (v), PAGE_COMPARISON);
+      const o = exactly(v, comparison ? [...PAGE_ENTRY, PAGE_COMPARISON] : PAGE_ENTRY, `own[${i}]`);
       const label = code(o.label, LABEL, `own[${i}].label`);
       if (labels.has(label)) throw new AggregateError(`own[${i}].label repeats another entry's`);
       labels.add(label);
@@ -264,6 +338,7 @@ export function checkPage(body) {
         headline: figuresOf(o.headline, `own[${i}].headline`),
         trend: figuresOf(list(o.trend, `own[${i}].trend`), `own[${i}].trend`),
         by_version: figuresOf(o.by_version, `own[${i}].by_version`),
+        ...(comparison ? { release_comparison: comparisonOf(o.release_comparison, `own[${i}].release_comparison`) } : {}),
       };
     }),
   };

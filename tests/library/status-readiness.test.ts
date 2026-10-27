@@ -39,6 +39,14 @@ const gateOver = (w: PrWorld) => {
   const pr = readPr(w.number, REPO, ghFor(w));
   return { pr, verdict: mergeVerdict(pr, { escalations: ESCALATE_PATHS, now: READ_AT }) };
 };
+/**
+ * The limit of a case that holds the view against the gate over many worlds. Each `gateOver` is
+ * about seven `gh` reads, and each read starts the stub `gh` as a node process of its own: some
+ * 650 ms a world on a laptop, against about 1 ms for the view itself. Over a dozen worlds that is
+ * seven seconds of process starts, past vitest's 5 s default and slower on a loaded runner.
+ * The gate's own `readPr` is what the case compares against, so the processes stay (kanon#1464).
+ */
+const GATE_READS_TIMEOUT = 30_000;
 
 /** The Merger's escalation of `rule` on `sha`, as it posts one. */
 const escalation = (rule: string, sha = HEAD) => ({
@@ -257,7 +265,7 @@ describe("an Implementer's pull request is ready only when the merge gate says s
     expect(checkPartition(gateOver(implementerPr({ mergeStateStatus: 'UNKNOWN' })).pr.checks).failed).toEqual([]);
     expect(unsettled.verdict.rule).toBe('merge-state-unknown');
     expect(unsettled.readiness).toMatchObject({ by: 'merger', ready: false, lacks: ['merge-state-unknown'] });
-  });
+  }, GATE_READS_TIMEOUT);
 });
 
 describe("any other pull request is a person's to merge", () => {
@@ -335,7 +343,7 @@ describe("any other pull request is a person's to merge", () => {
     // blocked, which the gate would refuse the Implementer's for.
     expect((await view(personPr({ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }))).v.readiness.ready).toBe(true);
     expect((await view(personPr({ mergeStateStatus: 'BLOCKED', labels: ['blocked'] }))).v.readiness.ready).toBe(true);
-  });
+  }, GATE_READS_TIMEOUT);
 
   it("[STAT-14] reads the Reviewer's latest verdict on the head, in either order, as the view's review field does", async () => {
     const changedThenApproved = (await view(personPr({ reviews: [approval(1, HEAD, 'CHANGES_REQUESTED'), approval(2, HEAD)] }))).v;

@@ -272,9 +272,12 @@ describe('the workflow wiring', () => {
   });
 
   it('fires on the event that CREATES the condition', () => {
-    expect(contract).toMatch(/^#\s+workflow_run: CI, \[completed\], branches \[main\]$/m);
+    expect(contract).toMatch(/^#\s+workflow_run: CI and the implement and triage callers, \[completed\], branches \[main\]$/m);
     // A cancelled CI run is a superseded one: still turned away, as before.
     expect(wf.jobs.filter.if).toContain("github.event.workflow_run.conclusion != 'cancelled'");
+    // A skipped run (an implement or triage run on an issue labelled anything else) opened
+    // nothing: turned away too (kanon#1427).
+    expect(wf.jobs.filter.if).toContain("github.event.workflow_run.conclusion != 'skipped'");
   });
 
   it('grants the filter job the scope its `gh pr list` needs', () => {

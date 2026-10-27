@@ -31,7 +31,7 @@ const keepsPending = (c: Concurrency | undefined) => c?.queue === 'max' && c['ca
 
 /** Each, with the runs that only skip and can reach its group. */
 const QUEUE_MAX: Record<string, string> = {
-  'agent-rebase.yml': 'an unmerged close, a cancelled CI run, and the merge queue\'s CI run the gate refuses (kanon#537)',
+  'agent-rebase.yml': 'an unmerged close, a cancelled CI run, the merge queue\'s CI run the gate refuses (kanon#537), and a skipped implement or triage run (kanon#1427)',
   'agent-implement-revise.yml': 'every other label on the pull request, and every review its filter skips',
   'agent-lead-revise.yml': 'every other label on the brief pull request, and every review that is not a changes-request',
   'agent-merge-reconcile.yml': 'a review on a pull request that is still open, and an unmerged close',
