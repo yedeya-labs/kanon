@@ -4,12 +4,12 @@
 [![Release](https://img.shields.io/github/v/release/yedeya-labs/kanon?sort=semver)](https://github.com/yedeya-labs/kanon/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Let Claude review your pull requests, then merge the safe ones and implement your issues, under rules it can't talk its way around.**
+**Let Claude review your pull requests, then merge the safe ones and implement your issues, with CI and GitHub, not prompts, deciding what it may do on its own.**
 
 Kanon is a set of GitHub workflows and two GitHub Apps for teams that let Claude Code agents work on a real repository. Start with the Reviewer on every pull request, and hand over more when you trust it.
 
 - **About a dollar a reviewed pull request.** $1.13 at the median at API list price ($2.74 at the 90th percentile), over 360 pull requests on Kanon's own repository, on your own API key or Claude subscription. [What each lane costs](docs/lanes.md#what-a-model-run-costs).
-- **Rules that fail the build, not prompts.** Agents seldom read a repository's rules file, and in [RepoComplianceBench](https://arxiv.org/abs/2607.26819) none followed a "stop and hand off to a person" rule unaided. Kanon's rules are CI checks, tests and GitHub settings.
+- **Rules that fail the build, not prompts.** Agents seldom read a repository's rules file, and in [RepoComplianceBench](https://arxiv.org/abs/2607.26819) none followed a "stop and hand off to a person" rule unaided. Most of Kanon's rules are CI checks, tests and GitHub settings, and [the count below](#what-is-enforced-honestly) says which aren't yet.
 - **An agent never approves its own work.** Writing and approving run under two separate GitHub Apps. A pull request can't change the rules it is judged by, and the Reviewer never runs its code.
 - **You decide how far it goes.** Review only, then low-risk pull requests merging on their own, then agents implementing issues. Anything on a path you mark always goes to a person.
 

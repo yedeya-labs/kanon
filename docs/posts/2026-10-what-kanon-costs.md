@@ -10,7 +10,7 @@ Kanon is a set of GitHub workflows and two GitHub Apps that let Claude Code agen
 
 Writing rules down for an agent isn't enough. A July 2026 study, [RepoComplianceBench](https://arxiv.org/abs/2607.26819), gave four frontier coding agents 106 real issues from 49 repositories that publish rules for AI contributions. The agents opened the repository's rules file on their own in 3.5% of runs. Rules that ask an agent to *refuse* or *hand off to a person* were followed in 0% of runs, for all four agents. Quoting the rule to the agent verbatim barely moved that, and one round of feedback naming the violation lifted it to at most 23%.
 
-So Kanon doesn't ask. Its rules are CI checks, tests and GitHub settings. The agent that writes code and the agent that approves it are two separate GitHub Apps, so one can't approve its own work. A pull request can't change the rules it is judged by, and the Reviewer never runs the pull request's code.
+So Kanon checks instead of asking wherever it can. Most of its rules are CI checks, tests and GitHub settings; the rest are still prose, and counted below. The agent that writes code and the agent that approves it are two separate GitHub Apps, so one can't approve its own work. A pull request can't change the rules it is judged by, and the Reviewer never runs the pull request's code.
 
 ## The numbers
 
@@ -51,7 +51,7 @@ For scale: Anthropic estimates its managed [Code Review](https://techcrunch.com/
 - **The API-key column is list price, not a bill.** Every run in the window ran on a subscription; we priced its tokens at list price.
 - **Cost isn't quality.** This post measures what a review costs, not how often the Reviewer is right. We don't publish a quality figure yet.
 - **Not every rule is enforced yet.** Kanon has 226 rules. 116 are enforced by a check, 55 in part, and 55 are still prose only. The [README](../../README.md#what-is-enforced-honestly) keeps that count current, and a test fails when it drifts.
-- **Small samples are left out.** A lane with fewer than ten runs gets a median and no 90th percentile.
+- **Small samples get a median only.** A lane with fewer than ten runs gets a median and no 90th percentile.
 
 ## Try it
 
