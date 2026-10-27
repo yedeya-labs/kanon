@@ -4,12 +4,18 @@ import { describe, expect, it } from 'vitest';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 
 // K-ADOPT-11: an adopter pins Kanon to an exact version, and copies the `uses:` line from
-// Kanon's documentation to do it. A stale version there sends a new adopter to an old
-// release, so release-please rewrites every such reference in the release PR: each file is
-// listed under `extra-files`, and each reference sits between
+// Kanon's documentation to do it. Each such reference sits between
 // `<!-- x-release-please-start-version -->` and `<!-- x-release-please-end -->` (or on a line
-// carrying `x-release-please-version`). Its generic updater replaces the FIRST X.Y.Z on each
-// line it covers, and nothing else.
+// carrying `x-release-please-version`), and two things rewrite it, by which release it must name:
+//   - What ships inside a release, the skills (read at the plugin's release) and the notify
+//     hooks' YAML (which `kanon init` copies as it is), names that release: release-please
+//     rewrites it in the release PR, each file listed under `extra-files`. Its generic updater
+//     replaces the FIRST X.Y.Z on each line it covers, and nothing else.
+//   - The rest of the documentation, which a reader copies from the default branch, names the
+//     latest stable release, which exists: the promotion rewrites it with
+//     `scripts/doc-pins.mjs move` once it tags one, and CI's `doc-pins.mjs check` fails a
+//     reference to anything else. On Kanon a release PR tags a candidate, so a reference it
+//     rewrote named a tag that didn't exist until promotion (0.42.0's README, for a week).
 //
 // The files are found from the tree, not from a list, so a new README with a reference is
 // caught without anyone remembering to add it here. Three kinds of Markdown are left out:
@@ -64,17 +70,37 @@ const scan = (file: string, text: string): Line[] => {
 
 const docs = [...markdown.filter((f) => !FORM_ONLY.test(f)), ...hookFiles].map((file) => ({ file, lines: scan(file, read(file)) }));
 const withRefs = docs.filter((d) => d.lines.some((l) => l.refs.length > 0));
+// What ships inside a release names that release; the rest of the documentation, the stable one.
+const SHIPPED = /^(skills\/|actions\/notify\/hooks\/)/;
+const shipped = withRefs.filter((d) => SHIPPED.test(d.file));
+const stableDocs = withRefs.filter((d) => !SHIPPED.test(d.file));
+const refsOf = (ds: typeof withRefs): string[] => ds.flatMap((d) => d.lines.flatMap((l) => l.refs));
+const semverOf = (ref: string): number[] => (ref.match(/\d+\.\d+\.\d+/)?.[0] ?? '').split('.').map(Number);
 
 describe('K-ADOPT-11 the version references an adopter copies stay current', () => {
   it('finds the references, so the checks below are not vacuous', () => {
     expect(withRefs.map((d) => d.file)).toContain('README.md');
     expect(withRefs.filter((d) => d.file.startsWith('actions/')).length).toBeGreaterThanOrEqual(8);
     expect(withRefs.map((d) => d.file)).toContain('actions/notify/hooks/slack.yml');
+    expect(shipped.map((d) => d.file)).toContain('skills/adopt/SKILL.md');
+    expect(stableDocs.map((d) => d.file)).toContain('README.md');
   });
 
-  it("every reference names package.json's version", () => {
-    const stale = withRefs.flatMap((d) => d.lines.flatMap((l) => l.refs.filter((r) => r !== `v${version}`).map((r) => `${l.at}: @${r}`)));
+  it("every reference in what ships inside a release names package.json's version", () => {
+    const stale = shipped.flatMap((d) => d.lines.flatMap((l) => l.refs.filter((r) => r !== `v${version}`).map((r) => `${l.at}: @${r}`)));
     expect(stale).toEqual([]);
+  });
+
+  // That the release is published is CI's `doc-pins.mjs check`, which reads the remote's tags;
+  // this test reads nothing over the network, so it holds what it can: one stable release, never
+  // a candidate, and none ahead of the version this tree releases.
+  it('the documentation names one stable release, no later than package.json\'s version', () => {
+    const named = [...new Set(refsOf(stableDocs))];
+    expect(named).toHaveLength(1);
+    expect(named[0]).toMatch(/^v\d+\.\d+\.\d+$/);
+    const [a = 0, b = 0, c = 0] = semverOf(named[0] ?? '');
+    const [x = 0, y = 0, z = 0] = semverOf(version);
+    expect(a * 1e6 + b * 1e3 + c).toBeLessThanOrEqual(x * 1e6 + y * 1e3 + z);
   });
 
   it('every reference is on a line release-please rewrites', () => {
@@ -82,9 +108,9 @@ describe('K-ADOPT-11 the version references an adopter copies stay current', () 
     expect(unmarked).toEqual([]);
   });
 
-  it('every file holding a reference is in extra-files, and nothing else is', () => {
+  it('every file shipped with a reference is in extra-files, and nothing else is: the release PR leaves the documentation alone', () => {
     const markdownFiles = extraFiles.filter((f): f is string => typeof f === 'string');
-    expect(markdownFiles.sort()).toEqual(withRefs.map((d) => d.file).sort());
+    expect(markdownFiles.sort()).toEqual(shipped.map((d) => d.file).sort());
   });
 
   // The skills' plugin (docs/skills.md) carries the release as its own version, which an adopter
@@ -118,10 +144,11 @@ describe('K-ADOPT-11 the version references an adopter copies stay current', () 
     // each covered line. A covered line holding another version, or two, would have the
     // wrong one rewritten.
     const next = '999.0.0';
-    for (const { lines } of withRefs) {
+    for (const { file, lines } of withRefs) {
+      const own = SHIPPED.test(file) ? version : (refsOf(stableDocs)[0] ?? '').slice(1);
       for (const l of lines.filter((x) => x.covered)) {
         const after = l.text.replace(/\d+\.\d+\.\d+/, next);
-        const expected = l.refs.length > 0 ? l.text.replace(new RegExp(`([@#]|"ref": ")v${version.replaceAll('.', '\\.')}`, 'g'), `$1v${next}`) : l.text;
+        const expected = l.refs.length > 0 ? l.text.replace(new RegExp(`([@#]|"ref": ")v${own.replaceAll('.', '\\.')}`, 'g'), `$1v${next}`) : l.text;
         expect(after, l.at).toBe(expected);
         expect((l.text.match(SEMVER) ?? []).length, l.at).toBeLessThanOrEqual(1);
       }

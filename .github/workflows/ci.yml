@@ -90,6 +90,11 @@ jobs:
           key: ${{ steps.actionlint-cache.outputs.cache-primary-key }}
       - run: npm run lint
       - run: npm run typecheck
+      # A reader copies the install command and the `uses:` lines from the default branch, so they
+      # name the latest stable release, which exists: never a candidate's version, which on Kanon is
+      # untagged until promotion (scripts/doc-pins.mjs). It reads the tags with `git ls-remote`.
+      - name: The docs name a published stable release
+        run: node scripts/doc-pins.mjs check
 
   unit:
     name: Unit tests (shard ${{ matrix.shard }}/4)

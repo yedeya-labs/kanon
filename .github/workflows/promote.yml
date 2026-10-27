@@ -19,6 +19,9 @@
 # `scripts/promote.mjs apply` creates the tag on the candidate's commit, publishes its Release as
 # latest and moves `v0`, as the Releaser: the one bypass actor of the `v*` tag ruleset (plan 0008
 # J6), as release.yml creates release tags and moves the major tag with the same App (#782).
+# Then, when the release is the latest, it opens `docs: point the docs at vX.Y.Z` as the Releaser:
+# the README's install command and the docs' `uses:` lines follow the stable channel, which only
+# this workflow moves (`scripts/doc-pins.mjs`; CI's check fails a reference to an untagged release).
 #
 # The default branch only: the lane callers whose pins and runs the gates read are the default
 # branch's.
@@ -84,8 +87,10 @@ jobs:
           PLAN: ${{ runner.temp }}/promotion.json
         run: node scripts/promote.mjs check
       # THE RELEASER'S TOKEN (plan 0005 §3.1, ADR 0013), only to promote, narrowed to Contents
-      # write: the tag, the Release and the major tag. A step `if:` can't read `secrets`, and the
-      # Releaser is required here, so a missing secret fails the mint by name.
+      # write, for the tag, the Release, the major tag and the docs' branch and commit, and Pull
+      # requests write, for the docs' pull request. No Workflows write: the docs' commit touches
+      # Markdown only. A step `if:` can't read `secrets`, and the Releaser is required here, so a
+      # missing secret fails the mint by name.
       - name: Mint the Releaser's token
         id: releaser
         if: steps.gates.outputs.decision == 'promote'
@@ -94,9 +99,61 @@ jobs:
           client-id: ${{ secrets.RELEASER_APP_ID }}
           private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
           permission-contents: write
+          permission-pull-requests: write
       - name: Tag, publish and move the major tag
         if: steps.gates.outputs.decision == 'promote'
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
           PLAN: ${{ runner.temp }}/promotion.json
         run: node scripts/promote.mjs apply
+      # The pin job's pattern (release-please.yml): the branch starts at this run's commit, the
+      # commit is made through the API so GitHub signs it as the Releaser and the `dco` check
+      # exempts it, and a pull request that already exists is left alone. The Owner merges it.
+      # If this step fails, the docs still name the previous stable release, which CI accepts;
+      # run `node scripts/doc-pins.mjs move vX.Y.Z` by hand.
+      - name: Open the pull request that points the docs at the new release
+        if: steps.gates.outputs.decision == 'promote'
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          PLAN: ${{ runner.temp }}/promotion.json
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          tag="$(jq -r .tag "$PLAN")"
+          if [[ "$(jq -r .latest "$PLAN")" != true ]]; then
+            echo "$tag is not the latest release: the docs stay on the newer one." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node scripts/doc-pins.mjs move "$tag" > "$RUNNER_TEMP/docs-moved"
+          files=()
+          while IFS= read -r f; do if [[ -n "$f" ]]; then files+=("$f"); fi; done < "$RUNNER_TEMP/docs-moved"
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "The docs already name $tag: nothing to open." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          title="docs: point the docs at $tag"
+          branch="kanon/docs-$tag"
+          existing="$(gh pr list -R "$REPO" --head "$branch" --state all --json url --jq '.[0].url // empty')"
+          if [[ -n "$existing" ]]; then
+            echo "The docs pull request for $tag already exists: $existing" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if gh api "repos/$REPO/git/matching-refs/heads/$branch" --jq '.[].ref' | grep -qx "refs/heads/$branch"; then
+            gh api -X PATCH "repos/$REPO/git/refs/heads/$branch" -f sha="$SHA" -F force=true > /dev/null
+          else
+            gh api -X POST "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$SHA" > /dev/null
+          fi
+          for f in "${files[@]}"; do
+            jq -n --arg path "$f" --rawfile text "$f" '{path: $path, contents: ($text | @base64)}'
+          done | jq -s . > "$RUNNER_TEMP/docs-additions.json"
+          jq -n --arg repo "$REPO" --arg branch "$branch" --arg head "$SHA" --arg headline "$title" \
+            --slurpfile additions "$RUNNER_TEMP/docs-additions.json" \
+            '{query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+              variables: {input: {branch: {repositoryNameWithOwner: $repo, branchName: $branch}, expectedHeadOid: $head,
+                message: {headline: $headline}, fileChanges: {additions: $additions[0]}}}}' > "$RUNNER_TEMP/docs-commit.json"
+          gh api graphql --input "$RUNNER_TEMP/docs-commit.json" --jq .data.createCommitOnBranch.commit.oid
+          body="Points the README's install command and every \`uses:\` line in the docs at \`$tag\`, the stable release this run promoted, with \`scripts/doc-pins.mjs move\`. A reader copies them from the default branch, so they follow the stable channel, never a candidate."
+          url="$(gh pr create -R "$REPO" --base "$BASE" --head "$branch" --title "$title" --body "$body")"
+          echo "Opened $url" >> "$GITHUB_STEP_SUMMARY"
