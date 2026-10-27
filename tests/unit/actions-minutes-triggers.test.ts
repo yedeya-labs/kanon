@@ -20,6 +20,7 @@ type Trigger = {
   prTarget?: string[];
   review?: boolean;
   ci?: 'any' | 'default';
+  openers?: string[];
   merged?: boolean;
   pinMoved?: boolean;
   schedule?: string;
@@ -30,7 +31,7 @@ type Trigger = {
 };
 
 /** Every key a `TRIGGERS` entry may carry. A new kind of trigger needs a phrase below first. */
-const KNOWN = new Set(['name', 'job', 'issues', 'pr', 'prTarget', 'review', 'ci', 'merged', 'pinMoved', 'schedule', 'dispatch', 'deployRun', 'reask', 'release']);
+const KNOWN = new Set(['name', 'job', 'issues', 'pr', 'prTarget', 'review', 'ci', 'openers', 'merged', 'pinMoved', 'schedule', 'dispatch', 'deployRun', 'reask', 'release']);
 
 const VERB: Record<string, string> = { labeled: 'labelled', opened: 'opened', closed: 'closed', milestoned: 'put on a milestone' };
 const verbs = (events: string[]) => events.map((e) => {
@@ -60,6 +61,8 @@ const phrases = (t: Trigger): string[] => {
   if (t.ci === 'any') out.push("CI finishing on a pull request's head");
   else if (t.ci === 'default') out.push('CI finishing on the default branch');
   else if (t.ci !== undefined) throw new Error(`no phrase for ci: ${String(t.ci)}`);
+  // kanon#1427: a run of a lane that opens pull requests, which may conflict from the start.
+  if (t.openers) out.push('a run of a lane that opens pull requests finishing');
   // The same events on pull requests and issues read as one phrase.
   if (t.pr && t.issues && verbs(t.pr) === verbs(t.issues)) out.push(`a pull request or issue ${verbs(t.pr)}`);
   else {
