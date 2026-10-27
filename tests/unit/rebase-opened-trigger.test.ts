@@ -46,8 +46,11 @@ describe("the rebase lane starts after a run that opens an Implementer pull requ
     expect(on(new Map([['agent-implement', 'Build it']])).workflow_run?.workflows).toEqual(['Tests', 'Build it', TRIGGERS['agent-triage']!.name]);
   });
 
-  // An issue labelled anything but the lane's label starts an implement run whose jobs all skip
-  // (268 of 295 in Kanon's week to 2026-10-27), so the filter must turn those away.
+  // An issue labelled anything but the lane's label starts an implement or triage run whose jobs
+  // all skip: on Kanon from 2026-10-20 to 2026-10-27, 561 of 613 implement runs and 594 of 612
+  // triage runs (`gh run list -R yedeya-labs/kanon --workflow <implement.yml|triage.yml> --limit
+  // 1000 --json conclusion,createdAt`, counted by conclusion inside that window). The filter must
+  // turn those away.
   it("the lane's filter admits a finished run that did something, and no skipped or cancelled one", () => {
     const cond = read('agent-rebase.yml').jobs.filter!.if!;
     const ctx = (conclusion: string) => ({ github: { event_name: 'workflow_run', event: { workflow_run: { conclusion } } } });

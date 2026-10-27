@@ -124,7 +124,8 @@ concurrency:
   # AND NO PENDING RUN IS REPLACED (kanon#537). With the default `queue: single`, a group
   # keeps one pending run and a newer arrival cancels it. Every event this lane is called on
   # joins the group BEFORE `filter` decides to skip it: an unmerged close, a cancelled CI
-  # run, and the merge queue's CI run, which the gate refuses. So while a resolution session
+  # run, the merge queue's CI run, which the gate refuses, and, most often, an implement or
+  # triage run whose jobs all skipped (kanon#1427). So while a resolution session
   # held the lane, the next skip-only arrival cancelled a merge's pending run, and the
   # conflict that merge caused waited for the next merge or the cron. A job-level `if:` does
   # not keep a run out of a workflow-level group (Kanon's own "Implement — revise" lane:
