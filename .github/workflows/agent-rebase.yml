@@ -31,6 +31,13 @@
 # first one's attempt markers and hands the agent nothing new. The cron is a FLOOR: the only
 # states it adds are ones no `main` merge caused, such as a human clearing `needs:human`.
 #
+# AND A PULL REQUEST BORN CONFLICTING (kanon#1427). An implement or triage run can open its pull
+# request after the merges that conflict it started this lane, so the caller also starts it on
+# a finished run of those lanes' callers, judged by that run's triggering actor, the member or
+# registered App that started it. Their status job has stamped the pull request by then, which
+# `rebase-lane.mjs` requires. A run whose jobs all skipped (an issue labelled anything else)
+# opened nothing, and the filter below turns it away.
+#
 # ── WHY `pull_request_target` IS SAFE HERE (kanon#484) ──────────────────────
 # It runs with the base's secrets on any pull request, a fork's included, so the lane takes
 # nothing from the closed pull request but the fact of its merge and who merged it:
@@ -70,7 +77,7 @@
 name: Rebase lane (Implementer)
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
-#   workflow_run: CI, [completed], branches [main]
+#   workflow_run: CI and the implement and triage callers, [completed], branches [main]
 #   pull_request_target: [closed], branches [main]   — a merged pull request (kanon#484)
 #   schedule: "17 5 * * *"   — the daily floor; clear of every other agent cron
 #   workflow_dispatch        — input `pr_number` (optional: a single PR; blank = every open PR)
@@ -145,7 +152,8 @@ jobs:
   filter:
     # A CANCELLED CI run on `main` is a superseded one and the push that superseded it
     # fires its own. A skipped job bills ~no Actions minutes, which matters because a
-    # third of `main`'s CI runs are cancelled.
+    # third of `main`'s CI runs are cancelled. A SKIPPED run is an implement or triage run on
+    # an issue labelled anything else, whose jobs all skipped (kanon#1427): it opened nothing.
     #
     # AND ONLY THE CALLER'S FOUR TRIGGERS. When this file held its triggers, no other event
     # could reach it; as a called workflow it runs on whatever its caller is called on, so
@@ -155,7 +163,8 @@ jobs:
     # request's base, which its author can write), skip here, whatever the caller's filter.
     if: >-
       (github.event_name == 'workflow_run'
-        && github.event.workflow_run.conclusion != 'cancelled')
+        && github.event.workflow_run.conclusion != 'cancelled'
+        && github.event.workflow_run.conclusion != 'skipped')
       || (github.event_name == 'pull_request_target'
         && github.event.action == 'closed'
         && github.event.pull_request.merged == true
