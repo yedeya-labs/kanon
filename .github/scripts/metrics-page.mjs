@@ -3,9 +3,9 @@
 // option A):
 //
 // 1. THE PAGE VIEW: the store's aggregate function's `?view=page` answer, read by
-//    `scripts/aggregate-read.mjs page`. The headline, trend and Kanon-version views of each
-//    project that declared its figures publishable, each one adopter's own, under the label the
-//    project chose. Nothing in it names a project, a person or an account.
+//    `scripts/aggregate-read.mjs page`. The headline, trend, Kanon-version views and release
+//    comparison (kanon#1453) of each project that declared its figures publishable, each one
+//    adopter's own, under the label the project chose. Nothing in it names a project, a person or an account.
 // 2. KANON'S HEALTH: `scripts/telemetry/kanon-health.mjs --json`. Disputed rules and the time
 //    to fix #41's bugs, read from Kanon's own issues.
 //
@@ -18,7 +18,10 @@
 // THE MINIMUM SAMPLES ARE CHECKED AGAIN HERE (§2.1). The function computes every estimate
 // below its minimum as "not enough data (N)". This file holds each `ok` estimate to Kanon's
 // own minimums once more, and refuses an answer computed with other minimums, so a function
-// deployed from another release cannot publish a number from too few items.
+// deployed from another release cannot publish a number from too few items. The release
+// comparison is held to them too, to the A/B's margins, and to its verdict: each verdict must be
+// the one `releaseVerdict` (`scripts/metrics/compare.mjs`, the report's own rule) gives its
+// figures, so a function from another release can't publish a "win" its figures don't make.
 //
 // NOTHING PRIVATE. The page holds labels, numbers, dates, versions and rule ids, all checked
 // against their patterns before they are written, and `assertNothingPrivate` refuses the
@@ -30,6 +33,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { RULE_IDS } from '../../actions/agent-telemetry/schema.mjs';
 import { checkPage } from '../../scripts/aggregate-read.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
+import { AB_MARGINS, RELEASE_VERDICTS, releaseVerdict } from '../../scripts/metrics/compare.mjs';
 import { IDLE_DAYS, MINIMUM } from '../../scripts/metrics/indicators.mjs';
 
 /** The generated heading every section of figures from fewer than three adopters opens with (§6.3). */
@@ -70,6 +74,10 @@ const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
  */
 function minimumAt(path) {
   const last = path[path.length - 1];
+  // The release comparison's fit needs the median's minimum in each release, so twice it in all.
+  if (path.includes('costAtEqualSize')) return 2 * MINIMUM.median;
+  if (path.includes('yieldDifference')) return MINIMUM.yield;
+  if (path.includes('escapeDifference')) return MINIMUM.escape;
   if (path.includes('validity')) return MINIMUM.validity;
   if (path.includes('cost')) return last === 'median' ? MINIMUM.median : last === 'p90' ? MINIMUM.p90 : null;
   if (path.includes('yield')) return MINIMUM.yield;
@@ -117,9 +125,32 @@ function checkedPage(raw) {
     for (const v of entry.by_version.versions) {
       if (v.items < MINIMUM.median) throw new PageError(`own[${k}].by_version: a version from ${v.items} items is below its minimum of ${MINIMUM.median}`);
     }
+    if (entry.release_comparison) checkComparison(entry.release_comparison, `own[${k}].release_comparison`);
     assertMinimums(entry, [`own[${k}]`]);
   }
   return page;
+}
+
+/**
+ * A release comparison held to this release's minimum and margins, each release to the median's
+ * minimum of items, and each verdict to the one its figures give (kanon#1453).
+ * @param {any} rc @param {string} at
+ */
+function checkComparison(rc, at) {
+  if (rc.minimum !== MINIMUM.median) throw new PageError(`${at}: computed with another minimum`);
+  if (!isDeepStrictEqual(rc.margins, { ...AB_MARGINS })) throw new PageError(`${at}: computed with other margins than this release holds (decision 11)`);
+  for (const [i, c] of rc.comparisons.entries()) {
+    for (const r of [c.old, c.new]) {
+      if (r.items < MINIMUM.median) throw new PageError(`${at}.comparisons[${i}]: a release from ${r.items} items is below its minimum of ${MINIMUM.median}`);
+    }
+    const cost = c.costAtEqualSize;
+    const given = releaseVerdict({
+      costAtEqualSize: cost.status === 'ok' ? { ok: true, loPct: cost.low, hiPct: cost.high } : { ok: false },
+      yieldDifference: c.yieldDifference,
+      escapeDifference: c.escapeDifference,
+    });
+    if (c.verdict !== given) throw new PageError(`${at}.comparisons[${i}]: its verdict is not the one its figures give`);
+  }
 }
 
 /** @param {unknown} v */
@@ -262,7 +293,42 @@ function validityText(validity) {
     : `The band validity check did not show cost rising with band, ${tau}, so the figures are pooled across bands.`;
 }
 
-/** One project's own figures: the headline, the trend and the Kanon-version view. @param {any} p @param {any} page */
+/** A signed percentage, a true minus sign below zero. @param {number} v */
+const signedPct = (v) => `${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(1)}%`;
+/** A difference of shares in percentage points. @param {number} v */
+const points = (v) => `${v < 0 ? '−' : '+'}${Math.abs(v * 100).toFixed(1)} points`;
+
+/**
+ * One difference of the release comparison as a cell: the value, its 95% interval and its
+ * sample, or why there is none.
+ * @param {any} d @param {(v: number) => string} fmt
+ */
+function differenceCell(d, fmt) {
+  if (d.status === 'ok') return `${fmt(d.value)} (${fmt(d.low)} to ${fmt(d.high)}), n ${d.n}`;
+  if (d.status === 'not-enough-data') return `not enough data (${d.n} of ${d.minimum})`;
+  if (d.status === 'no-spend') return `no spend (${d.n})`;
+  return `no fit (${d.n})`;
+}
+
+/** One project's release comparison (kanon#1453). @param {any} rc @param {any} page */
+function releaseComparison(rc, page) {
+  const head = `<h4>Release comparison, over the trend's ${esc(page.trend_windows * page.window_days)} days</h4>`;
+  if (!rc) return `${head}\n<p>This page view has no release comparison: the store's function was deployed from an earlier release.</p>`;
+  const fewer = `Releases with fewer than ${esc(rc.minimum)} merged items, not compared and not pooled: ${esc(rc.fewer.length ? rc.fewer.map((/** @type {any} */ f) => `${f.version} (${f.items})`).join(', ') : 'none')}. Merged items on dev, not a release: ${esc(rc.dev)}.`;
+  if (!rc.comparisons.length) return `${head}\n<p>Fewer than two Kanon releases have ${esc(rc.minimum)} merged items in the span, so none is compared. ${fewer}</p>`;
+  const rows = rc.comparisons.map((/** @type {any} */ c) => [
+    esc(`${c.old.version} → ${c.new.version}`), esc(differenceCell(c.costAtEqualSize, signedPct)), esc(differenceCell(c.yieldDifference, points)),
+    esc(differenceCell(c.escapeDifference, points)), esc(RELEASE_VERDICTS[/** @type {keyof typeof RELEASE_VERDICTS} */ (c.verdict)]),
+  ]);
+  const releases = rc.comparisons.flatMap((/** @type {any} */ c, /** @type {number} */ k) => (k === 0 ? [c.old, c.new] : [c.new]))
+    .map((/** @type {any} */ r) => [esc(r.version), esc(r.items), esc(r.from), esc(r.until)]);
+  return `${head}
+${table(['Old → new', 'Cost at equal size, new against old', 'Yield, new − old', 'Escapes at 30 days, new − old', 'Verdict'], rows)}
+${table(['Kanon release', 'Merged items', 'Closed from', 'Closed until'], releases)}
+<p>${fewer}</p>`;
+}
+
+/** One project's own figures: the headline, the trend, the Kanon-version view and the release comparison. @param {any} p @param {any} page */
 function project(p, page) {
   const trend = p.trend.map((/** @type {any} */ w) => [esc(`${w.window.from} to ${w.window.until}`), ...indicatorCells(w), esc(mixText(w.bandMix)), esc(w.versionsIntroduced.join(', ') || '—')]);
   const bv = p.by_version;
@@ -278,6 +344,7 @@ ${table(['Window', ...INDICATOR_HEAD, 'Band mix', 'Versions first seen'], trend)
 <h4>By Kanon version, over the trend's ${esc(page.trend_windows * page.window_days)} days</h4>
 ${versions.length ? table(['Kanon version', 'Items', ...INDICATOR_HEAD], versions) : '<p>No Kanon version has enough items to show alone.</p>'}
 <p>${esc(bv.unversioned)} items carry no Kanon version.${fewer}</p>
+${releaseComparison(p.release_comparison, page)}
 </article>`;
 }
 
@@ -342,6 +409,8 @@ function transparency(page, release, commit) {
 <p>An escape is counted only when someone linked a revert or a fix to the item. A defect nobody linked is not counted, so the escape rates are lower bounds.</p>
 <h3>When a bail counts against yield</h3>
 <p>A merged item counts in the window it closes in. A run that stopped before opening a pull request counts only once its issue has had no run for ${esc(IDLE_DAYS)} days, so that a run still being retried isn't counted as abandoned. So in a project's first ${esc(IDLE_DAYS)} days, and for ${esc(IDLE_DAYS)} days after any burst of such runs, yield reads high, and the "no PR" figure has few or no items, until they settle.</p>
+<h3>The release comparison</h3>
+<p>Each Kanon release with at least ${esc(m.median)} merged items over the trend's span is compared with the one before it that has as many; an item is in the release its lanes pinned at its merge. A release with fewer items is listed, and pooled with no other. Cost is compared at equal size: a log-linear fit of log cost on log(1 + changed lines) and the release, which needs ${esc(m.median)} merged items with a cost above zero and a diff size in each release, and gives the newer release's cost change in percent with its 95% interval. A release is a <strong>win</strong> only if that interval is entirely below zero and its quality holds within the margins, new minus old: yield's lower bound above ${esc(points(AB_MARGINS.yield))} and the 30-day escape rate's upper bound below ${esc(points(AB_MARGINS.escape30))} (a bootstrap interval for yield from ${esc(m.yield)} items in each release, Newcombe's for escapes from ${esc(m.escape)}). Cheaper without that is "cheaper, quality not shown to hold"; an interval entirely above zero is "dearer"; one that holds zero, "no measurable change". It says whether a release was cheaper at equal size, not that the release caused the difference: anything else that changed between the two releases' items, the model, a lane's configuration or the kind of work beyond its size, is read as the release's. A release whose items merged less than 30 days ago has too few matured items for the escape difference, so it reads "cheaper, quality not shown to hold" until they mature.</p>
 <h3>Bands, windows, samples and intervals</h3>
 <p>Band version ${esc(page.band_version)}. Each window is ${esc(page.window_days)} days and ends at the start of the UTC day the page was computed. The figures are shown by band only when the band validity check finds cost rising with band (a Kendall τ-b interval above zero, from at least ${esc(m.validity)} items); otherwise they are pooled, with the band mix beside them.</p>
 <p>Each figure shows its value, its 95% interval and its sample (n). Medians and p90s use an order-statistic interval, rates a Wilson interval, and yield a bootstrap of ${esc(page.bootstrap.resamples)} resamples with seed ${esc(page.bootstrap.seed)}. A figure from fewer items than its minimum shows "not enough data (N)": ${esc(m.median)} for a median, ${esc(m.p90)} for a p90, ${esc(m.proportion)} for approval and correction, ${esc(m.yield)} for yield, and ${esc(m.escape)} for an escape rate.</p>

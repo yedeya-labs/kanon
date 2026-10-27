@@ -5,6 +5,8 @@ import {
 } from '../../infra/telemetry/function/aggregate.mjs';
 import { ENDPOINT_WORKFLOWS, verifyToken } from '../../infra/telemetry/function/oidc.mjs';
 import { MINIMUM, TREND_WINDOWS, WINDOW_DAYS } from '../../scripts/metrics/indicators.mjs';
+import { AB_MARGINS, metricsViews } from '../../scripts/metrics/views.mjs';
+import { releaseRows, winRows } from './helpers/release-rows.js';
 import { LANES } from '../../actions/agent-telemetry/schema.mjs';
 import {
   ALIAS_ARN, AUDIENCE, DEFAULT_REF, EXPLORE, fakeRegister, keys, METRICS_PAGE, MIN_VERSION, OWNER, pageToken, type Registration,
@@ -124,6 +126,50 @@ describe('the page view: the work-item indicators of each declaring adopter (pla
     expect(entry(page(expired)).headline.cost.pooled.median.n).toBe(11);
     const smoke = items('alpha', 12).map((r) => (r.pr_number === 1 ? { ...r, tag: 'smoke' } : r));
     expect(entry(page(smoke)).headline.cost.pooled.median.n).toBe(11);
+  });
+});
+
+describe('the page view: the release comparison (kanon#1453)', () => {
+  const DAY = 86_400_000;
+  /** What `kanon metrics report` says of the same rows, over the same span. */
+  const reportOf = (stored: Stored[]) => metricsViews(stored.map((r) => { const plain = { ...r }; delete plain.pk; delete plain.expires_at; return plain; }), { until: new Date(Math.floor(NOW / DAY) * DAY) }).releaseComparison as J;
+
+  it("compares each release with the code `kanon metrics report` runs, and publishes only the Owner's derived fields", () => {
+    const stored = winRows('alpha', NOW);
+    const rc = entry(page(stored)).release_comparison;
+    const [r] = reportOf(stored).comparisons;
+    expect(rc.comparisons).toHaveLength(1);
+    const [c] = rc.comparisons;
+    expect(c.verdict).toBe('win');
+    expect(c.verdict).toBe(r.verdict);
+    expect(c.costAtEqualSize).toEqual({ status: 'ok', n: r.costAtEqualSize.n, value: r.costAtEqualSize.pct, low: r.costAtEqualSize.loPct, high: r.costAtEqualSize.hiPct });
+    expect(c.yieldDifference).toEqual(r.yieldDifference);
+    expect(c.escapeDifference).toEqual(r.escapeDifference);
+    expect(c.old).toEqual({ version: '0.39.0', items: 100, from: r.old.from, until: r.old.until });
+    expect(c.new).toEqual({ version: '0.40.0', items: 100, from: r.new.from, until: r.new.until });
+    // Exactly these fields: no release's cost, yield or escape cells, no item, no text.
+    expect(Object.keys(rc).sort()).toEqual(['comparisons', 'dev', 'fewer', 'margins', 'minimum']);
+    expect(Object.keys(c).sort()).toEqual(['costAtEqualSize', 'escapeDifference', 'new', 'old', 'verdict', 'yieldDifference']);
+    expect(rc).toMatchObject({ minimum: MINIMUM.median, margins: AB_MARGINS, fewer: [], dev: 0 });
+  });
+
+  it('publishes a fit below its minimum as not enough data with its counts, never its reason', () => {
+    const stored = [
+      ...releaseRows('alpha', '0.39.0', 1, 12, { now: NOW, days: [100, 160], scale: 1 }),
+      ...releaseRows('alpha', '0.40.0', 1001, 12, { now: NOW, days: [31, 95], scale: 0.5 }).map((r) => {
+        if (r.row_kind !== 'work_item' || (r.pr_number as number) < 1009) return r;
+        const rest = { ...r };
+        delete rest.changed_lines;
+        return rest;
+      }),
+      ...releaseRows('alpha', '0.41.0', 2001, 4, { now: NOW, days: [10, 20], scale: 1 }),
+    ];
+    const rc = entry(page(stored)).release_comparison;
+    expect(rc.comparisons[0].costAtEqualSize).toEqual({ status: 'not-enough-data', n: 8, minimum: MINIMUM.median });
+    expect(rc.comparisons[0].yieldDifference).toEqual({ status: 'not-enough-data', n: 12, minimum: MINIMUM.yield });
+    expect(rc.comparisons[0].verdict).toBe('not-enough-data');
+    expect(rc.fewer).toEqual([{ version: '0.41.0', items: 4 }]);
+    expect(JSON.stringify(rc)).not.toMatch(/needs|reason/);
   });
 });
 

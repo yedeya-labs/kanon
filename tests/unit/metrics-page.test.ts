@@ -9,6 +9,7 @@ import {
 import { pageView } from '../../infra/telemetry/function/aggregate.mjs';
 import { checkPage } from '../../scripts/aggregate-read.mjs';
 import { IDLE_DAYS, MINIMUM } from '../../scripts/metrics/indicators.mjs';
+import { releaseRows, winRows } from './helpers/release-rows.js';
 
 /**
  * Plan 0003 M7 (kanon#661), §6.3: the public metrics page and its generator. The page shows the
@@ -208,5 +209,90 @@ describe('the command', () => {
   });
   it('reads the minimum samples it holds a page to from the report\'s own module', () => {
     expect(MINIMUM.median).toBe(10);
+  });
+});
+
+describe('the release comparison on the page (kanon#1453)', () => {
+  /** A page view whose project `kanon` has two releases, the newer a win, as the read hands it on. */
+  const winPage = (): J => checkPage(JSON.parse(JSON.stringify(pageView(winRows('alpha', NOW), { now: NOW, own: { alpha: 'kanon' } }))));
+  const rcOf = (p: J) => p.own[0].release_comparison;
+
+  it('renders each comparison under its project, with its verdict wording, both releases and their item counts and dates', () => {
+    const html = render(winPage());
+    expect(html).toContain('<h4>Release comparison, over the trend\'s 168 days</h4>');
+    expect(html).toMatch(/<td>0\.39\.0 → 0\.40\.0<\/td><td>−30\.\d% \(−\d+\.\d% to −\d+\.\d%\), n 200<\/td><td>[^<]+<\/td><td>[^<]+<\/td><td>win<\/td>/);
+    expect(html).toMatch(/<td>0\.39\.0<\/td><td>100<\/td><td>\d{4}-\d{2}-\d{2}<\/td><td>\d{4}-\d{2}-\d{2}<\/td>/);
+    expect(html).toContain('<h3>The release comparison</h3>');
+    expect(html).toContain('not that the release caused the difference');
+  });
+
+  it('says so when fewer than two releases have enough items', () => {
+    expect(render()).toContain('Fewer than two Kanon releases have 10 merged items in the span, so none is compared.');
+  });
+
+  it("reads a page view from a function that doesn't compute the comparison yet, and says so", () => {
+    const raw = JSON.parse(JSON.stringify(pageView(winRows('alpha', NOW), { now: NOW, own: { alpha: 'kanon' } })));
+    delete raw.own[0].release_comparison;
+    const html = render(checkPage(raw));
+    expect(html).toContain('This page view has no release comparison: the store\'s function was deployed from an earlier release.');
+  });
+
+  it('refuses, in the read, any field the comparison does not publish, and any verdict it does not have', () => {
+    const raw = () => JSON.parse(JSON.stringify(pageView(winRows('alpha', NOW), { now: NOW, own: { alpha: 'kanon' } })));
+    const reason = raw();
+    reason.own[0].release_comparison.comparisons[0].costAtEqualSize.reason = 'text';
+    expect(() => checkPage(reason)).toThrow(/costAtEqualSize holds `reason`/);
+    const cells = raw();
+    cells.own[0].release_comparison.comparisons[0].old.cost = 1;
+    expect(() => checkPage(cells)).toThrow(/old holds `cost`/);
+    const verdict = raw();
+    verdict.own[0].release_comparison.comparisons[0].verdict = 'great';
+    expect(() => checkPage(verdict)).toThrow(/verdict is not a verdict/);
+    const dev = raw();
+    dev.own[0].release_comparison.comparisons[0].old.version = 'dev';
+    expect(() => checkPage(dev)).toThrow(/old\.version is not a release/);
+    const status = raw();
+    status.own[0].release_comparison.comparisons[0].escapeDifference = { status: 'no-fit', n: 3 };
+    expect(() => checkPage(status)).toThrow(/escapeDifference is not an estimate/);
+  });
+
+  it('refuses a comparison that breaks a minimum, whatever the answer says', () => {
+    const cases: [(rc: J) => void, RegExp][] = [
+      [(rc) => { rc.comparisons[0].costAtEqualSize.n = 19; }, /costAtEqualSize: an estimate from 19 items is below its minimum of 20/],
+      [(rc) => { rc.comparisons[0].yieldDifference.n = 19; }, /yieldDifference: an estimate from 19 items is below its minimum of 20/],
+      [(rc) => { rc.comparisons[0].escapeDifference.n = 49; }, /escapeDifference: an estimate from 49 items is below its minimum of 50/],
+      [(rc) => { rc.comparisons[0].new.items = 9; }, /a release from 9 items is below its minimum of 10/],
+      [(rc) => { rc.minimum = 5; }, /release_comparison: computed with another minimum/],
+      [(rc) => { rc.margins = { yield: -0.1, escape30: 0.02 }; }, /release_comparison: computed with other margins/],
+    ];
+    for (const [forge, refusal] of cases) {
+      const p = winPage();
+      forge(rcOf(p));
+      expect(() => render(p), String(refusal)).toThrow(refusal);
+    }
+  });
+
+  it('counts toward the fit\'s minimum only items with a cost above zero, as the fit does, so a $0 item never makes the page refuse (#1456)', () => {
+    // Ten items in 0.39.0, three of them $0 (a delivery run that failed at its first turn), and
+    // twelve in 0.40.0. Counting the $0 items, each release has its 10 and the fit runs on the 19
+    // it can use, which the page refuses, writing no page. Counting usable rows, 0.39.0 has 7.
+    const zero = new Set([1, 2, 3]);
+    const stored = [
+      ...releaseRows('alpha', '0.39.0', 1, 10, { now: NOW, days: [100, 160], scale: 1 }).map((r) => (r.row_kind === 'run' && zero.has(r.pr_number as number) ? { ...r, total_cost_usd: 0 } : r)),
+      ...releaseRows('alpha', '0.40.0', 1001, 12, { now: NOW, days: [31, 95], scale: 0.7 }),
+    ];
+    const p = checkPage(JSON.parse(JSON.stringify(pageView(stored, { now: NOW, own: { alpha: 'kanon' } }))));
+    expect(rcOf(p).comparisons[0].costAtEqualSize).toEqual({ status: 'not-enough-data', n: 7, minimum: MINIMUM.median });
+    expect(rcOf(p).comparisons[0].verdict).toBe('not-enough-data');
+    expect(() => render(p)).not.toThrow();
+  });
+
+  it("refuses a verdict its figures don't give: never a win without cost below zero and quality held", () => {
+    const dearer = winPage();
+    Object.assign(rcOf(dearer).comparisons[0].costAtEqualSize, { low: 5, high: 20 });
+    expect(() => render(dearer)).toThrow(/verdict is not the one its figures give/);
+    const quality = winPage();
+    Object.assign(rcOf(quality).comparisons[0].escapeDifference, { high: 0.05 });
+    expect(() => render(quality)).toThrow(/verdict is not the one its figures give/);
   });
 });

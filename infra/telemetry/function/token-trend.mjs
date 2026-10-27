@@ -1,0 +1,1 @@
+../../../scripts/lib/token-trend.mjs
