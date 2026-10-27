@@ -26,8 +26,13 @@
 //   bug      no open issue labelled `bug` and `sev:critical` or `sev:high` names, in its
 //            `Introduced by` field (`introducedBy`), a pull request the candidate contains.
 //   red      every run of Kanon's lane callers since the pins moved succeeded at its latest attempt
-//            (so a run re-run green passes), or failed with agent-classify's `unavailable` notice
-//            (the model was never reached), on one of its failed jobs. Each red conclusion is listed
+//            (so a run re-run green passes), or is explained (#1441): it failed with agent-classify's
+//            `unavailable` notice (the model was never reached) on one of its failed jobs; or every
+//            step that failed is a verdict on a pull request (`VERDICT_STEPS`, the red-test check
+//            saying the changed tests pass without the source change), not the lane dying; or a
+//            repository admin explained it, by run id and cause, in a comment starting with
+//            `EXPLAIN_MARKER` on the pin pull request or the held issue (`explanations`), which the
+//            evidence quotes. An edited explanation counts for nothing. Each red conclusion is listed
 //            by itself (`status=failure`, …): GitHub's filter matches the latest attempt, so a run
 //            re-run green drops out, and the green runs are counted, never read. A red listing
 //            GitHub truncates (more runs than were read, or its 1,000-result cap) holds.
@@ -50,6 +55,16 @@
 // input overrides it: the only way past a red one is a fix and a new candidate. Each gate is one
 // entry in `GATES`: the summary, the decision and the plan read the table.
 //
+// A FOURTH MODE, SO A HELD PROMOTION REACHES THE OWNER (#1441):
+//   notify reads the check's outcome (`OUTCOME`) with the workflow's token, Issues write. A
+//          candidate past its soak that a gate holds gets one issue, `Promotion held: <candidate>`,
+//          assigned to whoever merged its pin pull request (the Owner, who starts each soak), with
+//          the gates and what unblocks each. Each later run rewrites its body, and comments only when
+//          the gates holding it change, so the Owner is told once per change, not daily. It closes
+//          when the candidate is promoted (`APPLIED=success`), promoted already or superseded. A
+//          hold before the soak ends, or by the spacing or a dispatch's `hold`, is expected and opens
+//          nothing.
+//
 // A THIRD MODE, FOR THE PIN JOB (plan 0012 §8.1, decision 2):
 //   gate   reads the end-to-end gate alone for the candidate `TAG`, with a read-only token, and
 //          writes `pass=true|false` to GITHUB_OUTPUT and its verdict to the step summary.
@@ -57,7 +72,7 @@
 //          Kanon's pins, and the soak, start only on a candidate the harness passed.
 //
 // Env: GH_TOKEN, GITHUB_REPOSITORY, DEFAULT_BRANCH (default `main`), HOLD, URGENT, REASON, PLAN,
-// TAG (gate), GITHUB_OUTPUT, GITHUB_STEP_SUMMARY. Node built-ins and `gh` only.
+// OUTCOME (check, notify), APPLIED (notify), TAG (gate), GITHUB_OUTPUT, GITHUB_STEP_SUMMARY. Node built-ins and `gh` only.
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -111,6 +126,29 @@ export const startJobName = (tag, sha) => `start (the Reporter's check run: ${ta
 const START_PREFIX = 'start (';
 /** The red issue the harness's `verdict` files for a candidate (plan 0012 §8.3). @param {string} tag */
 export const redIssueTitle = (tag) => `e2e: ${tag} is red`;
+
+/**
+ * The steps whose failure is a lane's verdict on a pull request, not the lane dying, by the lane
+ * a caller calls (#1441). The red-test check failing its verification says the pull request's
+ * changed tests pass without its source change: a re-run says it again, and no candidate caused it.
+ * A test holds each name to the lane's workflow.
+ * @type {Record<string, string[]>}
+ */
+export const VERDICT_STEPS = { 'red-test.yml': ['Verify the changed tests fail without the source change'] };
+/**
+ * What a repository admin's explanation of red runs starts with, then one `- <run id>: <cause>` a
+ * line (#1441). Plain words, not a hidden marker, so the Owner can type it on a phone.
+ */
+export const EXPLAIN_MARKER = 'Explain red:';
+/** Whether a comment is an explanation: its first line is `EXPLAIN_MARKER`, in any case. @param {string} body */
+const isExplanation = (body) => body.trimStart().toLowerCase().startsWith(EXPLAIN_MARKER.toLowerCase());
+/** The issue a held promotion opens for its candidate (#1441). @param {string} candidate */
+export const heldTitle = (candidate) => `Promotion held: ${candidate}`;
+/** What marks the held issue's body, with the gates holding it, so a change of gates is noticed. */
+const HELD_MARKER = '<!-- kanon:promotion-held';
+/** The held issue's label and bucket: Kanon's own release operation (`K-WORK-4`, `K-WORK-11`). */
+export const HELD_LABEL = 'pipeline-improvement';
+export const HELD_MILESTONE = 'Development Automation';
 
 /** Kanon's own manifest, whose version release-please's `node` type writes at each release. */
 export const MANIFEST = 'package.json';
@@ -190,6 +228,7 @@ const notFound = (e) => e instanceof ApiError && e.status === 404;
  *   since: string,
  *   runsOf: (file: string, status: string) => Listing,
  *   completedOf: (file: string) => number,
+ *   explained: Map<number, string>, ignored: string[],
  * }} Context what every gate reads: the candidate, the pull requests it contains, the pin, and
  *   Kanon's lane callers
  * @typedef {{ pass: boolean, evidence: string }} Verdict
@@ -322,10 +361,13 @@ export const GATES = [
     id: 'red',
     title: 'No unexplained red',
     when: 'always',
-    check: ({ api, repo, callers, runsOf, completedOf, since }) => {
+    check: ({ api, repo, callers, runsOf, completedOf, since, explained, ignored }) => {
       const files = [...new Set(callers.map((c) => c.file))];
       let count = 0;
-      let explained = 0;
+      let unreachableRuns = 0;
+      let verdictRuns = 0;
+      /** @type {string[]} */
+      const byPerson = [];
       /** @type {string[]} */
       const red = [];
       /** @type {string[]} */
@@ -339,17 +381,23 @@ export const GATES = [
           const listing = runsOf(file, conclusion);
           if (listing.truncated) truncated.push(`${file} ${conclusion} (read ${listing.runs.length} of ${listing.total})`);
           for (const run of listing.runs) {
-            if (unreachable(api, repo, Number(run.id))) explained += 1;
-            else red.push(`${file} run ${run.id} (${conclusion})`);
+            const id = Number(run.id);
+            const kind = redKind(api, repo, id, callers.filter((c) => c.file === file).map((c) => c.lane));
+            if (kind === 'unreachable') unreachableRuns += 1;
+            else if (kind === 'verdict') verdictRuns += 1;
+            else if (explained.has(id)) byPerson.push(`${file} run ${id}, explained by ${explained.get(id)}`);
+            else red.push(`${file} run ${id} (${conclusion})`);
           }
         }
       }
+      const accepted = `${unreachableRuns} red with the model unreachable, ${verdictRuns} red as a verdict on a pull request${byPerson.length ? `, ${byPerson.length} explained: ${byPerson.join('; ')}` : ''}`;
+      const unread = ignored.length ? `; explanations not counted: ${ignored.join('; ')}` : '';
       if (truncated.length) {
-        return { pass: false, evidence: `a red run listing is truncated, so a red run may be unread: ${truncated.join(', ')}${red.length ? `; unexplained red since ${since}: ${red.join(', ')}` : ''}` };
+        return { pass: false, evidence: `a red run listing is truncated, so a red run may be unread: ${truncated.join(', ')}${red.length ? `; unexplained red since ${since}: ${red.join(', ')}` : ''}${unread}` };
       }
       return red.length
-        ? { pass: false, evidence: `unexplained red since ${since}: ${red.join(', ')}` }
-        : { pass: true, evidence: `${count} completed runs of ${files.length} callers since ${since}, ${explained} red with the model unreachable` };
+        ? { pass: false, evidence: `unexplained red since ${since}: ${red.join(', ')}${unread}` }
+        : { pass: true, evidence: `${count} completed runs of ${files.length} callers since ${since}, ${accepted}${unread}` };
     },
   },
   {
@@ -545,18 +593,96 @@ export function laneRefOf(run, repo) {
 }
 
 /**
- * Whether a red run's failed jobs carry agent-classify's `unavailable` notice: the model was
- * never reached, a cause outside Kanon's code. An unreadable job or annotation counts as no.
- * @param {Api} api @param {string} repo @param {number} id
+ * Why a red run is red, from its latest attempt's failed jobs: `unreachable` when one carries
+ * agent-classify's `unavailable` notice; `verdict` when every step that failed is a verdict step of
+ * a lane its caller calls (`VERDICT_STEPS`); otherwise `red`. A read that fails is `red`, so the
+ * gate holds rather than guess.
+ * @param {Api} api @param {string} repo @param {number} id @param {string[]} lanes
+ * @returns {'unreachable' | 'verdict' | 'red'}
  */
-function unreachable(api, repo, id) {
+export function redKind(api, repo, id, lanes) {
   try {
     const jobs = api(`repos/${repo}/actions/runs/${id}/jobs?per_page=100`)?.jobs ?? [];
-    return jobs.some((/** @type {any} */ job) => job?.conclusion === 'failure'
-      && (api(`repos/${repo}/check-runs/${Number(job.id)}/annotations?per_page=100`) ?? []).some((/** @type {any} */ a) => a?.title === UNREACHABLE_TITLE));
+    const failed = jobs.filter((/** @type {any} */ job) => job?.conclusion === 'failure');
+    if (failed.some((/** @type {any} */ job) => (api(`repos/${repo}/check-runs/${Number(job.id)}/annotations?per_page=100`) ?? []).some((/** @type {any} */ a) => a?.title === UNREACHABLE_TITLE))) return 'unreachable';
+    const verdicts = new Set(lanes.flatMap((l) => VERDICT_STEPS[l] ?? []));
+    const steps = failed.flatMap((/** @type {any} */ job) => (job?.steps ?? []).filter((/** @type {any} */ s) => s?.conclusion === 'failure').map((/** @type {any} */ s) => String(s?.name ?? '')));
+    // A failed job with no failed step (cancelled mid-step, or a runner lost) is no verdict.
+    const everyJobHasOne = failed.every((/** @type {any} */ job) => (job?.steps ?? []).some((/** @type {any} */ s) => s?.conclusion === 'failure'));
+    if (failed.length > 0 && everyJobHasOne && steps.every((/** @type {string} */ s) => verdicts.has(s))) return 'verdict';
+    return 'red';
   } catch {
-    return false;
+    return 'red';
   }
+}
+
+/**
+ * The red runs a repository admin explained (#1441), from the comments on the issues and pull
+ * requests `numbers` names: a comment starting with `EXPLAIN_MARKER`, by a user whose permission is
+ * `admin`, and never edited (people with write access, the agents' Apps among them, can edit another
+ * person's comment), names one run a line, `- <run id>: <cause>`. Every other marked comment is
+ * listed in `ignored`, with why, for the evidence.
+ * @param {Api} api @param {string} repo @param {number[]} numbers
+ * @returns {{ explained: Map<number, string>, ignored: string[] }}
+ */
+export function explanations(api, repo, numbers) {
+  /** @type {Map<number, string>} */
+  const explained = new Map();
+  /** @type {string[]} */
+  const ignored = [];
+  /** @type {Map<string, boolean>} */
+  const admins = new Map();
+  /** @param {string} login */
+  const isAdmin = (login) => {
+    if (!admins.has(login)) {
+      let admin = false;
+      try {
+        const p = api(`repos/${repo}/collaborators/${encodeURIComponent(login)}/permission`);
+        admin = p?.permission === 'admin';
+      } catch {
+        admin = false;
+      }
+      admins.set(login, admin);
+    }
+    return admins.get(login) === true;
+  };
+  for (const n of numbers) {
+    /** @type {any[]} */
+    let comments = [];
+    try {
+      comments = pages(api, `repos/${repo}/issues/${n}/comments`);
+    } catch {
+      ignored.push(`#${n}: its comments could not be read`);
+    }
+    for (const c of comments) {
+      const body = String(c?.body ?? '');
+      if (!isExplanation(body)) continue;
+      const login = String(c?.user?.login ?? '');
+      if (c?.user?.type === 'Bot' || !login || !isAdmin(login)) {
+        ignored.push(`#${n}: @${login} is not a repository admin`);
+        continue;
+      }
+      if (c?.updated_at && c?.created_at && c.updated_at !== c.created_at) {
+        ignored.push(`#${n}: @${login}'s explanation was edited after it was posted, so post a new one`);
+        continue;
+      }
+      for (const line of body.split('\n')) {
+        const m = /^\s*[-*]\s*(\d+)\s*:\s*(\S.*?)\s*$/.exec(line);
+        if (m) explained.set(Number(m[1]), `@${login} on #${n}: ${m[2]}`);
+      }
+    }
+  }
+  return { explained, ignored };
+}
+
+/**
+ * The open issue a held promotion opened for `candidate`, if any.
+ * @param {Api} api @param {string} repo @param {string} candidate
+ * @returns {{ number: number, body: string } | null}
+ */
+export function heldIssue(api, repo, candidate) {
+  const found = pages(api, `repos/${repo}/issues?state=open`).find((i) => !i?.pull_request && i?.title === heldTitle(candidate));
+  return found ? { number: Number(found.number), body: String(found.body ?? '') } : null;
 }
 
 /** @param {unknown} v */
@@ -574,7 +700,9 @@ const truthy = (v) => /^(true|1|yes)$/i.test(String(v ?? '').trim());
  *   candidate?: string,
  *   gates: Array<{ id: string, title: string, skipped: boolean } & Verdict>,
  *   plan?: Plan,
- * }} Outcome
+ *   pin?: number,
+ * }} Outcome `pin`: the candidate's merged pin pull request, whose merger the held issue is
+ *   assigned to
  */
 
 /**
@@ -727,15 +855,20 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
   /** How many runs completed since the pins moved, by the listing's count. @param {string} file */
   const completedOf = (file) => Number(api(`${runsPath(file)}&status=completed&per_page=1`)?.total_count ?? 0);
 
+  // An admin's explanations of red runs: on the pin pull request, or on the issue a held promotion
+  // opened for this candidate, where the Owner is told of the hold (#1441).
+  const openHeld = heldIssue(api, repo, candidate.name);
+  const { explained, ignored } = explanations(api, repo, [pin?.number, openHeld?.number].filter((n) => typeof n === 'number'));
+
   /** @type {Context} */
   const ctx = {
-    repo, branch, now, urgent, api, candidate, previous, cutAt, pin, contained, since, runsOf, completedOf,
+    repo, branch, now, urgent, api, candidate, previous, cutAt, pin, contained, since, runsOf, completedOf, explained, ignored,
     callers: laneCallers(workflows ?? readWorkflows(), repo),
   };
   const gates = GATES.filter((g) => g.when !== (urgent ? 'normal' : 'urgent')).map((g) => ({ id: g.id, title: g.title, skipped: false, ...g.check(ctx) }));
   if (urgent) for (const g of GATES.filter((x) => x.when === 'normal')) gates.push({ id: g.id, title: g.title, skipped: true, pass: true, evidence: `skipped: urgent, ${reason}` });
 
-  const base = { candidate: candidate.name, gates };
+  const base = { candidate: candidate.name, gates, ...(pin ? { pin: pin.number } : {}) };
   const held = gates.filter((g) => !g.pass);
   if (held.length) return { ...base, decision: 'hold', why: `held by ${held.map((g) => g.title.toLowerCase()).join(', ')}` };
 
@@ -803,6 +936,82 @@ export function summary(o) {
   return `${lines.join('\n')}\n`;
 }
 
+/** What unblocks each gate that can hold a candidate past its soak. @type {Record<string, string>} */
+const UNBLOCK = {
+  red: `**No unexplained red.** Read each run the evidence names. A red the candidate caused needs a fix and a new candidate. One it didn't cause (a transient read from GitHub or the store, a runtime that failed before the model was called) a repository admin explains in a new comment, here or on the pin pull request, starting with \`${EXPLAIN_MARKER}\` and one run a line; the next run quotes it in its evidence:\n\n\`\`\`\n${EXPLAIN_MARKER}\n- <run id>: <cause>\n\`\`\``,
+  revert: '**No revert.** A pull request the candidate contains was reverted since: the candidate ships the change the revert undid, so the next candidate, which carries the revert, is the one to promote.',
+  bug: '**No serious bug.** An open `sev:critical` or `sev:high` bug names a pull request the candidate contains: fix it, and the next candidate carries the fix.',
+  e2e: "**End to end.** The harness's red issue for the candidate names the scenario that failed. A fix ships as a new candidate; a scenario that is itself broken is fixed in the harness, and a re-run there reports again.",
+};
+
+/**
+ * The held issue's body: the gates holding the candidate, in the marker, then the summary and what
+ * unblocks each.
+ * @param {Outcome} o @param {string} ids @param {string} repo @param {string} runUrl
+ */
+function heldBody(o, ids, repo, runUrl) {
+  const holding = o.gates.filter((g) => !g.pass && !g.skipped);
+  const hints = holding.map((g) => `- ${UNBLOCK[g.id] ?? `**${g.title}.** Read its evidence above.`}`).join('\n');
+  return `${HELD_MARKER} ${ids} -->\n\`${o.candidate}\` has soaked, and ${holding.length === 1 ? 'one gate holds' : `${holding.length} gates hold`} its promotion to stable, so adopters stay on the previous release. Each daily run of \`promote.yml\` rewrites this body${runUrl ? ` ([the latest](${runUrl}))` : ''}, comments when the gates holding it change, and closes this issue once the candidate is promoted.\n\n${summary(o)}\n## What unblocks it\n\n${hints}\n\nTo read the gates again now: \`gh workflow run promote.yml -R ${repo}\`.\n`;
+}
+
+/**
+ * Tells the Owner of a held promotion (#1441): the writes on `o`, the check's outcome. A candidate
+ * past its soak that a gate holds gets one issue, assigned to whoever merged its pin pull request;
+ * later runs rewrite its body and comment only when the gates holding it change. It closes once
+ * the candidate is promoted (`applied` is the apply step's outcome), promoted already or superseded.
+ * @param {Outcome} o @param {{ api?: Api, repo: string, applied?: string, runUrl?: string }} deps
+ * @returns {string[]} what it did, a line each
+ */
+export function notify(o, { api = ghApi, repo, applied = '', runUrl = '' }) {
+  /** @type {string[]} */
+  const done = [];
+  if (!o.candidate) return done;
+  const open = heldIssue(api, repo, o.candidate);
+  if ((o.decision === 'promote' && applied === 'success') || o.decision === 'none') {
+    if (open) {
+      const why = o.decision === 'promote' ? `Promoted: \`${o.plan?.tag ?? ''}\` is the stable release.` : `Closed: ${o.why}.`;
+      api(`repos/${repo}/issues/${open.number}/comments`, { method: 'POST', body: { body: why } });
+      api(`repos/${repo}/issues/${open.number}`, { method: 'PATCH', body: { state: 'closed', state_reason: 'completed' } });
+      done.push(`Closed #${open.number}: ${why}`);
+    }
+    return done;
+  }
+  const soak = o.gates.find((g) => g.id === 'soak');
+  const holding = o.gates.filter((g) => !g.pass && !g.skipped);
+  // Before the soak ends, or held by the spacing or a dispatch's `hold`, the hold is expected.
+  if (o.decision !== 'hold' || !soak || soak.skipped || !soak.pass || holding.length === 0) return done;
+  const ids = holding.map((g) => g.id).join(',');
+  const body = heldBody(o, ids, repo, runUrl);
+  if (!open) {
+    /** @type {string[]} */
+    let assignees = [];
+    try {
+      const by = o.pin ? api(`repos/${repo}/pulls/${o.pin}`)?.merged_by?.login : null;
+      if (by) assignees = [String(by)];
+    } catch {
+      assignees = [];
+    }
+    let milestone = null;
+    try {
+      milestone = pages(api, `repos/${repo}/milestones?state=open`).find((m) => m?.title === HELD_MILESTONE)?.number ?? null;
+    } catch {
+      milestone = null;
+    }
+    const created = api(`repos/${repo}/issues`, { method: 'POST', body: { title: heldTitle(o.candidate), body, labels: [HELD_LABEL], assignees, ...(milestone ? { milestone } : {}) } });
+    done.push(`Opened #${created?.number ?? '?'}, ${heldTitle(o.candidate)}${assignees.length ? `, assigned to @${assignees[0]}` : ''}`);
+    return done;
+  }
+  const before = new RegExp(`${HELD_MARKER} (\\S*) -->`).exec(open.body)?.[1] ?? '';
+  api(`repos/${repo}/issues/${open.number}`, { method: 'PATCH', body: { body } });
+  done.push(`Updated #${open.number}`);
+  if (before !== ids) {
+    api(`repos/${repo}/issues/${open.number}/comments`, { method: 'POST', body: { body: `Now held by ${holding.map((g) => g.title.toLowerCase()).join(', ')}: the body has each gate's evidence.` } });
+    done.push(`Commented on #${open.number}: the gates holding it changed`);
+  }
+  return done;
+}
+
 function main() {
   const mode = process.argv[2];
   const env = process.env;
@@ -819,16 +1028,22 @@ function main() {
       const o = check(env);
       say(summary(o));
       if (o.plan && env.PLAN) writeFileSync(env.PLAN, JSON.stringify(o.plan));
+      if (env.OUTCOME) writeFileSync(env.OUTCOME, JSON.stringify(o));
       if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `decision=${o.decision}\n`);
     } else if (mode === 'gate') {
       const g = gate(env);
       say(gateSummary(g));
       if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `pass=${g.pass}\n`);
+    } else if (mode === 'notify') {
+      const o = /** @type {Outcome} */ (JSON.parse(readFileSync(String(env.OUTCOME), 'utf8')));
+      const runUrl = env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL ?? 'https://github.com'}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : '';
+      const done = notify(o, { repo: String(env.GITHUB_REPOSITORY), applied: env.APPLIED ?? '', runUrl });
+      if (done.length) say(`${done.map((l) => `- ${l}`).join('\n')}\n`);
     } else if (mode === 'apply') {
       const plan = /** @type {Plan} */ (JSON.parse(readFileSync(String(env.PLAN), 'utf8')));
       say(`${apply(plan, { repo: String(env.GITHUB_REPOSITORY) }).map((l) => `- ${l}`).join('\n')}\n`);
     } else {
-      throw new Refusal(`usage: promote.mjs check|gate|apply (got ${mode ?? 'nothing'})`);
+      throw new Refusal(`usage: promote.mjs check|gate|apply|notify (got ${mode ?? 'nothing'})`);
     }
   } catch (e) {
     const message = String(/** @type {Error} */ (e)?.message ?? e);

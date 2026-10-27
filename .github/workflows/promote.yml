@@ -23,6 +23,12 @@
 # the README's install command and the docs' `uses:` lines follow the stable channel, which only
 # this workflow moves (`scripts/doc-pins.mjs`; CI's check fails a reference to an untagged release).
 #
+# Last, `scripts/promote.mjs notify` tells the Owner of a held promotion (#1441): a candidate past
+# its soak that a gate holds gets one issue, `Promotion held: <candidate>`, assigned to whoever
+# merged its pin pull request, rewritten by each run, commented on only when the gates holding it
+# change, and closed once the candidate is promoted. A hold reports as a green run, so without it
+# a held candidate reached nobody (0.42.0 waited a week).
+#
 # The default branch only: the lane callers whose pins and runs the gates read are the default
 # branch's.
 name: Promote
@@ -62,10 +68,11 @@ jobs:
     # the lane callers' runs and jobs (`actions`) and their failed jobs' annotations (`checks`),
     # and the Reporter's `kanon-e2e` check runs on the candidate's commit (`checks`). The harness
     # run a check run links is in a public repository, read with the same token.
-    # The writes use the Releaser's token, minted below.
+    # `issues: write` is the held issue's alone (the notify step); the check reads issues with it.
+    # The promotion's writes use the Releaser's token, minted below.
     permissions:
       contents: read
-      issues: read
+      issues: write
       pull-requests: read
       actions: read
       checks: read
@@ -85,6 +92,7 @@ jobs:
           URGENT: ${{ inputs.urgent }}
           REASON: ${{ inputs.reason }}
           PLAN: ${{ runner.temp }}/promotion.json
+          OUTCOME: ${{ runner.temp }}/outcome.json
         run: node scripts/promote.mjs check
       # THE RELEASER'S TOKEN (plan 0005 §3.1, ADR 0013), only to promote, narrowed to Contents
       # write, for the tag, the Release, the major tag and the docs' branch and commit, and Pull
@@ -101,6 +109,7 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
       - name: Tag, publish and move the major tag
+        id: apply
         if: steps.gates.outputs.decision == 'promote'
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
@@ -157,3 +166,11 @@ jobs:
           body="Points the README's install command and every \`uses:\` line in the docs at \`$tag\`, the stable release this run promoted, with \`scripts/doc-pins.mjs move\`. A reader copies them from the default branch, so they follow the stable channel, never a candidate."
           url="$(gh pr create -R "$REPO" --base "$BASE" --head "$branch" --title "$title" --body "$body")"
           echo "Opened $url" >> "$GITHUB_STEP_SUMMARY"
+      # Runs after a failed docs step too: the promotion itself is done, and its issue closes.
+      - name: Tell the Owner of a held promotion
+        if: ${{ !cancelled() && steps.gates.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ runner.temp }}/outcome.json
+          APPLIED: ${{ steps.apply.outcome }}
+        run: node scripts/promote.mjs notify
