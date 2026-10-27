@@ -169,15 +169,20 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
   it('is called from exactly one place: a workflow that holds the mint and this call, and nothing else', () => {
     expect(call, `${agentFile} is called by no workflow`).toBeDefined();
     expect(more.map((c) => `${c.file}:${c.name}`)).toEqual([]);
-    // The spine's third job pushes the agent's commits with a token of its own (kanon#1383). The
-    // rebase lane's third sets the implementer status on the entry's pull request after its agent
-    // (#1379): it holds the key, so it runs only Kanon's Node and the action, never a checkout of
-    // the pull request or the agent (the check above, and `implementer-status.test.ts`).
-    const third = runFile === 'agent-lane.yml' ? ['push'] : runFile === 'rebase-run.yml' ? ['implementer-status'] : [];
-    expect(Object.keys(run.jobs ?? {}).sort()).toEqual([call.name, 'mint', ...third].sort());
-    for (const name of third.filter((n) => n === 'implementer-status')) {
-      expect(runsOthersCode(run.jobs![name]!), `${runFile}:${name}`).toBeUndefined();
-      expect(run.jobs![name]!.needs, `${runFile}:${name} runs after the agent's job`).toEqual([call.name]);
+    // The spine's third job pushes the agent's commits with a token of its own (kanon#1383), and
+    // so does the rebase lane's (kanon#1384), whose fourth sets the implementer status on the
+    // entry's pull request after its push (#1379). Each holds the key, so each runs only Kanon's
+    // Node, never a checkout of the pull request or the agent (the check above, `lane-push.test.ts`
+    // and `implementer-status.test.ts`).
+    const after = runFile === 'agent-lane.yml' ? ['push'] : runFile === 'rebase-run.yml' ? ['push', 'implementer-status'] : [];
+    expect(Object.keys(run.jobs ?? {}).sort()).toEqual([call.name, 'mint', ...after].sort());
+    if (runFile === 'rebase-run.yml') {
+      for (const name of after) {
+        expect(runsOthersCode(run.jobs![name]!), `${runFile}:${name}`).toBeUndefined();
+        expect(holdsKey(run.jobs![name]!), `${runFile}:${name}`).toBe(true);
+      }
+      expect(run.jobs!.push!.needs, `${runFile}:push runs after the agent's job`).toEqual([call.name]);
+      expect(run.jobs!['implementer-status']!.needs, `${runFile}:implementer-status runs after the push`).toEqual(['push']);
     }
     expect(Object.keys(run.on?.workflow_call?.secrets ?? {})).toEqual(expect.arrayContaining(['app-id', 'app-private-key', 'claude-token', 'anthropic-api-key']));
   });

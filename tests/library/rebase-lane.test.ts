@@ -401,8 +401,8 @@ describe('the prompt carries the rules that keep a resolution honest', () => {
     expect(prompt).toContain('--write-locked');
   });
 
-  it('requires the gates to be run on the MERGED tree before pushing', () => {
-    expect(prompt).toMatch(/VERIFY BEFORE YOU PUSH/);
+  it('requires the gates to be run on the MERGED tree before committing', () => {
+    expect(prompt).toMatch(/VERIFY BEFORE YOU COMMIT/);
     expect(prompt).toMatch(/not your side of it/);
     expect(prompt).toMatch(/every command the stack document's `## Gates` section lists/);
     expect(prompt).toMatch(/`## Schema changes`/);
@@ -418,8 +418,23 @@ describe('the prompt carries the rules that keep a resolution honest', () => {
     expect(prompt).toMatch(/do NOT guess/);
   });
 
-  it('forbids pushing conflict markers or an unverified tree', () => {
-    expect(prompt).toMatch(/[Nn]ever push a tree\s+with conflict markers/);
+  it('forbids committing conflict markers or an unverified tree', () => {
+    expect(prompt).toMatch(/[Nn]ever commit a tree\s+with conflict markers/);
+  });
+
+  it('commits the merge locally and leaves the push to the job after it (kanon#1384)', () => {
+    // The agent's token can't push (`[LANE-13]`); the push job re-creates the merge through GitHub.
+    expect(prompt).toMatch(/You do NOT\s+push/);
+    expect(prompt).toMatch(/a job after yours pushes what you committed/);
+    expect(prompt).not.toMatch(/\bgit push\b/);
+    // The push refuses a merge of any default-branch head but the one the job fetched (`[LANE-17]`).
+    expect(prompt).toMatch(/Never `git fetch`\s+or `git pull`/);
+    expect(prompt).toMatch(/one merge commit, its first parent the PR's head and its second\s+`origin\/main`/);
+    // Whatever is committed when the agent stops is pushed, a failed run's included (`[LANE-14]`).
+    expect(prompt).toMatch(/is pushed, even if your run fails/);
+    expect(prompt).toMatch(/git reset --hard origin\/<the PR's branch>/);
+    // GitHub's merge has another id than the agent's, so the comment cites none.
+    expect(prompt).toMatch(/Name no commit id of\s+your own/);
   });
 
   it('never merges the PR', () => {
