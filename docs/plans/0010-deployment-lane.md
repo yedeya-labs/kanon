@@ -58,7 +58,7 @@ The sketch's split, which this plan keeps: **Kanon owns the governance; the adop
 
 ## 3. The trigger
 
-**The caller's triggers** (`K-LAYOUT-18`: the caller holds them; the lane names them):
+**The caller's triggers** (the caller holds them, as an `agent-*` lane's does under `K-LAYOUT-18`; the lane names them):
 
 ```yaml
 on:

@@ -11,7 +11,7 @@
 # and `KANON_DEPLOY_SECRET`, which GitHub evaluates in `deploy.yml`'s job that sets
 # `environment:`, so it resolves to the environment's secret first (kanon#1049).
 #
-# THE CALLER'S TRIGGERS (`K-LAYOUT-18`) — this lane's contract with it:
+# THE CALLER'S TRIGGERS — this lane's contract with it:
 #   release:
 #     types: [published]        — a stable release and a pre-release alike (decision 4)
 #   workflow_dispatch:
