@@ -578,11 +578,12 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
         base: '${{ steps.push.outputs.base }}',
         checked: `\${{ steps.push.outputs.base && format('{{"pr":{0},"base":{1},"heads":{2}}}', toJSON(inputs.pr), toJSON(steps.push.outputs.base), toJSON(steps.push.outputs.heads)) || '' }}`,
       });
-      // The agent's job hands up no head and no `checked`: GitHub re-creates the agent's commits.
+      // The agent's job hands up no head and no `checked`: GitHub re-creates the agent's commits. Its
+      // `attempt` names only the bundle the push job reads (kanon#1465).
       expect(run.jobs.resolve!.uses).toBe('$/.github/workflows/rebase-agent-job.yml');
       const agentJob = called('rebase-agent-job.yml');
-      expect(Object.keys(agentJob.on.workflow_call.outputs ?? {}).sort()).toEqual(['commits', 'head-ref', 'merged', 'start']);
-      expect(Object.keys(agentJob.jobs.resolve!.outputs ?? {}).sort()).toEqual(['commits', 'head-ref', 'merged', 'start']);
+      expect(Object.keys(agentJob.on.workflow_call.outputs ?? {}).sort()).toEqual(['attempt', 'commits', 'head-ref', 'merged', 'start']);
+      expect(Object.keys(agentJob.jobs.resolve!.outputs ?? {}).sort()).toEqual(['attempt', 'commits', 'head-ref', 'merged', 'start']);
       type S = Step & { env?: Record<string, string>; if?: string };
       const steps = agentJob.jobs.resolve!.steps! as S[];
       const at = (id: string) => steps.findIndex((s) => s.id === id);

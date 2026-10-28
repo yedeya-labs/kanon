@@ -812,9 +812,20 @@ describe('the rebase lane\'s push job holds the key and runs nothing else (kanon
     expect(rebaseAgent.on.workflow_call.outputs.commits.value).toBe('${{ jobs.resolve.outputs.commits }}');
     // One artifact per matrix entry: every entry of the lane's matrix runs in the same run.
     const upload = rebaseSteps.find((s) => s.id === 'upload')!;
-    const download = steps.find((s) => String(s.uses ?? '').startsWith('actions/download-artifact@'))!;
     expect(upload.with?.name).toBe('kanon-push-${{ inputs.pr }}-${{ github.run_attempt }}');
-    expect(download.with?.name).toBe(upload.with?.name);
+  });
+
+  it('[LANE-14] on the rebase lane: re-run on its own, reads the bundle the agent\'s job uploaded in its attempt, of this run alone (kanon#1465)', () => {
+    const download = steps.find((s) => String(s.uses ?? '').startsWith('actions/download-artifact@'))!;
+    // The agent's job says which attempt it ran in, as an output a partial re-run reuses; the push
+    // job downloads that attempt's bundle for its pull request, never one from its own attempt.
+    expect(rebaseAgent.jobs.resolve.outputs.attempt).toBe('${{ github.run_attempt }}');
+    expect(rebaseAgent.on.workflow_call.outputs.attempt.value).toBe('${{ jobs.resolve.outputs.attempt }}');
+    expect(download.with?.name).toBe('kanon-push-${{ inputs.pr }}-${{ needs.resolve.outputs.attempt }}');
+    // An earlier attempt's artifact is read through the API, with this job's token, from this run only.
+    expect(download.with?.['run-id']).toBe('${{ github.run_id }}');
+    expect(download.with?.['github-token']).toBe('${{ steps.push-token.outputs.token }}');
+    expect(download.with).not.toHaveProperty('repository');
   });
 
   it('[LANE-14] on the rebase lane: runs no agent and no project code, checks nothing out, and moves the branch with the verified-commit helper', () => {
@@ -850,6 +861,7 @@ describe('the rebase lane\'s push job holds the key and runs nothing else (kanon
       'permission-contents': 'write',
       'permission-pull-requests': 'read',
       'permission-workflows': 'write',
+      'permission-actions': 'read',
     });
     expect(rebasePush?.env?.GH_TOKEN).toBe('${{ steps.push-token.outputs.token }}');
     expect(Object.values(job.outputs ?? {}).join(' ')).not.toMatch(/token/);

@@ -86,9 +86,10 @@ const MORE: Record<string, Perms> = {
   'agent-implement-revise.yml#fix-token': { contents: 'write', issues: 'write', 'pull-requests': 'write' },
   // The rebase lane's push job (kanon#1384, `[LANE-14]`): re-creates the agent's merge and moves the
   // pull request's branch (`contents`), which may carry the default branch's workflow changes
-  // (`workflows`), after it reads the pull request's head (`pull_requests: read`). Its job checks
-  // nothing out (`K-AGENT-49`).
-  'agent-rebase.yml#push-token': { contents: 'write', 'pull-requests': 'read', workflows: 'write' },
+  // (`workflows`), after it reads the pull request's head (`pull_requests: read`), and reads the
+  // bundle an earlier attempt of the run uploaded, when it is re-run alone (`actions: read`,
+  // kanon#1465). Its job checks nothing out (`K-AGENT-49`).
+  'agent-rebase.yml#push-token': { contents: 'write', 'pull-requests': 'read', workflows: 'write', actions: 'read' },
   // The split lane's push job (kanon#1385, `[LANE-14]`, `[LANE-18]`): replaces the split branch
   // (`contents`) and opens its pull request and labels it (`pull_requests`). The split writes only
   // `docs/projects/`, so no `workflows`. Its job checks nothing out (`K-AGENT-49`). The probe mints
