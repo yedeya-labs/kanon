@@ -46,7 +46,8 @@ describe('a closing pull request from another repository (kanon#1412)', () => {
     // No #9 here at all: before, the read threw on every tick and the project never closed.
     const io = fakeReads({ closedBy: { 1: [{ number: 9, repo: OTHER, state: 'MERGED' }] }, prs: {} }, { repo: REPO });
     const d = await readDeploy(CLOSED, { ...io, declared: () => DECLARED });
-    expect(d).toEqual({ state: 'merged-elsewhere', merges: [{ issue: 1, number: 9, repo: OTHER }] });
+    // Nothing here closed the issue, so nothing here is owed a deploy (kanon#1435).
+    expect(d).toEqual({ state: 'merged-elsewhere', here: 'nothing-to-deploy', merges: [{ issue: 1, number: 9, repo: OTHER }] });
   });
 
   it('holds even when this repository\'s own merges deployed: the release cannot hold the other repository\'s work', async () => {
@@ -57,10 +58,31 @@ describe('a closing pull request from another repository (kanon#1412)', () => {
     }, { repo: REPO });
     const d = await readDeploy(CLOSED, { ...io, declared: () => DECLARED });
     expect(d.state).toBe('merged-elsewhere');
+    // kanon#1435: the hold carries this repository's own verdict, so its message can name it.
+    expect(d).toMatchObject({ here: 'deployed', tag: 'v1.0.0', url: 'u1', environment: 'staging' });
     expect(mergeReadsOf(io.seen, 9)).toEqual([]);
     // The control: without the other repository's merge, the same world deploys.
     const own = fakeReads({ ...deployedWorld, closedBy: { 1: [7] }, prs: { 7: { state: 'MERGED', mergeCommit: { oid: SHA_HERE } } } }, { repo: REPO });
     expect((await readDeploy(CLOSED, { ...own, declared: () => DECLARED })).state).toBe('deployed');
+  });
+
+  // kanon#1435: the hold used to return before this repository's own merges were walked, so
+  // a project whose own work never shipped was handed to a human to close on the other
+  // repository's deploy alone.
+  it.each([
+    ['no release contains them', { releases: [] }, 'awaiting-release'],
+    ['their release failed to deploy', { jobs: { 1: [{ name: 'deploy', conclusion: 'failure' }] } }, 'failed'],
+    ['their release\'s deploy was skipped', { jobs: { 1: [{ name: 'deploy', conclusion: 'skipped' }] } }, 'gate-declined'],
+  ])('reports this repository\'s own state, not the hold, when %s', async (_w, world, state) => {
+    const io = fakeReads({
+      ...deployedWorld,
+      ...world,
+      closedBy: { 1: [7, { number: 9, repo: OTHER, state: 'MERGED' }] },
+      prs: { 7: { state: 'MERGED', mergeCommit: { oid: SHA_HERE } } },
+    }, { repo: REPO });
+    const d = await readDeploy(CLOSED, { ...io, declared: () => DECLARED });
+    expect(d.state).toBe(state);
+    expect(d).not.toHaveProperty('merges');
   });
 
   it('ignores one that hasn\'t merged, as an unmerged pull request here is ignored', async () => {

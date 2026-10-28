@@ -1021,6 +1021,20 @@ describe('phases 4 and 6 — deploy watch, then close (RA-1056)', () => {
       expect(r.stopped).toContain('someone-else/other-repo#9');
     });
 
+    it.each([
+      ['deployed', { here: 'deployed', tag: 'v1.2.3', url: 'https://run/1' }, /own merges for the project are deployed: `v1\.2\.3` reached .*https:\/\/run\/1/],
+      ['deployed after its own release failed', { here: 'deployed', tag: 'v1.2.4', url: 'u', failedAt: 'v1.2.3', failedUrl: 'f' }, /own release `v1\.2\.3` FAILED to deploy \(f\)/],
+      ['nothing to deploy', { here: 'nothing-to-deploy' }, /No merge in this repository closed the project's issues/],
+      ['an unknown verdict', {}, /own merges for the project are deployed is UNKNOWN/],
+    ])('the cross-repository hold says what this repository\'s own merges did when %s, and that phase 5 never ran (kanon#1435)', (_w, here, re) => {
+      const r = nextActions(allClosed({ deploy: { state: 'merged-elsewhere', merges: [{ issue: 1, number: 9, repo: 'someone-else/other-repo' }], ...here } }));
+      expect(r.escalate?.[0]).toMatch(re);
+      expect(r.escalate?.[0]).toMatch(/Phase 5 has NOT run/);
+      // Never "close once that work is deployed" alone: the acceptance criteria were never checked.
+      expect(r.escalate?.[0]).toMatch(/only once that work is deployed where it lives AND you have verified the project's acceptance criteria yourself/);
+      expect(r.escalate?.[0]).not.toMatch(/Once that work is deployed where it lives, close this project by hand/);
+    });
+
     it('is idempotent for nothing-to-deploy too, not only for deployed', () => {
       // `trackingClosed` was derived only when the state was `deployed`, so this
       // path kept `undefined` forever: `phaseOf` returned `close` every tick and
