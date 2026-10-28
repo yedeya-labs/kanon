@@ -5,13 +5,17 @@
 //   node "$KANON/infra/status/deploy.mjs" --artifact <the build> --bucket <artifacts bucket> \
 //     --role-arn <CloudFormation service role> --release <tag> --client-id <the App's client id> \
 //     [--secret-parameter <name>] [--redirects <list>] [--reserved-concurrency <n>] \
-//     [--permissions-boundary-arn <arn>] [--region eu-central-1]
+//     [--permissions-boundary-arn <arn>] [--legacy-deprecated-since <YYYY-MM-DD>] [--region eu-central-1]
 //
 // It packages the build (`build.mjs`'s output) into the artifacts bucket, deploys the stack
 // `kanon-status` through the service role, and prints the stack's status and the server's address,
 // and nothing else. Every template parameter is passed on every deploy, from the environment's
 // variables the hook maps to these flags, so a variable removed resets its parameter rather than
 // keeping the last deploy's value.
+//
+// THE DATE 2025-11-25 WAS DEPRECATED (#1423), which every answer at that MCP revision carries, is
+// `--legacy-deprecated-since`. With none, it is this deploy's own date, in UTC: the first deploy
+// ships the deprecation, so the operator sets the variable to that date to keep it.
 //
 // NO SECRET PASSES THROUGH IT (the Owner's Q1, 2026-10-26). The status App's client secret is an
 // SSM parameter the Owner puts by hand, and only its name is a parameter. So the hook needs no
@@ -33,7 +37,7 @@ export const COMPLETE = ['CREATE_COMPLETE', 'UPDATE_COMPLETE'];
  * @typedef {{
  *   artifact: string, packaged: string, bucket: string, roleArn: string, region: string,
  *   release: string, clientId: string, secretParameter: string, redirects: string,
- *   reservedConcurrency: string, permissionsBoundaryArn: string,
+ *   reservedConcurrency: string, permissionsBoundaryArn: string, deprecatedSince: string,
  * }} Options
  */
 
@@ -48,7 +52,7 @@ export function commands(o) {
     ['cloudformation', 'deploy', '--region', o.region, '--stack-name', STACK, '--template-file', o.packaged, '--role-arn', o.roleArn,
       '--capabilities', 'CAPABILITY_NAMED_IAM', '--no-fail-on-empty-changeset', '--parameter-overrides',
       `GitHubClientId=${o.clientId}`, `GitHubClientSecretParameter=${o.secretParameter}`, `Redirects=${o.redirects}`, `Release=${o.release}`,
-      `ReservedConcurrency=${o.reservedConcurrency}`, `PermissionsBoundaryArn=${o.permissionsBoundaryArn}`],
+      `ReservedConcurrency=${o.reservedConcurrency}`, `PermissionsBoundaryArn=${o.permissionsBoundaryArn}`, `LegacyDeprecatedSince=${o.deprecatedSince}`],
   ];
 }
 
@@ -72,11 +76,14 @@ const usage = (message) => {
 
 if (isCliEntry(import.meta.url)) {
   const { values: v } = parseArgs({
-    options: Object.fromEntries(['artifact', 'bucket', 'role-arn', 'release', 'client-id', 'secret-parameter', 'redirects', 'reserved-concurrency', 'permissions-boundary-arn', 'region'].map((k) => [k, { type: 'string' }])),
+    options: Object.fromEntries(['artifact', 'bucket', 'role-arn', 'release', 'client-id', 'secret-parameter', 'redirects', 'reserved-concurrency', 'permissions-boundary-arn', 'legacy-deprecated-since', 'region'].map((k) => [k, { type: 'string' }])),
   });
   for (const k of ['artifact', 'bucket', 'role-arn', 'release', 'client-id']) if (!v[k]) usage(`--${k} is required`);
   if (!/^arn:aws[a-z-]*:iam::\d{12}:role\/[\w+=,.@/-]+$/.test(String(v['role-arn']))) usage('--role-arn is a role ARN: the CloudFormation service role the bootstrap stack holds');
   if (v['reserved-concurrency'] && !/^[1-9]\d*$/.test(String(v['reserved-concurrency']))) usage('--reserved-concurrency is a whole number of 1 or more');
+  const since = String(v['legacy-deprecated-since'] || new Date().toISOString().slice(0, 10));
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(since) ? Date.parse(`${since}T00:00:00Z`) : NaN;
+  if (!Number.isFinite(day) || new Date(day).toISOString().slice(0, 10) !== since) usage('--legacy-deprecated-since is a date, YYYY-MM-DD');
   const region = String(v.region || 'eu-central-1');
   /** @type {Options} */
   const options = {
@@ -91,6 +98,7 @@ if (isCliEntry(import.meta.url)) {
     redirects: String(v.redirects ?? ''),
     reservedConcurrency: String(v['reserved-concurrency'] || '4'),
     permissionsBoundaryArn: String(v['permissions-boundary-arn'] ?? ''),
+    deprecatedSince: since,
   };
   try {
     // `aws`'s own output names the stack's resources and the change set, so it isn't printed.

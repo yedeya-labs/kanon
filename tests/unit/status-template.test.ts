@@ -76,7 +76,11 @@ describe("the hosted status server's template", () => {
     expect(vars[ENV.secretParameter]).toEqual({ Ref: 'GitHubClientSecretParameter' });
     expect(vars[ENV.redirects]).toEqual({ Ref: 'Redirects' });
     expect(vars[ENV.release]).toEqual({ Ref: 'Release' });
-    expect(Object.keys(P).sort()).toEqual(['GitHubClientId', 'GitHubClientSecretParameter', 'PermissionsBoundaryArn', 'Redirects', 'Release', 'ReservedConcurrency']);
+    expect(vars[ENV.deprecated]).toEqual({ Ref: 'LegacyDeprecatedSince' });
+    expect(Object.keys(P).sort()).toEqual(['GitHubClientId', 'GitHubClientSecretParameter', 'LegacyDeprecatedSince', 'PermissionsBoundaryArn', 'Redirects', 'Release', 'ReservedConcurrency']);
+    // The deprecation's date has no default: every deploy passes one.
+    expect(P.LegacyDeprecatedSince).toMatchObject({ Type: 'String', AllowedPattern: '^\\d{4}-\\d{2}-\\d{2}$' });
+    expect(P.LegacyDeprecatedSince).not.toHaveProperty('Default');
     expect(Object.values(P).filter((p: J) => p.NoEcho)).toEqual([]);
     // The parameter is a name under /kanon-status/, which the Owner puts by hand (Q1).
     expect(P.GitHubClientSecretParameter.Default).toBe('/kanon-status/github-client-secret');

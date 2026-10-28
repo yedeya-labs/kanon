@@ -22,6 +22,7 @@ export const STATUS_ENV = {
   [ENV.secretParameter]: '/kanon-status/github-client-secret',
   [ENV.redirects]: '',
   [ENV.release]: 'v0.43.0',
+  [ENV.deprecated]: '2026-11-02',
 };
 
 export type AwsCall = { url: string, target: string, body: Record<string, unknown>, authorization: string };

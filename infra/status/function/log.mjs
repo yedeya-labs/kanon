@@ -1,6 +1,7 @@
 // The hosted status server's log (project #1327, Issue H, `[MCP-8]`): one JSON line per request,
-// and only these fields: the route, the MCP method, the tool, the outcome, the duration, the
-// number of GitHub requests and GitHub's remaining rate limit.
+// and only these fields: the route, the MCP method, the protocol era, the tool, the outcome, the
+// duration, the number of GitHub requests and GitHub's remaining rate limit. The era counts
+// 2025-11-25's deprecated use before its removal date is chosen (#1423).
 //
 // EVERY VALUE IS FROM A CLOSED LIST OR A NUMBER. A route, a method or a tool the server doesn't
 // know is `other`, so a client's own text never reaches the log; nor does a token, a login, an
@@ -9,7 +10,10 @@
 import { METHODS, TOOLS } from './index.mjs';
 
 /** The fields of a line, in order. */
-export const FIELDS = ['route', 'method', 'tool', 'outcome', 'durationMs', 'githubRequests', 'rateLimitRemaining'];
+export const FIELDS = ['route', 'method', 'era', 'tool', 'outcome', 'durationMs', 'githubRequests', 'rateLimitRemaining'];
+
+/** The revision an `/mcp` request was served at: 2026-07-28 or 2025-11-25 (`index.mjs`'s `eraOf`). */
+export const ERAS = ['modern', 'legacy'];
 
 /** The server's routes, as a line names them. */
 export const ROUTES = ['/mcp', '/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server', '/register', '/authorize', '/callback', '/token', 'other'];
@@ -25,7 +29,7 @@ export const OUTCOMES = [
   'invalid_target', 'invalid_redirect_uri', 'invalid_client_metadata', 'access_denied', 'not_found', 'error', 'other',
 ];
 
-const KNOWN_METHODS = [...Object.keys(METHODS), 'notification', 'response'];
+const KNOWN_METHODS = [...new Set(Object.values(METHODS).flatMap((m) => Object.keys(m))), 'notification', 'response'];
 const KNOWN_TOOLS = TOOLS.map((t) => t.name);
 
 /** A count, or null. @param {unknown} n */
@@ -33,13 +37,14 @@ const count = (n) => (typeof n === 'number' && Number.isFinite(n) ? Math.max(0, 
 
 /**
  * One request's line.
- * @param {{ route?: unknown, method?: unknown, tool?: unknown, outcome?: unknown, durationMs?: unknown, githubRequests?: unknown, rateLimitRemaining?: unknown }} note
+ * @param {{ route?: unknown, method?: unknown, era?: unknown, tool?: unknown, outcome?: unknown, durationMs?: unknown, githubRequests?: unknown, rateLimitRemaining?: unknown }} note
  */
-export function logLine({ route, method, tool, outcome, durationMs, githubRequests, rateLimitRemaining }) {
+export function logLine({ route, method, era, tool, outcome, durationMs, githubRequests, rateLimitRemaining }) {
   const prm = typeof route === 'string' && route.startsWith('/.well-known/oauth-protected-resource') ? '/.well-known/oauth-protected-resource' : route;
   return JSON.stringify({
     route: ROUTES.includes(/** @type {string} */ (prm)) ? prm : 'other',
     method: method === null || method === undefined ? null : KNOWN_METHODS.includes(/** @type {string} */ (method)) ? method : 'other',
+    era: ERAS.includes(/** @type {string} */ (era)) ? era : null,
     tool: tool === null || tool === undefined ? null : KNOWN_TOOLS.includes(/** @type {string} */ (tool)) ? tool : 'other',
     outcome: OUTCOMES.includes(/** @type {string} */ (outcome)) ? outcome : 'other',
     durationMs: count(durationMs) ?? 0,

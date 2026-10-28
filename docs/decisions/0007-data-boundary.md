@@ -64,7 +64,7 @@ Written as rules `K-OBS-16`, `K-OBS-17` and `K-OBS-18` in [chapter 08](../../rul
 - **What it returns:** only numbers, titles, states, labels, check names and links, and the counts and times computed from them. It returns no comment or issue body. A tool's error may carry GitHub's own error message, such as "Not Found", which is returned to the person and never logged.
 - **What it reads and doesn't return:** a body it reads to find a Kanon marker is held in memory only, in decision 5's per-person cache, and is never returned or logged. It is never used after 60 seconds, and it leaves memory the next time that container uses its cache, or when the container is discarded.
 - **What it keeps:** nothing at rest: no token, no answer, no body. A person's GitHub tokens exist only inside the tokens it issues, encrypted under its KMS key.
-- **What it logs:** one line per request, with the route or method, the tool, the outcome, the duration, the GitHub request count and the remaining rate limit, and never a token, a login or text read from GitHub (`[MCP-8]`, [`docs/status.md`](../status.md#what-the-server-logs)).
+- **What it logs:** one line per request, with the route or method, the MCP protocol era, the tool, the outcome, the duration, the GitHub request count and the remaining rate limit, and never a token, a login or text read from GitHub (`[MCP-8]`, [`docs/status.md`](../status.md#what-the-server-logs)).
 
 ## Why
 

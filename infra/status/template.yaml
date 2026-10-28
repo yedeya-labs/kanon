@@ -39,9 +39,13 @@ Parameters:
     Default: ''
   Release:
     Type: String
-    Description: The Kanon release deployed, which the server's initialize answer names.
+    Description: The Kanon release deployed, which the server's identity names.
     AllowedPattern: '^[A-Za-z0-9._+-]{1,64}$'
     Default: unreleased
+  LegacyDeprecatedSince:
+    Type: String
+    Description: The date MCP protocol revision 2025-11-25 was deprecated, YYYY-MM-DD, which every answer at that revision carries as its Deprecation header (docs/status.md). No default, so every deploy passes it.
+    AllowedPattern: '^\d{4}-\d{2}-\d{2}$'
   ReservedConcurrency:
     Type: Number
     Description: The function's reserved concurrency. Its URL is public, so the reservation bounds what a flood can cost, and it is always set.
@@ -188,6 +192,7 @@ Resources:
           CLIENT_SECRET_PARAMETER: { Ref: GitHubClientSecretParameter }
           REDIRECTS: { Ref: Redirects }
           RELEASE: { Ref: Release }
+          LEGACY_DEPRECATED_SINCE: { Ref: LegacyDeprecatedSince }
 
   # The server does its own OAuth (Issue H), so its URL takes no IAM auth.
   StatusUrl:

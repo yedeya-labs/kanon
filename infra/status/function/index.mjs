@@ -8,13 +8,27 @@
 // A view whose reads didn't complete answers with its `{ error, reads }` section, as the tool's
 // error (`[STAT-3]`).
 //
-// THE TRANSPORT (`[MCP-1]`). One endpoint, `/mcp`, by POST, at the protocol version
-// `PROTOCOL_VERSION`, which docs/status.md names. A request is answered with one JSON object: the
-// four methods in `METHODS`, and method-not-found for any other. A notification, or a client's
-// response, is accepted with 202 and no body, whatever its method, and reads nothing. The server
-// is stateless: it mints no session, offers no stream to GET, and has no session to DELETE, so
-// both are 405. A request carrying an `Origin` is a browser page's, and is refused with 403, as the
-// transport's DNS-rebinding rule asks; the server's clients send none.
+// THE TRANSPORT (`[MCP-1]`). One endpoint, `/mcp`, by POST, at the two protocol revisions in
+// `PROTOCOL_VERSIONS`, which docs/status.md names (the Owner's decision on #1423). A request is
+// answered with one JSON object: its revision's methods in `METHODS`, and method-not-found for any
+// other. A notification, or a client's response, is accepted with 202 and no body, whatever its
+// method, and reads nothing. The server is stateless: it mints no session, offers no stream to
+// GET, and has no session to DELETE, so both are 405. A request carrying an `Origin` is a browser
+// page's, and is refused with 403, as the transport's DNS-rebinding rule asks; the server's
+// clients send none.
+//
+// TWO REVISIONS ON ONE ENDPOINT, a dual-era server as 2026-07-28's "Versioning" allows. A request
+// is served at the version its `_meta` names, or, with none there, its `MCP-Protocol-Version`
+// header (`eraOf`):
+//   - 2026-07-28, "modern": stateless, with no handshake. Every request carries its version and
+//     the client's capabilities in `_meta`, and its headers mirror its body (`Mcp-Method`, and
+//     `Mcp-Name` for a call); one that doesn't match is 400 and HeaderMismatch. Every result has
+//     `resultType`, the server's identity in its `_meta`, and the list's caching hints.
+//   - 2025-11-25, "legacy", also a request naming no version, as an older client's `initialize`
+//     does: answered as #1421 built it, and DEPRECATED from the first deploy. Every answer carries
+//     `Deprecation` (RFC 9745), dated by the deploy, and a `Link` to the note in docs/status.md, and
+//     `initialize`'s instructions say so. No `Sunset` until a removal date is chosen.
+//   - any other version is 400 and UnsupportedProtocolVersionError, naming the two.
 //
 // NOTHING WRITES (`[MCP-3]`). No tool, method or route writes to GitHub, and the handler keeps
 // nothing: no table, no bucket, no file. What the reader asks is GETs and GraphQL queries alone.
@@ -39,8 +53,22 @@ import { Buffer } from 'node:buffer';
 import { REPO_PATTERN, ownerAndName } from '../../../scripts/status/reader.mjs';
 import { VIEWS, section } from '../../../scripts/status/views.mjs';
 
-/** The MCP protocol version the server speaks, as docs/status.md names it. */
-export const PROTOCOL_VERSION = '2025-11-25';
+/** The stateless MCP protocol revision the server serves, as docs/status.md names it. */
+export const MODERN_VERSION = '2026-07-28';
+/** The handshake revision it also serves, deprecated, as docs/status.md names it. */
+export const LEGACY_VERSION = '2025-11-25';
+/** The revisions the server serves, newest first, as `server/discover` and a refusal list them. */
+export const PROTOCOL_VERSIONS = [MODERN_VERSION, LEGACY_VERSION];
+
+/** Where a deprecated answer's `Link` points: the note in docs/status.md. */
+export const DEPRECATION_NOTE = 'https://github.com/yedeya-labs/kanon/blob/main/docs/status.md#the-2025-11-25-revision-is-deprecated';
+
+/** 2026-07-28's `_meta` keys, on a request and on a result. */
+const META = {
+  version: 'io.modelcontextprotocol/protocolVersion',
+  capabilities: 'io.modelcontextprotocol/clientCapabilities',
+  serverInfo: 'io.modelcontextprotocol/serverInfo',
+};
 
 /** The one endpoint's path. */
 export const MCP_PATH = '/mcp';
@@ -50,6 +78,9 @@ const PARSE_ERROR = -32700;
 const INVALID_REQUEST = -32600;
 const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS = -32602;
+/** 2026-07-28's: a header that doesn't match the body, and a version the server doesn't serve. */
+const HEADER_MISMATCH = -32020;
+const UNSUPPORTED_PROTOCOL_VERSION = -32022;
 
 /** A repository, `owner/name`, as `kanon status --repo` takes one: the core's own pattern. */
 const REPO = { type: 'string', pattern: REPO_PATTERN, description: 'The repository, `owner/name`.' };
@@ -125,9 +156,11 @@ const annotations = (/** @type {Tool} */ t) => ({ title: t.title, readOnlyHint: 
  *   now?: () => Date,
  *   release?: string,
  *   reach?: ((repo: string) => Promise<string | null>) | null,
+ *   deprecated?: string | null,
  * }} Deps the person's reader, the clock, the Kanon release the server runs, as its wrapper knows
- *   it, and what says whether the status App reaches a repository with the person's access: null
- *   when it does, else why not
+ *   it, what says whether the status App reaches a repository with the person's access: null
+ *   when it does, else why not, and the date 2025-11-25 was deprecated, `YYYY-MM-DD`, as the
+ *   deploy names it
  * @typedef {{ statusCode: number, headers: Record<string, string>, body: string }} Reply
  */
 
@@ -138,51 +171,138 @@ const empty = (statusCode, headers = {}) => ({ statusCode, headers, body: '' });
 /** A JSON-RPC error. @param {string | number | null} id @param {number} code @param {string} message */
 const failure = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
 
+/** What the server can do: tools, and the list never changes while it runs. */
+const CAPABILITIES = { tools: { listChanged: false } };
+/** What a client shows the model about the server. */
+const INSTRUCTIONS = 'Kanon status, read-only: where a repository that runs Kanon stands, read live from GitHub with your own access. Every tool takes the repository as `owner/name`.';
+/** Who the server is. @param {string} release */
+const serverInfo = (release) => ({ name: 'kanon-status', title: 'Kanon status', version: release });
 /**
- * The four methods the server answers, each a request's `result`, or a JSON-RPC error as
- * `{ error }`.
- * @type {Record<string, (params: any, deps: Required<Deps>) => Promise<unknown> | unknown>}
+ * A cacheable 2026-07-28 result's hints: the tool list and the discovery are the same for every
+ * person and change only with a deploy, so any cache may hold them for an hour.
+ */
+const CACHE = { ttlMs: 3_600_000, cacheScope: 'public' };
+const listTools = () => ({
+  tools: TOOLS.map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema, annotations: annotations(t) })),
+});
+
+/**
+ * The methods the server answers at each revision, each a request's `result`, or a JSON-RPC
+ * error as `{ error }`.
+ * @type {Record<string, Record<string, (params: any, deps: Required<Omit<Deps, 'deprecated'>>) => Promise<unknown> | unknown>>}
  */
 export const METHODS = {
-  initialize: (_params, { release }) => ({
-    // The one version the server speaks, whatever version the client asked for: a client that
-    // can't speak it disconnects.
-    protocolVersion: PROTOCOL_VERSION,
-    capabilities: { tools: { listChanged: false } },
-    serverInfo: { name: 'kanon-status', title: 'Kanon status', version: release },
-    instructions: 'Kanon status, read-only: where a repository that runs Kanon stands, read live from GitHub with your own access. Every tool takes the repository as `owner/name`.',
-  }),
-  ping: () => ({}),
-  'tools/list': () => ({
-    tools: TOOLS.map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema, annotations: annotations(t) })),
-  }),
-  'tools/call': (params, deps) => callTool(params, deps),
+  [MODERN_VERSION]: {
+    'server/discover': () => ({ supportedVersions: PROTOCOL_VERSIONS, capabilities: CAPABILITIES, instructions: INSTRUCTIONS, ...CACHE }),
+    'tools/list': () => ({ ...listTools(), ...CACHE }),
+    'tools/call': (params, deps) => callTool(params, deps),
+  },
+  [LEGACY_VERSION]: {
+    initialize: (_params, { release }) => ({
+      // 2025-11-25, whatever version the client asked for: a client that can't speak it
+      // disconnects.
+      protocolVersion: LEGACY_VERSION,
+      capabilities: CAPABILITIES,
+      serverInfo: serverInfo(release),
+      instructions: `${INSTRUCTIONS} This server's MCP protocol revision ${LEGACY_VERSION} is deprecated: use ${MODERN_VERSION}, which it also serves.`,
+    }),
+    ping: () => ({}),
+    'tools/list': () => listTools(),
+    'tools/call': (params, deps) => callTool(params, deps),
+  },
 };
 
 /**
- * The handler: one function URL event in, one reply out.
+ * The headers on every answer served at 2025-11-25: `Deprecation` (RFC 9745), as the date the
+ * deploy names, and the `Link` to the note. No `Sunset` until a removal date is chosen.
+ * @param {string | null} since the date, `YYYY-MM-DD`, or null when the caller gives none
+ * @returns {Record<string, string>}
+ */
+export function deprecationHeaders(since) {
+  const at = since ? Date.parse(`${since}T00:00:00Z`) : NaN;
+  return {
+    ...(Number.isFinite(at) ? { deprecation: `@${at / 1000}` } : {}),
+    link: `<${DEPRECATION_NOTE}>; rel="deprecation"; type="text/html"`,
+  };
+}
+
+/** A request's headers, by lower-case name. @param {any} event @returns {Record<string, string>} */
+const headersOf = (event) => Object.fromEntries(Object.entries(event?.headers ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
+
+/** A request's body, parsed, or null when it isn't JSON. @param {any} event @returns {{ value: any } | null} */
+function messageOf(event) {
+  try {
+    return { value: JSON.parse(bodyOf(event)) };
+  } catch {
+    return null;
+  }
+}
+
+/** The version a message's `_meta` names, if it names one. @param {any} message */
+const metaVersionOf = (message) => {
+  const meta = message?.params?._meta;
+  return meta !== null && typeof meta === 'object' && Object.hasOwn(meta, META.version) ? meta[META.version] : undefined;
+};
+
+/**
+ * The revision a request is served at: the version its `_meta` names, or with none there its
+ * `MCP-Protocol-Version` header. `modern` is 2026-07-28; `legacy` is 2025-11-25, and a request
+ * naming no version, as an older client's first request; null is a version the server doesn't serve.
+ * @param {Record<string, string>} headers @param {unknown} message
+ * @returns {'modern' | 'legacy' | null}
+ */
+function eraFrom(headers, message) {
+  const meta = metaVersionOf(message);
+  const asked = meta !== undefined ? meta : headers['mcp-protocol-version'];
+  if (asked === MODERN_VERSION) return 'modern';
+  if (asked === undefined || asked === LEGACY_VERSION) return 'legacy';
+  return null;
+}
+
+/** The revision an `/mcp` request is served at, for the handler and the log. @param {any} event */
+export const eraOf = (event) => eraFrom(headersOf(event), messageOf(event)?.value);
+
+/**
+ * The handler: one function URL event in, one reply out. Every answer at 2025-11-25 carries the
+ * deprecation's headers.
  * @param {any} event a function URL event (payload 2.0)
  * @param {Deps} deps
  * @returns {Promise<Reply>}
  */
-export async function handle(event, { reader, now = () => new Date(), release = 'unreleased', reach = null }) {
-  const headers = Object.fromEntries(Object.entries(event?.headers ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
+export async function handle(event, { reader, now = () => new Date(), release = 'unreleased', reach = null, deprecated = null }) {
   if ((event?.rawPath ?? event?.requestContext?.http?.path) !== MCP_PATH) return empty(404);
+  const headers = headersOf(event);
+  const parsed = messageOf(event);
+  const era = eraFrom(headers, parsed?.value);
+  const reply = await answer(event, headers, parsed, era, { reader, now, release, reach });
+  return era === 'legacy' ? { ...reply, headers: { ...reply.headers, ...deprecationHeaders(deprecated) } } : reply;
+}
+
+/**
+ * One request's answer, at its revision.
+ * @param {any} event @param {Record<string, string>} headers @param {{ value: any } | null} parsed
+ * @param {'modern' | 'legacy' | null} era @param {Required<Omit<Deps, 'deprecated'>>} deps
+ * @returns {Promise<Reply>}
+ */
+async function answer(event, headers, parsed, era, deps) {
   if (headers.origin !== undefined) return json(403, failure(null, INVALID_REQUEST, 'a request from a browser page is refused'));
   if (event?.requestContext?.http?.method !== 'POST') return empty(405, { allow: 'POST' });
-  const version = headers['mcp-protocol-version'];
-  if (version !== undefined && version !== PROTOCOL_VERSION) {
-    return json(400, failure(null, INVALID_REQUEST, `unsupported protocol version ${version}; this server speaks ${PROTOCOL_VERSION}`));
-  }
 
   /** @type {any} */
-  let message;
-  try {
-    message = JSON.parse(bodyOf(event));
-  } catch {
-    return json(400, failure(null, PARSE_ERROR, 'the body is not JSON'));
+  const message = parsed?.value;
+  const idOf = () => (typeof message?.id === 'string' || typeof message?.id === 'number' ? message.id : null);
+  const header = headers['mcp-protocol-version'];
+  const meta = metaVersionOf(message);
+  if (meta !== undefined && header !== undefined && meta !== header) {
+    return json(400, failure(idOf(), HEADER_MISMATCH, `the MCP-Protocol-Version header, ${header}, doesn't match the request's _meta, ${String(meta)}`));
   }
-  if (Array.isArray(message)) return json(400, failure(null, INVALID_REQUEST, `a batch is not accepted at protocol version ${PROTOCOL_VERSION}`));
+  if (era === null) {
+    const requested = String(meta !== undefined ? meta : header);
+    return json(400, { jsonrpc: '2.0', id: idOf(), error: { code: UNSUPPORTED_PROTOCOL_VERSION, message: `unsupported protocol version ${requested}`, data: { supported: PROTOCOL_VERSIONS, requested } } });
+  }
+
+  if (!parsed) return json(400, failure(null, PARSE_ERROR, 'the body is not JSON'));
+  if (Array.isArray(message)) return json(400, failure(null, INVALID_REQUEST, 'a batch is not accepted'));
   if (message === null || typeof message !== 'object' || message.jsonrpc !== '2.0') return json(400, failure(null, INVALID_REQUEST, 'the body is not a JSON-RPC 2.0 message'));
 
   const hasId = Object.hasOwn(message, 'id');
@@ -197,16 +317,60 @@ export async function handle(event, { reader, now = () => new Date(), release = 
   }
 
   const { id, method, params } = message;
-  const run = Object.hasOwn(METHODS, method) ? METHODS[method] : undefined;
-  if (!run) return json(200, failure(id, METHOD_NOT_FOUND, `method not found: ${method}`));
-  const answer = /** @type {any} */ (await run(params ?? {}, { reader, now, release, reach }));
-  return json(200, answer && Object.hasOwn(answer, 'error') ? { jsonrpc: '2.0', id, error: answer.error } : { jsonrpc: '2.0', id, result: answer });
+  if (era === 'modern') {
+    const wrong = mismatchOf(headers, method, params);
+    if (wrong) return json(400, failure(id, HEADER_MISMATCH, wrong));
+    const m = params?._meta;
+    if (typeof m?.[META.version] !== 'string' || m[META.capabilities] === null || typeof m[META.capabilities] !== 'object' || Array.isArray(m[META.capabilities])) {
+      return json(400, failure(id, INVALID_PARAMS, `a ${MODERN_VERSION} request's _meta carries ${META.version} and ${META.capabilities}`));
+    }
+  }
+  const methods = METHODS[era === 'modern' ? MODERN_VERSION : LEGACY_VERSION] ?? {};
+  const run = Object.hasOwn(methods, method) ? methods[method] : undefined;
+  // 2026-07-28 answers a method it doesn't serve with 404; 2025-11-25 with 200.
+  if (!run) return json(era === 'modern' ? 404 : 200, failure(id, METHOD_NOT_FOUND, `method not found: ${method}`));
+  const result = /** @type {any} */ (await run(params ?? {}, deps));
+  if (result && Object.hasOwn(result, 'error')) return json(200, { jsonrpc: '2.0', id, error: result.error });
+  if (era !== 'modern') return json(200, { jsonrpc: '2.0', id, result });
+  return json(200, { jsonrpc: '2.0', id, result: { resultType: 'complete', ...result, _meta: { ...result._meta, [META.serverInfo]: serverInfo(deps.release) } } });
+}
+
+/** The body field each 2026-07-28 method's `Mcp-Name` header mirrors. */
+const NAMED = { 'tools/call': 'name', 'prompts/get': 'name', 'resources/read': 'uri' };
+
+/**
+ * What doesn't match between a 2026-07-28 request's headers and its body, or null: its
+ * `MCP-Protocol-Version`, its `Mcp-Method`, and, for a call, its `Mcp-Name`, which may come
+ * base64-encoded as `=?base64?…?=`.
+ * @param {Record<string, string>} headers @param {string} method @param {any} params
+ * @returns {string | null}
+ */
+function mismatchOf(headers, method, params) {
+  if (headers['mcp-protocol-version'] === undefined) return 'the MCP-Protocol-Version header is missing';
+  if (headers['mcp-method'] !== method) return headers['mcp-method'] === undefined ? 'the Mcp-Method header is missing' : "the Mcp-Method header doesn't match the request's method";
+  const field = Object.hasOwn(NAMED, method) ? NAMED[/** @type {keyof typeof NAMED} */ (method)] : null;
+  if (!field) return null;
+  const raw = headers['mcp-name'];
+  if (raw === undefined) return 'the Mcp-Name header is missing';
+  if (headerValue(raw) !== params?.[field]) return `the Mcp-Name header doesn't match the request's ${field}`;
+  return null;
+}
+
+/**
+ * A header's value as the transport encodes it: plain visible ASCII, or base64 of UTF-8 between
+ * `=?base64?` and `?=`. Null when it is neither.
+ * @param {string} raw
+ */
+function headerValue(raw) {
+  const encoded = /^=\?base64\?([A-Za-z0-9+/]*={0,2})\?=$/.exec(raw);
+  if (encoded) return Buffer.from(/** @type {string} */ (encoded[1]), 'base64').toString('utf8');
+  return /^[\x20-\x7E\t]*$/.test(raw) ? raw : null;
 }
 
 /**
  * `tools/call`: the tool's view, as its section of `kanon-status/v1`. An unknown tool is a
  * protocol error; arguments the tool can't take, and a view with no answer, are the tool's error.
- * @param {any} params @param {Required<Deps>} deps
+ * @param {any} params @param {Required<Omit<Deps, 'deprecated'>>} deps
  */
 async function callTool(params, { reader, now, reach }) {
   const tool = TOOLS.find((t) => t.name === params?.name);

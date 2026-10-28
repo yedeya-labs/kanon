@@ -15,8 +15,9 @@
 // logs the same line with the step `key`. Without it, a function that may not use its key would
 // answer that `tools/list` with 401, and fail only at a person's sign-in.
 //
-// The key's id, the client id, the parameter's name, the redirect allow-list and the release come
-// from the environment; nothing secret does.
+// The key's id, the client id, the parameter's name, the redirect allow-list, the release and the
+// date 2025-11-25 was deprecated (#1423), which every answer at that revision carries, come from
+// the environment; nothing secret does.
 
 import { performance } from 'node:perf_hooks';
 import { redirectsFrom, serve } from './auth.mjs';
@@ -32,10 +33,17 @@ export const ENV = {
   secretParameter: 'CLIENT_SECRET_PARAMETER',
   redirects: 'REDIRECTS',
   release: 'RELEASE',
+  deprecated: 'LEGACY_DEPRECATED_SINCE',
 };
 
 /** AWS's shape of an error code, the only part of a failure that is logged. */
 const CODE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
+
+/** A calendar date, `YYYY-MM-DD`, that is a real day. @param {string | undefined} s */
+const isDate = (s) => {
+  const t = /^\d{4}-\d{2}-\d{2}$/.test(s ?? '') ? Date.parse(`${s}T00:00:00Z`) : NaN;
+  return Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === s;
+};
 
 /** `e`, naming the startup step it failed. @param {unknown} e @param {string} step */
 const at = (e, step) => Object.assign(e instanceof Error ? e : new Error(String(e)), { step });
@@ -52,7 +60,8 @@ export async function depsFrom(env, { fetch: fetchImpl = fetch } = {}) {
   const keyId = env[ENV.keyId];
   const clientId = env[ENV.clientId];
   const parameter = env[ENV.secretParameter];
-  if (!keyId || !clientId || !parameter) throw at(Object.assign(new Error('the function is unconfigured'), { code: 'Unconfigured' }), 'client_secret');
+  const deprecated = env[ENV.deprecated];
+  if (!keyId || !clientId || !parameter || !isDate(deprecated)) throw at(Object.assign(new Error('the function is unconfigured'), { code: 'Unconfigured' }), 'client_secret');
   const seals = sealer({ kms: kmsOf(env, fetchImpl), keyId });
   const [clientSecret] = await Promise.all([
     ssmOf(env, fetchImpl).getParameter(parameter).catch((e) => { throw at(e, 'client_secret'); }),
@@ -64,6 +73,7 @@ export async function depsFrom(env, { fetch: fetchImpl = fetch } = {}) {
     sealer: seals,
     redirects: redirectsFrom(env[ENV.redirects]),
     release: env[ENV.release] || 'unreleased',
+    deprecated,
   };
 }
 
