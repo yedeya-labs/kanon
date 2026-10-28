@@ -17,7 +17,10 @@ import { writeStub } from './helpers/stub-bin.js';
  *   • Kanon's `notify` block, which runs the adopter's notify hook from the checkout it makes, at
  *     the run's commit, whatever branch it is on (plan 0011 §5, step N6);
  *   • a checkout with a `ref:`: a branch other than the triggering commit (a PR's head). The
- *     default branch by name is not one: it is merged code (the Merger's job checks it out).
+ *     default branch by name is not one: it is merged code (the Merger's job checks it out);
+ *   • code imported from git at another ref: `infra/telemetry/intake-first.mjs` imports each
+ *     release's schema modules out of git at the tags it compares, and the promotion's `intake`
+ *     mode runs it (kanon#1502), so a tag pushed on an unmerged commit would run there.
  *
  * NO EXCEPTIONS (kanon#279). Every lane runs its agent the one way the spine does: a called
  * workflow holding exactly a `mint` job, which holds the key and runs nothing else, and the
@@ -47,10 +50,14 @@ const isNotify = (s: Step) => /^(?:\$\/|yedeya-labs\/kanon\/)actions\/notify(?:@
 const DEFAULT_BRANCH = /^\$\{\{\s*github\.event\.repository\.default_branch\s*\}\}$/;
 const isRefCheckout = (s: Step) => String(s.uses ?? '').startsWith('actions/checkout@')
   && String(s.with?.ref ?? '') !== '' && !DEFAULT_BRANCH.test(String(s.with?.ref));
+/** A step that imports code out of git at a ref it doesn't check out (kanon#1502). */
+const GIT_REF_CODE = /\bintake-first\.mjs\b|\bscripts\/promote\.mjs\s+intake\b/;
+const isGitRefCode = (s: Step) => GIT_REF_CODE.test(String(s.run ?? ''));
 /** Why a job runs code other than Kanon's and the job's own, or `undefined` when it runs none. */
 const runsOthersCode = (job: Job): string | undefined => {
   const steps = job.steps ?? [];
   if (steps.some(isAgent)) return 'runs the agent';
+  if (steps.some(isGitRefCode)) return 'imports code from git at another ref (intake-first)';
   const local = steps.find(isLocal);
   if (local) return `runs \`${local.uses}\` from the checkout`;
   if (steps.some(isNotify)) return 'runs the notify hook from the checkout';
@@ -142,6 +149,18 @@ describe('K-AGENT-49: no job that runs an agent or project code holds an App pri
 
   it('holds for every job, with no exception', () => {
     expect(violations(docs)).toEqual({});
+  });
+
+  // kanon#1502: the intake comparison runs keyless, beside the promotion's jobs that hold the
+  // Releaser's key (MUTATION: moving the comparison into the promote job turns this red).
+  it("finds the promotion's intake comparison, and goes red if a keyed job runs it", () => {
+    const promote = docs['promote.yml']!;
+    expect(runsOthersCode(promote.jobs!.intake!)).toBe('imports code from git at another ref (intake-first)');
+    expect(holdsKey(promote.jobs!.intake!)).toBe(false);
+    expect(holdsKey(promote.jobs!.promote!)).toBe(true);
+    const moved = structuredClone(promote);
+    moved.jobs!.promote!.steps!.unshift({ name: 'Compare', run: 'node scripts/promote.mjs intake' });
+    expect(violations({ 'promote.yml': moved })).toEqual({ 'promote.yml:promote': 'imports code from git at another ref (intake-first)' });
   });
 
   it('finds the spine and all nine lanes that call the blocks themselves', () => {

@@ -15,6 +15,11 @@
 #
 # `scripts/promote.mjs check` reads the gates with this job's read-only token and writes each
 # one's verdict and evidence to the step summary, so a held promotion says which gate held it.
+# The sixth, intake (#1502), holds a candidate whose telemetry rows the deployed intake would
+# refuse. Two jobs before `promote` read it: `record` reads the operator's intake record, through
+# a Releaser token narrowed to Contents read on that repository alone, and runs nothing from this
+# tree; `intake` compares the two releases' schemas, which imports code from both tags' commits,
+# so it holds no key and no write grant (`K-AGENT-49`), and `check` reads only its verdict.
 # Only when it decides to promote is the Releaser's token minted, narrowed to Contents write, and
 # `scripts/promote.mjs apply` creates the tag on the candidate's commit, publishes its Release as
 # latest and moves `v0`, as the Releaser, as release.yml creates release tags and moves the major
@@ -60,9 +65,105 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # THE INTAKE RECORD (#1502): the operator's repository records the Kanon release production's
+  # intake was deployed from, and the variable `KANON_INTAKE_RECORD` names where,
+  # `<owner>/<repo>:<path>`. The Releaser, installed there too, reads it with a token minted for
+  # that repository alone and narrowed to Contents read. This job checks nothing out and runs
+  # nothing from this tree, so the key it references is in a job that runs only the mint and `gh`.
+  # Nothing here fails the run: an unset variable, a token that can't be minted or a record that
+  # can't be read reaches the intake gate as `read=false`, with why, and the gate holds and says so.
+  record:
+    name: Read the intake record
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      read: ${{ steps.read.outputs.read }}
+      text: ${{ steps.read.outputs.text }}
+      error: ${{ steps.read.outputs.error }}
+    steps:
+      - name: Find the intake record
+        id: record
+        env:
+          RECORD: ${{ vars.KANON_INTAKE_RECORD }}
+        run: |
+          if [[ "$RECORD" =~ ^([A-Za-z0-9-]+)/([A-Za-z0-9._-]+):([^[:space:]]+)$ ]]; then
+            { echo "owner=${BASH_REMATCH[1]}"; echo "repo=${BASH_REMATCH[2]}"; echo "path=${BASH_REMATCH[3]}"; } >> "$GITHUB_OUTPUT"
+          fi
+      - name: Mint the Releaser's token for the intake record
+        id: intake-token
+        if: steps.record.outputs.repo != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASER_APP_ID }}
+          private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.record.outputs.owner }}
+          repositories: ${{ steps.record.outputs.repo }}
+          permission-contents: read
+      - name: Read the intake record
+        id: read
+        if: steps.record.outputs.repo != ''
+        env:
+          GH_TOKEN: ${{ steps.intake-token.outputs.token }}
+          MINTED: ${{ steps.intake-token.outcome }}
+          OWNER: ${{ steps.record.outputs.owner }}
+          REPO: ${{ steps.record.outputs.repo }}
+          RECORD_PATH: ${{ steps.record.outputs.path }}
+        run: |
+          if [[ "$MINTED" != success ]]; then
+            { echo "read=false"; echo "error=the Releaser's token for $OWNER/$REPO couldn't be minted: read this job's log"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if gh api -H 'Accept: application/vnd.github.raw' "repos/$OWNER/$REPO/contents/$RECORD_PATH" > "$RUNNER_TEMP/record" 2> "$RUNNER_TEMP/record.err"; then
+            eof="EOF_$(openssl rand -hex 16)"
+            { echo "read=true"; echo "text<<$eof"; cat "$RUNNER_TEMP/record"; echo; echo "$eof"; } >> "$GITHUB_OUTPUT"
+          else
+            { echo "read=false"; echo "error=$(head -n 1 "$RUNNER_TEMP/record.err")"; } >> "$GITHUB_OUTPUT"
+          fi
+
+  # THE COMPARISON (#1502): `infra/telemetry/intake-first.mjs` imports each release's schema
+  # modules out of git at the record's tag and the candidate's, code from those tags' commits, and
+  # Kanon has no tag ruleset yet, so a `candidate-v*` tag can name a commit that never merged. So it
+  # runs here, with Contents read and no secret (`K-AGENT-49`; `app-key-isolation.test.ts` fails a
+  # keyed job that runs it), after `promote.mjs intake` checks that both tags' commits are on the
+  # default branch. Code in this job could forge its verdict, which fakes this one gate; the
+  # soak, end-to-end and red gates still hold.
+  intake:
+    name: Compare the candidate's telemetry schema with the deployed intake's
+    needs: record
+    if: ${{ !cancelled() && github.ref_name == github.event.repository.default_branch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      verdict: ${{ steps.compare.outputs.verdict }}
+    steps:
+      # The whole history and its tags, which intake-first reads from git.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Compare the schemas
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INTAKE_RECORD: ${{ vars.KANON_INTAKE_RECORD }}
+          INTAKE_RECORD_READ: ${{ needs.record.outputs.read }}
+          INTAKE_RECORD_TEXT: ${{ needs.record.outputs.text }}
+          INTAKE_RECORD_ERROR: ${{ needs.record.outputs.error }}
+        run: node scripts/promote.mjs intake
+
   promote:
     name: Promote the newest candidate
-    if: github.ref_name == github.event.repository.default_branch
+    needs: intake
+    # Runs when the intake job failed too: the gate then holds, and the notify step still runs.
+    if: ${{ !cancelled() && github.ref_name == github.event.repository.default_branch }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Reads only: the tags, the candidate's package.json and Release (`contents`), the pull
@@ -95,6 +196,7 @@ jobs:
           REASON: ${{ inputs.reason }}
           PLAN: ${{ runner.temp }}/promotion.json
           OUTCOME: ${{ runner.temp }}/outcome.json
+          INTAKE_VERDICT: ${{ needs.intake.outputs.verdict }}
         run: node scripts/promote.mjs check
       # THE RELEASER'S TOKEN (plan 0005 §3.1, ADR 0013), only to promote, narrowed to Contents
       # write, for the tag, the Release, the major tag and the docs' branch and commit, Pull

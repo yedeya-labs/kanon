@@ -123,6 +123,9 @@ const RELEASE: Record<string, Perms> = {
   // default branch's head and the major tag's target, and GitHub refused the first promotion's tag
   // without it (run 40641153349; the exact rule isn't confirmed).
   '.github/workflows/promote.yml#releaser': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
+  // The promotion's intake gate (#1502): reads the operator's intake record, in the one repository
+  // `KANON_INTAKE_RECORD` names, which the mint's `repositories` narrows it to.
+  '.github/workflows/promote.yml#intake-token': { contents: 'read' },
 };
 const STATUS: Record<string, Perms> = {
   // Lists the open pull requests, reads a head commit and compares two heads.
@@ -289,8 +292,12 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     // The shared grant, raised by what Kanon's adoption record declares for its Releaser.
     const declared = readAppExtras(readFileSync(join(root, 'docs/qa/adoption.md'), 'utf8'), Object.keys(all)).extras.releaser;
     const releaser = withExtras(all.releaser!.permissions as Record<string, string>, declared);
+    // Within it: a mint may ask less than the grant (the intake gate's Contents read), never more.
+    const rank = (level: string | undefined) => ['read', 'write'].indexOf(String(level));
     for (const [scope, level] of Object.entries(perms)) {
-      expect(releaser[scope.replace('-', '_')], `${key} asks ${scope}: ${level}`).toBe(level);
+      const granted = releaser[scope.replace('-', '_')];
+      expect(rank(level), `${key} asks ${scope}: ${level}`).toBeGreaterThanOrEqual(0);
+      expect(rank(granted), `${key} asks ${scope}: ${level}, and the Releaser holds ${granted ?? 'none'}`).toBeGreaterThanOrEqual(rank(level));
     }
   });
 

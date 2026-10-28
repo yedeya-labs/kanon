@@ -107,7 +107,10 @@ describe('the release view', () => {
     const direct = check({ GITHUB_REPOSITORY: 'acme/shop', DEFAULT_BRANCH: 'main' }, { api, now: PROMOTION_NOW.getTime(), workflows });
     expect(view.promotion).toEqual({ workflow: 'promote.yml', decision: direct.decision, why: direct.why, candidate: direct.candidate, gates: direct.gates });
     expect(view.promotion.decision).toBe('hold');
-    expect(view.promotion.gates.map((g: Any) => [g.id, g.pass])).toEqual([['soak', false], ['revert', true], ['bug', true], ['red', true], ['e2e', true]]);
+    expect(view.promotion.gates.map((g: Any) => [g.id, g.pass])).toEqual([['soak', false], ['revert', true], ['bug', true], ['red', true], ['e2e', true], ['intake', true]]);
+    // The intake gate needs the operator's record and two releases in git, which only the
+    // promotion's own run has (#1502): the view shows it skipped, never passed.
+    expect(view.promotion.gates.at(-1)).toMatchObject({ id: 'intake', skipped: true });
     expect(view.promotion.gates[0].evidence).toBe(`pinned 10h of 72, since #110 merged at ${PIN}`);
 
     // A refusal is the check's answer too, which a person reads.
@@ -127,7 +130,7 @@ describe('the release view', () => {
   it('[STAT-1] the release view asks only REST GETs and GraphQL queries, the promotion\'s check\'s reads among them', async () => {
     const w = promoting({ releases: RELEASES, latest: RELEASES[1], pulls: PULLS });
     const view: Any = await releaseView({ reader: w.reader, repo: w.repo, now: PROMOTION_NOW });
-    expect(view.promotion.gates).toHaveLength(5);
+    expect(view.promotion.gates).toHaveLength(6);
     expect(w.seen).toContain('GET repos/acme/shop/git/matching-refs/tags/candidate-v');
     for (const s of w.seen) expect(s, s).toMatch(/^(GET|PAGES|GraphQL) /);
   });
