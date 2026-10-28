@@ -112,6 +112,33 @@ export function attemptsIn(bodies, sha) {
   return out;
 }
 
+/** The lane's one read of a PR's comments: each body with its author beside it, so a marker
+ *  counts only from the App that writes it (kanon#1486). */
+export const COMMENTS_JQ = '[.comments[] | {login: .author.login, body}]';
+
+/**
+ * The bodies of the comments the Implementer App wrote, or null for an unreadable read.
+ *
+ * BY AUTHOR, because anyone may comment on a public PR, and a marker read from every author
+ * let any commenter stop the lane at a head (kanon#1486; `K-AGENT-1`'s Why: a check reads a
+ * marker only on an object the expected App authored). The workflow posts the attempt with
+ * the Implementer App's token, asserted against `IMPLEMENTER_LOGIN` first. A comment with no
+ * author (a deleted account) is no one's: anyone can make and delete one.
+ */
+export function implementerBodies(comments, { implementer = implementerLogin() } = {}) {
+  if (!Array.isArray(comments)) return null;
+  const app = normaliseLogin(implementer);
+  return comments.filter((c) => normaliseLogin(c?.login ?? c?.author?.login) === app).map((c) => c.body);
+}
+
+/** Has this head been handed to the agent? Unreadable comments mean "may already have
+ *  attempted": suppress, never repeat. An agent handed the same head twice is the
+ *  expensive direction. */
+export function attempted(comments, sha, opts = {}) {
+  const b = implementerBodies(comments, opts);
+  return b === null || b.some((body) => String(body).includes(marker(sha)));
+}
+
 /** What the lane says on the PR before handing it over, so a human reading the PR in
  *  that window sees an actor rather than silence. Signed as the Implementer, whose App
  *  posts it (plan 0005 §3.3). */
@@ -337,28 +364,22 @@ function main() {
   }
 
   // ONE comment read per PR, shared by both questions below.
-  const bodiesOf = new Map();
-  const bodies = (pr) => {
-    if (!bodiesOf.has(pr.number)) {
+  const commentsOf = new Map();
+  const comments = (pr) => {
+    if (!commentsOf.has(pr.number)) {
       try {
-        bodiesOf.set(pr.number, ghJson(['pr', 'view', String(pr.number), '--repo', REPO, '--json', 'comments',
-          '--jq', '[.comments[].body]']));
+        commentsOf.set(pr.number, ghJson(['pr', 'view', String(pr.number), '--repo', REPO, '--json', 'comments',
+          '--jq', COMMENTS_JQ]));
       } catch {
-        bodiesOf.set(pr.number, null);
+        commentsOf.set(pr.number, null);
       }
     }
-    return bodiesOf.get(pr.number);
-  };
-  // Unreadable comments means "may already have attempted": suppress, never repeat.
-  // An agent handed the same head twice is the expensive direction.
-  const hasMarker = (pr) => {
-    const b = bodies(pr);
-    return b === null || b.some((body) => String(body).includes(marker(pr.headRefOid)));
+    return commentsOf.get(pr.number);
   };
   const readRetry = makeRetryEvidenceReader({ json: ghJson, repo: REPO });
   const decision = rebaseDecision(prs, {
-    hasMarker,
-    attemptsOf: (pr) => { const b = bodies(pr); return b === null ? null : attemptsIn(b, pr.headRefOid); },
+    hasMarker: (pr) => attempted(comments(pr), pr.headRefOid),
+    attemptsOf: (pr) => { const b = implementerBodies(comments(pr)); return b === null ? null : attemptsIn(b, pr.headRefOid); },
     // The matrix job for THIS PR only: one run resolves every PR a `main` merge
     // conflicted, and another PR's capped job must not license this one's retry.
     evidenceOf: (runId, pr) => readRetry(runId, { job: (name) => isResolveJob(name, pr.number) }),
