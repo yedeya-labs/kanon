@@ -111,9 +111,11 @@ const RELEASE: Record<string, Perms> = {
   // for Workflows write, which Kanon's adoption record declares for its Releaser (`K-AGENT-3`).
   '.github/workflows/release-please.yml#releaser': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
   // Kanon's promotion (plan 0009 S5): the stable tag on the candidate's commit, its Release and the
-  // major tag, then the pull request that points the docs at it (`scripts/doc-pins.mjs`). Its
-  // commit touches Markdown only, so no Workflows write.
-  '.github/workflows/promote.yml#releaser': { contents: 'write', 'pull-requests': 'write' },
+  // major tag, then the pull request that points the docs at it (`scripts/doc-pins.mjs`). Workflows
+  // write too: the tags point at a candidate's commit whose `.github/workflows` differ from the
+  // default branch's head and the major tag's target, and GitHub refused the first promotion's tag
+  // without it (run 40641153349; the exact rule isn't confirmed).
+  '.github/workflows/promote.yml#releaser': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
 };
 const STATUS: Record<string, Perms> = {
   // Lists the open pull requests, reads a head commit and compares two heads.

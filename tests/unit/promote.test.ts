@@ -902,7 +902,7 @@ describe('promote.yml', () => {
     expect(Object.fromEntries(Object.entries(wf.on.workflow_dispatch.inputs).map(([k, v]) => [k, v.type]))).toEqual({ hold: 'boolean', urgent: 'boolean', reason: 'string' });
   });
 
-  it('reads with a read-only token but for the held issue, and mints the Releaser\'s, Contents and Pull requests write, only to promote', () => {
+  it('reads with a read-only token but for the held issue, and mints the Releaser\'s, Contents, Pull requests and Workflows write, only to promote', () => {
     expect(wf.permissions).toEqual({});
     expect(Object.entries(job.permissions).filter(([, p]) => p !== 'read')).toEqual([['issues', 'write']]);
     expect(step('gates').run).toBe('node scripts/promote.mjs check');
@@ -910,7 +910,7 @@ describe('promote.yml', () => {
     const mint = step('releaser');
     expect(mint.uses).toMatch(/^actions\/create-github-app-token@/);
     expect(mint.if).toBe("steps.gates.outputs.decision == 'promote'");
-    expect(mint.with).toEqual({ 'client-id': '${{ secrets.RELEASER_APP_ID }}', 'private-key': '${{ secrets.RELEASER_APP_PRIVATE_KEY }}', 'permission-contents': 'write', 'permission-pull-requests': 'write' });
+    expect(mint.with).toEqual({ 'client-id': '${{ secrets.RELEASER_APP_ID }}', 'private-key': '${{ secrets.RELEASER_APP_PRIVATE_KEY }}', 'permission-contents': 'write', 'permission-pull-requests': 'write', 'permission-workflows': 'write' });
     const write = step('Tag, publish and move the major tag');
     expect(write.if).toBe("steps.gates.outputs.decision == 'promote'");
     expect(write.run).toBe('node scripts/promote.mjs apply');
