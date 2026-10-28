@@ -1,10 +1,12 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 const {
-  HELD_LABEL, IMPLEMENTER_LOGIN, MAX_PER_RUN, PIPELINE_LABELS, PR_FIELDS, SETTLE_PAUSE_MS, SETTLE_READS,
-  attemptComment, ineligible, isResolveJob, marker, rebaseDecision, report, settledPrs,
+  COMMENTS_JQ, HELD_LABEL, IMPLEMENTER_LOGIN, MAX_PER_RUN, PIPELINE_LABELS, PR_FIELDS, SETTLE_PAUSE_MS, SETTLE_READS,
+  attemptComment, attempted, attemptsIn, implementerBodies, ineligible, isResolveJob, marker, rebaseDecision, report,
+  runMarker, settledPrs,
 } = await import('../../scripts/rebase-lane.mjs');
 import { parseCondition } from '../unit/helpers/job-condition.js';
 const { ConflictFieldsUnread } = await import('../../scripts/conflict-state.mjs');
@@ -137,6 +139,55 @@ describe('one attempt per head', () => {
     expect(body).toMatch(/product decision/);
     expect(body).toContain(HELD_LABEL);
     expect(body).toMatch(/RA-1722/);
+  });
+});
+
+describe('an attempt counts only from the Implementer App (kanon#1486)', () => {
+  // Anyone may comment on a public PR. A marker read from every author let any commenter
+  // park a conflicting pipeline PR as "attempted" until someone pushed (`K-AGENT-1`'s Why:
+  // a check reads a marker only on an object the expected App authored).
+  const run = runMarker(HEAD, '36142146720');
+  const forged = { login: 'someone-else', body: `${marker(HEAD)}\n${run}` };
+  const real = (login: string) => ({ login, body: attemptComment(HEAD, '36142146720') });
+  // The comments as the lane's own read shapes them, through real jq.
+  const read = (comments: { author: { login: string } | null, body: string }[]) =>
+    JSON.parse(execFileSync('jq', ['-c', COMMENTS_JQ], { input: JSON.stringify({ comments }), encoding: 'utf8' }));
+
+  it('a forged marker is no attempt, and feeds no retry', () => {
+    expect(attempted([forged], HEAD)).toBe(false);
+    expect(attemptsIn(implementerBodies([forged]), HEAD)).toEqual([]);
+    const out = decide([pr()], { hasMarker: (p: { headRefOid: string }) => attempted([forged], p.headRefOid) });
+    expect(out.resolve).toHaveLength(1);
+  });
+
+  it('the Implementer App\'s own marker still counts, in each of its login spellings', () => {
+    for (const login of [IMPLEMENTER_LOGIN, `${IMPLEMENTER_LOGIN}[bot]`, `app/${IMPLEMENTER_LOGIN}`]) {
+      expect(attempted([forged, real(login)], HEAD)).toBe(true);
+      expect(attemptsIn(implementerBodies([forged, real(login)]), HEAD)).toEqual([{ runId: '36142146720' }]);
+    }
+  });
+
+  it('an unreadable comment list still reads as attempted, and a comment with no author as no one\'s', () => {
+    expect(attempted(null, HEAD)).toBe(true);
+    expect(implementerBodies(null)).toBeNull();
+    // A deleted account reads as no author; anyone can make one, so it is not the App.
+    expect(attempted([{ login: null, body: marker(HEAD) }], HEAD)).toBe(false);
+  });
+
+  it('the lane\'s read keeps each comment\'s author beside its body', () => {
+    const comments = read([
+      { author: { login: 'someone-else' }, body: forged.body },
+      { author: { login: IMPLEMENTER_LOGIN }, body: attemptComment(HEAD) },
+      { author: null, body: marker(HEAD) },
+    ]);
+    expect(comments).toEqual([
+      { login: 'someone-else', body: forged.body },
+      { login: IMPLEMENTER_LOGIN, body: attemptComment(HEAD) },
+      { login: null, body: marker(HEAD) },
+    ]);
+    expect(attempted(comments, HEAD)).toBe(true);
+    expect(attempted(comments.slice(0, 1), HEAD)).toBe(false);
+    expect(readFileSync(join(ROOT, 'scripts/rebase-lane.mjs'), 'utf8')).toContain("'--jq', COMMENTS_JQ");
   });
 });
 

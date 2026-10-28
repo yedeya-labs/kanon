@@ -74,6 +74,10 @@ const SHAPES: Record<string, PrWorld> = {
   'a conflict the rebase lane tried': implementerPr({
     mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY', comments: [{ login: 'example-implementer[bot]', body: `Resolving.\n${rebaseMarker(HEAD)}`, at: '2026-10-25T11:00:00Z' }],
   }),
+  // Anyone may comment: a marker counts only from the Implementer App (kanon#1486).
+  'a conflict with a forged attempt marker': implementerPr({
+    mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY', comments: [{ login: 'octo', body: `Resolving.\n${rebaseMarker(HEAD)}`, at: '2026-10-25T11:00:00Z' }],
+  }),
   'a head the merge queue removed': implementerPr({
     queue: { enabled: true, queued: false, removed: { reason: 'FAILED_CHECKS', at: '2026-10-25T11:30:00Z' } },
     comments: [{ login: 'example-merger[bot]', body: `${MERGER_HEADER}\n\nQueued.\n\n${mergerMarker('queued', HEAD)}`, at: '2026-10-25T11:20:00Z' }],
@@ -87,13 +91,23 @@ describe('the readiness view feeds the merge gate the shape readPr builds', () =
   it.each(Object.keys(SHAPES))('[STAT-7] builds readPr\'s pull request from the same world, through the reader: %s', async (name) => {
     const w = SHAPES[name]!;
     const r = readerFor(w);
-    const { pr } = await readPullRequest(r.reader, REPO, w.number, { merger: 'example-merger' });
+    const { pr } = await readPullRequest(r.reader, REPO, w.number, { merger: 'example-merger', implementer: 'example-implementer' });
     const viaGh = gateOver(w);
     expect(pr).toEqual(viaGh.pr);
     // So the gate, given the same reads, answers the same, and the view reports that answer.
     const { v } = await view(w);
     expect(v.verdict).toEqual({ action: viaGh.verdict.action, rule: viaGh.verdict.rule, why: viaGh.verdict.why });
   });
+
+  it('counts the rebase lane\'s attempt only from the Implementer App, in both reads (kanon#1486)', async () => {
+    const tried = SHAPES['a conflict the rebase lane tried']!;
+    const forged = SHAPES['a conflict with a forged attempt marker']!;
+    for (const [w, attempted] of [[tried, true], [forged, false]] as const) {
+      const { pr } = await readPullRequest(readerFor(w).reader, REPO, w.number, { merger: 'example-merger', implementer: 'example-implementer' });
+      expect(pr.rebaseAttempted, 'the view').toBe(attempted);
+      expect(gateOver(w).pr.rebaseAttempted, 'the gate').toBe(attempted);
+    }
+  }, GATE_READS_TIMEOUT);
 });
 
 describe('what the readiness view gives', () => {

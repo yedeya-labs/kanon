@@ -194,7 +194,8 @@ const jq = args.includes('--jq') ? args[args.indexOf('--jq') + 1] : null;
 const out = (s) => process.stdout.write(s);
 const json = (v) => out(JSON.stringify(v));
 const lines = (vs) => out(vs.map((v) => v + '\n').join(''));
-if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) out(w.comments.map((c) => c.body).join('\n'));
+// The rebase lane's read, COMMENTS_JQ: each body with its author, a bot's as GraphQL spells it.
+if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) json(w.comments.map((c) => ({ login: c.login.replace(/\[bot\]$/, ''), body: c.body })));
 else if (args[0] === 'pr' && args[1] === 'view') json(w.meta);
 else if (args[0] === 'run' && args[1] === 'list') json(w.failedRuns);
 else if (args[0] === 'api' && args[1] === 'graphql') json(w.queueNode);
