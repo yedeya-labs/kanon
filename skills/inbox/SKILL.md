@@ -16,7 +16,7 @@ Run it from the repository's checkout, through the release this skill ships in:
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.42.0 kanon inbox --json
+npx --yes --package github:yedeya-labs/kanon#v0.43.0 kanon inbox --json
 ```
 
 <!-- x-release-please-end -->
