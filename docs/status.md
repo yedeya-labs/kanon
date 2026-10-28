@@ -82,6 +82,10 @@ Whether it is ready is never the view's own judgement:
 
   Nothing else is asked of it: a person merging it reads the rest on GitHub.
 
+- **A decision asked on it holds it** (`[STAT-18]`). A pull request of either kind that would be ready for a person's merge isn't, while it carries `decision:needed` and the decision asked on it waits: it has no ask, or no answer came after its latest ask, each read as [the inbox](#the-inbox) reads it. It lacks `ask`, and the inbox lists it only among the decisions, since merging it would pre-empt the answer. An answer recorded after the latest ask lifts the hold, though the label is still on. A pull request the Merger would merge isn't held: that is the merge gate's to judge ([#1501](https://github.com/yedeya-labs/kanon/issues/1501)).
+
+A person's pull request that GitHub reports conflicting was ready until 2026-10-28: decision 13 of [the status project](projects/1327.md) chose no conflict test. The Owner overturned it on [#1497](https://github.com/yedeya-labs/kanon/pull/1497#issuecomment-6476880831), so that ready means one thing in every view, and a pull request that can't be merged as it stands is never offered.
+
 ## The lane-health view
 
 `--lanes` reads the workflows in `.github/workflows/` on the default branch, and lists each lane caller among them: each workflow with a job that calls one of Kanon's lanes, the lane callers [the lane check](../actions/lane-check/README.md) holds to the lane rules. For each it gives:
@@ -113,11 +117,13 @@ It reads a comment only to find a bail, the hold marker or a decision's marker a
 
 `kanon inbox`, or `kanon status --inbox`, answers "what is waiting on me?" with two lists, each entry with its link. It is how a person, or the agent they ask, finds what waits on them: read from GitHub when asked, never from what a session remembers (`K-WORK-25`). It is pull-only: it prints when it is run, and sends nothing, to anyone, ever.
 
-- **Ready for your merge**, `merges`: the needs-the-Owner view's `merges`, computed the same way, by the [readiness view](#the-pull-request-readiness-view). A pull request is listed only while it is open, so one a person already merged or closed never is. Each is one the Merger may not merge: for a person's, a Lead's brief, a dependency bump or the release pull request, it is ready when it has a check that counts and none running, cancelled or failed on its head, GitHub doesn't report it conflicting, the Reviewer's verdict stamped with its head is an approval, and, for a brief, no decision is open; for the Implementer's, when only an escalation path stops the Merger.
+- **Ready for your merge**, `merges`: the needs-the-Owner view's `merges`, computed the same way: each open pull request the [readiness view](#the-pull-request-readiness-view) reports ready for a person's merge, by its definition and no other. A pull request is listed only while it is open, so one a person already merged or closed never is, and one with an unanswered decision asked on it is listed only under the decisions.
 - **Decisions waiting on you**, `asks`: each open issue and open pull request labelled `decision:needed`, which is how an agent records a decision it needs from a person before it asks it anywhere else (`K-WORK-24`). For each:
   - `ask`, the link of the latest comment that asks the decision, the comment whose first line is `<!-- kanon:decision-needed -->`;
   - `form`, `ok` when that comment has the three parts of the fixed form, each opening a line: `**Question.**`, `**Options.**` and `**Recommendation.**`; `incomplete` when it lacks one; and `missing` when the thread carries the label and no such comment, which is a decision nobody wrote down;
-  - `answered`, true when a comment whose first line is `<!-- kanon:decision-answered -->` came after the ask, so the answer is recorded and the label should come off.
+  - `answered`, true when a comment whose first line is `<!-- kanon:decision-answered -->` came after the ask, so the answer is recorded and the label should come off. Such a pull request is no longer held out of `merges`.
+
+  An App-run agent's comment opens with its persona header (`K-AGENT-1`), so the marker is read on the line after that header too. Anything else before the marker, a quotation included, makes the comment neither an ask nor an answer.
 
   A closed issue or pull request is never listed: closing the thread ends the question. [`scripts/lib/decision-asks.mjs`](../scripts/lib/decision-asks.mjs) holds the form, and writes an ask's and an answer's body.
 
@@ -297,7 +303,7 @@ A path names a field inside its parent: `project.items[].key` is the `key` of ea
 | `pr.readiness` | object | Whether it is ready to merge, and by whom. |
 | `pr.readiness.by` | string | `merger` when it is the Merger's to merge, `person` when it is a person's. |
 | `pr.readiness.ready` | boolean | True when it is ready for that merge. |
-| `pr.readiness.lacks` | array | What it lacks: for a person's pull request, `checks`, `approval` or `decisions`; for the Implementer's, the merge gate's rule that stops it. Empty when it is ready. |
+| `pr.readiness.lacks` | array | What it lacks: for a person's pull request, `checks`, `mergeable`, `approval` or `decisions`; for the Implementer's, the merge gate's rule that stops it; for either that a person would merge, `ask` while a decision asked on it waits. Empty when it is ready. |
 | `pr.readiness.why` | string | A sentence saying why. |
 | `lanes` | object | The lane-health view, when `--lanes` asked for it: the fields below, or, when its reads didn't complete, only `error` and `reads`. |
 | `lanes.error` | string | Why the view has no answer, naming each read that failed. |

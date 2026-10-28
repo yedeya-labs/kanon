@@ -45,12 +45,12 @@ Read only standard output, one JSON document. Standard error says which token `g
    | 3 | `error` | It couldn't run: show `.error` in plain words. Usually the checkout has no origin remote on GitHub (pass `--repo`), `gh` isn't signed in, or the repository has no App register on its default branch, which the readiness view needs to judge a pull request. |
    | 4 | `incomplete` | A read didn't complete, so there is no answer: `.inbox.error` names it, and `.inbox.reads[].why` and `.inbox.reads[].resetAt` say why and when a rate limit resets. Say so, and never give a partial list. |
 
-2. **List what is ready for their merge,** each of `.inbox.merges` as its title and link, `.inbox.merges[].title` and `.inbox.merges[].url`, with `.inbox.merges[].reason` when they ask why. Say it is ready by the readiness view's definition, which this release states in "The inbox": nothing more is implied.
+2. **List what is ready for their merge,** each of `.inbox.merges` as its title and link, `.inbox.merges[].title` and `.inbox.merges[].url`, with `.inbox.merges[].reason` when they ask why. Say it is ready by the readiness view's definition, which this release's `docs/status.md` states in "The pull-request readiness view": nothing more is implied. A pull request with a decision asked on it and not answered is never in this list, only in the next.
 
 3. **List the decisions waiting on them,** each of `.inbox.asks`: its thread, `.inbox.asks[].title` and `.inbox.asks[].url`, and the link of the decision itself, `.inbox.asks[].ask`. Then say what needs fixing:
    - `.inbox.asks[].form` is `missing`: the thread carries the label and nobody wrote the decision down. If it is yours, or this session's, write the ask now (below); otherwise say so.
    - `incomplete`: the ask lacks a part of the form. Offer to post a whole one.
-   - `.inbox.asks[].answered` is true: the answer is recorded and the label was left on. Offer to take it off.
+   - `.inbox.asks[].answered` is true: the answer is recorded and the label was left on. Offer to take it off. A pull request in this state is no longer held out of the merges.
 
 4. **Nothing waiting** is an answer too: say both lists are empty.
 

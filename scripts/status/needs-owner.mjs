@@ -5,7 +5,8 @@
 // things and nothing else, and judges none of them itself:
 //   - the pull requests ready for a person's merge: the readiness view's answer for each open
 //     pull request (`readinessOf`), both the Implementer's the merge gate escalates for a path
-//     alone and those it skips as not the Implementer's (`[STAT-7]`, `[STAT-14]`, decision 13);
+//     alone and those it skips as not the Implementer's (`[STAT-7]`, `[STAT-14]`, decision 13 as
+//     the Owner overturned it on kanon#1497), but none held by an unanswered ask (`[STAT-18]`);
 //   - the Implementer's stops that wait on a person: `qa:needs-info` and `qa:needs-split` on an
 //     open issue, and, for an issue in one of the dispatch sweep's lanes, the sweep's own
 //     `classify` over the same conversation, open pull requests and live runs: its

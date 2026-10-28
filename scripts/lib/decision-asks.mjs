@@ -12,6 +12,14 @@
 // bold parts are what a person needs to decide without the session that asked. The status core
 // reads a comment only to find the marker and the parts (decision 4 of the status project: a
 // comment's text never leaves the process), and answers with the comment's link.
+//
+// AN APP-RUN AGENT'S ASK OPENS WITH ITS HEADER. `K-AGENT-1` makes every post an App-run agent
+// writes open with its persona header and role marker, so the marker may stand on the line after
+// that header rather than on the first line. One header line is skipped, and only a line that
+// carries a role marker: anything else before the marker makes the comment neither an ask nor an
+// answer, so a marker quoted further down still isn't one.
+
+import { markedRole } from './role-marker.mjs';
 
 /** The label that marks a thread waiting on a person's decision (`K-WORK-12`, `K-WORK-24`). */
 export const DECISION_LABEL = 'decision:needed';
@@ -28,12 +36,15 @@ export const ASK_PARTS = /** @type {const} */ (['**Question.**', '**Options.**',
 /** The parts every answer carries, each opening a line. */
 export const ANSWER_PARTS = /** @type {const} */ (['**Decision.**', '**Decided by.**']);
 
+/** `lines`, opened with an App-run agent's header line and a blank line when one is given (`K-AGENT-1`). @param {string | undefined} header @param {string[]} lines */
+const headed = (header, lines) => (header ? [header, '', ...lines] : lines).join('\n');
+
 /**
- * An ask's body, in the form the rule fixes.
- * @param {{ question: string, options: string[], recommendation: string }} ask
+ * An ask's body, in the form the rule fixes; for an App-run agent, after its header line.
+ * @param {{ question: string, options: string[], recommendation: string, header?: string }} ask
  */
-export function askBody({ question, options, recommendation }) {
-  return [
+export function askBody({ question, options, recommendation, header }) {
+  return headed(header, [
     ASK_MARKER,
     '',
     `${ASK_PARTS[0]} ${question}`,
@@ -42,28 +53,30 @@ export function askBody({ question, options, recommendation }) {
     ...options.map((o, i) => `${i + 1}. ${o}`),
     '',
     `${ASK_PARTS[2]} ${recommendation}`,
-  ].join('\n');
+  ]);
 }
 
 /**
- * An answer's body, in the form the rule fixes.
- * @param {{ decision: string, by: string }} answer the decision, and who made it and where
+ * An answer's body, in the form the rule fixes; for an App-run agent, after its header line.
+ * @param {{ decision: string, by: string, header?: string }} answer the decision, and who made it and where
  */
-export function answerBody({ decision, by }) {
-  return [ANSWER_MARKER, '', `${ANSWER_PARTS[0]} ${decision}`, '', `${ANSWER_PARTS[1]} ${by}`].join('\n');
+export function answerBody({ decision, by, header }) {
+  return headed(header, [ANSWER_MARKER, '', `${ANSWER_PARTS[0]} ${decision}`, '', `${ANSWER_PARTS[1]} ${by}`]);
 }
 
 /** Does a line of the body open with `part`? @param {string} body @param {string} part */
 const opens = (body, part) => body.split('\n').some((l) => l.trimStart().startsWith(part));
 
 /**
- * What a comment is: an ask, an answer, or neither, by the marker on its first non-blank line.
- * A marker quoted further down is neither.
+ * What a comment is: an ask, an answer, or neither, by the marker on its first non-blank line,
+ * or on the next one when the first is an App-run agent's header line, the one line carrying a
+ * role marker (`K-AGENT-1`). A marker quoted further down is neither.
  * @param {string} body
  * @returns {'ask' | 'answer' | null}
  */
 export function kindOf(body) {
-  const first = String(body ?? '').split('\n').find((l) => l.trim() !== '')?.trim();
+  const lines = String(body ?? '').split('\n').map((l) => l.trim()).filter((l) => l !== '');
+  const first = lines[0] !== undefined && markedRole(lines[0]) !== null ? lines[1] : lines[0];
   if (first === ASK_MARKER) return 'ask';
   if (first === ANSWER_MARKER) return 'answer';
   return null;

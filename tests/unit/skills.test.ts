@@ -68,7 +68,9 @@ const LANE_SKILLS = ['upstream-finding', 'file-issue'];
 
 /**
  * The skills the model may start without being asked: doctor, which changes nothing without
- * asking, and the filing skill, which an agent about to file an issue needs (#164).
+ * asking; the filing skill, which an agent about to file an issue needs (#164); and inbox, which
+ * an agent asked what waits on a person, or about to ask a person a decision, needs
+ * (`K-WORK-24`, `K-WORK-25`).
  */
 const MODEL_INVOKED = ['doctor', 'file-issue', 'inbox'];
 

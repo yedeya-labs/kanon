@@ -102,8 +102,8 @@ Whether a gate moved anything is read from the rule its findings cite. [`scripts
 | [`.github/workflows/`](../.github/workflows/) | The lanes, the shared lane workflow they call, the release workflow, and Kanon's own CI. |
 | [`actions/`](../actions/) | The checks and the building blocks of a lane, each a versioned composite action. |
 | [`scripts/`](../scripts/) | The library the lanes run. |
-| [`cli/`](../cli/) | The `kanon` command: `init`, `doctor`, `apps`, `milestones`, `metrics`, [`status`](status.md). |
-| [`skills/`](../skills/) | The Claude Code skills: `/kanon:adopt`, `/kanon:doctor`, `/kanon:upgrade`, `/kanon:mandate`, which starts a project for the Lead and carries its brief's pull request, and the lanes' skills, `file-issue` and `upstream-finding`, which an agent reads by its path. |
+| [`cli/`](../cli/) | The `kanon` command: `init`, `doctor`, `apps`, `milestones`, `metrics`, [`status`](status.md), and [`inbox`](status.md#the-inbox), `kanon status --inbox` under its own name. |
+| [`skills/`](../skills/) | The Claude Code skills: `/kanon:adopt`, `/kanon:doctor`, `/kanon:upgrade`, `/kanon:mandate`, which starts a project for the Lead and carries its brief's pull request, `/kanon:inbox`, which lists what waits on you and records each decision asked of you on GitHub, and the lanes' skills, `file-issue` and `upstream-finding`, which an agent reads by its path. |
 | [`infra/`](../infra/) | The QA store's and the telemetry store's cloud templates, and the request handler of the [hosted status server](status.md#the-hosted-mcp-server), which serves `kanon status`'s six views read-only to an MCP client, through the same status core, with its own OAuth sign-in in front of Kanon's status App, so it reads GitHub as the person who [signed in](status.md#signing-in) and stores nothing. Its template, `infra/status/template.yaml`, and the build, deploy and smoke scripts beside it are what the operator's deploy hooks run at the pinned release ([Deploy](status.md#deploy)). |
 | [`tests/`](../tests/) | Kanon's own tests, run on every pull request. |
 

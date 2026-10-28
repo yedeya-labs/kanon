@@ -120,6 +120,62 @@ describe('[K-WORK-25] what the inbox calls ready for a person\'s merge', () => {
   });
 });
 
+describe('[K-WORK-25] a pull request with a decision asked on it', () => {
+  const asked = (comments: Array<{ login: string; body: string; at: string }>, over: Partial<PrWorld> = {}) => numbered(44, personPr({ labels: ['documentation', DECISION_LABEL], comments, ...over }));
+  const answer = () => answerBody({ decision: 'One.', by: 'the Owner, in chat' });
+  async function both(pr: PrWorld) {
+    const v: Any = await inboxView({ reader: ownerWorld({ prs: [pr] }).reader, repo: REPO, now: READ_AT });
+    const r: Any = await readinessView({ reader: ownerWorld({ prs: [pr] }).reader, repo: REPO, pr: 44, now: READ_AT });
+    return { merges: v.merges.map((m: Any) => m.number), asks: v.asks.map((a: Any) => [a.number, a.form, a.answered]), readiness: r.readiness };
+  }
+
+  it('[STAT-18] holds an otherwise ready pull request out of the merges while its ask waits, and lists it only among the decisions', async () => {
+    const { merges, asks, readiness } = await both(asked([{ login: 'octo', body: ASK(), at: AT }]));
+    expect(merges).toEqual([]);
+    expect(asks).toEqual([[44, 'ok', false]]);
+    expect(readiness).toMatchObject({ by: 'person', ready: false, lacks: ['ask'] });
+    expect(readiness.why).toContain(`https://github.com/${REPO}/pull/44#issuecomment-1`);
+    expect(readiness.why).not.toMatch(/PRIVATE/);
+  });
+
+  it('[STAT-18] holds it too when the label is on and no decision was asked in the fixed form', async () => {
+    const { merges, asks, readiness } = await both(asked([{ login: 'octo', body: 'Should we?', at: AT }]));
+    expect([merges, asks]).toEqual([[], [[44, 'missing', false]]]);
+    expect(readiness.lacks).toEqual(['ask']);
+  });
+
+  it('[STAT-18] lifts the hold once an answer follows the latest ask, though the label is still on', async () => {
+    const { merges, asks, readiness } = await both(asked([{ login: 'octo', body: ASK(), at: AT }, { login: 'octo', body: answer(), at: AT }]));
+    expect(merges).toEqual([44]);
+    expect(asks).toEqual([[44, 'ok', true]]);
+    expect(readiness).toMatchObject({ ready: true, lacks: [] });
+    // A new ask after that answer holds it again.
+    const again = await both(asked([{ login: 'octo', body: ASK(), at: AT }, { login: 'octo', body: answer(), at: AT }, { login: 'octo', body: ASK(), at: AT }]));
+    expect([again.merges, again.readiness.lacks]).toEqual([[], ['ask']]);
+  });
+
+  it('[STAT-18] reads the label, not the comment: an ask on a pull request without the label holds nothing', async () => {
+    const { merges, asks } = await both(asked([{ login: 'octo', body: ASK(), at: AT }], { labels: ['documentation'] }));
+    expect([merges, asks]).toEqual([[44], []]);
+  });
+
+  it('[STAT-18] names the ask beside what else a pull request lacks', async () => {
+    const { readiness } = await both(asked([{ login: 'octo', body: ASK(), at: AT }], { checks: [ci('test', 'FAILURE')] }));
+    expect(readiness.lacks).toEqual(['checks', 'ask']);
+  });
+
+  it("[STAT-18] holds the Implementer's pull request a person would merge, and never the Merger's", async () => {
+    const ask = [{ login: 'octo', body: ASK(), at: AT }];
+    const escalated = numbered(43, implementerPr({ labels: ['agent:implement', 'enhancement', DECISION_LABEL], comments: ask, files: [{ filename: 'migrations/001.sql' }] }));
+    expect(await readyOf([escalated])).toEqual([]);
+    const r: Any = await readinessView({ reader: ownerWorld({ prs: [escalated] }).reader, repo: REPO, pr: 43, now: READ_AT });
+    expect(r.readiness).toMatchObject({ by: 'person', ready: false, lacks: ['ask'] });
+    const merger = numbered(42, implementerPr({ labels: ['agent:implement', 'enhancement', DECISION_LABEL], comments: ask }));
+    const m: Any = await readinessView({ reader: ownerWorld({ prs: [merger] }).reader, repo: REPO, pr: 42, now: READ_AT });
+    expect(m.readiness).toMatchObject({ by: 'merger', ready: true });
+  });
+});
+
 describe('a token GitHub refuses the check runs', () => {
   const refused = (over: Partial<PrWorld>) => numbered(44, personPr({ checksRefused: true, checks: [], ...over }));
 
@@ -189,6 +245,21 @@ describe('[K-WORK-24] the decision forms', () => {
     expect(kindOf(`\n\n${ASK_MARKER}\n**Question.** x`)).toBe('ask');
     expect(kindOf(`Quoting: ${ASK_MARKER}`)).toBeNull();
     expect(kindOf(`> ${ASK_MARKER}`)).toBeNull();
+  });
+
+  it('reads an App-run agent\'s ask and answer on the line after its header (K-AGENT-1), and nothing else before the marker', () => {
+    const header = '**Lead** <!-- kanon:role=lead -->';
+    const ask = askBody({ question: 'Which?', options: ['One', 'Two'], recommendation: 'One.', header });
+    expect(ask.split('\n').slice(0, 3)).toEqual([header, '', ASK_MARKER]);
+    expect(kindOf(ask)).toBe('ask');
+    expect(isWholeAsk(ask)).toBe(true);
+    expect(kindOf(answerBody({ decision: 'One.', by: 'the Owner', header }))).toBe('answer');
+    expect(askState([{ body: ask, url: 'u#1' }])).toEqual({ ask: 'u#1', form: 'ok', answered: false });
+    // Only a line carrying a role marker is a header, and only one is skipped.
+    expect(kindOf(`**Lead**\n\n${ASK_MARKER}`)).toBeNull();
+    expect(kindOf(`${header}\nQuoting: ${ASK_MARKER}`)).toBeNull();
+    expect(kindOf(`${header}\n${header}\n${ASK_MARKER}`)).toBeNull();
+    expect(kindOf(header)).toBeNull();
   });
 
   it('[STAT-16] reads a thread\'s latest ask, its form, and whether an answer followed it', () => {
