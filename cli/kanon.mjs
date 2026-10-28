@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // The `kanon` command: `kanon init` (cli/init.mjs), `kanon doctor` (cli/doctor.mjs), `kanon apps`
-// (cli/apps.mjs), `kanon milestones` (cli/milestones.mjs), `kanon metrics` (cli/metrics.mjs) and `kanon status`
-// (cli/status.mjs). Each calls GitHub through the caller's own `gh`, and says first which token it uses and whose it
+// (cli/apps.mjs), `kanon milestones` (cli/milestones.mjs), `kanon metrics` (cli/metrics.mjs), `kanon status`
+// (cli/status.mjs) and `kanon inbox` (cli/inbox.mjs). Each calls GitHub through the caller's own `gh`, and says first which token it uses and whose it
 // is (cli/gh-token.mjs).
 import { apps } from './apps.mjs';
 import { doctor } from './doctor.mjs';
+import { inbox } from './inbox.mjs';
 import { init } from './init.mjs';
 import { metrics } from './metrics.mjs';
 import { milestones } from './milestones.mjs';
@@ -29,7 +30,10 @@ Commands:
   status       where the repository stands, read live from GitHub: a project's items, what
                holds each, and its phase; what is about to ship, what shipped and where it is
                deployed; how each lane has run lately; whether a pull request is ready to merge;
-               or what waits on a person; writes nothing; --json for scripts (kanon status --help)`;
+               or what waits on a person; writes nothing; --json for scripts (kanon status --help)
+  inbox        what waits on you, with links: the pull requests ready for a person's merge
+               and the decisions asked of a person (decision:needed); read live, writes and
+               sends nothing; --json for scripts (kanon inbox --help)`;
 
 const [command, ...rest] = process.argv.slice(2);
 if (command === 'init') process.exitCode = await init(rest);
@@ -38,6 +42,7 @@ else if (command === 'apps') process.exitCode = await apps(rest);
 else if (command === 'milestones') process.exitCode = await milestones(rest);
 else if (command === 'metrics') process.exitCode = await metrics(rest);
 else if (command === 'status') process.exitCode = await status(rest);
+else if (command === 'inbox') process.exitCode = await inbox(rest);
 else if (command === undefined || command === '-h' || command === '--help') console.log(HELP);
 else {
   console.error(`kanon: unknown command "${command}"\n\n${HELP}`);

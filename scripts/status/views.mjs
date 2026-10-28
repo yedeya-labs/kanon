@@ -1,4 +1,4 @@
-// The status core's five views, as each surface asks for one (project #1327): `kanon status`
+// The status core's six views, as each surface asks for one (project #1327): `kanon status`
 // (`cli/status.mjs`) and the hosted MCP server (`infra/status/function/`). Both build each view's
 // section of `kanon-status/v1` here, so a tool's answer is the command's section for the same
 // reads by construction, never a second assembly beside it (`[MCP-2]`).
@@ -7,12 +7,12 @@
 // answer: its section is `{ error, reads }`, naming each read and why. Any other failure throws,
 // and the surface says it stopped.
 //
-// EVERY VIEW LOADS FROM ANY DIRECTORY. The readiness and needs-the-Owner views run the merge gate's
+// EVERY VIEW LOADS FROM ANY DIRECTORY. The readiness, needs-the-Owner and inbox views run the merge gate's
 // verdict function, whose module reads no App register from the working directory when there is
 // none, and judge by the logins in the default branch's register (kanon#1396). So the hosted
-// server, which has no checkout, serves all five.
+// server, which has no checkout, serves all six.
 
-import { needsOwnerView } from './needs-owner.mjs';
+import { inboxView, needsOwnerView } from './needs-owner.mjs';
 import { IncompleteRead, projectView } from './project.mjs';
 import { readinessView } from './pull-request.mjs';
 import { ReadError } from './reader.mjs';
@@ -27,7 +27,7 @@ import { releaseView } from './release.mjs';
 /**
  * Each view, by its key in `kanon-status/v1`. A view's own argument, the tracking issue or the
  * pull request, is `n`.
- * @type {Record<'project' | 'release' | 'pr' | 'lanes' | 'needsOwner', (args: Reads & { n?: number }) => Promise<object>>}
+ * @type {Record<'project' | 'release' | 'pr' | 'lanes' | 'needsOwner' | 'inbox', (args: Reads & { n?: number }) => Promise<object>>}
  */
 export const VIEWS = {
   project: ({ reader, repo, n }) => projectView({ reader, repo, project: /** @type {number} */ (n) }),
@@ -35,6 +35,7 @@ export const VIEWS = {
   pr: ({ reader, repo, n, readAt }) => readinessView({ reader, repo, pr: /** @type {number} */ (n), now: Date.parse(readAt) }),
   lanes: ({ reader, repo }) => laneHealthView({ reader, repo }),
   needsOwner: ({ reader, repo, readAt }) => needsOwnerView({ reader, repo, now: Date.parse(readAt) }),
+  inbox: ({ reader, repo, readAt }) => inboxView({ reader, repo, now: Date.parse(readAt) }),
 };
 
 /**

@@ -21,6 +21,7 @@ const { IncompleteRead } = await import('../../scripts/status/project.mjs');
 const { ReadError } = await import('../../scripts/status/reader.mjs');
 const { HELD_MARKER } = await import('../../scripts/lead-reconcile.mjs');
 const { RETRY_STEPS } = await import('../../scripts/lane-retry.mjs');
+const { askBody, answerBody, ASK_MARKER } = await import('../../scripts/lib/decision-asks.mjs');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -45,9 +46,21 @@ const PRS = () => [
   numbered(47, briefPr('Which store? ✅ ANSWERED: Postgres.', {}, 'docs/projects/10.md')),
   // The Implementer's, still running its checks, and closing #36.
   numbered(48, implementerPr({ checks: [ci('test', null)], closes: [{ number: 36, body: 'PRIVATE issue body' }] })),
+  // A person's, red, with a decision asked on it.
+  numbered(49, personPr({ checks: [ci('test', 'FAILURE')], labels: ['decision:needed'], comments: [{ login: 'octo', body: ASK(), at: STALE }] })),
 ];
 
+/** A decision asked in the fixed form, its text private to the thread. */
+const ASK = () => askBody({ question: 'PRIVATE: which provider?', options: ['PRIVATE one', 'PRIVATE two'], recommendation: 'PRIVATE one.' });
+
 const ISSUES = (): OwnerIssue[] => [
+  // Decisions asked of a person: in the fixed form; labelled with no ask; an ask missing a part,
+  // answered after with the label left on; and a marker only quoted, which is no ask.
+  { number: 60, title: 'Pick a payment provider', labels: ['decision:needed'], comments: [{ login: 'octo', body: 'Context first.', createdAt: STALE }, { login: 'octo', body: ASK(), createdAt: STALE }] },
+  { number: 61, title: 'Choose a font', labels: ['decision:needed', 'enhancement'], comments: [{ login: 'octo', body: `Quoting the form: ${ASK_MARKER}`, createdAt: STALE }] },
+  { number: 62, title: 'Name the plan', labels: ['decision:needed'], comments: [{ login: 'octo', body: `${ASK_MARKER}\n\n**Question.** PRIVATE?`, createdAt: STALE }, { login: 'octo', body: answerBody({ decision: 'PRIVATE yes.', by: 'the Owner, in chat' }), createdAt: FRESH }] },
+  // An answered decision whose label came off is no longer listed.
+  { number: 63, title: 'Pick a colour', labels: ['enhancement'], comments: [{ login: 'octo', body: ASK(), createdAt: STALE }] },
   { number: 7, title: 'Project: storefront', labels: ['needs:human'], comments: [{ login: 'example-lead', body: `${LEAD_HEADER}\n\nPRIVATE hold reasons.\n\n${HELD_MARKER}`, createdAt: STALE }] },
   // The marker in a comment that isn't the Lead's is no Lead hold (kanon#1399).
   { number: 8, title: 'Project: payments', labels: ['needs:human'], comments: [{ login: 'octo', body: `Quoting: ${HELD_MARKER}`, createdAt: STALE }] },
@@ -93,7 +106,7 @@ describe('the needs-the-Owner view', () => {
   it('[STAT-10] lists what waits on a person, each with its link and its reason, and nothing else', async () => {
     const w = world();
     const v: Any = await needsOwnerView({ reader: w.reader, repo: w.repo, now: READ_AT });
-    expect(Object.keys(v).sort(), 'the closed list, and nothing else').toEqual(['branch', 'decisions', 'holds', 'lanes', 'merges', 'stops']);
+    expect(Object.keys(v).sort(), 'the closed list, and nothing else').toEqual(['asks', 'branch', 'decisions', 'holds', 'lanes', 'merges', 'stops']);
     expect(v.branch).toBe('main');
 
     // The pull requests ready for a person's merge: the Implementer's the gate escalates for a path
@@ -107,7 +120,7 @@ describe('the needs-the-Owner view', () => {
       expect(readiness).toMatchObject({ by: 'person', ready: true });
       expect([m.title, m.reason]).toEqual([title, readiness.why]);
     }
-    for (const n of [42, 45, 46, 48]) {
+    for (const n of [42, 45, 46, 48, 49]) {
       const { readiness } = (await readinessView({ reader: world().reader, repo: REPO, pr: n, now: READ_AT })) as Any;
       expect(readiness.by === 'person' && readiness.ready, `#${n}`).toBe(false);
     }
@@ -132,6 +145,15 @@ describe('the needs-the-Owner view', () => {
       number: 46, title: 'docs(projects): brief for #9', url: `https://github.com/${REPO}/pull/46`, brief: 'docs/projects/9.md', n: 1, headline: 'Which store? ⛔ OPEN', marker: '⛔',
     }]);
 
+    // Each issue and pull request labelled decision:needed, with the link of its latest ask, the
+    // ask's form, and whether an answer followed it with the label left on (K-WORK-24).
+    expect(v.asks).toEqual([
+      { number: 49, title: 'docs: say how to order', url: `https://github.com/${REPO}/pull/49`, kind: 'pr', ask: `https://github.com/${REPO}/pull/49#issuecomment-1`, form: 'ok', answered: false },
+      { number: 60, title: 'Pick a payment provider', url: `https://github.com/${REPO}/issues/60`, kind: 'issue', ask: `https://github.com/${REPO}/issues/60#issuecomment-2`, form: 'ok', answered: false },
+      { number: 61, title: 'Choose a font', url: `https://github.com/${REPO}/issues/61`, kind: 'issue', ask: null, form: 'missing', answered: false },
+      { number: 62, title: 'Name the plan', url: `https://github.com/${REPO}/issues/62`, kind: 'issue', ask: `https://github.com/${REPO}/issues/62#issuecomment-1`, form: 'incomplete', answered: true },
+    ]);
+
     // The lanes the lane-health view reports red; not a flaky one, not a green one.
     expect(v.lanes).toEqual([{ file: 'implement.yml', url: `https://github.com/${REPO}/actions/workflows/implement.yml`, failed: 3, decisive: 3 }]);
 
@@ -143,10 +165,10 @@ describe('the needs-the-Owner view', () => {
   it('[STAT-10] leaves the list empty where nothing waits on a person', async () => {
     const w = ownerWorld({ prs: [numbered(42, implementerPr())], issues: [{ number: 34, title: 'Add cart', labels: ['agent:implement'], comments: [implementer('Working on it.', FRESH)] }] });
     const v: Any = await needsOwnerView({ reader: w.reader, repo: w.repo, now: READ_AT });
-    expect(v).toEqual({ branch: 'main', merges: [], stops: [], holds: [], decisions: [], lanes: [] });
+    expect(v).toEqual({ branch: 'main', merges: [], stops: [], holds: [], decisions: [], asks: [], lanes: [] });
     expect(w.seen.some((s) => s.includes('event=issues')), 'the live runs are read for an issue in a lane').toBe(true);
     const none = ownerWorld({ prs: [] });
-    expect(await needsOwnerView({ reader: none.reader, repo: none.repo, now: READ_AT })).toEqual({ branch: 'main', merges: [], stops: [], holds: [], decisions: [], lanes: [] });
+    expect(await needsOwnerView({ reader: none.reader, repo: none.repo, now: READ_AT })).toEqual({ branch: 'main', merges: [], stops: [], holds: [], decisions: [], asks: [], lanes: [] });
     expect(none.seen.some((s) => s.includes('event=issues')), 'and not without one').toBe(false);
   });
 
@@ -217,6 +239,10 @@ describe('the needs-the-Owner view', () => {
     // An issue's comments, which the sweep and the hold are read from.
     const comments = world({ overrides: { graphql: { Comments: (vars: Any) => { if (vars.number === 7) throw new ReadError('GraphQL Comments', 'Something went wrong'); return { repository: { issue: { comments: { nodes: [], totalCount: 0, pageInfo: { hasNextPage: false } } } } }; } } } });
     await expect(needsOwnerView({ reader: comments.reader, repo: comments.repo, now: READ_AT })).rejects.toThrow(/needs-the-Owner view.*GraphQL Comments failed: Something went wrong/);
+
+    // The comments of a thread labelled decision:needed, which its ask is read from.
+    const asked = world({ overrides: { pages: refuse(/issues\/60\/comments/) } });
+    await expect(needsOwnerView({ reader: asked.reader, repo: asked.repo, now: READ_AT })).rejects.toThrow(/needs-the-Owner view.*issues\/60\/comments\?per_page=100 failed: API rate limit exceeded/);
 
     // The live runs, cut short.
     const cut = world({ overrides: { pages: (p: string) => (p.includes('status=queued&event=issues') ? [{ total_count: 300, workflow_runs: [] }] : undefined) } });

@@ -12,9 +12,14 @@
 // `readPr` maps from and an API answer doesn't carry.
 //
 // A PERSON'S PULL REQUEST IS COMPOSED, NOT JUDGED (`[STAT-14]`, decision 13). The gate skips a
-// pull request that isn't provably the Implementer's. For one, the view composes three functions
-// that exist already: the gate's `checkPartition`, the review-recovery lane's `verdictOnHead`,
-// and, for a brief, the brief guard's `openDecisions`, and applies no other test.
+// pull request that isn't provably the Implementer's. For one, the view composes four functions
+// that exist already: the gate's `checkPartition`, `conflictState`, the review-recovery lane's
+// `verdictOnHead`, and, for a brief, the brief guard's `openDecisions`, and applies no other test.
+//
+// A TOKEN THAT CAN'T READ CHECK RUNS STILL GETS AN ANSWER. A fine-grained personal access token
+// has no Checks permission to grant, so GitHub refuses it the check rollup. The view then reads
+// the head's workflow runs and commit statuses instead (`checksFromRuns`), and says so
+// (`checks.source`); the refusal is the answer to that one read, not a failure of the view (`[STAT-15]`).
 //
 // INCOMPLETE IS AN ERROR (`[STAT-3]`). `readPr` reads some answers softly, as `null`, which the
 // gate waits on; a status answer built on one would be partial, so here every failed read is the
@@ -42,25 +47,46 @@ import { IncompleteRead } from './project.mjs';
 import { ReadError, graphqlRead, ownerAndName, requireComplete, watched } from './reader.mjs';
 import { readSpecLayer } from './spec-layer.mjs';
 
-const Q_PR = `query PullRequestGate($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
+/** What the readiness view reads of a pull request, but its checks. */
+const PR_FIELDS = `
       id number title url body state isDraft headRefOid mergeable mergeStateStatus isMergeQueueEnabled isInMergeQueue
       author { __typename login }
       labels(first: 100) { totalCount nodes { name } }
       closingIssuesReferences(first: 100) { totalCount nodes { number body repository { nameWithOwner } } }
       commits(first: 100) { totalCount nodes { commit { messageHeadline messageBody } } }
+      timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 1) { nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } } }`;
+
+/** The head's checks, as the merge gate reads them: a token that can't read check runs is refused this. */
+const HEAD_CHECKS = `
       head: commits(last: 1) {
         nodes { commit { statusCheckRollup { contexts(first: 100) { totalCount nodes {
           __typename
           ... on CheckRun { name status conclusion startedAt completedAt detailsUrl checkSuite { workflowRun { workflow { name } } } }
           ... on StatusContext { context state createdAt }
         } } } } }
-      }
-      timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 1) { nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } } }
+      }`;
+
+const Q_PR = `query PullRequestGate($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {${PR_FIELDS}${HEAD_CHECKS}
     }
   }
 }`;
+
+/**
+ * The same read without the checks, for a token GitHub won't show check runs to: a fine-grained
+ * personal access token has no Checks permission to grant, and an App token may lack it. The
+ * head's checks are then read from its workflow runs and commit statuses (`checksFromRuns`).
+ */
+export const Q_PR_NO_CHECKS = `query PullRequestGateNoChecks($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {${PR_FIELDS}
+    }
+  }
+}`;
+
+/** GitHub's answer to a token that may not read the check runs a query asks for. */
+const CHECKS_REFUSED = /Resource not accessible|FORBIDDEN/i;
 
 /** The marker rule of the Merger's record that it queued a head (`merge-gate.mjs`, kanon#1104). */
 const QUEUED = 'queued';
@@ -106,6 +132,36 @@ function checkOf(node) {
 }
 
 /**
+ * The head's checks, read from what a token without the Checks permission can read: each workflow
+ * run on the head is one check, named by its workflow, and each commit status context its newest
+ * status, both in the shape `checkOf` gives. A run stands in for its jobs, so a run with a failed
+ * job is one failed check, and a run still going is one pending check.
+ * @param {any[]} runs the head's workflow runs, as the REST listing has them
+ * @param {any[]} statuses the head's commit statuses, newest first, as the REST listing has them
+ */
+export function checksFromRuns(runs, statuses) {
+  const fromRuns = runs.map((r) => {
+    const done = r?.status === 'completed';
+    return {
+      name: String(r?.name ?? ''),
+      workflowName: String(r?.name ?? ''),
+      startedAt: r?.run_started_at ?? r?.created_at ?? ZERO_TIME,
+      completedAt: done ? (r?.updated_at ?? ZERO_TIME) : ZERO_TIME,
+      databaseId: undefined,
+      runId: r?.id === undefined ? undefined : String(r.id),
+      jobId: undefined,
+      status: done ? 'COMPLETED' : String(r?.status ?? 'queued').toUpperCase(),
+      conclusion: done ? String(r?.conclusion ?? '').toUpperCase() : '',
+    };
+  });
+  /** @type {Set<string>} */
+  const seen = new Set();
+  const newest = statuses.filter((s) => !seen.has(String(s?.context)) && seen.add(String(s?.context)));
+  const fromStatuses = newest.map((s) => checkOf({ __typename: 'StatusContext', context: s.context, state: String(s.state ?? '').toUpperCase(), createdAt: s.created_at ?? ZERO_TIME }));
+  return [...fromRuns, ...fromStatuses];
+}
+
+/**
  * Every entry of a paged REST listing. `at` picks a page's entries; a page without them is a
  * failed read, and so is a listing that ends before the count it reports, when `total` reads one.
  * @param {import('./reader.mjs').Reader} reader @param {string} path
@@ -148,15 +204,26 @@ function wholeConnection(conn, name, reader) {
  *   (kanon#1486): the default branch's register's, never the working directory's (kanon#1396)
  */
 export async function readPullRequest(reader, repo, number, { merger, implementer }) {
-  const data = /** @type {any} */ (await reader.graphql(Q_PR, { ...ownerAndName(repo), number }));
+  const vars = { ...ownerAndName(repo), number };
+  /** Where the head's checks were read from: its check rollup, or, for a token refused that, its runs. */
+  let checksFrom = /** @type {'rollup' | 'runs'} */ ('rollup');
+  let data;
+  try {
+    data = /** @type {any} */ (await reader.graphql(Q_PR, vars));
+  } catch (e) {
+    const why = e instanceof ReadError ? e.why : String(/** @type {Error} */ (e)?.message ?? e);
+    if (!CHECKS_REFUSED.test(why)) throw e;
+    // Read again without the checks: the refusal is answered, not lost (`[STAT-3]`).
+    if (e instanceof ReadError) e.expected = true;
+    data = /** @type {any} */ (await reader.graphql(Q_PR_NO_CHECKS, vars));
+    checksFrom = 'runs';
+  }
   const node = data?.repository?.pullRequest;
   if (!node) throw new ReadError(graphqlRead(Q_PR), `${repo} has no pull request #${number}`);
   const head = String(node.headRefOid);
   const labels = wholeConnection(node.labels, 'labels', reader).map((l) => l.name);
   const closes = wholeConnection(node.closingIssuesReferences, 'closingIssuesReferences', reader);
   const commits = wholeConnection(node.commits, 'commits', reader);
-  const rollup = node.head?.nodes?.at(-1)?.commit?.statusCheckRollup;
-  const checks = (rollup ? wholeConnection(rollup.contexts, 'statusCheckRollup', reader) : []).map(checkOf);
 
   const base = `repos/${repo}`;
   const changed = await listing(reader, `${base}/pulls/${number}/files?per_page=100`);
@@ -164,6 +231,10 @@ export async function readPullRequest(reader, repo, number, { merger, implemente
   const reviews = await listing(reader, `${base}/pulls/${number}/reviews?per_page=100`);
   const runs = await listing(reader, `${base}/actions/runs?head_sha=${head}&status=failure&per_page=100`, (p) => p?.workflow_runs, (p) => p?.total_count);
   const statuses = await listing(reader, `${base}/commits/${head}/statuses?per_page=100`);
+  const rollup = node.head?.nodes?.at(-1)?.commit?.statusCheckRollup;
+  const checks = checksFrom === 'runs'
+    ? checksFromRuns(await listing(reader, `${base}/actions/runs?head_sha=${head}&per_page=100`, (p) => p?.workflow_runs, (p) => p?.total_count), statuses)
+    : (rollup ? wholeConnection(rollup.contexts, 'statusCheckRollup', reader) : []).map(checkOf);
   await reader.get(`${base}/issues?per_page=1`);
 
   /** @type {Promise<Array<{ login: string, body: string, at: string }>> | null} */
@@ -218,7 +289,7 @@ export async function readPullRequest(reader, repo, number, { merger, implemente
       : undefined,
     mergeQueue,
   };
-  return { pr, node, changed };
+  return { pr, node, changed, checksFrom };
 }
 
 /**
@@ -393,7 +464,7 @@ export async function readinessContext(reader, repo) {
  */
 export async function readinessOf(number, { reader, repo, now, context }) {
   const { files, logins, escalations } = context;
-  const { pr, node, changed } = await readPullRequest(reader, repo, number, { merger: logins.merger, implementer: logins.implementer });
+  const { pr, node, changed, checksFrom } = await readPullRequest(reader, repo, number, { merger: logins.merger, implementer: logins.implementer });
   const gate = { escalations, now, implementer: logins.implementer, reviewer: logins.reviewer, merger: logins.merger };
   const verdict = mergeVerdict(pr, gate);
   const parts = checkPartition(pr.checks);
@@ -427,6 +498,7 @@ export async function readinessOf(number, { reader, repo, now, context }) {
     head: pr.headSha,
     branch: files.branch,
     checks: {
+      source: checksFrom,
       relevant: parts.relevant.map((/** @type {any} */ c) => ({ name: c.name, workflow: c.workflowName || null, status: c.status, conclusion: c.conclusion || null })),
       pending: names(parts.pending),
       cancelled: names(parts.cancelled),
@@ -461,8 +533,9 @@ function implementersReadiness(pr, verdict, gate, merger) {
 /**
  * A pull request the gate skips as not the Implementer's (`[STAT-14]`): a person's to merge,
  * ready only when the gate's check partition finds a relevant check and none pending, cancelled
- * or failed, the review-recovery lane reads an approval on its head, and, for a brief, the brief
- * guard finds no open decision. Nothing else is asked of it.
+ * or failed, GitHub doesn't report it conflicting (`conflictState`, so a mergeability GitHub is
+ * still computing doesn't hold it), the review-recovery lane reads an approval on its head, and,
+ * for a brief, the brief guard finds no open decision. Nothing else is asked of it.
  * @param {any} pr @param {ReturnType<typeof checkPartition>} parts
  * @param {Array<{ n: number }> | null} decisions @param {string} reviewer
  */
@@ -477,6 +550,10 @@ function personsReadiness(pr, parts, decisions, reviewer) {
   } else if (parts.pending.length || parts.cancelled.length || parts.failed.length) {
     lacks.push('checks');
     why.push(`its checks aren't green (${[...parts.pending.map((c) => `${c.name} running`), ...parts.cancelled.map((c) => `${c.name} cancelled`), ...parts.failed.map((c) => `${c.name} ${c.conclusion}`)].join(', ')})`);
+  }
+  if (conflictState({ mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus }) === 'conflicting') {
+    lacks.push('mergeable');
+    why.push('it conflicts with its base branch');
   }
   const onHead = verdictOnHead({
     headRefOid: pr.headSha,
@@ -494,6 +571,6 @@ function personsReadiness(pr, parts, decisions, reviewer) {
     by: 'person',
     ready: lacks.length === 0,
     lacks,
-    why: lacks.length ? `a person's to merge, not ready: ${why.join('; ')}` : "a person's to merge: its checks are green, the Reviewer approved its head" + (decisions ? ', and its brief has no open decision' : ''),
+    why: lacks.length ? `a person's to merge, not ready: ${why.join('; ')}` : "a person's to merge: its checks are green, it doesn't conflict with its base branch, the Reviewer approved its head" + (decisions ? ', and its brief has no open decision' : ''),
   };
 }

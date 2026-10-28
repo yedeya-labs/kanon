@@ -58,6 +58,10 @@ export interface PrWorld {
   reviews: Array<{ id: number; state: string; login: string; body: string; commit: string }>;
   /** the failed workflow runs on the head */
   failedRuns: Array<{ name: string; conclusion: string }>;
+  /** every workflow run on the head, as the REST listing has them: read only when GitHub refuses the token the check rollup */
+  headRuns?: Array<{ id: number; name: string; status: string; conclusion: string | null; event?: string; run_started_at?: string; updated_at?: string }>;
+  /** GitHub refuses this token the check rollup, as it refuses a fine-grained personal access token */
+  checksRefused?: boolean;
   /** the head's commit statuses, newest first */
   statuses: Array<{ context: string; state: string; creator: string }>;
   /** issue comments, oldest first */
@@ -298,14 +302,23 @@ export function readerFor(w: PrWorld, overrides: Partial<FakeWorld> = {}) {
       if (path === `${base}/pulls/${w.number}/reviews?per_page=100`) return [restReviews(w)];
       if (path === `${base}/commits/${w.head}/statuses?per_page=100`) return [w.statuses.map((s) => ({ context: s.context, state: s.state, creator: { login: s.creator } }))];
       if (path === `${base}/actions/runs?head_sha=${w.head}&status=failure&per_page=100`) return [{ total_count: w.failedRuns.length, workflow_runs: w.failedRuns }];
-      if (path === `${base}/issues/${w.number}/comments?per_page=100`) return [w.comments.map((c) => ({ user: { login: c.login }, body: c.body, created_at: c.at }))];
+      if (path === `${base}/actions/runs?head_sha=${w.head}&per_page=100`) return [{ total_count: (w.headRuns ?? []).length, workflow_runs: w.headRuns ?? [] }];
+      if (path === `${base}/issues/${w.number}/comments?per_page=100`) return [w.comments.map((c, k) => ({ user: { login: c.login }, body: c.body, created_at: c.at, html_url: `https://github.com/${REPO}/pull/${w.number}#issuecomment-${k + 1}` }))];
       if (path === `${base}/issues/${w.number}/events?per_page=100`) return [w.events.map((e) => ({ event: e.event, label: e.label ? { name: e.label } : undefined, actor: { login: e.actor } }))];
       return undefined;
     },
     graphql: {
       PullRequestGate: (v: Any) => {
         if (Number(v.number) !== w.number) throw Object.assign(new Error(`Could not resolve to a PullRequest with the number of ${v.number}.`), { status: 404 });
+        // GitHub's answer when the query asks for check runs the token may not read.
+        if (w.checksRefused) throw new Error('Resource not accessible by personal access token');
         return { repository: { pullRequest: graphqlPr(w) } };
+      },
+      PullRequestGateNoChecks: (v: Any) => {
+        if (Number(v.number) !== w.number) throw Object.assign(new Error(`Could not resolve to a PullRequest with the number of ${v.number}.`), { status: 404 });
+        const rest: Record<string, unknown> = { ...graphqlPr(w) };
+        delete rest.head;
+        return { repository: { pullRequest: rest } };
       },
       ...overrides.graphql,
     },

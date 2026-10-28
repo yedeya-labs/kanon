@@ -102,6 +102,7 @@ Code linked into the hosted status server. Its handler under `infra/status/` ser
 - `^scripts/project-digest\.mjs$` `pipeline` `always` — the project digest, whose read of what waits on the Owner the needs-owner view shares; linked into the hosted status server (#1345)
 - `^scripts/metrics/release\.mjs$` `pipeline` `always` — whether a pull request is a release pull request, which the release view reads; linked into the hosted status server (#1345)
 - `^scripts/lib/(lane-caller|waivers|schedule-silence|labels|milestones|fix-commands|notify-contract|telemetry-artifacts)\.mjs$` `pipeline` `always` — the libraries those deciders import: which workflows call a lane and the waivers the adoption record declares, a schedule's silence, the label taxonomy, the milestones, the known fix commands, the notification contract and a lane's telemetry artifacts; linked into the hosted status server (#1345)
+- `^scripts/lib/decision-asks\.mjs$` `pipeline` `always` — the form of a decision asked of a person, which the needs-owner view and the inbox read each `decision:needed` thread with (`K-WORK-24`); linked into the hosted status server
 - `^cli/workflow-yaml\.mjs$` `pipeline` `always` — the YAML reader the lane-caller and the schedule heartbeat read workflows with; linked into the hosted status server (#1345)
 - `^infra/qa-store/aws/(cost-rows|keys)\.mjs$` `infra` `always` — the QA store's cost-row query and its keys, which the dispatch sweep imports; linked into the hosted status server (#1345)
 

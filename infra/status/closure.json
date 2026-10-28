@@ -37,6 +37,7 @@
     "scripts/lib/app-extras.mjs",
     "scripts/lib/cli-entry.mjs",
     "scripts/lib/code-areas.mjs",
+    "scripts/lib/decision-asks.mjs",
     "scripts/lib/declarations.mjs",
     "scripts/lib/deploy-declaration.mjs",
     "scripts/lib/escalation-paths.mjs",

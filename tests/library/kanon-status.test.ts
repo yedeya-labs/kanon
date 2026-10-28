@@ -20,6 +20,7 @@ const { laneHealthView } = await import('../../scripts/status/lanes.mjs');
 const { needsOwnerView } = await import('../../scripts/status/needs-owner.mjs');
 const { ReadError } = await import('../../scripts/status/reader.mjs');
 const { HELD, HELD_MARKER } = await import('../../scripts/lead-reconcile.mjs');
+const { askBody } = await import('../../scripts/lib/decision-asks.mjs');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -90,6 +91,7 @@ const owing = () => ownerWorld({
   issues: [
     { number: 7, title: 'Project: storefront', labels: [HELD], comments: [{ login: 'example-lead', body: `**Lead** <!-- kanon:role=lead -->\n\nheld\n${HELD_MARKER}`, createdAt: '2026-10-01T00:00:00Z' }] },
     { number: 30, title: 'Pick a store', labels: ['qa:needs-info'] },
+    { number: 60, title: 'Pick a payment provider', labels: ['decision:needed'], comments: [{ login: 'octo', body: askBody({ question: 'Which provider?', options: ['One', 'Two'], recommendation: 'One.' }), createdAt: '2026-10-01T00:00:00Z' }] },
   ],
   workflows: { 'implement.yml': laneCaller('implement') },
   runs: { 'implement.yml': [{ id: 1, conclusion: 'failure' }, { id: 2, conclusion: 'failure' }, { id: 3, conclusion: 'failure' }] },
@@ -215,7 +217,7 @@ describe('kanon status prints one document, or the same result as prose', () => 
       expect(p.out, 'nothing on standard output').toBe('');
       expect(j.readers, 'nothing was read').toEqual([]);
     }
-    expect((await run(['--json'], null)).doc().error).toMatch(/--project <n>, --release, --pr <n>, --lanes or --needs-owner/);
+    expect((await run(['--json'], null)).doc().error).toMatch(/--project <n>, --release, --pr <n>, --lanes, --needs-owner or --inbox/);
     expect((await run(['--needs-owner=yes', '--json'], null)).code).toBe(EXIT.usage);
 
     // The needs-the-Owner view is a section of its own, the view's answer for the same reads, and in prose.
@@ -225,7 +227,8 @@ describe('kanon status prints one document, or the same result as prose', () => 
     expect(owner.doc(), 'one section per view asked for').not.toHaveProperty('pr');
     const ownerProse = await run(['--needs-owner'], owing());
     expect(ownerProse.code).toBe(owner.code);
-    expect(ownerProse.out).toContain('Needs a person: 5 thing(s)');
+    expect(ownerProse.out).toContain('Needs a person: 6 thing(s)');
+    expect(ownerProse.out).toContain('Decide Issue #60 Pick a payment provider: https://github.com/acme/shop/issues/60#issuecomment-1');
     expect(ownerProse.out).toContain(`Merge #${NUMBER} docs: say how to order: a person's to merge`);
     expect(ownerProse.out).toContain('Stopped #30 Pick a store: qa:needs-info https://github.com/acme/shop/issues/30');
     expect(ownerProse.out).toContain('Held by the Lead #7 Project: storefront https://github.com/acme/shop/issues/7');
@@ -322,8 +325,12 @@ describe('docs/status.md is held to the code', () => {
     // And the needs-the-Owner view: one of each entry, and a read that didn't complete.
     const ownerDocs = [(await run(['--needs-owner', '--json'], owing())).doc(), (await run(['--needs-owner', '--json'], refusedOwing())).doc()];
     expect(ownerDocs.map((d) => d.status)).toEqual(['ok', 'incomplete']);
-    expect(['merges', 'stops', 'holds', 'decisions', 'lanes'].map((k) => ownerDocs[0].needsOwner[k].length)).toEqual([1, 1, 1, 1, 1]);
-    for (const d of [...docs, ...laneDocs, ...ownerDocs]) for (const p of paths(d)) emitted.add(p);
+    expect(['merges', 'stops', 'holds', 'decisions', 'asks', 'lanes'].map((k) => ownerDocs[0].needsOwner[k].length)).toEqual([1, 1, 1, 1, 1, 1]);
+    // And the inbox: one of each list, and a read that didn't complete.
+    const inboxDocs = [(await run(['--inbox', '--json'], owing())).doc(), (await run(['--inbox', '--json'], refusedOwing())).doc()];
+    expect(inboxDocs.map((d) => d.status)).toEqual(['ok', 'incomplete']);
+    expect(['merges', 'asks'].map((k) => inboxDocs[0].inbox[k].length)).toEqual([1, 1]);
+    for (const d of [...docs, ...laneDocs, ...ownerDocs, ...inboxDocs]) for (const p of paths(d)) emitted.add(p);
     // The worlds did reach each branch, so a field missing from them is missing from the code.
     expect(docs.filter((d) => !d.pr).map((d) => d.project?.brief?.state ?? d.project?.error?.slice(0, 10) ?? d.status)).toEqual(['parsed', 'parsed', 'unparseable', 'missing', 'project #7', 'error']);
     expect(docs[1].project.hold).toEqual({ label: HELD, by: 'lead' });
@@ -343,7 +350,7 @@ describe('docs/status.md is held to the code', () => {
     // The hosted server's tools, as the server lists them.
     const { TOOLS: SERVED } = await import('../../infra/status/function/index.mjs');
     const TOOLS: string[] = SERVED.map((t: Any) => t.name);
-    expect(TOOLS.length).toBe(5);
+    expect(TOOLS.length).toBe(6);
     const tools = section(page, '## The hosted server\'s tools');
     expect(tools, 'docs/status.md has a "## The hosted server\'s tools" section').not.toBeNull();
     expect(firstCells(tools!).sort()).toEqual([...TOOLS].sort());

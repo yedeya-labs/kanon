@@ -79,6 +79,10 @@ export function ownerWorld({
         return [{ total_count: found.length, workflow_runs: found }];
       }
       if (isLane(path)) return lanes.reader.pages(path);
+      // An issue's comments over REST, as the inbox reads a thread labelled `decision:needed`.
+      const said = new RegExp(`^${base}/issues/(\\d+)/comments\\?per_page=100$`).exec(path);
+      const issue = said ? issues.find((i) => i.number === Number(said[1])) : undefined;
+      if (issue) return [(issue.comments ?? []).map((c, k) => ({ user: { login: c.login }, body: c.body, created_at: c.createdAt, html_url: `${issueNode(issue).url}#issuecomment-${k + 1}` }))];
       return (whose(path) ?? home).reader.pages(path);
     },
     graphql: (query: string, variables: Record<string, Any> = {}) => {
@@ -92,7 +96,10 @@ export function ownerWorld({
           repository: {
             pullRequests: connection(prs.map((w) => ({
               number: w.number,
+              title: w.title,
+              url: `https://github.com/${REPO}/pull/${w.number}`,
               headRefName: branches[w.number] ?? `pr-${w.number}`,
+              labels: connection(w.labels.map((name) => ({ name }))),
               closingIssuesReferences: connection(w.closes.map((i) => ({ number: i.number, repository: { nameWithOwner: i.repo ?? REPO } }))),
             }))),
           },
@@ -107,7 +114,7 @@ export function ownerWorld({
         if (!i) throw new Error(`unrouted: GraphQL Comments #${variables.number}`);
         return { repository: { issue: { comments: connection((i.comments ?? []).map((c) => ({ author: { login: c.login }, body: c.body, createdAt: c.createdAt }))) } } };
       }
-      if (op === 'PullRequestGate') {
+      if (op === 'PullRequestGate' || op === 'PullRequestGateNoChecks') {
         const i = prs.findIndex((w) => w.number === Number(variables.number));
         if (i < 0) throw new Error(`unrouted: GraphQL PullRequestGate #${variables.number}`);
         return per[i]!.reader.graphql(query, variables);

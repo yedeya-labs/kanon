@@ -22,6 +22,7 @@ const { IncompleteRead } = await import('../../scripts/status/project.mjs');
 const { ReadError } = await import('../../scripts/status/reader.mjs');
 const { checkPartition, mergeVerdict, readPr } = await import('../../scripts/merge-gate.mjs');
 const { verdictOnHead } = await import('../../scripts/review-recovery.mjs');
+const { conflictState } = await import('../../scripts/conflict-state.mjs');
 const { ESCALATION_HEADER, HANDBACK, mergerMarker } = await import('../../scripts/lib/protocol-spellings.mjs');
 const { IMPLEMENTER_STATUS } = await import('../../scripts/lib/role-marker.mjs');
 const { marker: rebaseMarker } = await import('../../scripts/rebase-lane.mjs');
@@ -283,37 +284,40 @@ describe("an Implementer's pull request is ready only when the merge gate says s
 });
 
 describe("any other pull request is a person's to merge", () => {
-  it("[STAT-14] is a person's, ready only on the gate's check partition, a current approval and, for a brief, no open decision, and names what it lacks", async () => {
+  it("[STAT-14] is a person's, ready only on the gate's check partition, no conflict, a current approval and, for a brief, no open decision, and names what it lacks", async () => {
     const ready = (await view(personPr())).v;
     expect(ready.verdict).toMatchObject({ action: 'skip', rule: 'not-the-implementer' });
     expect(ready.readiness).toMatchObject({ by: 'person', ready: true, lacks: [] });
     expect(ready.decisions, 'not a brief, so no decision is read').toBeNull();
 
-    // Each of the three, alone, and what it lacks.
+    // Each of the four, alone, and what it lacks.
     const cases: Array<[string, PrWorld, string[]]> = [
       ['no check at all', personPr({ checks: [] }), ['checks']],
       ['only the pipeline\'s own check', personPr({ checks: [{ kind: 'CheckRun', name: 'review / review', workflow: 'Review (Reviewer)', status: 'COMPLETED', conclusion: 'SUCCESS' }] }), ['checks']],
       ['a check still running', personPr({ checks: [ci('test', null)] }), ['checks']],
       ['a check cancelled', personPr({ checks: [ci('test', 'CANCELLED')] }), ['checks']],
       ['a check failed', personPr({ checks: [ci('test', 'FAILURE')] }), ['checks']],
+      ['a conflict GitHub reports', personPr({ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }), ['mergeable']],
+      ['a conflict in the state alone', personPr({ mergeable: 'UNKNOWN', mergeStateStatus: 'DIRTY' }), ['mergeable']],
       ['no review', personPr({ reviews: [] }), ['approval']],
       ['an approval of an older head', personPr({ reviews: [approval(1, OLD)] }), ['approval']],
       ['changes requested on the head', personPr({ reviews: [approval(1, HEAD, 'CHANGES_REQUESTED')] }), ['approval']],
       ['an approval from someone else', personPr({ reviews: [{ ...approval(1), login: 'octo' }] }), ['approval']],
       ['an open decision in a brief', briefPr('Which store? ⛔ OPEN'), ['decisions']],
-      ['all three', briefPr('Which store? PROPOSED', { checks: [ci('test', 'FAILURE')], reviews: [] }), ['checks', 'approval', 'decisions']],
+      ['all four', briefPr('Which store? PROPOSED', { checks: [ci('test', 'FAILURE')], reviews: [], mergeable: 'CONFLICTING' }), ['checks', 'mergeable', 'approval', 'decisions']],
     ];
     for (const [name, w, lacks] of cases) {
       const { v } = await view(w);
       expect(v.readiness, name).toMatchObject({ by: 'person', ready: false, lacks });
-      expect(v.readiness.why, name).toMatch(lacks.includes('decisions') ? /decision/ : lacks.includes('approval') ? /approv/ : /check/);
-      // Composed of the three functions themselves.
+      expect(v.readiness.why, name).toMatch(lacks.includes('decisions') ? /decision/ : lacks.includes('approval') ? /approv/ : lacks.includes('mergeable') ? /conflicts with its base branch/ : /check/);
+      // Composed of the functions themselves.
       const { pr } = gateOver(w);
       const p = checkPartition(pr.checks);
       const green = p.relevant.length > 0 && !p.pending.length && !p.cancelled.length && !p.failed.length;
       const onHead = verdictOnHead({ headRefOid: pr.headSha, reviews: pr.reviews.map((r: Any) => ({ author: { login: r.author }, state: r.state, body: r.body, commit: { oid: r.sha } })) });
       expect(lacks.includes('checks'), name).toBe(!green);
       expect(lacks.includes('approval'), name).toBe(onHead?.state !== 'APPROVED');
+      expect(lacks.includes('mergeable'), name).toBe(conflictState(pr) === 'conflicting');
     }
 
     // The brief guard's read: an answered mark wins over an open one, and a pre-standard brief
@@ -353,9 +357,10 @@ describe("any other pull request is a person's to merge", () => {
       expect(v.readiness.by, rule).toBe('person');
       expect(v.readiness.ready, rule).toBe(true);
     }
-    // And no other test: a person's pull request is ready though GitHub says it conflicts or is
-    // blocked, which the gate would refuse the Implementer's for.
-    expect((await view(personPr({ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }))).v.readiness.ready).toBe(true);
+    // And no other test: a person's pull request is ready while GitHub is still computing whether it
+    // conflicts, and though GitHub says it is blocked, which the gate would refuse the
+    // Implementer's for.
+    expect((await view(personPr({ mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' }))).v.readiness.ready).toBe(true);
     expect((await view(personPr({ mergeStateStatus: 'BLOCKED', labels: ['blocked'] }))).v.readiness.ready).toBe(true);
   }, GATE_READS_TIMEOUT);
 

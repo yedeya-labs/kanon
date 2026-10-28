@@ -171,6 +171,7 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 | | `gate-candidate` | `d93f0b` | Filer says launch-gating (sev:critical or sev:high); the Stakeholder decides if it joins the gate |
 | | `gate:declined` | `cfd3d7` | The Stakeholder declined this gate-candidate for the gate; applied by a person only |
 | | `needs:human` | `d93f0b` | A human decides: the Merger declined this PR, the Lead held this project, or a review deferred it |
+| | `decision:needed` | `e4e669` | A person owes a decision asked in a comment here; removed once the answer is recorded (K-WORK-24) |
 | | `lead:file-only` | `c5def5` | On a project's tracking issue: the Lead files and reconciles its issues but dispatches none |
 | | `blocked` | `b60205` | Waiting on something outside the pipeline; parks the issue's whole project |
 | | `test:characterization` | `c2e0c6` | A person says the PR's tests lock behaviour already right: red-test skips; applied by a person only |
@@ -314,6 +315,28 @@ Every label the pipeline applies must be in this table. The table is the authori
 **Why.** An issue with no kind label is invisible to every query that counts work by kind, and a tracking issue has no other kind of its own. A dedicated "tracking" label would be a second way to find a project, next to the brief file the reconciler already reads, and the two could disagree.
 
 **Enforced by.** The brief guard reads each brief's tracking issue, issue `<n>` for `docs/projects/<n>.md`, and fails when it has no kind label or both, isn't on the bucket its kind goes in, or carries `project:<n>`. A read that fails is a finding, not a pass ([`tests/library/brief-guard.test.ts`](../tests/library/brief-guard.test.ts)). It checks too that each decomposition item names its labels (`K-PROJ-9`). Which kind a project's work is stays prose only.
+
+**Class.** framework
+
+## Asking a person
+
+### `K-WORK-24` Record a decision on GitHub before asking it, and label the thread `decision:needed`
+
+**Rule.** Before an agent asks a person for a decision, in chat or anywhere else, it posts the decision as one comment on the issue or pull request the decision concerns, in the fixed form, and adds `decision:needed` to that issue or pull request. A decision with no thread of its own goes on the tracking issue of the project it belongs to. The form is a first line `<!-- kanon:decision-needed -->`, then three parts, each opening a line: `**Question.**`, `**Options.**` and `**Recommendation.**`. When the person answers, in chat or on GitHub, the agent records the answer on the same thread, as a comment whose first line is `<!-- kanon:decision-answered -->` with `**Decision.**` and `**Decided by.**`, and removes the label. A decision asked only in chat is never asked. Which decisions go to a person at all is `K-PRIN-3`'s to say, not this rule's.
+
+**Why.** A decision asked only in a conversation lives in that conversation's memory, and a session's memory is lossy: its context is compacted, a subagent's hand-back carries only what it chose to carry, and a session that ends takes its open questions with it. Decisions asked that way were forgotten, by the agent that asked and by the person asked, and found again only when the work they blocked was found stuck. A comment in a fixed form is still there after any session, says enough for a person to decide without the session that asked, and is where the answer is recorded for the next agent to read. The label is what makes the open ones findable by a query rather than by recall, and taking it off is what closes the question. It is a label of its own, not `needs:human`, because `needs:human` already means a hold the pipeline placed, which a person clears on their own schedule, while this one is a question an agent is waiting on now.
+
+**Enforced by.** [`kanon inbox`](../docs/status.md#the-inbox) lists each open thread labelled `decision:needed` with the link of its latest ask, and reports a labelled thread with no ask in the form, and one whose answer was recorded with the label left on ([`tests/library/status-inbox.test.ts`](../tests/library/status-inbox.test.ts)). [`scripts/lib/decision-asks.mjs`](../scripts/lib/decision-asks.mjs) writes both forms. Asking on GitHub before asking in chat, and removing the label, are prose only, in the inbox skill an agent loads when it asks.
+
+**Class.** framework
+
+### `K-WORK-25` Read what waits on a person from the repository, when asked; never keep it, and never push it
+
+**Rule.** Which pull requests are ready for a person's merge, and which decisions wait on a person, are computed from GitHub when someone asks, by `kanon inbox`, and never kept in a session's memory or in a list an agent maintains. A pull request is ready for a person's merge when the readiness view says so: it is open, it has a check that counts and none running, cancelled or failed on its head, GitHub doesn't report it conflicting, the Reviewer's verdict stamped with its head is an approval, and, for a brief, no decision in it is open. An agent asked what waits on a person answers by running `kanon inbox`, never from recall. Nothing sends the inbox to anyone: it is read when asked.
+
+**Why.** A list a session keeps of what is ready or waiting is a copy of the repository's state, and it drifts the moment anything changes: a push makes an approval stale, a red check lands after the list was written, a person merges what the list still offers. Every session that keeps one keeps it its own way, and none of them survives the session. Computing the answer each time costs a few reads and can't be stale. The definition of ready is the readiness view's, which judges with the merge gate's own functions, so the inbox can't call a pull request ready that the gate's checks would refuse, and a test holds each part of it. The inbox is pull-only because a solo developer or a small team asked to be reminded of their own backlog learns to ignore the reminder; what they need is one place that is right when they look.
+
+**Enforced by.** `kanon inbox` and the readiness view's tests, which fail when any part of the definition of ready changes: a check that counts, none running, cancelled or failed, no conflict, an approval stamped with the head and not an older commit, nor a request for changes or a comment, and an open pull request only ([`tests/library/status-inbox.test.ts`](../tests/library/status-inbox.test.ts), [`tests/library/status-readiness.test.ts`](../tests/library/status-readiness.test.ts)). Answering from the command rather than from recall is prose only, in the inbox skill.
 
 **Class.** framework
 

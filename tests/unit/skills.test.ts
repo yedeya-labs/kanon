@@ -70,7 +70,14 @@ const LANE_SKILLS = ['upstream-finding', 'file-issue'];
  * The skills the model may start without being asked: doctor, which changes nothing without
  * asking, and the filing skill, which an agent about to file an issue needs (#164).
  */
-const MODEL_INVOKED = ['doctor', 'file-issue'];
+const MODEL_INVOKED = ['doctor', 'file-issue', 'inbox'];
+
+/**
+ * The person's skills an agent loads in the course of a session: the inbox skill (`K-WORK-24`,
+ * `K-WORK-25`), which drives `kanon inbox`, whose contract is `kanon status`'s. The checks of
+ * init's and doctor's contracts below don't apply to it; its own are in "the inbox skill".
+ */
+const SESSION_SKILLS = ['inbox'];
 
 /**
  * The person's skills that drive no `kanon` command: the mandate skill (#853), which works
@@ -83,7 +90,7 @@ const ALL_SKILLS: Skill[] = readdirSync(join(ROOT, 'skills'), { withFileTypes: t
   .filter((d) => d.isDirectory())
   .map((d) => parseSkill(d.name, read(`skills/${d.name}/SKILL.md`)));
 /** The person's skills that drive a `kanon` command. */
-const SKILLS: Skill[] = ALL_SKILLS.filter((s) => !LANE_SKILLS.includes(s.dir) && !PROJECT_SKILLS.includes(s.dir));
+const SKILLS: Skill[] = ALL_SKILLS.filter((s) => !LANE_SKILLS.includes(s.dir) && !PROJECT_SKILLS.includes(s.dir) && !SESSION_SKILLS.includes(s.dir));
 /** Every skill a person starts as `/kanon:<name>`. */
 const PERSONS_SKILLS: Skill[] = ALL_SKILLS.filter((s) => !LANE_SKILLS.includes(s.dir));
 const skill = (dir: string): Skill => {
@@ -256,7 +263,7 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
     for (const m of listed) expect(new Set([m[1], m[2], m[3]]).size, m[0]).toBe(1);
     expect(listed.map((m) => m[1]).sort()).toEqual(PERSONS_SKILLS.map((s) => s.dir).sort());
     expect(SKILLS.map((s) => s.dir).sort()).toEqual(['adopt', 'doctor', 'upgrade']);
-    expect(PERSONS_SKILLS.map((s) => s.dir).sort()).toEqual(['adopt', 'doctor', 'mandate', 'upgrade']);
+    expect(PERSONS_SKILLS.map((s) => s.dir).sort()).toEqual(['adopt', 'doctor', 'inbox', 'mandate', 'upgrade']);
     // The lanes' skills are listed apart, as files a lane reads, never as a `/kanon:` command.
     const lanes = section(read('docs/skills.md'), /^## The lanes' skills$/);
     expect(lanes).not.toBeNull();
@@ -266,7 +273,7 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
     expect(lanes).not.toMatch(/\/kanon:/);
   });
 
-  it("names each skill by its directory, describes it, and lets only doctor and the filing skill start without being asked", () => {
+  it("names each skill by its directory, describes it, and lets only doctor, the filing skill and the inbox start without being asked", () => {
     for (const s of ALL_SKILLS) {
       expect(s.front.name, s.dir).toBe(s.dir);
       expect(String(s.front.name)).toMatch(/^[a-z]+(?:-[a-z]+)*$/);
@@ -1126,5 +1133,66 @@ describe('the mandate skill (#853)', () => {
     const check = steps(15, 16);
     expect(check).toMatch(/every section it touches carries it/);
     expect(check).toMatch(/brief guard passed on the head/);
+  });
+});
+
+/**
+ * The inbox skill (`K-WORK-24`, `K-WORK-25`): what an agent loads to answer "what's waiting on
+ * me?" and before it asks the person a decision. It is held to the command it runs, `kanon inbox`,
+ * whose contract is `kanon status`'s, and to the decision forms the inbox reads.
+ */
+describe('the inbox skill', () => {
+  const s = skill('inbox');
+  const STATUS_PAGE = 'docs/status.md';
+
+  it('runs kanon inbox --json through npx from one release, and only commands and flags the CLI has', () => {
+    const lines = code(s.body).filter((c) => c.startsWith('npx '));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^npx --yes --package github:yedeya-labs\/kanon#v\d+\.\d+\.\d+ kanon inbox --json$/);
+    const calls = invocations(s.body);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(new Set(calls.map((c) => c.command))).toEqual(new Set(['inbox']));
+    expect(COMMANDS.has('inbox')).toBe(true);
+    const known = flagsOf('inbox');
+    expect([...known].sort()).toEqual(['--help', '--json', '--repo']);
+    for (const c of code(s.body).filter((x) => x.startsWith('--'))) expect(known.has(/^--[a-z-]+/.exec(c)![0]), c).toBe(true);
+  });
+
+  it("names kanon status's contract, and reads only fields docs/status.md documents", async () => {
+    const { SCHEMA } = await import('../../cli/status.mjs');
+    expect(s.body).toContain(`**The contract is \`${SCHEMA}\`.**`);
+    const fields = section(read(STATUS_PAGE), /^### The fields$/)!;
+    const documented = new Set([...fields.matchAll(/^\|\s*`([^`]+)`\s*\|/gm)].map((m) => m[1]!));
+    const read_ = paths(s.body);
+    expect(read_.filter((p) => p.startsWith('.inbox.')).length).toBeGreaterThan(8);
+    expect(read_.filter((p) => !documented.has(p.slice(1)))).toEqual([]);
+  });
+
+  it("handles exactly kanon status's statuses and exit codes", () => {
+    const documented = section(read(STATUS_PAGE), /^## Exit codes$/)!;
+    expect(statusPairs(s.body)).toEqual(statusPairs(documented));
+    expect(statusPairs(s.body).length).toBe(4);
+  });
+
+  it('states what it never does, and what only a person can do', () => {
+    const rules = section(s.body, /^## Ground rules$/)!;
+    for (const lead of ['**Never merge.**', '**Never print a secret.**', '**Only a person can**', '**The person signs off.**', '**Never answer "what\'s waiting on me?" from memory,**', '**Never ask a decision only in chat.**']) {
+      expect(rules.split('\n').some((l) => l.startsWith(`- ${lead}`)), lead).toBe(true);
+    }
+  });
+
+  it('applies and removes only decision:needed, and spells both forms as the inbox reads them', async () => {
+    const { DECISION_LABEL, ASK_MARKER, ANSWER_MARKER, ASK_PARTS, ANSWER_PARTS, isWholeAsk, kindOf } = await import('../../scripts/lib/decision-asks.mjs');
+    const labelled = code(s.body).flatMap((c) => [...c.matchAll(/--(?:add|remove)-label ([^\s`]+)/g)].map((m) => m[1]!));
+    expect(labelled.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(labelled)).toEqual(new Set([DECISION_LABEL]));
+    const blocks = [...s.body.matchAll(/^ *```text\n([\s\S]*?)^ *```$/gm)].map((m) => m[1]!.split('\n').map((l) => l.trim()).join('\n'));
+    const ask = blocks.find((b) => kindOf(b) === 'ask');
+    const answer = blocks.find((b) => kindOf(b) === 'answer');
+    expect(ask?.split('\n')[0]).toBe(ASK_MARKER);
+    expect(isWholeAsk(ask!)).toBe(true);
+    for (const part of ASK_PARTS) expect(ask!.split('\n').some((l) => l.startsWith(part)), part).toBe(true);
+    expect(answer?.split('\n')[0]).toBe(ANSWER_MARKER);
+    for (const part of ANSWER_PARTS) expect(answer!.split('\n').some((l) => l.startsWith(part)), part).toBe(true);
   });
 });
