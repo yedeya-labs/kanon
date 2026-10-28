@@ -56,7 +56,7 @@ import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 
 // The classifier lives in the `agent-classify` block's directory (RA-2691), so the block can
 // run it from its own path; this imports the same file.
-import { classifyResult, parseMaxTurns, parseObjects, readConfiguredModel, readResult } from "../agent-classify/classify-agent-result.mjs";
+import { classifyResult, parseMaxTurns, parseObjects, readConfiguredModel, readResult, readRuntimeNotInstalled } from "../agent-classify/classify-agent-result.mjs";
 import { AUTHS, LANE_ROLES, PROMPT_CACHE_TTLS, STAGES, TERMINAL_REASONS, describeErrors, validate } from "./schema.mjs";
 import { isCliEntry } from "../../scripts/lib/cli-entry.mjs";
 import { markedRole } from "../../scripts/lib/role-marker.mjs";
@@ -753,7 +753,10 @@ function collect(args, env) {
   const stepFailed = stages.some(([s, v]) => s === "agent" && v === "failure")
     || (args.agent_outcome ?? env.TELEMETRY_AGENT_OUTCOME) === "failure"
     || (args.job_status ?? env.TELEMETRY_JOB_STATUS) === "failure";
-  const classification = classifyResult(result, model, { maxTurns: parseMaxTurns(ctx.claude_args), stepFailed });
+  // A RUN WHOSE INSTALL OF CLAUDE CODE FAILED (kanon#1470), from `agent-run`'s marker in this job's
+  // temp directory: the row says `unavailable`, as the `agent-classify` notice for the same run does.
+  const runtimeNotInstalled = readRuntimeNotInstalled(env.RUNNER_TEMP);
+  const classification = classifyResult(result, model, { maxTurns: parseMaxTurns(ctx.claude_args), stepFailed, runtimeNotInstalled });
   return { row: buildRow(result, ctx, classification), classification, path, counts };
 }
 

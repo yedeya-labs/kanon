@@ -24,7 +24,7 @@ import {
   sumNumstat,
   run as runTelemetry,
 } from '../../actions/agent-telemetry/agent-telemetry.mjs';
-import { classifyResult, parseObjects } from '../../actions/agent-classify/classify-agent-result.mjs';
+import { RUNTIME_NOT_INSTALLED, classifyResult, parseObjects } from '../../actions/agent-classify/classify-agent-result.mjs';
 import { writeStub } from './helpers/stub-bin.js';
 
 /**
@@ -144,6 +144,17 @@ describe('the four states never collapse into a zero', () => {
     expect(row.total_cost_usd).toBeNull();
     expect(row.num_turns).toBeNull();
     expect(row.usage).toBeNull();
+  });
+
+  it("records a run whose install of Claude Code failed as unavailable, as the notice does (kanon#1470)", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'telemetry-runtime-'));
+    const absent = join(dir, 'claude-execution-output.json');
+    expect(runTelemetry({ agent: 'reviewer', execution_file: absent }, { RUNNER_TEMP: dir }).outcome).toBe('not-reached');
+    writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), 'the install failed\n');
+    const row = runTelemetry({ agent: 'reviewer', execution_file: absent }, { RUNNER_TEMP: dir });
+    expect(row.outcome).toBe('unavailable');
+    expect(row.reason).toMatch(/Claude Code never installed/);
+    expect(row.total_cost_usd, 'still unmeasured, never zero').toBeNull();
   });
 
   it('keeps the denominators even when the measurement is lost', () => {

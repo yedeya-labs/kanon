@@ -229,6 +229,7 @@ describe('the blocks run their scripts from the action cache, never from the wor
       'agent-finish: $GITHUB_ACTION_PATH/agent-quality-prs.mjs',
       'agent-run: $GITHUB_ACTION_PATH/credential-check.mjs',
       'agent-run: $GITHUB_ACTION_PATH/persona-prompt.mjs',
+      'agent-run: $GITHUB_ACTION_PATH/runtime-check.mjs',
       'agent-run: $GITHUB_ACTION_PATH/turn-budget.mjs',
       'agent-run: $GITHUB_ACTION_PATH/user-scope.mjs',
       'agent-setup: $GITHUB_ACTION_PATH/persona.mjs',

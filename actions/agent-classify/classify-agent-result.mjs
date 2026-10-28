@@ -34,7 +34,8 @@
 // `unavailable` are advice, and calling a real crash an outage tells a human to wait
 // when they should act: the same wrong advice this exists to remove, pointed the other
 // way.
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 
 /** Did the model the run was CONFIGURED for actually get used?
@@ -101,6 +102,10 @@ const configuredModelRan = (usage, model) => {
  *   agent step died before writing one — and this cannot see which. It used to assert
  *   the first, in the same breath as `unavailable` was corrected for asserting a cause
  *   it could not observe.
+ *   EXCEPT WHERE `agent-run` SAW THE INSTALL FAIL (kanon#1470): `runtimeNotInstalled`, read
+ *   from the marker its runtime check writes, makes a missing result `unavailable`, since
+ *   Claude Code never ran and so no model was called. Only with no result: a run that
+ *   wrote one is classified by it, whatever the marker says.
  *
  * EVERY RETURN CARRIES A REASON `code` BESIDE ITS SENTENCE (plan 0002 §2.3): one code per
  * sentence template, from the closed list in `agent-telemetry/schema.mjs` (`REASON_OUTCOME`),
@@ -116,10 +121,26 @@ const configuredModelRan = (usage, model) => {
  * `maxTurns` and `stepFailed` are the caller's: the run's `--max-turns` and whether the step
  * that ran it failed. Without both, an overshoot is classified by its terminal reason alone.
  *
- * @param {{ maxTurns?: number | null, stepFailed?: boolean }} [opts]
+ * `runtimeNotInstalled` is `agent-run`'s marker (`readRuntimeNotInstalled`): the action's install
+ * of Claude Code failed before the model was called.
+ *
+ * @param {{ maxTurns?: number | null, stepFailed?: boolean, runtimeNotInstalled?: boolean }} [opts]
  */
 export function classifyResult(result, model = '', opts = {}) {
-  const { maxTurns = null, stepFailed = false } = opts;
+  const { maxTurns = null, stepFailed = false, runtimeNotInstalled = false } = opts;
+  if ((!result || typeof result !== 'object') && runtimeNotInstalled) {
+    // THE MODEL WAS NEVER CALLED, AND `agent-run` SAW WHY (kanon#1470): the action failed after
+    // writing its prompt, with no CLI in place, so its install of Claude Code failed. Same kind,
+    // code and notice as a model that refused the run, because the advice is the same: nothing
+    // in the change under test ran, and waiting (a download outage) or the configuration is
+    // what to look at. `no_model_ran`, since no model ran at all.
+    return {
+      kind: 'unavailable',
+      code: 'no_model_ran',
+      why: "Claude Code never installed, so no model ran at all (claude-code-action's install of "
+        + 'the CLI failed, and the agent step wrote no result file)',
+    };
+  }
   if (!result || typeof result !== 'object') {
     // NO RESULT FILE IS ITS OWN ANSWER (RA-1503 review). These steps run on
     // `if: failure()`, which is true when ANY earlier step failed — and in most arms
@@ -235,10 +256,11 @@ export function parseMaxTurns(claudeArgs) {
  *     (`terminal_reason: 'api_error'`, measured on PR RA-2446's revise run: 45 turns, $2.66,
  *     inside the 2026-09-25 cap window).
  * Everything else is null and keeps report-only: the turn and dollar caps reproduce on a
- * re-run, and a run that finished and failed is not an outage.
+ * re-run, and a run that finished and failed is not an outage. `opts` is `classifyResult`'s, so
+ * a run whose install failed (kanon#1470) is `unreachable` too.
  */
-export function retryClass(result, model = '') {
-  const { kind } = classifyResult(result, model);
+export function retryClass(result, model = '', opts = {}) {
+  const { kind } = classifyResult(result, model, opts);
   if (kind === 'unavailable') return 'unreachable';
   if (kind === 'failed' && result?.terminal_reason === 'api_error') return 'api_error';
   return null;
@@ -305,6 +327,20 @@ export function parseObjects(raw) {
 const readObjects = (path, read) => {
   try { return parseObjects(read(path, 'utf8')); } catch { return []; }
 };
+
+/**
+ * The marker `agent-run`'s runtime check writes in the runner's temp directory when
+ * claude-code-action's install of Claude Code failed before the model was called (kanon#1470).
+ */
+export const RUNTIME_NOT_INSTALLED = 'kanon-claude-code-not-installed';
+
+/**
+ * Whether this job's `agent-run` recorded that marker. The temp directory is the job's own, so a
+ * marker there is this job's. With no absolute `RUNNER_TEMP`, false: never a shared `/tmp`.
+ */
+export function readRuntimeNotInstalled(runnerTemp, { exists = existsSync } = {}) {
+  return isAbsolute(String(runnerTemp ?? '')) && exists(join(runnerTemp, RUNTIME_NOT_INSTALLED));
+}
 
 /** The model the run was CONFIGURED for, from the `init` message. */
 export function readConfiguredModel(path, { read = readFileSync } = {}) {
@@ -496,6 +532,9 @@ export function renderNotice(kind, why, { arm = 'agent', recover = '', nonFatal 
  * `--not-raisable` is for a lane whose turn limit no dispatch can raise: its turn-cap notice
  * names no re-dispatch with `max_turns` (kanon#1009).
  *
+ * With no result file, `agent-run`'s marker in `$RUNNER_TEMP` (`RUNTIME_NOT_INSTALLED`) makes the
+ * run `unavailable`: the install of Claude Code failed before the model was called (kanon#1470).
+ *
  * ALWAYS EXITS 0. This step explains a red run; it must not be the thing that makes one,
  * or a classifier bug would turn a healthy agent arm red and this would be a new failure
  * mode rather than a description of an existing one. The arm's own steps decide the
@@ -513,10 +552,11 @@ function cli() {
   const raisable = !process.argv.includes('--not-raisable');
   const maxTurns = parseMaxTurns(arg('claude-args'));
   const stepFailed = arg('agent-outcome') === 'failure';
+  const runtimeNotInstalled = readRuntimeNotInstalled(process.env.RUNNER_TEMP);
 
   const result = readResult(file);
   const model = readConfiguredModel(file);
-  const { kind, why } = classifyResult(result, model, { maxTurns, stepFailed });
+  const { kind, why } = classifyResult(result, model, { maxTurns, stepFailed, runtimeNotInstalled });
   const { level, title, body } = renderNotice(kind, why, { arm, recover, nonFatal, raisable });
 
   console.log(`::${level} title=${title}::${body}`);
@@ -526,7 +566,7 @@ function cli() {
     // NOT THE REASON CODE (#314). `agent-telemetry` reads it off `classifyResult`'s return
     // instead, so emitting it here would be a step output with no reader — the block
     // declares only what a caller reads.
-    appendFileSync(process.env.GITHUB_OUTPUT, `kind=${kind}\nretry=${retryClass(result, model) ?? ''}\n`);
+    appendFileSync(process.env.GITHUB_OUTPUT, `kind=${kind}\nretry=${retryClass(result, model, { runtimeNotInstalled }) ?? ''}\n`);
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
     const icon = {

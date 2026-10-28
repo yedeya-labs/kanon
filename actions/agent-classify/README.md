@@ -42,4 +42,5 @@ The block has no `if:` of its own, because the right gate depends on the lane. G
 
 - **It never fails the run.** The script always exits 0: it explains a red run and must not cause one.
 - **It reads `$RUNNER_TEMP/claude-execution-output.json`,** where `claude-code-action` writes its result.
+- **A run whose install of Claude Code failed is `unavailable`** ([#1470](https://github.com/yedeya-labs/kanon/issues/1470)). When the action fails at its install of the CLI, it writes no result file, and that alone reads as `not-reached`, "cannot tell which". [`agent-run`](../agent-run/README.md) records the install failure as a marker in `$RUNNER_TEMP`, and with that marker and no result file the run gets the same `unavailable` notice and `unreachable` retry class as a model that refused it, with the reason code `no_model_ran`. A result file, when there is one, still decides.
 - **The script runs from the action's own directory,** never from the checked-out tree, so a pull request under review can't change it.

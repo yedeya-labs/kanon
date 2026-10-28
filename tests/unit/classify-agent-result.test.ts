@@ -9,7 +9,8 @@ import { interpolate } from './helpers/expression.js';
 import { readBlock } from './helpers/blocks.js';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import {
-  classifyResult, parseObjects, readConfiguredModel, readResult, renderNotice,
+  RUNTIME_NOT_INSTALLED, classifyResult, parseObjects, readConfiguredModel, readResult, readRuntimeNotInstalled,
+  renderNotice, retryClass,
 } from '../../actions/agent-classify/classify-agent-result.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -310,6 +311,52 @@ describe('classifyResult', () => {
   });
 });
 
+/**
+ * kanon#1470 — review run 39739375943 logged "Installation failed, retrying..." twice, Claude Code
+ * never ran and no result file was written, so the classifier said "cannot tell which", licensed no
+ * retry, and the promotion's gate counted the run against the candidate. `agent-run` now records
+ * that the action's install of the CLI failed (`agent-run-runtime-check.test.ts`), and with that
+ * marker and no result the run is `unavailable`, the notice the gate and doctor read.
+ */
+describe('a run whose install of Claude Code failed (kanon#1470)', () => {
+  it('is `unavailable`, with no model run at all, when there is no result', () => {
+    for (const result of [null, undefined]) {
+      const c = classifyResult(result, OPUS_5, { runtimeNotInstalled: true });
+      expect(c).toMatchObject({ kind: 'unavailable', code: 'no_model_ran' });
+      expect(c.why).toMatch(/Claude Code never installed/);
+    }
+  });
+
+  it('licenses the retry an unreachable model does', () => {
+    expect(retryClass(null, OPUS_5, { runtimeNotInstalled: true })).toBe('unreachable');
+    expect(retryClass(null, OPUS_5)).toBeNull();
+  });
+
+  it('without the marker, a missing result keeps the "cannot tell which" answer', () => {
+    expect(classifyResult(null, OPUS_5).kind).toBe('not-reached');
+    expect(classifyResult(null, OPUS_5, { runtimeNotInstalled: false }).kind).toBe('not-reached');
+  });
+
+  it('never overrides a result the run wrote: the marker widens nothing', () => {
+    for (const [result, kind] of [[HEALTHY, 'ok'], [MID_RUN, 'failed'], [EXHAUSTED, 'exhausted']] as const) {
+      expect(classifyResult(result, OPUS_5, { runtimeNotInstalled: true }).kind).toBe(kind);
+    }
+  });
+
+  it("reads the marker only from this job's temp directory, never a relative or empty one", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'classify-marker-'));
+    expect(readRuntimeNotInstalled(dir)).toBe(false);
+    writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), 'x\n');
+    expect(readRuntimeNotInstalled(dir)).toBe(true);
+    const seen: string[] = [];
+    const exists = (p: unknown) => { seen.push(String(p)); return true; };
+    expect(readRuntimeNotInstalled('', { exists })).toBe(false);
+    expect(readRuntimeNotInstalled(undefined, { exists })).toBe(false);
+    expect(readRuntimeNotInstalled('relative/tmp', { exists })).toBe(false);
+    expect(seen).toEqual([]);
+  });
+});
+
 describe('readResult', () => {
   const write = (body: string) => {
     const dir = mkdtempSync(join(tmpdir(), 'classify-'));
@@ -587,17 +634,18 @@ describe('renderNotice', () => {
 describe('the CLI, run as the workflow runs it', SPAWNS, () => {
   const script = join(process.cwd(), 'actions/agent-classify/classify-agent-result.mjs');
 
-  const run = (body: string | null, extra: string[] = []) => {
+  const run = (body: string | null, extra: string[] = [], { notInstalled = false } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'classify-cli-'));
     const file = join(dir, 'claude-execution-output.json');
     if (body !== null) writeFileSync(file, body);
+    if (notInstalled) writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), 'the install failed\n');
     const out = join(dir, 'out.txt');
     const summary = join(dir, 'summary.md');
     writeFileSync(out, '');
     writeFileSync(summary, '');
     const r = spawnSync(process.execPath, [script, '--file', file, ...extra], {
       encoding: 'utf8',
-      env: { ...process.env, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
+      env: { ...process.env, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary, RUNNER_TEMP: dir },
     });
     return {
       status: r.status,
@@ -654,6 +702,15 @@ describe('the CLI, run as the workflow runs it', SPAWNS, () => {
     expect(r.stdout, 'both causes, neither asserted').toMatch(/cannot tell which/);
     expect(r.stdout, 'and must not implicate a cap or an outage').not.toMatch(/status\.anthropic\.com/);
     expect(r.outputs).toContain('kind=not-reached');
+  });
+
+  it("gives a run whose install of Claude Code failed the unreachable model's notice and retry (kanon#1470)", () => {
+    const r = run(null, ['--arm', 'review agent', '--agent-outcome', 'failure'], { notInstalled: true });
+    expect(r.stdout, "the title the promotion's gate and doctor look for").toMatch(/^::error title=the model was unreachable, not a failed run::/m);
+    expect(r.stdout).toMatch(/Claude Code never installed/);
+    expect(r.outputs).toContain('kind=unavailable');
+    expect(r.outputs).toContain('retry=unreachable');
+    expect(r.status).toBe(0);
   });
 
   it('says a clean agent run is not the cause, when something later failed', () => {
