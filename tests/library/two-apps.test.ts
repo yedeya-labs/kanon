@@ -21,7 +21,11 @@ const { carryDecision, pickOpened } = await import('../../actions/implementer-st
 const AUTHOR = 'example-author';
 const JUDGE = 'example-judge';
 const OTHER_APP = 'example-ci';
-const EMAIL = `1+${AUTHOR}[bot]@users.noreply.github.com`;
+// A commit the Author App's token created through the API: GitHub signed it, as the App's (`LANE-19`).
+const appCommit = (sha: string, parents: string[] = []) => ({
+  sha, parents: parents.map((p) => ({ sha: p })), author: { login: `${AUTHOR}[bot]`, type: 'Bot' }, committer: { login: 'web-flow' },
+  commit: { verification: { verified: true, reason: 'valid' } },
+});
 const HEAD = 'a'.repeat(40);
 const START = 'b'.repeat(40);
 const NOW = Date.parse('2026-10-05T12:00:00Z');
@@ -74,8 +78,8 @@ describe('L4: the Merger\'s green zone is the Author App, marked `implementer`, 
     // The real Implementer PR, after a person pushed `HEAD` onto it: the status was on the
     // commit before, and the carry step refuses to move it past a commit that isn't the App's.
     const carry = carryDecision({
-      startHead: START, head: HEAD, slug: AUTHOR, email: EMAIL, startStatuses: [{ context: IMPLEMENTER_STATUS, state: 'success', creator: { login: `${AUTHOR}[bot]` } }],
-      compare: { status: 'ahead', commits: [{ sha: HEAD, parents: [{ sha: START }], commit: { author: { email: 'a.person@example.com' } } }] },
+      startHead: START, head: HEAD, slug: AUTHOR, startStatuses: [{ context: IMPLEMENTER_STATUS, state: 'success', creator: { login: `${AUTHOR}[bot]` } }],
+      compare: { status: 'ahead', commits: [{ sha: HEAD, parents: [{ sha: START }], author: { login: 'a-person', type: 'User' }, committer: { login: 'a-person' }, commit: { verification: { verified: false, reason: 'unsigned' } } }] },
       // Bound to the run (#1263) as if its agent's job held `HEAD`: the chain still refuses it.
       heads: [{ ref: 'HEAD', sha: HEAD }], base: START, fixSha: '',
     });
@@ -89,14 +93,13 @@ describe('L4: the implement lane stamps only the PR its own run opened', () => {
   const since = '2026-10-05T10:00:00Z';
   const pr = (number: number, ref: string, createdAt: string, sha: string) =>
     ({ number, created_at: createdAt, head: { ref, sha, repo: { full_name: 'o/r' } } });
-  const appCommit = () => ({ sha: HEAD, commit: { author: { email: EMAIL } } });
 
   it('leaves a forged Author PR already open and saying `Closes #N` unstamped, and stamps the run\'s own', () => {
     // The forged PR was open before the run started, from a branch that already existed.
     const forged = pr(5, 'fix/3-forged', '2026-10-05T09:00:00Z', HEAD);
     const ours = pr(6, 'feat/3-thing', '2026-10-05T10:05:00Z', HEAD);
     // `heads`: what the run's agent job held after the agent (#324), its own branch's head.
-    const picked = pickOpened({ prs: [forged, ours], repo: 'o/r', since, branchesBefore: ['main', 'fix/3-forged'], email: EMAIL, heads: [{ ref: 'feat/3-thing', sha: HEAD }], headCommit: appCommit });
+    const picked = pickOpened({ prs: [forged, ours], repo: 'o/r', since, branchesBefore: ['main', 'fix/3-forged'], slug: AUTHOR, heads: [{ ref: 'feat/3-thing', sha: HEAD }], headCommit: (sha: string) => appCommit(sha) });
     expect(picked).toEqual({ pr: 6, sha: HEAD });
     // So the forged PR's head has no status, and the Merger still refuses it.
     expect(verdict(authorPr({ number: 5, headStatuses: [] })).rule).toBe('not-the-implementer');
@@ -105,7 +108,7 @@ describe('L4: the implement lane stamps only the PR its own run opened', () => {
   it('stamps neither of two candidates, and says so by number', () => {
     const a = pr(6, 'feat/3-a', '2026-10-05T10:05:00Z', HEAD);
     const b = pr(8, 'feat/3-b', '2026-10-05T10:06:00Z', HEAD);
-    const picked = pickOpened({ prs: [a, b], repo: 'o/r', since, branchesBefore: ['main'], email: EMAIL, heads: [{ ref: 'feat/3-a', sha: HEAD }, { ref: 'feat/3-b', sha: HEAD }], headCommit: appCommit });
+    const picked = pickOpened({ prs: [a, b], repo: 'o/r', since, branchesBefore: ['main'], slug: AUTHOR, heads: [{ ref: 'feat/3-a', sha: HEAD }, { ref: 'feat/3-b', sha: HEAD }], headCommit: (sha: string) => appCommit(sha) });
     expect(picked).toHaveProperty('none');
     expect(String((picked as { none: string }).none)).toMatch(/#6, #8/);
   });
@@ -126,8 +129,8 @@ describe('L4: implement-revise and the rebase lane refuse a forged PR, so neithe
 
   it('even were it pushed to, the carry step sets no status on its new head, and the Merger still refuses it', () => {
     const carry = carryDecision({
-      startHead: START, head: HEAD, slug: AUTHOR, email: EMAIL, startStatuses: [],
-      compare: { status: 'ahead', commits: [{ sha: HEAD, parents: [{ sha: START }], commit: { author: { email: EMAIL } } }] },
+      startHead: START, head: HEAD, slug: AUTHOR, startStatuses: [],
+      compare: { status: 'ahead', commits: [appCommit(HEAD, [START])] },
       heads: [{ ref: 'HEAD', sha: HEAD }], base: START, fixSha: '',
     });
     expect(String((carry as { none: string }).none)).toContain('the chain has no start');

@@ -13,11 +13,12 @@
 //          is never found by its link to the issue, its label or its author, all of which an
 //          agent can forge. It is the one pull request that was opened after the run started,
 //          from a branch that didn't exist before the run (the filter job's snapshot), whose
-//          head commit is authored by the App, AT A HEAD THIS RUN'S PUSH JOB MOVED (the lane
-//          spine's `push-heads` output, #324; never the agent's job, `LANE-16`). The App's email alone binds
-//          nothing: every run of the shared Author App commits under it, so two overlapping
-//          runs would each see both pull requests, and a run that opened none would stamp
-//          another lane's. None, or more than one, and it stamps nothing and says so by name.
+//          head commit GitHub verified as the App's (`LANE-20`), AT A HEAD THIS RUN'S PUSH JOB
+//          MOVED (the lane spine's `push-heads` output, #324; never the agent's job, `LANE-16`).
+//          GitHub's verification alone binds nothing: every run of the shared Author App
+//          commits as it, so two overlapping runs would each see both pull requests, and a run
+//          that opened none would stamp another lane's. None, or more than one, and it stamps
+//          nothing and says so by name.
 //   carry  (implement-revise, rebase): the status moves to the new head only when the head the
 //          run started from carried one created by this App, and only to a head THIS RUN
 //          PUSHED, built on exactly what it checked out (#1263). All three must hold: the new
@@ -25,11 +26,12 @@
 //          agent job) or the commit the revise lane's no-model fix pushed (`fix-sha`); the head
 //          that push built on (`base`) is the head the run started from, so nothing landed between
 //          the filter's read and the checkout; and every commit on the first-parent path from
-//          the new head back to it is authored by the App. The email alone binds nothing, as
-//          for `open`: a person's commit under the App's address, pushed below the run's tip
-//          or above it, fails the second or the first. A missing input carries nothing. A
-//          person's push breaks the chain, and so does a head that never had the status: the
-//          lane says so, and sets none.
+//          the new head back to it is one GitHub verified as the App's (`LANE-19`). GitHub's
+//          verification binds it: no email is compared, so a person's commit under the App's
+//          address is unverified wherever it sits on the path (#1358), even one the agent
+//          fetched again during its run. A missing input carries nothing. A person's push
+//          breaks the chain, and so does a head that never had the status: the lane says so,
+//          and sets none.
 //
 // A CHANGES-REQUEST FILED BEFORE THE STATUS IS RE-DELIVERED, ONCE (#1379). The revise lane
 // refuses a head without the status, and it can't tell "not the Implementer's" from "not stamped
@@ -64,45 +66,79 @@ export const CONTEXT = IMPLEMENTER_STATUS;
 /** The label that starts the Implementer's revise lane on a pull request (`K-WORK-12`). */
 export const REVISE_LABEL = 'agent:revise';
 
-/** What a GitHub API commit says about its author, as this module reads it. */
-/** @typedef {{ sha: string, parents?: Array<{ sha: string }>, commit?: { author?: { email?: string } } }} ApiCommit */
+/** GitHub's own committer for the commits it creates and signs, as the `dco` action reads it. */
+const GITHUB_COMMITTER = 'web-flow';
+
+/** What a GitHub API commit says about who made it, as this module reads it. */
+/**
+ * @typedef {{
+ *   sha: string, parents?: Array<{ sha: string }>,
+ *   author?: { login?: string, type?: string } | null, committer?: { login?: string } | null,
+ *   commit?: { verification?: { verified?: unknown, reason?: string } },
+ * }} ApiCommit
+ */
 
 /**
- * Whether the App authored `commit`: its noreply address as the author's email. The email is
- * read, not the name: the name is the bot account's (`K-AGENT-1`), and any pusher can set it.
+ * Whether GitHub verified `commit` as the App's (#1358): a verified signature, the App's bot
+ * account (`<slug>[bot]`, type `Bot`) as its author, and GitHub or the App as its committer. No
+ * email is read: GitHub resolves both accounts from the commit's emails, which any pusher sets,
+ * and verifies the signature against the committer, so a person who commits under the App's
+ * author address and signs with their own key is still the committer. Only GitHub can sign for
+ * `web-flow` or for the App.
  * @param {ApiCommit | undefined} commit
- * @param {string} email
+ * @param {string} slug
+ * @returns {{ ok: boolean, why: string }}
  */
-export const byApp = (commit, email) => String(commit?.commit?.author?.email ?? '').toLowerCase() === email.toLowerCase();
+export function verifiedAsApp(commit, slug) {
+  const app = `${slug}[bot]`;
+  if (!commit) return { ok: false, why: 'the commit could not be read' };
+  const short = `\`${String(commit.sha ?? '').slice(0, 7)}\``;
+  const v = commit?.commit?.verification;
+  if (v?.verified !== true) return { ok: false, why: `commit ${short} is not verified (${v?.reason || 'no reason given'})` };
+  const author = commit?.author;
+  if (author?.login !== app || author?.type !== 'Bot') {
+    return { ok: false, why: `commit ${short} is verified, but its author is ${author?.login || 'no account'}${author?.login === app ? ` as a ${author?.type || 'typeless'} account` : ''}, not ${app}` };
+  }
+  const committer = commit?.committer?.login;
+  if (committer !== GITHUB_COMMITTER && committer !== app) {
+    return { ok: false, why: `commit ${short} is verified, but its committer is ${committer || 'no account'}, not ${GITHUB_COMMITTER} or ${app}` };
+  }
+  return { ok: true, why: '' };
+}
 
 /**
  * The pull request this run opened, by what the run created and nothing an agent can claim.
  *
  * @param {{
  *   prs: Array<{ number: number, created_at: string, head: { ref: string, sha: string, repo?: { full_name?: string } | null } }>,
- *   repo: string, since: string, branchesBefore: string[] | null, email: string,
+ *   repo: string, since: string, branchesBefore: string[] | null, slug: string,
  *   heads: Array<{ ref?: string, sha?: string }> | null,
  *   headCommit: (sha: string) => ApiCommit | undefined,
  * }} input
  * @returns {{ pr: number, sha: string } | { none: string }}
  */
-export function pickOpened({ prs, repo, since, branchesBefore, email, heads, headCommit }) {
+export function pickOpened({ prs, repo, since, branchesBefore, slug, heads, headCommit }) {
   const t = Date.parse(since);
   if (Number.isNaN(t)) return { none: 'the run\'s start time is unknown, so no pull request can be shown to be this run\'s' };
   if (!Array.isArray(branchesBefore)) return { none: 'the branches that existed before the run are unknown, so no branch can be shown to be first pushed in it' };
   if (!Array.isArray(heads)) return { none: 'the heads the agent\'s job held are unknown, so no pull request\'s head can be shown to be the one this run pushed' };
   const before = new Set(branchesBefore);
-  // THE BINDING (#324): the head this run's agent job held. The App's email, checked below
-  // too, is shared by every run of the App and every Author lane, so it binds nothing alone.
+  // THE BINDING (#324): the head this run's agent job held. GitHub's verification, checked
+  // below too, is every run's of the App and every Author lane's, so it binds nothing alone.
   const pushed = new Set(heads.map((h) => String(h?.sha ?? '').toLowerCase()).filter((x) => /^[0-9a-f]{40}$/.test(x)));
-  const candidates = prs.filter((p) =>
+  const bound = prs.filter((p) =>
     p.head?.repo?.full_name === repo
     && !before.has(p.head.ref)
     && Date.parse(p.created_at) >= t
-    && pushed.has(String(p.head.sha).toLowerCase())
-    && byApp(headCommit(p.head.sha), email));
+    && pushed.has(String(p.head.sha).toLowerCase()));
+  // [LANE-20] The head commit verified as the App's.
+  const checked = bound.map((p) => ({ p, v: verifiedAsApp(headCommit(p.head.sha), slug) }));
+  const candidates = checked.filter(({ v }) => v.ok).map(({ p }) => p);
+  if (candidates.length === 0 && checked.length) {
+    return { none: `no pull request this run opened is at a head GitHub verified as the App's (${checked.map(({ p, v }) => `#${p.number}: ${v.why}`).join('; ')})` };
+  }
   if (candidates.length === 0) {
-    return { none: `no open pull request was opened after the run started, from a branch first pushed in it, at a head this run's agent job pushed (${pushed.size ? `it held ${heads.slice(0, 5).map((h) => `${h.ref}@${String(h.sha).slice(0, 7)}`).join(', ')}${heads.length > 5 ? ', …' : ''}` : 'it held none'}) and the App authored` };
+    return { none: `no open pull request was opened after the run started, from a branch first pushed in it, at a head this run's agent job pushed (${pushed.size ? `it held ${heads.slice(0, 5).map((h) => `${h.ref}@${String(h.sha).slice(0, 7)}`).join(', ')}${heads.length > 5 ? ', …' : ''}` : 'it held none'})` };
   }
   if (candidates.length > 1) {
     return { none: `${candidates.length} pull requests match (#${candidates.map((p) => p.number).join(', #')}), so none is provably this run's` };
@@ -117,14 +153,14 @@ export function pickOpened({ prs, repo, since, branchesBefore, email, heads, hea
  * the commit the revise lane's no-model fix pushed ('' when it pushed none).
  *
  * @param {{
- *   startHead: string, head: string, slug: string, email: string,
+ *   startHead: string, head: string, slug: string,
  *   startStatuses: Array<{ context?: string, state?: string, creator?: { login?: string } | null }>,
  *   compare: { status?: string, commits?: ApiCommit[] } | null,
  *   heads: Array<{ ref?: string, sha?: string }> | null, base: string, fixSha: string,
  * }} input
  * @returns {{ carry: string } | { none: string }}
  */
-export function carryDecision({ startHead, head, slug, email, startStatuses, compare, heads, base, fixSha }) {
+export function carryDecision({ startHead, head, slug, startStatuses, compare, heads, base, fixSha }) {
   if (!/^[0-9a-f]{40}$/i.test(startHead)) return { none: 'the head the run started from is unknown' };
   // The same question the Merger and the rebase lane ask (`implementerStatusOn`): the NEWEST
   // status of the context is the App's success.
@@ -147,18 +183,19 @@ export function carryDecision({ startHead, head, slug, email, startStatuses, com
   if (!compare || compare.status !== 'ahead') {
     return { none: `the new head \`${head.slice(0, 7)}\` does not descend from \`${startHead.slice(0, 7)}\` (${compare?.status ?? 'unreadable'})` };
   }
-  // THE FIRST-PARENT PATH from the new head back to the start, which is the checkout, as above;
-  // every commit on it the App's. A merge's second parent is what it merged in (the default
-  // branch, for the rebase lane), so its commits are other people's by design; the merge itself
-  // must be the App's.
+  // [LANE-19] THE FIRST-PARENT PATH from the new head back to the start, which is the checkout,
+  // as above; every commit on it verified as the App's. A merge's second parent is what it merged
+  // in (the default branch, for the rebase lane), so its commits are other people's by design;
+  // the merge itself must be the App's.
   const bySha = new Map((compare.commits ?? []).map((c) => [c.sha, c]));
   for (let sha = head, steps = 0; sha !== startHead; steps += 1) {
     const c = bySha.get(sha);
     if (!c || steps > bySha.size) {
       return { none: `the path from \`${head.slice(0, 7)}\` back to \`${startHead.slice(0, 7)}\` could not be read whole` };
     }
-    if (!byApp(c, email)) {
-      return { none: `commit \`${sha.slice(0, 7)}\` since \`${startHead.slice(0, 7)}\` is not the App's: a person's push ends the chain` };
+    const app = verifiedAsApp(c, slug);
+    if (!app.ok) {
+      return { none: `the path since \`${startHead.slice(0, 7)}\` is not all the App's, as GitHub verified it: ${app.why}, and a person's push ends the chain` };
     }
     sha = c.parents?.[0]?.sha ?? '';
   }
@@ -234,9 +271,6 @@ function main() {
   if (!write) {
     return say(`${lead} not set: the Author App (the Implementer's) could not mint a token with Commit statuses write. Grant it that permission (a broadened permission, recorded in the App register, \`K-AGENT-3\`). Without the status the Merger skips this pull request as \`not-the-implementer\`, and the revise and rebase lanes refuse it, so a person merges it.`);
   }
-  const id = ghJson(['api', `users/${slug}%5Bbot%5D`], read).id;
-  const host = String(env.GITHUB_SERVER_URL ?? 'https://github.com').replace(/^[a-z]+:\/\//, '').replace(/\/.*$/, '');
-  const email = `${id}+${slug}[bot]@users.noreply.${host}`;
 
   let target;
   if (env.MODE === 'open') {
@@ -248,7 +282,7 @@ function main() {
     try { heads = JSON.parse(String(env.HEADS ?? '')); } catch { heads = null; }
     const prs = ghJson(['api', '--paginate', '--slurp', `repos/${repo}/pulls?state=open&per_page=100`], read).flat();
     const verdict = pickOpened({
-      prs, repo, since: String(env.SINCE ?? ''), branchesBefore, email, heads,
+      prs, repo, since: String(env.SINCE ?? ''), branchesBefore, slug, heads,
       headCommit: (sha) => ghJson(['api', `repos/${repo}/commits/${sha}`], read),
     });
     if ('none' in verdict) return say(`${lead} not set: ${verdict.none}.`);
@@ -265,7 +299,7 @@ function main() {
     let heads;
     try { heads = JSON.parse(String(env.HEADS ?? '')); } catch { heads = null; }
     const verdict = carryDecision({
-      startHead, head, slug, email, compare, heads, base: String(env.BASE ?? ''), fixSha: String(env.FIX_SHA ?? ''),
+      startHead, head, slug, compare, heads, base: String(env.BASE ?? ''), fixSha: String(env.FIX_SHA ?? ''),
       startStatuses: /^[0-9a-f]{40}$/i.test(startHead) ? ghJson(['api', '--paginate', '--slurp', `repos/${repo}/commits/${startHead}/statuses?per_page=100`], write).flat() : [],
     });
     if ('none' in verdict) return say(`${lead} not carried to PR #${env.PR}: ${verdict.none}.`);
