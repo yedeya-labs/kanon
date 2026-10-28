@@ -112,8 +112,9 @@ const RELEASE: Record<string, Perms> = {
   '.github/workflows/release-please.yml#releaser': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
   // Kanon's promotion (plan 0009 S5): the stable tag on the candidate's commit, its Release and the
   // major tag, then the pull request that points the docs at it (`scripts/doc-pins.mjs`). Workflows
-  // write too: GitHub refuses an App token a ref on a commit that changes `.github/workflows`,
-  // which every candidate's does (candidate-v0.42.0's first promotion, run 40641153349).
+  // write too: the tags point at a candidate's commit whose `.github/workflows` differ from the
+  // default branch's head and the major tag's target, and GitHub refused the first promotion's tag
+  // without it (run 40641153349; the exact rule isn't confirmed).
   '.github/workflows/promote.yml#releaser': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
 };
 const STATUS: Record<string, Perms> = {

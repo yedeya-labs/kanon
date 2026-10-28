@@ -96,11 +96,13 @@ jobs:
         run: node scripts/promote.mjs check
       # THE RELEASER'S TOKEN (plan 0005 §3.1, ADR 0013), only to promote, narrowed to Contents
       # write, for the tag, the Release, the major tag and the docs' branch and commit, Pull
-      # requests write, for the docs' pull request, and Workflows write: GitHub refuses an App token
-      # without it a ref, tag or branch, on a commit that changes `.github/workflows`, which every
-      # candidate's does ("Resource not accessible by integration" on candidate-v0.42.0's first
-      # promotion, run 40641153349), as the pin job's token holds it for the same reason. Kanon's
-      # adoption record declares it for the Releaser (`K-AGENT-3`). A step `if:` can't read
+      # requests write, for the docs' pull request, and Workflows write. The stable tag and the
+      # major tag point at the candidate's commit, whose `.github/workflows` differ from the default
+      # branch's head and from the major tag's current target, though the commit itself changes
+      # none; GitHub refused the first promotion's tag without it ("Resource not accessible by
+      # integration", run 40641153349). The exact rule GitHub applies isn't confirmed, so keep the
+      # grant even when a candidate's own diff touches no workflow. Kanon's adoption record declares
+      # it for the Releaser (`K-AGENT-3`). A step `if:` can't read
       # `secrets`, and the Releaser is required here, so a missing secret fails the mint by name.
       - name: Mint the Releaser's token
         id: releaser
