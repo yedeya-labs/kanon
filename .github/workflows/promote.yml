@@ -17,8 +17,10 @@
 # one's verdict and evidence to the step summary, so a held promotion says which gate held it.
 # Only when it decides to promote is the Releaser's token minted, narrowed to Contents write, and
 # `scripts/promote.mjs apply` creates the tag on the candidate's commit, publishes its Release as
-# latest and moves `v0`, as the Releaser: the one bypass actor of the `v*` tag ruleset (plan 0008
-# J6), as release.yml creates release tags and moves the major tag with the same App (#782).
+# latest and moves `v0`, as the Releaser, as release.yml creates release tags and moves the major
+# tag with the same App (#782). Kanon's repository has no tag ruleset yet: the one on `v*` and
+# `candidate-v*` is an Owner step plan 0008 lists as not done (J5, J6). Writing as the Releaser
+# now means this needs no change once that ruleset lets the Releaser bypass it.
 # Then, when the release is the latest, it opens `docs: point the docs at vX.Y.Z` as the Releaser:
 # the README's install command and the docs' `uses:` lines follow the stable channel, which only
 # this workflow moves (`scripts/doc-pins.mjs`; CI's check fails a reference to an untagged release).

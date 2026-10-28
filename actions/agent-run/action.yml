@@ -3,8 +3,9 @@
 #
 # CALL IT WITH `id: agent`. The block's outputs mirror the action's own names, so the
 # lane reads `steps.agent.outputs.execution_file` exactly as it did when the action was
-# a step of its own — and `steps.agent.outcome` means what it meant then: the action is the
-# last step, and the start stamp and the TTL record before it cannot fail. The user-scope step can, only when the
+# a step of its own — and `steps.agent.outcome` means what it meant then: the start stamp and
+# the TTL record before the action cannot fail, and the one step after it, the runtime check,
+# cannot either (kanon#1470). The user-scope step can, only when the
 # runner gives it no usable temp directory, and then the agent must not start (kanon#283). So
 # can the turn-budget check, only on a raised `max_turns` the lane refuses (kanon#891).
 #
@@ -132,10 +133,18 @@ runs:
     # caller for a timestamp the job already has. UNCONDITIONAL here, where the spine gated
     # it on the quality label: the stamp is an output nobody reads unless agent-finish is
     # given a label, and a block that runs the agent should not need to know about one.
+    #
+    # IT ALSO CLEARS THE INSTALL MARKER (kanon#1470). A non-ephemeral runner can keep `RUNNER_TEMP`
+    # between jobs, so a marker the runtime check below wrote for an earlier job, or an earlier
+    # block of this one, is deleted before this block's agent can run. The marker also names its
+    # job, and is read only by that job. The deletion cannot fail the step: `rm -rf` of a missing
+    # path succeeds, and `|| true` covers the rest.
     - name: Record when the agent started
       id: started
       shell: bash -e {0}
-      run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      run: |
+        if [ -n "$RUNNER_TEMP" ]; then rm -rf -- "$RUNNER_TEMP/kanon-claude-code-not-installed" || true; fi
+        echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
     # A RAISED TURN LIMIT, CHECKED BEFORE ANYTHING ELSE THE AGENT NEEDS (kanon#891). A person may
     # raise the lane's limit for one dispatched run, with a reason, up to the ceiling the lane
@@ -275,3 +284,22 @@ runs:
         # The string 'true'/'false' the spine's boolean arrived as — the same value the
         # action was handed when this step sat in the spine and read the boolean itself.
         show_full_output: ${{ inputs.full-transcript }}
+
+    # DID THE ACTION FAIL AT ITS INSTALL OF CLAUDE CODE (kanon#1470)? Then no model was called, and
+    # `agent-classify` says so with its `unavailable` notice, where a missing result file alone
+    # could only say "cannot tell which". The script reads what the action left on disk (a prompt
+    # written during this run, no CLI in place) and the step's own outputs, never its log, and
+    # writes a marker into this job's temp directory for `agent-classify` and `agent-telemetry`.
+    # Only after the action failed, which the step's own `outcome` says: `!cancelled()` lets it run
+    # after a failed step, and no block asks `failure()` (`agent-lane-blocks.test.ts`). It always
+    # exits 0, and `continue-on-error` besides, so it never changes the block's outcome.
+    - name: Record whether claude-code-action failed to install Claude Code
+      if: "!cancelled() && steps.agent.outcome == 'failure'"
+      continue-on-error: true
+      shell: bash -e {0}
+      env:
+        OUTCOME: ${{ steps.agent.outcome }}
+        CONCLUSION: ${{ steps.agent.outputs.conclusion }}
+        EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
+        STARTED_AT: ${{ steps.started.outputs.at }}
+      run: node "$GITHUB_ACTION_PATH/runtime-check.mjs"

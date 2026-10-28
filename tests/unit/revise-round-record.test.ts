@@ -139,8 +139,10 @@ for (const lane of LANES) {
       // Since RA-2666 that is the `agent-run` block's CALL, whose outcome is the block's —
       // failure if any step inside failed. So the block's outcome is the action's only
       // while nothing else in it can fail on its own, which is asserted rather than
-      // assumed: the action is its LAST step (nothing after a green action can red the
-      // block), and every step before it either swallows its failure or is the one named
+      // assumed: after the action comes exactly one step, the runtime check (kanon#1470), and it
+      // can't red a green action: it runs only when the action's own outcome is `failure`, so
+      // the block is red already, and it is `continue-on-error` besides. Any other step after
+      // the action, or that one ungated or able to fail, could red a green agent run. Every step before it either swallows its failure or is the one named
       // no-model step whose failure means the agent never started (the second, the revert
       // of loaded blocks, went with the `./` block references in RA-2697). Another fallible
       // step before the agent must be added to that list on purpose. The user-scope step
@@ -159,7 +161,12 @@ for (const lane of LANES) {
       const action = inner.findIndex((s) => /claude-code-action/.test(String(s.uses)));
       expect(action, 'the block runs no claude-code-action step').toBeGreaterThan(-1);
       expect(inner.filter((s) => /claude-code-action/.test(String(s.uses))), 'exactly one agent step').toHaveLength(1);
-      expect(action, 'a step after the action could red a green agent run').toBe(inner.length - 1);
+      const after = inner.slice(action + 1);
+      expect(after.map((s) => s.name), 'a step after the action could red a green agent run')
+        .toEqual(['Record whether claude-code-action failed to install Claude Code']);
+      expect(after[0]?.['continue-on-error'], 'the runtime check must not be able to red the block').toBe(true);
+      expect(after[0]?.if, "the runtime check runs only on the agent step's failure")
+        .toBe("!cancelled() && steps.agent.outcome == 'failure'");
       const fallible = inner.slice(0, action).filter((s) => s['continue-on-error'] !== true).map((s) => s.name);
       expect(fallible).toEqual([
         'Record when the agent started', 'Check the turn limit raised for this run', 'Record the prompt-cache TTL the agent is pinned at', 'Check the Claude credential',
