@@ -115,6 +115,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-AGENT-48`
 
 - **2026-10-20.** The Owner decided that a `pull_request_target` workflow may check out a head on the base repository, never a fork's, when it refuses a fork's head before any checkout and no step runs the head's tree, and that only the agent of a lane `K-AGENT-50` accepts may run that tree. The review lane's checkout and fetch of the head it reviews and the rebase lane's full-history checkout are the named exceptions. The rebase lane now refuses a fork's head itself. The guard now follows every call into Kanon's workflows and actions, counts a head handed down as an input, and fails when it reads no step, where before it read only the steps of a file that declares the trigger, and Kanon's three such files have none. [#1128](https://github.com/yedeya-labs/kanon/issues/1128)
+- **2026-10-28.** The exception's agent runs the tests on what it commits, not on what it pushes: since [#1373](https://github.com/yedeya-labs/kanon/issues/1373)'s push jobs, a lane's agent commits on its runner and a job after it pushes. Wording only, by the Owner's answer on [#1387](https://github.com/yedeya-labs/kanon/issues/1387).
 
 ## `K-AGENT-49`
 
@@ -125,6 +126,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-06.** The shared lane job turns git's `core.symlinks` off for a lane with project setup off, so the Lead's `Edit(/docs/**)` has no symlink in the tree to write through. [#327](https://github.com/yedeya-labs/kanon/issues/327)
 - **2026-10-07.** The grant probe battery covers both Lead lanes' flags, and the Owner decided the deny list that refuses a program handed to `git push` or `git fetch` for the far end. [#405](https://github.com/yedeya-labs/kanon/issues/405)
 - **2026-10-14.** The Owner decided that the `notify` job of `K-OBS-19` joins the guard's named exceptions in that rule's exact shape, and that it runs the adopter's notify hook at the run's commit on any branch, accepting that whoever can push a branch and dispatch a notifying lane can read that lane's chat secret. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)
+- **2026-10-28.** The Owner decided the accepted exception's wording now that the revise and rebase lanes' agent no longer pushes: it runs the tests on what it commits, beside a token it comments and labels with, which holds no contents or workflows write. A `push` job after the agent's, which runs none of the code, holds that write, so code planted on the implementer's branch no longer reaches a token that writes code or workflow files. The exception itself stands. [#1387](https://github.com/yedeya-labs/kanon/issues/1387)
 
 ## `K-MERGE-4`
 

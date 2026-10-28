@@ -133,7 +133,7 @@ export const violations = (paths: string[]): Record<string, string> => {
 
 /**
  * Each exception, with its reason. ACCEPTED is the Owner's decision of 2026-10-05 on kanon#243:
- * the lane's agent must run the tests on what it pushes, with the token it pushes with, and the
+ * the lane's agent must run the tests on what it commits, beside the token it comments with, and the
  * exposure is recorded on `K-AGENT-50` rather than closed. DEFAULT is the default branch's
  * reviewed code, which the rule does not cover.
  */
