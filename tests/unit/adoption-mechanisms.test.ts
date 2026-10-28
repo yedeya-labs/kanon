@@ -195,6 +195,9 @@ export const DETECTORS: Array<[string, Detector]> = [
   // The Overseer's lane runs it weekly from the release that carries the step (#1274). The
   // CHANGELOG names pull requests, so this is #1366, the one that closes #1274.
   ['The finding count, `scripts/finding-counts.mjs`', all(runs('finding-counts.mjs'), shipped(1366))],
+  // `kanon inbox` runs on a person's machine, from the release that carries it, and reads the
+  // `decision:needed` label the next `kanon init` creates here (#1497).
+  ['`kanon inbox` and the inbox skill', all(test('tests/library/status-inbox.test.ts'), shipped(1497))],
   ['The `main` ruleset: pull request required', outside("the `main` ruleset's rules (GitHub's API: `repos/{repo}/rulesets`)")],
   ["The ruleset's required approving review", outside("the `main` ruleset's pull-request rule, and its history")],
   ['The merge queue, with every required check', outside("the `main` ruleset's merge-queue rule; tests/unit/workflows.test.ts holds the checks to `merge_group`")],
