@@ -5,7 +5,9 @@
  * the server's own protected-resource metadata, and that metadata names the server (`[MCP-11]`).
  *
  * It runs here as the hook runs it, a process given `--url`, against the real `serve` behind a
- * local `node:http` server, and against servers that each get one thing wrong.
+ * local `node:http` server, and against servers that each get one thing wrong. And it runs against
+ * the function's own entry point over an AWS that refuses one thing, in-process, since the entry
+ * point names its origin as a function URL's, which is `https://`.
  */
 import { execFile } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
@@ -17,9 +19,11 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 import { SPAWNS } from '../unit/helpers/spawns.js';
+import { STATUS_ENV, fakeAws } from '../unit/helpers/status-aws.js';
 import { writeStub } from '../unit/helpers/stub-bin.js';
 
 const { serve } = await import('../../infra/status/function/auth.mjs');
+const { handlerOf } = await import('../../infra/status/function/handler.mjs');
 const { checkServer } = await import('../../infra/status/smoke.mjs');
 
 const SMOKE = join(ROOT, 'infra/status/smoke.mjs');
@@ -78,6 +82,20 @@ const smoke = async (url: string) => {
 
 const METADATA = '/.well-known/oauth-protected-resource/mcp';
 
+/** `fetch`, answered by a Lambda handler as a function URL at `https://<host>` would answer it. */
+const through = (handler: (event: unknown) => Promise<{ statusCode: number, headers?: Record<string, string>, body?: string }>) => (async (input: string, init: { method?: string, headers?: Record<string, string>, body?: string } = {}) => {
+  const url = new URL(input);
+  const reply = await handler({
+    rawPath: url.pathname,
+    rawQueryString: url.search.slice(1),
+    headers: init.headers ?? {},
+    body: init.body ?? '',
+    isBase64Encoded: false,
+    requestContext: { http: { method: init.method ?? 'GET', path: url.pathname }, domainName: url.host },
+  });
+  return new Response(reply.body ?? '', { status: reply.statusCode, headers: reply.headers ?? {} });
+}) as unknown as typeof fetch;
+
 describe("the hosted status server's deploy smoke", SPAWNS, () => {
   it('[MCP-11] passes only when the deployed server answers an unauthenticated tools/list with 401 and serves its protected-resource metadata', async () => {
     const url = await listen(real);
@@ -96,6 +114,22 @@ describe("the hosted status server's deploy smoke", SPAWNS, () => {
       const result = await smoke(await listen(handler));
       expect(result.code, what).toBe(1);
       expect(result.out, what).toMatch(message);
+    }
+  });
+
+  it("fails a deployed function that can't use its KMS key, as one that can't read its client secret", async () => {
+    const URL_ = 'https://abc.lambda-url.eu-central-1.on.aws/mcp';
+    const deployed = () => {
+      const aws = fakeAws();
+      return { aws, fetch: through(handlerOf(STATUS_ENV, { fetch: aws.fetchImpl, log: () => {} })) };
+    };
+    const working = deployed();
+    expect(await checkServer(URL_, { fetch: working.fetch })).toEqual([]);
+
+    for (const target of ['TrentService.GenerateDataKey', 'TrentService.Decrypt', 'AmazonSSM.GetParameter']) {
+      const broken = deployed();
+      broken.aws.refuse[target] = 'AccessDeniedException';
+      expect(await checkServer(URL_, { fetch: broken.fetch }), target).toEqual([`tools/list at ${URL_} got 500, not 401`]);
     }
   });
 
