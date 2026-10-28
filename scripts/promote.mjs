@@ -51,13 +51,15 @@
 //            write (#1502, `docs/release.md`, "Intake first"): `infra/telemetry/intake-first.mjs`
 //            compares the candidate's schema with the schema of the release intake was deployed
 //            from, both read from git, and exits 0. The deployed release is the one the operator's
-//            intake record names, at `KANON_INTAKE_RECORD` (`<owner>/<repo>:<path>`), which
-//            promote.yml reads with a Releaser token narrowed to Contents read on that repository
-//            and hands this mode as a file (`INTAKE_RECORD_FILE`). A widening holds until intake
-//            is deployed from the candidate and the record names it; a narrowing holds too, since
-//            deploying first doesn't help. A record that is unset, unread or names no release
-//            holds. Only the CLI reads it (`intakeFromEnv`): the status view, which has neither the
-//            record nor the git refs, shows the gate skipped.
+//            intake record names, at `KANON_INTAKE_RECORD` (`<owner>/<repo>:<path>`). A widening
+//            holds until intake is deployed from the candidate and the record names it; a
+//            narrowing holds too, since deploying first doesn't help. A record that is unset,
+//            unread or names no release holds, and so does a tag whose commit isn't on the default
+//            branch. The comparison imports each release's schema modules out of git, code from
+//            those tags' commits, so it runs in the `intake` mode below, in a job of its own that
+//            holds no key and no write grant (`K-AGENT-49`), and `check` reads only its verdict
+//            (`INTAKE_VERDICT`, `intakeFromVerdict`). The status view, which has no verdict, shows
+//            the gate skipped.
 // What a candidate contains is every pull request since the newest STABLE tag below it, so the
 // pull requests of a candidate held and never promoted count against the next one.
 // `urgent` (plan 0009 §7) skips the soak and the six-day spacing, and asks instead that a review
@@ -85,12 +87,20 @@
 //          `release-please.yml`'s pin job opens the pin pull request only on `pass=true`, so
 //          Kanon's pins, and the soak, start only on a candidate the harness passed.
 //
+// A FIFTH MODE, FOR THE INTAKE GATE (#1502), IN A JOB WITH NO KEY:
+//   intake reads the newest candidate tag, as `check` does, with a read-only token, and the record
+//          the `record` job read (`INTAKE_RECORD_READ`, `INTAKE_RECORD_TEXT`, `INTAKE_RECORD_ERROR`),
+//          refuses a tag whose commit isn't an ancestor of the checkout's HEAD, the default
+//          branch, and runs intake-first in the checkout. It writes `verdict=<json>` to
+//          GITHUB_OUTPUT, the candidate's tag with the gate's verdict and evidence, which the
+//          promote job hands `check` as `INTAKE_VERDICT`.
+//
 // Env: GH_TOKEN, GITHUB_REPOSITORY, DEFAULT_BRANCH (default `main`), HOLD, URGENT, REASON, PLAN,
-// OUTCOME (check, notify), INTAKE_RECORD and INTAKE_RECORD_FILE (check), APPLIED (notify), TAG
-// (gate), GITHUB_OUTPUT, GITHUB_STEP_SUMMARY. Node built-ins, `gh`, and `git` through intake-first.
+// OUTCOME (check, notify), INTAKE_VERDICT (check), INTAKE_RECORD and INTAKE_RECORD_* (intake),
+// APPLIED (notify), TAG (gate), GITHUB_OUTPUT, GITHUB_STEP_SUMMARY. Node built-ins, `gh`, and `git`.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isCliEntry } from './lib/cli-entry.mjs';
@@ -213,19 +223,24 @@ export function deployedIntake(text) {
 
 /**
  * The intake gate's verdict for `candidate` (#1502): from the record's location (`INTAKE_VARIABLE`),
- * its text (`null` when it wasn't read, with why in `recordError`), and `compare`, which runs
- * intake-first for the deployed release against the candidate's tag. Anything it can't read holds.
+ * its text (`null` when it wasn't read, with why in `recordError`), `merged`, whether a tag's
+ * commit is on the default branch, and `compare`, which runs intake-first for the deployed release
+ * against the candidate's tag. intake-first imports code from both tags' commits, so a tag on a
+ * commit that never merged is refused before it runs. Anything it can't read holds.
  * @param {{ location: string, record: string | null, recordError: string, candidate: string,
+ *   merged: (ref: string) => boolean,
  *   compare: (deployed: string, release: string) => { status: number | null, stdout: string, stderr: string } }} args
  * @returns {Verdict}
  */
-export function intakeVerdict({ location, record, recordError, candidate, compare }) {
+export function intakeVerdict({ location, record, recordError, candidate, merged, compare }) {
   if (!location) return { pass: false, evidence: `the intake record isn't configured: set the repository variable \`${INTAKE_VARIABLE}\` to \`<owner>/<repo>:<path>\`, the operator's record of the release intake was deployed from` };
   if (!RECORD_LOCATION.test(location)) return { pass: false, evidence: `\`${INTAKE_VARIABLE}\` is ${JSON.stringify(location)}, not \`<owner>/<repo>:<path>\`` };
   if (record === null) return { pass: false, evidence: `the intake record ${location} couldn't be read: ${recordError || "the Releaser's token for its repository wasn't minted"}` };
   const parsed = deployedIntake(record);
   if ('error' in parsed) return { pass: false, evidence: `the intake record ${location} ${parsed.error}` };
   const deployed = parsed.ref;
+  const unmerged = [deployed, candidate].filter((ref) => !merged(ref));
+  if (unmerged.length) return { pass: false, evidence: `${unmerged.join(' and ')} ${unmerged.length > 1 ? 'are' : 'is'} not on the default branch, so the comparison, which runs code from each tag's commit, wasn't run` };
   const r = compare(deployed, candidate);
   const lines = String(r.stdout ?? '').split('\n').filter((l) => /^\s+- /.test(l)).map((l) => l.trim().slice(2));
   const from = `intake deployed from ${deployed} (${location})`;
@@ -236,22 +251,56 @@ export function intakeVerdict({ location, record, recordError, candidate, compar
   return { pass: false, evidence: `comparing ${candidate} with ${from} failed: ${why}` };
 }
 
+/** Whether a tag's commit is an ancestor of the checkout's HEAD, the default branch. @param {string} ref */
+const mergedInTree = (ref) => spawnSync('git', ['merge-base', '--is-ancestor', `refs/tags/${ref}^{commit}`, 'HEAD'], { cwd: TREE, stdio: 'ignore' }).status === 0;
+
 /**
- * The CLI's intake gate: the record promote.yml wrote to `INTAKE_RECORD_FILE` (and, when its read
- * failed, why, beside it as `<file>.err`), and intake-first run in the checkout.
+ * intake-first in the checkout, with no credential in its environment: it imports code from the
+ * tags' commits.
+ * @param {string} deployed @param {string} release
+ */
+const compareInTree = (deployed, release) => {
+  const r = spawnSync(process.execPath, [join(TREE, INTAKE_FIRST), '--deployed', deployed, '--release', release], {
+    cwd: TREE, encoding: 'utf8', timeout: 120_000, maxBuffer: 16 * 1024 * 1024, env: { PATH: String(process.env.PATH ?? ''), HOME: String(process.env.HOME ?? '') },
+  });
+  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr || r.error?.message || '' };
+};
+
+/**
+ * The `intake` mode (#1502), in the keyless job: the newest candidate, as `check` takes it, and the
+ * gate's verdict for it, from the record the `record` job read.
+ * @param {Record<string, string | undefined>} env
+ * @param {{ api?: Api, merged?: (ref: string) => boolean, compare?: (deployed: string, release: string) => { status: number | null, stdout: string, stderr: string } }} [deps]
+ * @returns {{ candidate: string | null } & Verdict}
+ */
+export function intakeRun(env, { api = ghApi, merged = mergedInTree, compare = compareInTree } = {}) {
+  if (!env.GITHUB_REPOSITORY) throw new Refusal('GITHUB_REPOSITORY must be set');
+  const candidate = tagsOf(api, String(env.GITHUB_REPOSITORY), 'candidate-v', CANDIDATE).sort((a, b) => compareParts(b.parts, a.parts))[0];
+  if (!candidate) return { candidate: null, pass: true, evidence: 'no candidate tag' };
+  const record = env.INTAKE_RECORD_READ === 'true' ? String(env.INTAKE_RECORD_TEXT ?? '') : null;
+  const recordError = String(env.INTAKE_RECORD_ERROR ?? '').trim().split('\n')[0] ?? '';
+  return { candidate: candidate.name, ...intakeVerdict({ location: String(env.INTAKE_RECORD ?? '').trim(), record, recordError, candidate: candidate.name, merged, compare }) };
+}
+
+/**
+ * The CLI check's intake gate: the verdict the keyless `intake` job wrote (`INTAKE_VERDICT`), for
+ * this candidate. A missing or unreadable verdict, or one for another candidate, holds.
  * @param {Record<string, string | undefined>} env
  * @returns {(candidate: Tag) => Verdict}
  */
-export function intakeFromEnv(env) {
-  const file = String(env.INTAKE_RECORD_FILE ?? '');
-  const record = file && existsSync(file) ? readFileSync(file, 'utf8') : null;
-  const recordError = file && existsSync(`${file}.err`) ? readFileSync(`${file}.err`, 'utf8').trim().split('\n')[0] ?? '' : '';
-  /** @param {string} deployed @param {string} release */
-  const compare = (deployed, release) => {
-    const r = spawnSync(process.execPath, [join(TREE, INTAKE_FIRST), '--deployed', deployed, '--release', release], { cwd: TREE, encoding: 'utf8', timeout: 120_000, maxBuffer: 16 * 1024 * 1024 });
-    return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr || r.error?.message || '' };
+export function intakeFromVerdict(env) {
+  return (candidate) => {
+    /** @type {any} */
+    let v = null;
+    try {
+      v = JSON.parse(String(env.INTAKE_VERDICT ?? ''));
+    } catch {
+      v = null;
+    }
+    if (!v || typeof v !== 'object') return { pass: false, evidence: "the intake job reported no verdict: read its run's log" };
+    if (v.candidate !== candidate.name) return { pass: false, evidence: `the intake job read ${JSON.stringify(v.candidate)}, not ${candidate.name}` };
+    return { pass: v.pass === true, evidence: String(v.evidence ?? '') };
   };
-  return (candidate) => intakeVerdict({ location: String(env.INTAKE_RECORD ?? '').trim(), record, recordError, candidate: candidate.name, compare });
 }
 
 /**
@@ -1151,7 +1200,7 @@ function main() {
   };
   try {
     if (mode === 'check') {
-      const o = check(env, { intake: intakeFromEnv(env) });
+      const o = check(env, { intake: intakeFromVerdict(env) });
       say(summary(o));
       if (o.plan && env.PLAN) writeFileSync(env.PLAN, JSON.stringify(o.plan));
       if (env.OUTCOME) writeFileSync(env.OUTCOME, JSON.stringify(o));
@@ -1160,6 +1209,11 @@ function main() {
       const g = gate(env);
       say(gateSummary(g));
       if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `pass=${g.pass}\n`);
+    } else if (mode === 'intake') {
+      const v = intakeRun(env);
+      say(`## The intake gate${v.candidate ? `: \`${v.candidate}\`` : ''}\n\n**${v.pass ? 'Pass' : 'Hold'}:** ${v.evidence}\n`);
+      // One line of JSON: the promote job hands it to `check` as INTAKE_VERDICT.
+      if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `verdict=${JSON.stringify(v)}\n`);
     } else if (mode === 'notify') {
       const o = /** @type {Outcome} */ (JSON.parse(readFileSync(String(env.OUTCOME), 'utf8')));
       const runUrl = env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL ?? 'https://github.com'}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : '';
@@ -1169,7 +1223,7 @@ function main() {
       const plan = /** @type {Plan} */ (JSON.parse(readFileSync(String(env.PLAN), 'utf8')));
       say(`${apply(plan, { repo: String(env.GITHUB_REPOSITORY) }).map((l) => `- ${l}`).join('\n')}\n`);
     } else {
-      throw new Refusal(`usage: promote.mjs check|gate|apply|notify (got ${mode ?? 'nothing'})`);
+      throw new Refusal(`usage: promote.mjs check|gate|intake|apply|notify (got ${mode ?? 'nothing'})`);
     }
   } catch (e) {
     const message = String(/** @type {Error} */ (e)?.message ?? e);

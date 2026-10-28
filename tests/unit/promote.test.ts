@@ -1,11 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { UNREACHABLE_TITLE as DOCTOR_UNREACHABLE_TITLE } from '../../cli/doctor.mjs';
 import {
-  deployedIntake, INTAKE_FIRST, INTAKE_VARIABLE, intakeFromEnv, intakeVerdict,
+  deployedIntake, INTAKE_FIRST, INTAKE_VARIABLE, intakeFromVerdict, intakeRun, intakeVerdict,
   ApiError, apply, check, E2E_CHECK, EXPLAIN_MARKER, GATES, gate, gateSummary, HARNESS, HARNESS_WORKFLOW, HELD_LABEL, HELD_MILESTONE, heldTitle,
   laneCallers, notify, pinTitle, redIssueTitle, Refusal, REPORTER_APP_ID, RUN_LISTING_CAP, SOAK_MS, SPACING_MS, startJobName, summary,
   HELD_AUTHOR, UNREACHABLE_TITLE, VERDICT_JOB, VERDICT_TITLES,
@@ -14,11 +12,11 @@ import { VERDICT_TITLE as RED_TEST_VERDICT_TITLE, verdictCommand } from '../../s
 
 /**
  * Plan 0009 §2, §3 and §7, step S5: the promotion, on fixtures of GitHub's answers. A candidate is
- * held by each of the four gates in turn, promoted when all five pass (its tag on the candidate's
+ * held by each of the four gates in turn, promoted when all six pass (its tag on the candidate's
  * commit, its Release latest, `v0` moved), held by the six-day spacing unless `urgent`, and
  * refused when `urgent` has no reason or the commit's package.json names another version. Plan
  * 0012 §8, step E11: the fifth gate, end to end, on fixtures of the Reporter's check runs and the
- * harness's runs.
+ * harness's runs. #1502: the sixth, intake, on fixtures of intake-first's answers.
  */
 
 const REPO = 'yedeya-labs/kanon';
@@ -163,7 +161,7 @@ const verdicts = (o: ReturnType<typeof check>) => Object.fromEntries(o.gates.map
 const ALL_PASS = { soak: 'pass', revert: 'pass', bug: 'pass', red: 'pass', e2e: 'pass', intake: 'pass' };
 
 describe('the gates (plan 0009 §2)', () => {
-  it('a candidate passing all five is promoted: its tag on the candidate\'s commit, its Release latest, v0 moved', () => {
+  it('a candidate passing all six is promoted: its tag on the candidate\'s commit, its Release latest, v0 moved', () => {
     const { outcome, gh } = run(4 * DAY);
     expect(verdicts(outcome)).toEqual(ALL_PASS);
     expect(outcome.decision).toBe('promote');
@@ -562,7 +560,7 @@ describe('the spacing, hold and urgent (plan 0009 §3, §7)', () => {
     expect(outcome.plan!.notes).toContain('out of band (urgent): security fix for #140');
   });
 
-  it('urgent still applies the other four gates, and needs a review run that succeeded at the candidate', () => {
+  it('urgent still applies the other five gates, and needs a review run that succeeded at the candidate', () => {
     const urgent = { URGENT: 'true', REASON: 'fix' };
     const bug = { [page(`repos/${REPO}/issues?state=open&labels=bug`)]: [{ number: 131, labels: [{ name: 'bug' }, { name: 'sev:high' }], body: '### Introduced by\n\n#101\n' }] };
     expect(run(10 * HOUR, { env: urgent, over: bug }).outcome.decision).toBe('hold');
@@ -906,8 +904,17 @@ describe('the intake gate (#1502, docs/release.md "Intake first")', () => {
   };
   const verdict = (over: Partial<Parameters<typeof intakeVerdict>[0]> = {}, answer: Compared = { status: 0, stdout: 'accepts', stderr: '' }) => {
     const c = comparing(answer);
-    return { ...intakeVerdict({ location: LOCATION, record: RECORD, recordError: '', candidate: CANDIDATE, compare: c.compare, ...over }), asked: c.asked };
+    return { ...intakeVerdict({ location: LOCATION, record: RECORD, recordError: '', candidate: CANDIDATE, merged: () => true, compare: c.compare, ...over }), asked: c.asked };
   };
+
+  it("runs no code from a tag whose commit isn't on the default branch: it holds, comparing nothing (MUTATION: skipping the ancestry check turns this red)", () => {
+    const off = verdict({ merged: (ref) => ref !== CANDIDATE });
+    expect(off).toMatchObject({ pass: false, evidence: `${CANDIDATE} is not on the default branch, so the comparison, which runs code from each tag's commit, wasn't run` });
+    expect(off.asked).toEqual([]);
+    const both = verdict({ merged: () => false });
+    expect(both.evidence).toBe(`candidate-v0.40.0 and ${CANDIDATE} are not on the default branch, so the comparison, which runs code from each tag's commit, wasn't run`);
+    expect(both.asked).toEqual([]);
+  });
 
   it('passes when intake-first exits 0, comparing the release the record names with the candidate\'s tag', () => {
     const v = verdict();
@@ -982,33 +989,42 @@ describe('the intake gate (#1502, docs/release.md "Intake first")', () => {
     expect(outcome.decision).toBe('promote');
   });
 
-  describe('as the CLI reads it (intakeFromEnv)', () => {
-    let dir = '';
-    afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = ''; });
-    const record = (text: string | null, err?: string) => {
-      dir = mkdtempSync(join(tmpdir(), 'intake-record-'));
-      const file = join(dir, 'intake-record.md');
-      if (text !== null) writeFileSync(file, text);
-      if (err !== undefined) writeFileSync(`${file}.err`, err);
-      return file;
+  describe('in the keyless job (intakeRun), and as the check reads its verdict (intakeFromVerdict)', () => {
+    const tags = { [`repos/${REPO}/git/matching-refs/tags/candidate-v`]: [ref('candidate-v0.40.0', PREV), ref(CANDIDATE, SHA)] };
+    const ran = (env: Record<string, string>, answer: Compared = { status: 0, stdout: '', stderr: '' }) => {
+      const c = comparing(answer);
+      const v = intakeRun({ GITHUB_REPOSITORY: REPO, ...env }, { api: github(at(0), tags).api, merged: () => true, compare: c.compare });
+      return { v, asked: c.asked };
     };
-    const tag = { name: 'candidate-v999.0.0', version: '999.0.0', parts: [999, 0, 0], sha: SHA };
 
-    it('reads the record the workflow wrote, and runs intake-first on it: a tag git lacks fails the comparison, which holds', () => {
-      const file = record(RECORD.replace('candidate-v0.40.0', 'candidate-v998.0.0'));
-      const v = intakeFromEnv({ INTAKE_RECORD: LOCATION, INTAKE_RECORD_FILE: file })(tag);
-      expect(v.pass).toBe(false);
-      expect(v.evidence).toMatch(new RegExp(`^comparing candidate-v999\\.0\\.0 with intake deployed from candidate-v998\\.0\\.0 \\(${LOCATION.replace(/[.]/g, '\\.')}\\) failed: intake-first: .*candidate-v998\\.0\\.0`));
+    it('compares the newest candidate, as the check takes it, with the release the record job read', () => {
+      const { v, asked } = ran({ INTAKE_RECORD: LOCATION, INTAKE_RECORD_READ: 'true', INTAKE_RECORD_TEXT: RECORD });
+      expect(v).toEqual({ candidate: CANDIDATE, pass: true, evidence: `intake deployed from candidate-v0.40.0 (${LOCATION}) accepts every row ${CANDIDATE} can write` });
+      expect(asked).toEqual([['candidate-v0.40.0', CANDIDATE]]);
     });
 
-    it("says why a record wasn't read: the read's error beside it, or no token", () => {
-      expect(intakeFromEnv({ INTAKE_RECORD: LOCATION, INTAKE_RECORD_FILE: record(null, 'gh: Not Found (HTTP 404)\nmore\n') })(tag).evidence).toBe(`the intake record ${LOCATION} couldn't be read: gh: Not Found (HTTP 404)`);
-      expect(intakeFromEnv({ INTAKE_RECORD: LOCATION, INTAKE_RECORD_FILE: record(null) })(tag).evidence).toMatch(/wasn't minted$/);
-      expect(intakeFromEnv({ INTAKE_RECORD: '', INTAKE_RECORD_FILE: record(RECORD) })(tag).evidence).toMatch(/^the intake record isn't configured/);
+    it("says why a record wasn't read: the record job's error, or no token, and never reads text it didn't mark read", () => {
+      expect(ran({ INTAKE_RECORD: LOCATION, INTAKE_RECORD_READ: 'false', INTAKE_RECORD_ERROR: 'gh: Not Found (HTTP 404)\nmore' }).v.evidence).toBe(`the intake record ${LOCATION} couldn't be read: gh: Not Found (HTTP 404)`);
+      expect(ran({ INTAKE_RECORD: LOCATION }).v.evidence).toMatch(/wasn't minted$/);
+      expect(ran({ INTAKE_RECORD: LOCATION, INTAKE_RECORD_TEXT: RECORD }).v.pass).toBe(false);
+      expect(ran({ INTAKE_RECORD: '', INTAKE_RECORD_READ: 'true', INTAKE_RECORD_TEXT: RECORD }).v.evidence).toMatch(/^the intake record isn't configured/);
     });
 
-    it(`runs ${INTAKE_FIRST}, which exists`, () => {
+    it('in the checkout, runs intake-first: a tag git lacks is not on the default branch, so nothing runs', () => {
+      const v = intakeRun({ GITHUB_REPOSITORY: REPO, INTAKE_RECORD: LOCATION, INTAKE_RECORD_READ: 'true', INTAKE_RECORD_TEXT: RECORD.replace('candidate-v0.40.0', 'candidate-v998.0.0') }, { api: github(at(0), tags).api });
+      expect(v).toEqual({ candidate: CANDIDATE, pass: false, evidence: expect.stringMatching(/^candidate-v998\.0\.0 .*not on the default branch/) });
       expect(readFileSync(new URL(`../../${INTAKE_FIRST}`, import.meta.url), 'utf8')).toContain('--deployed');
+    });
+
+    it("the check takes the verdict only for its own candidate, and holds on none (MUTATION: ignoring the verdict's candidate turns this red)", () => {
+      const tag = { name: CANDIDATE, version: VERSION, parts: [0, 41, 0], sha: SHA };
+      const of = (verdict: unknown) => intakeFromVerdict({ INTAKE_VERDICT: typeof verdict === 'string' ? verdict : JSON.stringify(verdict) })(tag);
+      expect(of({ candidate: CANDIDATE, pass: true, evidence: 'accepts' })).toEqual({ pass: true, evidence: 'accepts' });
+      expect(of({ candidate: CANDIDATE, pass: false, evidence: 'refuses' })).toEqual({ pass: false, evidence: 'refuses' });
+      expect(of({ candidate: CANDIDATE, pass: 'true', evidence: 'x' }).pass).toBe(false);
+      expect(of({ candidate: 'candidate-v0.40.0', pass: true, evidence: 'accepts' })).toEqual({ pass: false, evidence: `the intake job read "candidate-v0.40.0", not ${CANDIDATE}` });
+      expect(of('')).toEqual({ pass: false, evidence: "the intake job reported no verdict: read its run's log" });
+      expect(of('not json')).toEqual({ pass: false, evidence: "the intake job reported no verdict: read its run's log" });
     });
 
     // Without a reading the gate is skipped, as the status view needs: the CLI's check, which
@@ -1016,7 +1032,7 @@ describe('the intake gate (#1502, docs/release.md "Intake first")', () => {
     it("is handed to the CLI's check, so the workflow's run never skips the gate", () => {
       const source = readFileSync(new URL('../../scripts/promote.mjs', import.meta.url), 'utf8');
       const main = source.slice(source.indexOf('function main()'));
-      expect(main).toContain("if (mode === 'check') {\n      const o = check(env, { intake: intakeFromEnv(env) });");
+      expect(main).toContain("if (mode === 'check') {\n      const o = check(env, { intake: intakeFromVerdict(env) });");
       expect(main.split(/\bcheck\(/).length - 1, 'the one call of check in main').toBe(1);
     });
   });
@@ -1073,27 +1089,46 @@ describe('promote.yml', () => {
     expect(docs.run).toContain('title="docs: point the docs at $tag"');
   });
 
-  // #1502: the intake record is read with a Releaser token narrowed to Contents read on the one
-  // repository the variable names, which reaches the read step alone; the check gets the file.
-  it('reads the intake record with a token for its repository alone, Contents read, which no other step holds', () => {
-    const checkout = job.steps.find((s) => String(s.uses).startsWith('actions/checkout@'))!;
-    expect(checkout.with).toMatchObject({ 'persist-credentials': false, 'fetch-depth': 0 });
-    expect(step('record').env).toEqual({ RECORD: '${{ vars.KANON_INTAKE_RECORD }}' });
-    const mint = step('intake-token');
-    expect(mint.uses).toMatch(/^actions\/create-github-app-token@/);
+  // #1502: the record is read in a job of its own, with a Releaser token narrowed to Contents read
+  // on the one repository the variable names, that runs nothing from this tree; the comparison,
+  // which runs code from the tags' commits, runs in a job with no key and Contents read alone.
+  it('reads the intake record in a job that runs no tree code, with a token for its repository alone, Contents read', () => {
+    const record = wf.jobs.record! as typeof job & { outputs: Record<string, string>; if: string };
+    const rstep = (id: string) => record.steps.find((s) => s.id === id || s.name === id)!;
+    expect(record.permissions).toEqual({});
+    expect(record.steps.filter((s) => s.uses).map((s) => String(s.uses).split('@')[0])).toEqual(['actions/create-github-app-token']);
+    expect(record.steps.map((s) => s.run ?? '').join('\n')).not.toMatch(/\bnode\b|scripts\//);
+    expect(rstep('record').env).toEqual({ RECORD: '${{ vars.KANON_INTAKE_RECORD }}' });
+    const mint = rstep('intake-token');
     expect(mint.if).toBe("steps.record.outputs.repo != ''");
     expect((mint as { 'continue-on-error'?: boolean })['continue-on-error']).toBe(true);
     expect(mint.with).toEqual({
       'client-id': '${{ secrets.RELEASER_APP_ID }}', 'private-key': '${{ secrets.RELEASER_APP_PRIVATE_KEY }}',
       owner: '${{ steps.record.outputs.owner }}', repositories: '${{ steps.record.outputs.repo }}', 'permission-contents': 'read',
     });
-    const read = step('Read the intake record');
-    expect(read.if).toBe("steps.intake-token.outcome == 'success'");
-    expect(read.env!.OUT).toBe('${{ runner.temp }}/intake-record.md');
-    const holders = job.steps.filter((s) => JSON.stringify(s).includes('steps.intake-token.outputs.token'));
-    expect(holders.map((s) => s.name)).toEqual(['Read the intake record']);
-    expect(job.steps.indexOf(read)).toBeLessThan(job.steps.indexOf(step('gates')));
-    expect(step('gates').env).toMatchObject({ INTAKE_RECORD: '${{ vars.KANON_INTAKE_RECORD }}', INTAKE_RECORD_FILE: '${{ runner.temp }}/intake-record.md' });
+    expect(record.steps.filter((s) => JSON.stringify(s).includes('steps.intake-token.outputs.token')).map((s) => s.id)).toEqual(['read']);
+    expect(record.outputs).toEqual({ read: '${{ steps.read.outputs.read }}', text: '${{ steps.read.outputs.text }}', error: '${{ steps.read.outputs.error }}' });
+  });
+
+  it('compares in a job with no key, Contents read alone, and hands the promote job only its verdict', () => {
+    const intake = wf.jobs.intake! as typeof job & { needs: string; if: string; outputs: Record<string, string> };
+    expect(intake.needs).toBe('record');
+    expect(intake.permissions).toEqual({ contents: 'read' });
+    expect(JSON.stringify(intake)).not.toMatch(/secrets\./);
+    const checkout = intake.steps.find((s) => String(s.uses).startsWith('actions/checkout@'))!;
+    expect(checkout.with).toEqual({ 'persist-credentials': false, 'fetch-depth': 0 });
+    const compare = intake.steps.find((s) => s.id === 'compare')!;
+    expect(compare.run).toBe('node scripts/promote.mjs intake');
+    expect(compare.env).toEqual({
+      GH_TOKEN: '${{ github.token }}', INTAKE_RECORD: '${{ vars.KANON_INTAKE_RECORD }}',
+      INTAKE_RECORD_READ: '${{ needs.record.outputs.read }}', INTAKE_RECORD_TEXT: '${{ needs.record.outputs.text }}', INTAKE_RECORD_ERROR: '${{ needs.record.outputs.error }}',
+    });
+    expect(intake.outputs).toEqual({ verdict: '${{ steps.compare.outputs.verdict }}' });
+    const promoteJob = job as typeof job & { needs: string; if: string };
+    expect(promoteJob.needs).toBe('intake');
+    expect(promoteJob.if).toBe('${{ !cancelled() && github.ref_name == github.event.repository.default_branch }}');
+    expect(step('gates').env!.INTAKE_VERDICT).toBe('${{ needs.intake.outputs.verdict }}');
+    expect(JSON.stringify(job)).not.toMatch(/intake-first|promote\.mjs intake|fetch-depth/);
   });
 
   // #1441: a hold reports as a green run, so the held issue is how the Owner hears of it.
