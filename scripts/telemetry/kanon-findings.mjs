@@ -40,7 +40,7 @@
 // release with no list (no such tag, or `dev`, which is no release) checks nothing against a tree,
 // so a finding of it with a path or a text fails the gate, `kanon_version (no-tree)`.
 //
-// THE KEYS AND THE NAMES. `--register` is the private register `render.mjs` reads: every key in it
+// THE KEYS AND THE NAMES. `--register` is the private register file (plan 0002 §5): every key in it
 // joins the keys the output is checked against, and each entry's repository gives that key's name
 // hashes through the scrub's `nameContext`, as intake has them (plan 0006 §4.2). A key with no
 // entry has no name context, so a text of it fails the gate, `evidence (no-sender-context)`.

@@ -14,8 +14,10 @@ import { parseYaml, YamlError } from '../../cli/workflow-yaml.mjs';
  */
 const ROOT = process.cwd();
 const files = execFileSync('git', ['ls-files', '*.yml', '*.yaml'], { cwd: ROOT, encoding: 'utf8' }).split('\n').filter(Boolean);
-// The one file in the tree it doesn't read: a CloudFormation template, which uses tags.
-const NOT_READ = ['infra/telemetry/template.yaml'];
+// Files in the tree it doesn't read. None since plan 0008 J9: the telemetry store's template held
+// the one anchor in the tree (its importer and backfill roles shared an invoke policy), and lost
+// it with those policies. The reader's refusal is held on fixtures below instead.
+const NOT_READ: string[] = [];
 
 describe('the workflow YAML reader', () => {
   it('reads every YAML file in the tree as the yaml package does', () => {

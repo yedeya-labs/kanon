@@ -7,8 +7,9 @@
 // the key, `<key>#<lane>` for each lane in the schema's enum, `<key>#work`, `<key>#finding`, `<key>#deploy`
 // and `<key>#smoke_check` (plan 0006 §2.3, plan 0010 D9, plan 0013 S3), so it is complete without a scan. The table's resource policy lets only the function's role, the
 // Owner's role and the self-read role (which only the function assumes, plan 0008 §7) delete, so it runs with the
-// Owner's profile. Remove the key from the register
-// and redeploy first (step 1), so nothing writes while it runs. It prints counts only.
+// Owner's profile. Suspend the key's registration first (`register.mjs suspend`), so nothing
+// writes while it runs; `register.mjs erase` is the whole erasure, tombstone and all. It prints
+// counts only.
 
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';

@@ -10,11 +10,11 @@
 // subject template (`use_default: false`) makes the subject something else entirely, so it is
 // refused unless the caller names the exact subject.
 //
-// THE ONE HOME (kanon#295, `K-PRIN-2`). Both stores read their subjects here: the telemetry
-// store's `infra/telemetry/render.mjs` and the QA store's `infra/qa-store/aws/provision.mjs`. A
-// second copy would let a fix (a new subject form GitHub introduces, say) reach one store and not
-// the other, so that one trusts a subject the other refuses. `tests/unit/oidc-subject.test.ts`
-// holds the subject checks; each store's own test covers only how it calls them.
+// THE ONE HOME (kanon#295, `K-PRIN-2`). The QA store's `infra/qa-store/aws/provision.mjs` reads
+// its subjects here, as the telemetry store's `render.mjs` did until plan 0008 J9 removed the
+// telemetry store's GitHub-trusting roles. A second copy would let a fix (a new subject form GitHub
+// introduces, say) reach one store and not another. `tests/unit/oidc-subject.test.ts` holds the
+// subject checks; each store's own test covers only how it calls them.
 
 import { execFileSync } from 'node:child_process';
 

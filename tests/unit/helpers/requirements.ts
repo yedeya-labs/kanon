@@ -177,6 +177,10 @@ export const buildRequirements = (root: string) => {
       // sends with GitHub's OIDC token. `kanon doctor` reads the caller's last run against such a
       // release (`telemetry.refused`, `telemetry.not-run`), where it used to ask for the variables.
       ...('audience' in (((collectorDoc.on as Doc).workflow_call as Doc)?.inputs ?? {}) ? { token: true } : {}),
+      // The inputs the collector declares, so doctor names a caller's line it doesn't, which GitHub
+      // refuses before the run starts (`caller.input-stale`): the SigV4 path's `writer-role` since
+      // plan 0008 J9.
+      inputs: Object.keys(((collectorDoc.on as Doc).workflow_call as Doc)?.inputs ?? {}).sort(),
     }
     : undefined;
   // The QA store (kanon#433): the adopter's hook, which the `qa-store` block calls, and the

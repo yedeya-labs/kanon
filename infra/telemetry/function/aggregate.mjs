@@ -36,23 +36,22 @@
 // holds to `Query` with exactly `PROJECTION` (`dynamodb:Attributes`, `dynamodb:Select`), so it
 // can't fetch any other field of a row. `node:` built-ins only, like the ingest function.
 //
-// WHO MAY ASK, AND WHOSE ROWS ARE READ (plan 0008 §3.6, §9, step J4). The function has two URLs
-// during vM's overlap, and tells them apart by the qualifier of the ARN Lambda invoked it through
-// (`invokedFunctionArn`), never by the request:
-// - the unqualified function's URL, `AWS_IAM`, today's path: an invoker role
-//   `kanon-telemetry-<key>-aggregates` in this account whose key is in `INVOKER_KEYS`, or the
-//   Owner's direct invoke. A bearer token there is refused;
+// WHO MAY ASK, AND WHOSE ROWS ARE READ (plan 0008 §3.6, §9, steps J4 and J9). The function has
+// one URL, on its `live` alias, and tells its two ways in apart by the qualifier of the ARN Lambda
+// invoked it through (`invokedFunctionArn`), never by the request:
+// - the unqualified function, which has had no URL since J9 removed the IAM one and the invoker
+//   roles: only the Owner's direct invoke, which needs `lambda:InvokeFunction`, a grant only the
+//   Owner holds. An event shaped as a URL's is refused there;
 // - the `live` alias's URL, `NONE`, the token path: GitHub's OIDC token, checked by `verifyToken`
 //   (`oidc.mjs`) for the `aggregate` endpoint, so the Explorer's `agent-explore-telemetry.yml` at
 //   a release, from a registration whose `aggregate_invoker` is true; or, for `?view=page` only,
 //   Kanon's `metrics-page.yml` at its registration's default branch, from a registration whose
 //   `page_reader` is true (§2.2's exception, `pageReaderOf`). An IAM-shaped request there is
 //   refused. The caller's registration is one `GetItem` per request, projected to `AGGREGATE_GET`.
-// On BOTH paths, whose rows are read comes from the register table, not the environment: every
-// registration whose `status` is `active` (`AGGREGATE_KEYS` no more), its `publish_own_figures_as`
-// (`OWN_FIGURES` no more), from one `Scan` projected to `AGGREGATE_SCAN`. A SUSPENDED (or erased)
-// key's partitions are never read, so its rows are in no cell, no signal and no page view; and an
-// invoker role whose key isn't active is refused. The three-adopter rule counts keys (Owner
+// On both, whose rows are read comes from the register table, not the environment: every
+// registration whose `status` is `active`, and its `publish_own_figures_as`, from one `Scan`
+// projected to `AGGREGATE_SCAN`. A SUSPENDED (or erased) key's partitions are never read, so its
+// rows are in no cell, no signal and no page view. The three-adopter rule counts keys (Owner
 // decision 7 of 2026-10-12), so the scan needs no owner id.
 
 import { Buffer } from 'node:buffer';
@@ -89,8 +88,6 @@ export const ATTRIBUTES = Object.freeze([...new Set([...PROJECTION, ...WORK_PROJ
 /** The one view a caller may ask for by name (`?view=page`); a GET without one is the aggregate. */
 export const PAGE_VIEW = 'page';
 const KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const INVOKER_ROLE = /^kanon-telemetry-([a-z0-9][a-z0-9-]{0,31})-aggregates$/;
-const ASSUMED_ROLE = /^arn:aws[a-z-]*:sts::(\d+):assumed-role\/([^/]+)\/[^/]+$/;
 
 /**
  * @typedef {{ pk: string, row_kind?: string, tag?: string, recorded_at?: string, lane?: string,
@@ -217,19 +214,6 @@ export const publicView = (/** @type {Aggregate} */ a) => ({ cross_adopter: a.cr
 export function assertNoKey(value, keys) {
   if (typeof value === 'string' && keys.has(value)) throw new Error('the aggregate holds an adopter key; nothing is returned');
   if (value && typeof value === 'object') for (const v of Object.values(value)) assertNoKey(v, keys);
-}
-
-/**
- * The function's environment: the keys whose invoker role may call the IAM URL, as `render.mjs`
- * writes them from the register file (`INVOKER_KEYS`), for today's path until vM+1 removes the
- * roles. Which keys are aggregated, and under which labels, is the register table's
- * (`registrationsFrom`): `AGGREGATE_KEYS` and `OWN_FIGURES` are no longer read.
- * @param {{ INVOKER_KEYS?: string }} env
- */
-export function configOf(env) {
-  const invokers = (env.INVOKER_KEYS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-  if (!invokers.every((k) => KEY.test(k))) throw new Error('INVOKER_KEYS is malformed');
-  return { invokers };
 }
 
 /**
@@ -538,18 +522,18 @@ const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const LAMBDA_ARN = /^arn:aws[a-z-]*:lambda:[a-z0-9-]+:\d+:function:[A-Za-z0-9_-]+(?::([A-Za-z0-9$_-]+))?$/;
 
 /**
- * Which URL the request came through, from the ARN Lambda invoked: `iam` for the unqualified
- * function (today's path), `token` for the `live` alias, `null` for any other qualifier or a
- * malformed ARN. With no ARN, `iam`: Lambda always passes one, and the tests that call `handle`
- * without one exercise today's path.
+ * Which way the request came in, from the ARN Lambda invoked: `direct` for the unqualified
+ * function (the Owner's direct invoke), `token` for the `live` alias, `null` for any other
+ * qualifier or a malformed ARN. With no ARN, `direct`: Lambda always passes one, and the tests
+ * that call `handle` without one exercise the Owner's way.
  * @param {unknown} arn
- * @returns {'iam' | 'token' | null}
+ * @returns {'direct' | 'token' | null}
  */
 export function pathOf(arn) {
-  if (arn === undefined) return 'iam';
+  if (arn === undefined) return 'direct';
   const m = typeof arn === 'string' ? LAMBDA_ARN.exec(arn) : null;
   if (!m) return null;
-  if (m[1] === undefined) return 'iam';
+  if (m[1] === undefined) return 'direct';
   return m[1] === TOKEN_ALIAS ? 'token' : null;
 }
 
@@ -665,34 +649,6 @@ const refusal = (/** @type {Refused} */ r) =>
   reply(r.status, { error: r.error }, r.status === 401 ? { 'www-authenticate': 'Bearer error="invalid_token"' } : {});
 
 /**
- * The key of a URL call from an invoker role, `kanon-telemetry-<key>-aggregates` in this account
- * whose key is in `invokers`; `''` for a direct invoke (no `requestContext`), which needs
- * `lambda:InvokeFunction` outside the URL, which only the Owner holds; `null` for anyone else.
- * @param {any} event
- * @param {{ ACCOUNT_ID?: string }} env
- * @param {string[]} invokers
- * @returns {string | null}
- */
-export function invokerKeyOf(event, env, invokers) {
-  if (event?.requestContext === undefined) return '';
-  const arn = event.requestContext?.authorizer?.iam?.userArn;
-  const m = typeof arn === 'string' ? ASSUMED_ROLE.exec(arn) : null;
-  const role = m ? INVOKER_ROLE.exec(/** @type {string} */ (m[2])) : null;
-  const key = role ? /** @type {string} */ (role[1]) : '';
-  return m && role && m[1] === env.ACCOUNT_ID && invokers.includes(key) ? key : null;
-}
-
-/**
- * Whether a URL call comes from a registered invoker role, `kanon-telemetry-<key>-aggregates` in
- * this account. A direct invoke (no `requestContext`) needs `lambda:InvokeFunction` outside the
- * URL, which only the Owner holds.
- * @param {any} event
- * @param {{ ACCOUNT_ID?: string }} env
- * @param {string[]} invokers
- */
-export const callerAllowed = (event, env, invokers) => invokerKeyOf(event, env, invokers) !== null;
-
-/**
  * Which view a request asks for: the aggregate, with no query; the page view, with exactly
  * `view=page`; anything else is refused, so a caller can't name an adopter or narrow a cell.
  * @param {any} event
@@ -737,13 +693,6 @@ export async function handle(event, deps = {}) {
   if (event?.requestContext !== undefined && event.requestContext?.http?.method !== 'GET') return reply(405, { error: 'method' });
   const path = pathOf(deps.invokedArn);
   if (path === null) return reply(403, { error: 'caller' });
-  let config;
-  try {
-    config = configOf(env);
-  } catch {
-    log('configuration: malformed');
-    return reply(500, { error: 'configuration' });
-  }
   const now = (deps.now ?? Date.now)();
   const db = dynamoOf(env);
   const query = deps.query ?? ((/** @type {Record<string, any>} */ r) => db('Query', r));
@@ -753,10 +702,9 @@ export async function handle(event, deps = {}) {
   const registerTable = env.REGISTER_TABLE ?? REGISTER_TABLE;
   const bearer = bearerOf(event);
 
-  // Who is asking: on the alias, a token and nothing else; on the IAM URL, a role and never a token.
+  // Who is asking: on the alias, a token and nothing else; on the unqualified function, the
+  // Owner's direct invoke, never a URL's event, since that function has no URL.
   let pageOnly = false;
-  /** @type {string | null} */
-  let invokerKey = '';
   if (path === 'token') {
     if (event?.requestContext?.authorizer?.iam !== undefined) return reply(403, { error: 'caller' });
     if (!bearer) return refusal(refused(401, 'token'));
@@ -785,10 +733,8 @@ export async function handle(event, deps = {}) {
       return refusal(caller);
     }
     pageOnly = caller.pageOnly;
-  } else {
-    if (bearer) return reply(403, { error: 'caller' });
-    invokerKey = invokerKeyOf(event, env, config.invokers);
-    if (invokerKey === null) return reply(403, { error: 'caller' });
+  } else if (event?.requestContext !== undefined || bearer !== undefined) {
+    return reply(403, { error: 'caller' });
   }
   const view = viewOf(event);
   if (view === null) return reply(400, { error: 'view' });
@@ -803,10 +749,6 @@ export async function handle(event, deps = {}) {
     const status = failureOf(e, 'Scan', 'register');
     log(`aggregate: failed (${status})`);
     return reply(502, { error: 'aggregate' });
-  }
-  // An invoker role reads only while its key's registration is active (plan 0008 §9's overlap).
-  if (invokerKey && !register.keys.includes(invokerKey)) {
-    return register.known.includes(invokerKey) ? reply(403, { error: 'suspended' }) : reply(404, { error: 'not-registered' });
   }
   let result;
   try {

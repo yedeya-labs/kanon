@@ -1,6 +1,7 @@
 // AWS Signature Version 4, with `node:` built-ins only (plan 0002 §4: no SDK, no new
-// dependency). The ingest function signs its DynamoDB `PutItem` with it, and the verify script
-// signs its calls to the function URL. Its test checks it against AWS's published example.
+// dependency). Both functions sign their DynamoDB, STS and Lambda calls with it (`aws.mjs`). No
+// caller signs a request to a function URL since plan 0008 J9. Its test checks it against AWS's
+// published example.
 
 import { createHash, createHmac } from 'node:crypto';
 import { URL } from 'node:url';

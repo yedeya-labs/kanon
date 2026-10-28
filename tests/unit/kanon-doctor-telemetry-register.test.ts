@@ -1,19 +1,18 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { doctor, EXIT, FINDINGS } from '../../cli/doctor.mjs';
-import { render } from '../../infra/telemetry/render.mjs';
-import { checkout, fakeGitHub, healthyFiles, ids, PINNED, put, REPO, REQ, ROOT, run } from './helpers/doctor.js';
+import { checkout, fakeGitHub, healthyFiles, ids, PINNED, put, REPO, REQ, run } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 
 /**
- * `telemetry.register-tracked` (#1071): a telemetry register, or what `render.mjs` makes from
- * one, tracked in the repository doctor checks, which is one where Kanon's lanes run.
+ * `telemetry.register-tracked` (#1071): a telemetry register, or what `render.mjs` made from
+ * one before plan 0008 J9 removed it, tracked in the repository doctor checks, which is one where
+ * Kanon's lanes run. A render made before J9 can still lie in a checkout, so doctor still knows it.
  * docs/telemetry.md ("Where the register lives") forbids that, public or private: the Reviewer
  * reads any diff that touches it, and every agent reads the checkout. Doctor recognises the file
  * by its shape, never its name, exempts a register whose owner ARN is still a `<…>` placeholder
- * (Kanon's own `register.example.json`), and names only the path: never a key or a repository.
+ * (as Kanon's own `register.example.json` was until J9), and names only the path: never a key or
+ * a repository.
  *
  * The guard can fail: with the check removed from cli/doctor.mjs, the first case finds nothing
  * and turns red.
@@ -30,7 +29,17 @@ const register = {
   repositories: KEYS.map((key, i) => ({ key, repository: REPOS[i]!, readers: ['ref:refs/heads/main'] })),
 };
 const json = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
-const example = readFileSync(join(ROOT, 'infra/telemetry/register.example.json'), 'utf8');
+/** The example Kanon shipped until plan 0008 J9: its owner ARN is a `<…>` placeholder. */
+const example = json({
+  owner_principal_arn: 'arn:aws:iam::<account id>:role/aws-reserved/sso.amazonaws.com/eu-central-1/AWSReservedSSO_<permission set>_<suffix>',
+  repositories: [{ key: 'k3f9c2a71', repository: 'yedeya-labs/kanon', readers: ['ref:refs/heads/main'] }],
+});
+/** What `render.mjs` wrote before J9, in the parts doctor reads: the writer keys, and the parameters. */
+const CURSOR = 'cd'.repeat(32);
+const rendered = {
+  template: { Resources: { IngestFunction: { Type: 'AWS::Lambda::Function', Properties: { Environment: { Variables: { WRITER_KEYS: KEYS.join(','), NAME_HASHES: '' } } } } } },
+  parameters: [`OwnerPrincipalArn=${ARN}`, 'CreateOidcProvider=false', 'ReservedConcurrency=0', 'EnableVerify=false', 'EnableImporter=false', 'EnableBackfill=false', `CursorKey=${CURSOR}`],
+};
 const LIVES = 'docs/telemetry.md#where-the-register-lives';
 
 /** Nothing doctor prints, in either mode, holds a key or a repository from the file. */
@@ -71,7 +80,7 @@ describe('kanon doctor on a telemetry register tracked in the checkout (#1071)',
     expect(ignored.stdout.split('\n').filter(Boolean)).toEqual(['.env', 'ops/state/accounts.json']);
   });
 
-  it("does not flag Kanon's register.example.json, whose owner ARN is still a placeholder", async () => {
+  it("does not flag a register whose owner ARN is still a placeholder, as Kanon's own example's was", async () => {
     const files = healthyFiles();
     files['infra/telemetry/register.example.json'] = example;
     const r = await run(checkout(files), fakeGitHub(), ['--json']);
@@ -97,13 +106,8 @@ describe('kanon doctor on a telemetry register tracked in the checkout (#1071)',
     expect(r.status, r.out).toBe(EXIT.healthy);
   });
 
-  it("blocks on render.mjs's template.json and parameters.json, tracked, and names neither a key nor a repository", async () => {
-    const gh = (args: string[]) => {
-      const m = /^repos\/([^/]+\/[^/]+)(\/actions\/oidc\/customization\/sub)?$/.exec(args[1] ?? '');
-      if (!m) throw new Error(`gh: HTTP 404 for ${args[1]}`);
-      return JSON.stringify(m[2] ? { use_default: true, use_immutable_subject: false } : { full_name: m[1], default_branch: 'main' });
-    };
-    const out = render(register, { gh });
+  it("blocks on render.mjs's template.json and parameters.json, made before J9 and tracked, and names neither a key nor a repository", async () => {
+    const out = rendered;
     const files = healthyFiles();
     files['deploy/build/template.json'] = json(out.template);
     files['deploy/build/parameters.json'] = json(out.parameters);

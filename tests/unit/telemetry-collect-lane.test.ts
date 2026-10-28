@@ -28,13 +28,14 @@ const starts = (cond: string, event: string, ref: string) =>
   Boolean(evaluate(cond, { github: { event_name: event, ref_name: ref, event: { repository: { default_branch: 'main' } } }, inputs: {} }));
 
 describe('telemetry-collect.yml, the lane', () => {
-  it('is called only: a self-hosted store\'s url and audience, the deprecated writer role, the override, and the two dispatch inputs', () => {
+  it("is called only: a self-hosted store's url and audience, the override, and the two dispatch inputs; the SigV4 path's writer role is gone (plan 0008 J9)", () => {
     expect(Object.keys(lane.on)).toEqual(['workflow_call']);
     const inputs = lane.on.workflow_call.inputs as Record<string, { type: string; default: string; required: boolean; description?: string }>;
-    expect(Object.keys(inputs).sort()).toEqual(['audience', 'erase', 'register', 'url', 'window_minutes', 'writer-role']);
-    for (const k of ['audience', 'url', 'window_minutes', 'writer-role']) expect(inputs[k]).toMatchObject({ type: 'string', default: '', required: false });
+    expect(Object.keys(inputs).sort()).toEqual(['audience', 'erase', 'register', 'url', 'window_minutes']);
+    for (const k of ['audience', 'url', 'window_minutes']) expect(inputs[k]).toMatchObject({ type: 'string', default: '', required: false });
     for (const k of ['erase', 'register']) expect(inputs[k]).toMatchObject({ type: 'string', default: 'no', required: false });
-    expect(inputs['writer-role']!.description ?? '').toMatch(/refused before any token is minted/i);
+    expect(inputs.url!.description ?? '').toMatch(/refused before any token is minted/i);
+    expect(LANE_TEXT).not.toMatch(/writer-role|LEGACY/);
     expect(lane.on.workflow_call.secrets).toBeUndefined();
   });
 
@@ -50,16 +51,16 @@ describe('telemetry-collect.yml, the lane', () => {
   // While the hosted store's URL is unpublished, a run that names no store of its own skips, green.
   // Its job must not be named as a sweep, or the watermark would anchor on it and the first real
   // sweep after the URL is published would reach back 90 minutes instead of to the last sweep (#843).
-  const UNPUBLISHED = HOSTED_INGEST_URL === '' ? ` || inputs.url == '' && inputs.audience == '' && inputs.writer-role == '' && '${UNPUBLISHED_JOB}'` : '';
+  const UNPUBLISHED = HOSTED_INGEST_URL === '' ? ` || inputs.url == '' && inputs.audience == '' && '${UNPUBLISHED_JOB}'` : '';
   const name = (inputs: Record<string, string>) => evaluate(String(collect.name).slice(3, -2), { inputs });
 
   it('names the collect job as the watermark looks for it, an override run otherwise (kanon#315), and an erasure or an unpublished skip as neither (#843)', () => {
     expect(collect.name).toBe(`\${{ inputs.erase == 'yes' && '${ERASE_JOB}'${UNPUBLISHED} || inputs.window_minutes == '' && '${COLLECT_JOB}' || '${COLLECT_JOB_OVERRIDE}' }}`);
-    const store = { url: 'https://abc.lambda-url.eu-central-1.on.aws/', audience: 'acme-telemetry', 'writer-role': '' };
+    const store = { url: 'https://abc.lambda-url.eu-central-1.on.aws/', audience: 'acme-telemetry' };
     expect(name({ ...store, erase: '', window_minutes: '' })).toBe(COLLECT_JOB);
     expect(name({ ...store, erase: 'no', window_minutes: '30' })).toBe(COLLECT_JOB_OVERRIDE);
     expect(name({ ...store, erase: 'yes', window_minutes: '' })).toBe(ERASE_JOB);
-    expect(name({ url: '', audience: '', 'writer-role': '', erase: 'yes', window_minutes: '' })).toBe(ERASE_JOB);
+    expect(name({ url: '', audience: '', erase: 'yes', window_minutes: '' })).toBe(ERASE_JOB);
   });
 
   // The job's name is evaluated before the script runs, so while the hosted URL is empty the
@@ -69,15 +70,13 @@ describe('telemetry-collect.yml, the lane', () => {
     const SELF = 'https://abc.lambda-url.eu-central-1.on.aws/';
     for (const url of ['', SELF]) {
       for (const audience of ['', 'acme-telemetry']) {
-        for (const role of ['', 'a-writer-role']) {
-          for (const window of ['', '30']) {
-            const { store, problems } = inputsOf({ KANON_TELEMETRY_URL: url, KANON_TELEMETRY_AUDIENCE: audience, LEGACY: String(role !== ''), ERASE: 'no', REGISTER: 'no' });
-            const got = name({ url, audience, 'writer-role': role, erase: 'no', window_minutes: window });
-            const where = JSON.stringify({ url, audience, role, window });
-            if (problems.length) continue; // refused in the check step: red, so never a watermark
-            if (store.ok) expect(got, where).toBe(window === '' ? COLLECT_JOB : COLLECT_JOB_OVERRIDE);
-            else expect(store.unpublished && got, where).toBe(UNPUBLISHED_JOB);
-          }
+        for (const window of ['', '30']) {
+          const { store, problems } = inputsOf({ KANON_TELEMETRY_URL: url, KANON_TELEMETRY_AUDIENCE: audience, ERASE: 'no', REGISTER: 'no' });
+          const got = name({ url, audience, erase: 'no', window_minutes: window });
+          const where = JSON.stringify({ url, audience, window });
+          if (problems.length) continue; // refused in the check step: red, so never a watermark
+          if (store.ok) expect(got, where).toBe(window === '' ? COLLECT_JOB : COLLECT_JOB_OVERRIDE);
+          else expect(store.unpublished && got, where).toBe(UNPUBLISHED_JOB);
         }
       }
     }
@@ -92,7 +91,7 @@ describe('telemetry-collect.yml, the lane', () => {
     expect(LANE_TEXT).not.toMatch(/configure-aws-credentials|role-to-assume/);
   });
 
-  it('checks the inputs in a step of their own before the sweep, and passes the writer role only as whether it is set', () => {
+  it('checks the inputs in a step of their own before the sweep, by name', () => {
     const [path, check, run] = collect.steps!;
     expect(path!.uses).toBe('$/actions/kanon-path');
     expect(check!.run?.trim()).toBe('node "$KANON/scripts/telemetry-collect.mjs" check');
@@ -101,13 +100,10 @@ describe('telemetry-collect.yml, the lane', () => {
       GH_TOKEN: '${{ github.token }}',
       KANON_TELEMETRY_URL: '${{ inputs.url }}',
       KANON_TELEMETRY_AUDIENCE: '${{ inputs.audience }}',
-      LEGACY: "${{ inputs.writer-role != '' }}",
       WINDOW: '${{ inputs.window_minutes }}',
       ERASE: '${{ inputs.erase }}',
       REGISTER: '${{ inputs.register }}',
     });
-    // Never the role's value: it named an account.
-    expect(JSON.stringify(collect.steps)).not.toContain('${{ inputs.writer-role }}');
   });
 
   it('is the shape the id-token guard admits, and a fourth step is not (plan 0008 J5)', () => {
@@ -154,8 +150,8 @@ describe("telemetry.yml, Kanon's caller (S7, S9)", () => {
   });
 
   it('passes what its pinned release takes on the token path, and no variable and no secret (plan 0008 §9 step 4)', () => {
-    // The pin is on the token path: the collector refuses `url` or `writer-role` without
-    // `audience` (#842), and the hosted store's URL is its own constant, so the caller passes
+    // The pin is on the token path: the collector refuses `url` without `audience` (#842), and
+    // takes no `writer-role` since plan 0008 J9; the hosted store's URL is its own constant, so the caller passes
     // only the three dispatch inputs through.
     expect(job.with).toEqual({
       window_minutes: '${{ inputs.window_minutes }}',

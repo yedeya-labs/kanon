@@ -1555,7 +1555,14 @@
       "issues": "read",
       "pull-requests": "read"
     },
-    "token": true
+    "token": true,
+    "inputs": [
+      "audience",
+      "erase",
+      "register",
+      "url",
+      "window_minutes"
+    ]
   },
   "qaStore": {
     "hook": ".github/actions/qa-store/action.yml",

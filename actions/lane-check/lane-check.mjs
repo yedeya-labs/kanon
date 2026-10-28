@@ -289,6 +289,13 @@ let COLLECTOR = false;
  * (plan 0008 §8), and so refuses the SigV4 path's `url` and `writer-role` without `audience`.
  */
 const TOKEN_PATH = REQUIREMENTS?.telemetry?.token === true;
+/**
+ * The inputs this release's collector declares, its requirements' `telemetry.inputs`, or null for
+ * a release whose requirements don't list them (before plan 0008 J9). A caller passing any other
+ * is refused by GitHub before the run starts: doctor's `caller.input-stale`.
+ * @type {string[] | null}
+ */
+const COLLECTOR_INPUTS = Array.isArray(REQUIREMENTS?.telemetry?.inputs) ? REQUIREMENTS.telemetry.inputs : null;
 /** @type {string[]} */
 const ROLES = [];
 /** @type {Array<[string, string]>} */
@@ -360,10 +367,20 @@ for (const f of WORKFLOWS) {
     // runs at that pin: in Kanon's own tree, read without `ACTION_REF`, the caller lags at the
     // last release, whose collector still takes these inputs.
     const pin = tostring(v.uses).slice(tostring(v.uses).lastIndexOf('@') + 1);
+    // AN INPUT THE COLLECTOR DOES NOT DECLARE at this release, as doctor's `caller.input-stale`
+    // reads it: the SigV4 path's `writer-role:` since plan 0008 J9. GitHub refuses the call before
+    // the run starts. Judged at the caller's pin, as the rule below is.
+    if (wf === 'telemetry-collect' && COLLECTOR_INPUTS && pin === ACTION_REF && isObject(v.with) && tsv(name)) {
+      const stale = Object.keys(v.with).filter((k) => !COLLECTOR_INPUTS.includes(k));
+      if (stale.length) {
+        fail(f, `the job \`${tsv(name)}\` passes ${stale.map((k) => `\`${tsv(k)}:\``).join(' and ')} to Kanon's telemetry collector, which does not declare ${stale.length > 1 ? 'them' : 'it'} at this release, so GitHub refuses the call before the run starts. Remove ${stale.length > 1 ? 'them' : 'it'} from the job's \`with:\`${stale.includes('writer-role') ? ', with the repository variable it read (the SigV4 path\'s writer role, gone since plan 0008 J9)' : ''} (caller.input-stale)`);
+      }
+    }
     if (wf === 'telemetry-collect' && TOKEN_PATH && pin === ACTION_REF && isObject(v.with) && !Object.hasOwn(v.with, 'audience')) {
-      const legacy = ['url', 'writer-role'].filter((k) => Object.hasOwn(v.with, k));
+      // An input this release no longer declares is the rule above's, as doctor splits them.
+      const legacy = ['url', 'writer-role'].filter((k) => Object.hasOwn(v.with, k) && (!COLLECTOR_INPUTS || COLLECTOR_INPUTS.includes(k)));
       if (legacy.length && tsv(name)) {
-        fail(f, `the job \`${tsv(name)}\` passes ${legacy.map((k) => `\`${k}:\``).join(' and ')} to Kanon's telemetry collector without \`audience:\`, the inputs of the SigV4 path this release no longer takes: the collector refuses them before it mints a token, so every run is red, and nothing is sent or registered. Run \`kanon init --telemetry\` again to write the new caller, which passes neither and sends to Kanon's hosted store; or, for a store of your own, add \`audience:\` beside \`url:\` and remove \`writer-role:\` (docs/telemetry.md, "Collect the rows"; telemetry.legacy-inputs)`);
+        fail(f, `the job \`${tsv(name)}\` passes ${legacy.map((k) => `\`${k}:\``).join(' and ')} to Kanon's telemetry collector without \`audience:\`, as callers of the SigV4 path did: the collector refuses ${legacy.length > 1 ? 'them' : 'it'} before it mints a token, so every run is red, and nothing is sent or registered. Run \`kanon init --telemetry\` again to write the new caller, which passes neither and sends to Kanon's hosted store; or, for a store of your own, add \`audience:\` beside \`url:\`${legacy.includes('writer-role') ? ' and remove `writer-role:`' : ''} (docs/telemetry.md, "Collect the rows"; telemetry.legacy-inputs)`);
       }
     }
     if (wf === lane || !Object.hasOwn(v, 'secrets') || isObject(v.secrets)) continue;

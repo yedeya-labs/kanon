@@ -790,7 +790,7 @@ describe("the collect job's inputs, checked before any token is minted", () => {
   it('url without audience refuses, and the check step exits 1 naming it', () => {
     const lines: string[] = [];
     expect(checkStep({ KANON_TELEMETRY_URL: SELF_URL }, (l) => lines.push(l))).toBe(1);
-    expect(lines.join('\n')).toMatch(/::error title=telemetry-collect::the caller passes `url` or `writer-role` without `audience`.*no token was minted/);
+    expect(lines.join('\n')).toMatch(/::error title=telemetry-collect::the caller passes `url` without `audience`.*no token was minted/);
     // audience alone is refused by the store check, naming what is missing.
     const alone: string[] = [];
     expect(checkStep({ KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE }, (l) => alone.push(l))).toBe(1);
@@ -798,19 +798,16 @@ describe("the collect job's inputs, checked before any token is minted", () => {
   });
 
   // Owner decision of 2026-10-14 (#842): the SigV4 path's inputs are refused, never redirected.
-  it('a caller that still passes url and writer-role without audience is refused, and its url is never swapped for the hosted store', () => {
-    const r = inputsOf({ KANON_TELEMETRY_URL: 'https://old123.lambda-url.eu-central-1.on.aws/', LEGACY: 'true' });
+  it("a caller that still passes the SigV4 path's url without audience is refused, and its url is never swapped for the hosted store", () => {
+    const r = inputsOf({ KANON_TELEMETRY_URL: 'https://old123.lambda-url.eu-central-1.on.aws/' });
     expect(r.problems).toEqual([LEGACY_REFUSAL]);
     expect(r.store).toMatchObject({ ok: false });
     expect(LEGACY_REFUSAL).toMatch(/nothing is sent and nothing is registered/);
     expect(LEGACY_REFUSAL).toMatch(/Run `kanon init` again/);
     expect(LEGACY_REFUSAL).toMatch(/add `audience:` beside `url:`/);
-    // writer-role alone, with no url, is refused the same.
-    expect(inputsOf({ LEGACY: 'true' }).problems).toEqual([LEGACY_REFUSAL]);
-    // Beside a self-hosted url and audience, writer-role is ignored, with a warning.
-    const self = inputsOf({ KANON_TELEMETRY_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE, LEGACY: 'true' });
-    expect(self).toMatchObject({ problems: [], store: SELF });
-    expect(self.warnings).toEqual([expect.stringContaining('`writer-role`, which this release of the collector ignores')]);
+    // Plan 0008 J9: the writer role's flag is not read at all, so it neither refuses nor warns.
+    expect(inputsOf({ LEGACY: 'true' })).toMatchObject({ problems: [], warnings: [] });
+    expect(inputsOf({ KANON_TELEMETRY_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE, LEGACY: 'true' })).toMatchObject({ problems: [], warnings: [], store: SELF });
   });
 
   it('a legacy self-hosted caller sends nothing, registers nothing, and stays red: the run stops before any token (#842)', () => {
@@ -821,7 +818,7 @@ describe("the collect job's inputs, checked before any token is minted", () => {
       encoding: 'utf8',
       env: {
         PATH: process.env.PATH, GITHUB_REPOSITORY: REPO, GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/telemetry.yml@refs/heads/main`,
-        KANON_TELEMETRY_URL: 'https://old123.lambda-url.eu-central-1.on.aws/', LEGACY: 'true', ERASE: '', REGISTER: '',
+        KANON_TELEMETRY_URL: 'https://old123.lambda-url.eu-central-1.on.aws/', ERASE: '', REGISTER: '',
         ACTIONS_ID_TOKEN_REQUEST_URL: 'http://127.0.0.1:9/token?api-version=2.0', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'runner-request-token',
       },
     });
@@ -829,8 +826,8 @@ describe("the collect job's inputs, checked before any token is minted", () => {
     expect(r.stdout).toContain('nothing is sent and nothing is registered');
     for (const s of ['add-mask', 'OIDC endpoint', 'could not be reached', 'Telemetry registration', 'Telemetry collector:']) expect(r.stdout + r.stderr).not.toContain(s);
     const lines: string[] = [];
-    expect(checkStep({ KANON_TELEMETRY_URL: 'https://old123.lambda-url.eu-central-1.on.aws/', LEGACY: 'true' }, (l) => lines.push(l))).toBe(1);
-    expect(lines).toEqual([expect.stringMatching(/^::error title=telemetry-collect::the caller passes `url` or `writer-role` without `audience`/)]);
+    expect(checkStep({ KANON_TELEMETRY_URL: 'https://old123.lambda-url.eu-central-1.on.aws/' }, (l) => lines.push(l))).toBe(1);
+    expect(lines).toEqual([expect.stringMatching(/^::error title=telemetry-collect::the caller passes `url` without `audience`/)]);
   });
 
   it('erase and register are yes or no, empty on a schedule, never both', () => {
