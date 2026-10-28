@@ -100,6 +100,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-15.** The Owner decided that the sign-off delegation covers only the repository's agent Apps: a commit by an App on an `Other App` row, or by the Intake App, is checked like any other bot's commit and needs a person's sign-off. The `dco` check leaves those rows' slugs out. [#998](https://github.com/yedeya-labs/kanon/issues/998)
 - **2026-10-16.** The Why says what passes such an App's commit: a person re-authoring it and signing it off, since a sign-off counts only when it is the author's, so a person's sign-off added to a bot's commit never passes it. The check is unchanged. [#1036](https://github.com/yedeya-labs/kanon/issues/1036)
+- **2026-10-28.** The Owner decided to widen the rule text to match the check: the Releaser's exemption covers every commit GitHub creates and signs for it, whether release-please writes it into the release PR or the Releaser's own pin or docs pull request does through the API, not only release-please's. The check is unchanged. [#1480](https://github.com/yedeya-labs/kanon/issues/1480)
 
 ## `K-AGENT-45`
 

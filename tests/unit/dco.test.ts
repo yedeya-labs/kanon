@@ -620,15 +620,16 @@ describe("K-MERGE-17 a stacked PR is judged by the default branch, not by its ba
   });
 });
 
-// #337: a release PR opened with the Releaser App's token. release-please writes its commits
-// through the API, so GitHub creates and signs them as the App, with no sign-off.
+// #337: commits made through the API with the Releaser App's token: release-please's release PR,
+// and the Releaser's own pin and docs pull requests (#1480). GitHub creates and signs them as the
+// App, with no sign-off, and the check doesn't ask which of them wrote the commit.
 const RELEASER = 'example-releaser';
 const RELEASER_ROW = `| Releaser | \`${RELEASER}\` | Read & write | No access | Read & write | No access |`;
 const REGISTER_R = `${REGISTER.trimEnd()}\n${RELEASER_ROW}\n`;
 const TRUST_R = { ...TRUST, slugs: [...TRUST.slugs, RELEASER], releaser: RELEASER };
 const releaseCommit = (over: Partial<Commit> = {}) => botCommit(`${RELEASER}[bot]`, 'chore(main): release 1.2.3', over);
 
-describe('#337 the Releaser\'s release commits are exempt, by its App identity', () => {
+describe('#337 the Releaser\'s GitHub-signed commits are exempt, by its App identity', () => {
   it('reads the Releaser\'s slug from the register\'s one Releaser row', () => {
     expect(parseRegister(REGISTER_R)).toEqual({ slugs: [IMPL, 'example-lead', RELEASER], releaser: RELEASER });
     expect(parseRegister(REGISTER_R.replace('| Releaser |', '| **Releaser** |'))).toMatchObject({ releaser: RELEASER });
