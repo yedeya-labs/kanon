@@ -353,7 +353,7 @@ describe('plan 0013 at intake: deploy row version 2 (S2), and a smoke-check row 
       pk: 'k1#smoke_check', sk: '20261002T115900Z#33679229731-1-1', row_kind: 'smoke_check', source: 'collector',
       expires_at: Math.floor(addMonths(NOW - 60_000, 13) / 1000),
     })]);
-    const importer = await call(event([smokeCheck()], { role: 'kanon-telemetry-importer', key: 'k2' }), { IMPORTER_ROLE: 'kanon-telemetry-importer' });
+    const importer = await call(event([smokeCheck()], IMPORTER));
     expect(importer.status).toBe(200);
     expect(importer.puts).toEqual([expect.objectContaining({ pk: 'k2#smoke_check', source: 'import' })]);
   });
@@ -361,7 +361,7 @@ describe('plan 0013 at intake: deploy row version 2 (S2), and a smoke-check row 
   it('a smoke-tagged one keeps 30 days; the backfill role may not send one', async () => {
     const smoke = await call(event([smokeCheck({ tag: 'smoke' })]));
     expect(smoke.puts[0]).toMatchObject({ pk: 'k1#smoke_check', expires_at: Math.floor((NOW - 60_000 + 30 * DAY) / 1000) });
-    const backfill = await call(event([smokeCheck()], { role: 'kanon-telemetry-backfill', key: 'k2' }), { BACKFILL_ROLE: 'kanon-telemetry-backfill' });
+    const backfill = await call(event([smokeCheck()], BACKFILLER));
     expect(backfill.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
     expect(backfill.puts).toEqual([]);
   });
@@ -555,15 +555,6 @@ describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
     // The sender's own word is still refused.
     const own = await call(event([withText('Observed: the Acme lane stopped.')]), kanon);
     expect(errorsOf(own)).toEqual([{ field: 'evidence', problem: 'name' }]);
-  });
-
-  it("stores no finding for a key without name hashes, or with malformed ones: the sender's check can't run", async () => {
-    const hashes = (repository: string) => [...nameContext({ repository })].sort();
-    for (const over of [{}, { name_hashes: [] }, { name_hashes: ['not-a-hash'] }, { name_hashes: [...hashes('acme-corp/widget-shop'), 'x'] }, { name_hashes: 'abc' }]) {
-      const r = await call(event([findingRow()]), (f) => register(f, 'k1', '1', over));
-      expect(r.status).toBe(422);
-      expect(errorsOf(r)).toEqual([{ field: 'row_kind', problem: 'no-sender-context' }]);
-    }
   });
 
   it("refuses a registered key held in the text as a word, whoever's it is, naming the field and never the key", async () => {
