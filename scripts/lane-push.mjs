@@ -141,8 +141,9 @@ export function prepareStore({ store, bundle, start, server, repo, token }) {
 /**
  * Why the commits from `tip` back to `start` are not the rebase lane's resolution, or `''`
  * (`[LANE-17]`): exactly one merge commit on the first-parent path, whose parents are `start` and
- * `merged` in that order, and one parent for every other commit on it. A merge's first parent is
- * where its first-parent path goes on, so a merge whose first parent is `start` is the path's oldest.
+ * `merged` in that order. Every other commit on the path then has one parent, since none has none
+ * and a second merge is refused. A merge's first parent is where its first-parent path goes on, so
+ * a merge whose first parent is `start` is the path's oldest.
  *
  * @param {{gitDir: string, tip: string, start: string, merged: string}} opts
  */
@@ -159,8 +160,6 @@ export function mergeShape({ gitDir, tip, start, merged }) {
   const [first, second, ...more] = merge?.parents ?? [];
   if (first !== start) return `its merge ${merge?.sha}'s first parent is ${first}, not the pull request's head as the job fetched it (${start})`;
   if (second !== merged || more.length) return `its merge ${merge?.sha}'s other parents are ${[second, ...more].join(', ')}, not the default branch's head recorded before the agent ran (${merged})`;
-  const other = path.find((c) => c !== merge && c.parents.length !== 1);
-  if (other) return `${other.sha}, after its merge, has ${other.parents.length} parents, not one`;
   return '';
 }
 
@@ -366,8 +365,10 @@ if (isCliEntry(import.meta.url)) {
     if (!token) throw new Error('no GH_TOKEN, the push job\'s token');
     const start = arg('--start');
     if (!SHA.test(start)) throw new Error(`--start ${JSON.stringify(start)} is not the commit the agent's job checked out`);
+    // Given, `--merged` is never empty: an empty one would push as a revise does, with no merge
+    // checked (`[LANE-17]`). Only the rebase lane passes it.
     const merged = arg('--merged');
-    if (merged && !SHA.test(merged)) throw new Error(`--merged ${JSON.stringify(merged)} is not the default branch's head the agent's job fetched`);
+    if (process.argv.includes('--merged') && !SHA.test(merged)) throw new Error(`--merged ${JSON.stringify(merged)} is not the default branch's head the agent's job fetched`);
     const prText = arg('--pr');
     if (prText && !/^[1-9]\d*$/.test(prText)) throw new Error(`--pr ${JSON.stringify(prText)} is not a pull request's number`);
     const store = join(mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), 'kanon-push-store-')), 'store.git');

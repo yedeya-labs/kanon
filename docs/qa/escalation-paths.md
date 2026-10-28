@@ -32,7 +32,7 @@ What ships, and when:
 The hosted stores' trust and code:
 
 - `^infra/telemetry/template\.yaml$` `infra` `always` — the telemetry store's template: its tables' resource policies, its functions' URLs and the roles and aliases that reach them (no role trusts GitHub's OIDC provider since plan 0008 J9)
-- `^infra/telemetry/function/` `infra` `always` — the ingest function, the only code that writes the telemetry table and decides the one key a call may write (from the token's `repository` claim on `live`, or the Owner's `import` and `backfill` aliases' `{ key, rows }` event), and the aggregate function, which publishes only what at least three adopters contribute to
+- `^infra/telemetry/function/` `infra` `always` — the ingest function, the only code that writes the telemetry table and decides the one key a call may write (on `live`, the key of the registration the token's `repository_id` claim finds, or the Owner's `import` and `backfill` aliases' `{ key, rows }` event), and the aggregate function, which publishes only what at least three adopters contribute to
 - `^infra/qa-store/aws/(template\.yaml|provision\.mjs)$` `infra` `always` — the QA store's template and its provisioner, which set the role and the exact subjects it trusts
 - `^infra/status/` `infra` `always` — the hosted status server: what it reads with the token a person signs in with, and the status App's sign-in that issues it (project #1327)
 
@@ -59,7 +59,7 @@ The library scripts that decide a verdict, gate a lane, mint or narrow what a to
 - `^scripts/telemetry-collect\.mjs$` `pipeline` `always` — the collector, which holds the telemetry writer's credentials and decides which rows, and which findings at which level, leave a repository
 - `^scripts/lib/telemetry-token\.mjs$` `auth` `always` — the telemetry store's token client (plan 0008 §2.1): which URL a GitHub OIDC token minted for the store's audience is sent to, and its mask; the collector, the Overseer's read, the Explorer's and the metrics page's import it
 - `^scripts/telemetry/jev\.mjs$` `pipeline` `always` — the decision whether a private upstream finding becomes a public issue
-- `^scripts/lane-push\.mjs$` `pipeline` `always` — the spine's and the rebase lane's push jobs: which of an agent's branches it moves, from which head, the pull request it opens from the agent's request, and the one merge the rebase lane may push (`[LANE-13]` to `[LANE-17]`)
+- `^scripts/lane-push\.mjs$` `pipeline` `always` — the spine's, the rebase lane's and the Lead's split lane's push jobs: which of an agent's branches it moves, from which head, the pull request it opens from the agent's request, the one merge the rebase lane may push, and the dead split branch the split lane replaces (`[LANE-13]` to `[LANE-18]`)
 - `^scripts/lib/verified-commits\.mjs$` `pipeline` `always` — the verified-commit helper: which commits GitHub creates, and signs, as an Author lane's App, and when it moves a branch to them (`[LANE-6]` to `[LANE-11]`)
 - `^scripts/lib/branch-path\.mjs$` `pipeline` `always` — imported by the verified-commit helper and the implementer status's re-delivery, and run by the revise lanes' fingerprint: the REST path a branch name becomes, so a `#` or a `%` in it can't name another ref (kanon#1432)
 - `^scripts/status/` `pipeline` `always` — the status core: the reads a person's token makes, which must stay reads, behind the hosted server and the `kanon status` command (project #1327)

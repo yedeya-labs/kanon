@@ -214,8 +214,25 @@ describe('the verified-commit helper (kanon#1382)', () => {
       const f = fixture();
       f.commit('one', () => f.w('a.txt', 'one\n'));
       const err = await f.push({ appLogin: 'another-app[bot]' }).then(() => '', (e: Error) => e.message);
-      expect(err).toMatch(/is verified with example-author\[bot\] as its author, not another-app\[bot\], so no branch moved/);
+      expect(err).toMatch(/is verified, but its author is example-author\[bot\], not another-app\[bot\], so no branch moved/);
       expect(refMoves(f.calls)).toEqual([]);
+    });
+
+    it('[LANE-9] moves nothing when a created commit\'s committer is neither GitHub nor the App, and names it (kanon#1482)', async () => {
+      // Whatever commit GitHub creates is the one read back: name every sha a person committer.
+      const f = fixture({ committers: new Proxy({}, { get: () => 'a-person' }) as Record<string, string> });
+      f.commit('one', () => f.w('a.txt', 'one\n'));
+      const err = await f.push().then(() => '', (e: Error) => e.message);
+      expect(err).toMatch(/is verified, but its committer is a-person, not web-flow or example-author\[bot\], so no branch moved/);
+      expect(refMoves(f.calls)).toEqual([]);
+      // A refusal GitHub won't change on a second read is not read again.
+      expect(f.calls.filter((c) => c.method === 'GET' && c.path.startsWith(`repos/${REPO}/commits/`))).toHaveLength(1);
+    });
+
+    it('[LANE-9] takes the App\'s bot account as the committer, as it takes web-flow (kanon#1482)', async () => {
+      const f = fixture({ committers: new Proxy({}, { get: () => APP }) as Record<string, string> });
+      f.commit('one', () => f.w('a.txt', 'one\n'));
+      expect((await f.push()).move).toBe('created');
     });
 
     it('[LANE-9] waits out a verification that lags, within the bound', async () => {

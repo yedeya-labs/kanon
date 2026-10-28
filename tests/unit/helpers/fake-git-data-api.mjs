@@ -30,12 +30,12 @@ import { URL, fileURLToPath, pathToFileURL } from 'node:url';
  * @typedef {{method: string, path: string, body?: any}} Call
  * @typedef {{status: number, headers: Record<string, string>, json: any}} Answer
  * @param {{remote: string, repo: string, appLogin: string,
- *          authors?: Record<string, string>, defaultBranch?: string,
+ *          authors?: Record<string, string>, committers?: Record<string, string>, defaultBranch?: string,
  *          verification?: (sha: string, byApi: boolean) => {verified: boolean, reason: string} | undefined,
  *          pulls?: Record<string, any>,
  *          before?: (call: Call, calls: Call[]) => Answer | undefined}} opts
  */
-export function fakeGitHub({ remote, repo, appLogin, authors = {}, defaultBranch = 'main', verification = () => undefined, pulls = {}, before = () => undefined }) {
+export function fakeGitHub({ remote, repo, appLogin, authors = {}, committers = {}, defaultBranch = 'main', verification = () => undefined, pulls = {}, before = () => undefined }) {
   /** @type {Call[]} */
   const calls = [];
   /** @type {Set<string>} */
@@ -116,7 +116,10 @@ export function fakeGitHub({ remote, repo, appLogin, authors = {}, defaultBranch
       if (!has(sha, 'commit')) return answer(422, { message: 'No commit found' });
       const api = byApi.has(sha);
       const v = verification(sha, api) ?? (api ? { verified: true, reason: 'valid' } : { verified: false, reason: 'unsigned' });
-      return answer(200, { sha, author: { login: authors[sha] ?? (api ? appLogin : 'a-person') }, commit: { verification: v } });
+      // An API commit's committer as `web-flow`, one of the two `verifiedAs` accepts: which one GitHub
+      // records for an App's commit is unmeasured (kanon#1482), and `committers` sets the other.
+      const author = { login: authors[sha] ?? (api ? appLogin : 'a-person'), type: api ? 'Bot' : 'User' };
+      return answer(200, { sha, author, committer: { login: committers[sha] ?? (api ? 'web-flow' : 'a-person') }, commit: { verification: v } });
     }
     if (method === 'POST' && p === 'git/blobs') {
       return answer(201, { sha: git(['hash-object', '-w', '--stdin'], { input: Buffer.from(body.content, body.encoding === 'base64' ? 'base64' : 'utf8') }) });

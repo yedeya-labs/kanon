@@ -409,6 +409,9 @@ describe('the spine\'s push job holds the key and runs nothing else (kanon#1383)
   const steps = job.steps ?? [];
   /** The job's `if:`, for these inputs and needs. Only the forms it uses. */
   const gate = (expr: string, { push = true, commits = 'true', result = 'success' }: { push?: boolean; commits?: string; result?: string }) => {
+    // GitHub prefixes `success() &&` to an `if` that calls no status function, so a job gated on
+    // outputs alone is skipped when the job it needs failed (kanon#1476).
+    if (!/\b(always|cancelled|failure|success)\(\)/.test(expr) && result !== 'success') return false;
     const js = String(expr).replace(/^\$\{\{\s*|\s*\}\}$/g, '')
       .replace(/!cancelled\(\)/g, 'true')
       .replace(/inputs\.push\b(?!-)/g, String(push))
@@ -700,6 +703,30 @@ describe('the rebase lane\'s push (kanon#1384)', () => {
       api.stop();
     }
   });
+
+  it('[LANE-17] the push job\'s own step refuses an empty recorded merge, and moves nothing (kanon#1466)', async () => {
+    const f = conflicting();
+    // Commits that hold no merge: an empty `--merged` read as absent would push them as a revise.
+    rebaseAgentJob(f, () => { f.commit('one.txt', 'only my side\n', 'not a merge'); });
+    const served = join(f.root, 'served');
+    mkdirSync(served);
+    writeFileSync(join(served, 'pulls.json'), JSON.stringify({ [PR]: PULL }));
+    const api = await serveFake({ remote: f.remote, repo: REPO, appLogin: APP, dir: served });
+    try {
+      const r = runWorkflowStep(rebasePush!, {
+        env: {
+          ...CLEAN_ENV, KANON: process.cwd(), RUNNER_TEMP: f.temp, GH_TOKEN: 'x', REPO,
+          GITHUB_SERVER_URL: `file://${f.root}`, GITHUB_API_URL: api.url, APP_LOGIN: APP,
+          PR: String(PR), START: f.start, MERGED: '', REF: PR_BRANCH,
+        },
+      });
+      expect(r.status, r.output).not.toBe(0);
+      expect(r.output).toMatch(/--merged ""/);
+      expect(f.onRemote('rev-parse', `refs/heads/${PR_BRANCH}`)).toBe(f.start);
+    } finally {
+      api.stop();
+    }
+  });
 });
 
 describe('the rebase lane\'s push job holds the key and runs nothing else (kanon#1384)', () => {
@@ -708,6 +735,9 @@ describe('the rebase lane\'s push job holds the key and runs nothing else (kanon
   const steps = job.steps ?? [];
   /** The job's `if:`, for these needs. Only the forms it uses. */
   const gate = (expr: string, { commits = 'true', result = 'success' }: { commits?: string; result?: string }) => {
+    // GitHub prefixes `success() &&` to an `if` that calls no status function, so a job gated on
+    // outputs alone is skipped when the job it needs failed (kanon#1476).
+    if (!/\b(always|cancelled|failure|success)\(\)/.test(expr) && result !== 'success') return false;
     const js = String(expr).replace(/^\$\{\{\s*|\s*\}\}$/g, '')
       .replace(/!cancelled\(\)/g, 'true')
       .replace(/needs\.resolve\.result/g, JSON.stringify(result))

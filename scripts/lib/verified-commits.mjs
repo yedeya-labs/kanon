@@ -20,7 +20,8 @@
 // - The message is sent byte for byte, and nothing else but the tree and the parents: no author,
 //   committer or signature, which would forfeit GitHub's signature.
 // - Every created commit is read back, and must be verified with the App's bot account as its
-//   author, before any branch moves.
+//   author and GitHub or the App as its committer, before any branch moves: `verifiedAs`, the
+//   predicate the implementer status carries and stamps under (kanon#1482).
 // - The branch is created, moved without force from the head it was given, or refused. Only
 //   replace mode forces, and it builds over a commit on the default branch: the head it was given,
 //   when GitHub compares it as on that branch (kanon#1385), else the branch's head.
@@ -55,6 +56,43 @@ export const UNNAMED_WAIT_MS = 60_000;
 export const READBACK = { tries: 3, waitMs: 2000 };
 
 const SUBMODULE = '160000';
+
+/** GitHub's own committer for the commits it creates and signs, as the `dco` action reads it. */
+const GITHUB_COMMITTER = 'web-flow';
+
+/** What a GitHub API commit says about who made it, as `verifiedAs` reads it. */
+/**
+ * @typedef {{
+ *   sha: string, parents?: Array<{ sha: string }>,
+ *   author?: { login?: string, type?: string } | null, committer?: { login?: string } | null,
+ *   commit?: { verification?: { verified?: unknown, reason?: string } },
+ * }} ApiCommit
+ */
+
+/**
+ * Whether GitHub verified `commit` as the App's whose bot account is `app` (#1358): a verified
+ * signature, `app` (type `Bot`) as its author, and GitHub or the App as its committer. No email is
+ * read: GitHub resolves both accounts from the commit's emails, which any pusher sets, and
+ * verifies the signature against the committer, so a person who commits under the App's author
+ * address and signs with their own key is still the committer. Only GitHub can sign for
+ * `web-flow` or for the App. `why` follows "<the commit> is".
+ * @param {Pick<ApiCommit, 'author' | 'committer' | 'commit'>} commit
+ * @param {string} app
+ * @returns {{ ok: boolean, why: string }}
+ */
+export function verifiedAs(commit, app) {
+  const v = commit.commit?.verification;
+  if (v?.verified !== true) return { ok: false, why: `not verified (${v?.reason || 'no reason given'})` };
+  const author = commit.author;
+  if (author?.login !== app || author?.type !== 'Bot') {
+    return { ok: false, why: `verified, but its author is ${author?.login || 'no account'}${author?.login === app ? ` as a ${author?.type || 'typeless'} account` : ''}, not ${app}` };
+  }
+  const committer = commit.committer?.login;
+  if (committer !== GITHUB_COMMITTER && committer !== app) {
+    return { ok: false, why: `verified, but its committer is ${committer || 'no account'}, not ${GITHUB_COMMITTER} or ${app}` };
+  }
+  return { ok: true, why: '' };
+}
 
 /**
  * @typedef {{status: number, headers: Record<string, string>, json: any}} Response
@@ -303,14 +341,13 @@ export async function pushVerified({
   for (const created of made.values()) {
     for (let read = 1; ; read++) {
       const c = ok(await call('GET', `commits/${created}`), `reading back ${created.slice(0, 7)}`);
-      const v = c.commit?.verification ?? {};
-      const login = c.author?.login ?? '';
-      if (v.verified === true && login === appLogin) break;
-      if (v.verified !== true && read < READBACK.tries) {
+      const app = verifiedAs(c, appLogin);
+      if (app.ok) break;
+      if (c.commit?.verification?.verified !== true && read < READBACK.tries) {
         await sleep(READBACK.waitMs);
         continue;
       }
-      throw new Error(`${created} is ${v.verified === true ? 'verified' : `not verified (${v.reason ?? 'no reason given'})`} with ${login || 'no account'} as its author, not ${appLogin}, so no branch moved`);
+      throw new Error(`${created} is ${app.why}, so no branch moved`);
     }
   }
 
