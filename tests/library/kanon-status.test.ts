@@ -333,7 +333,7 @@ describe('docs/status.md is held to the code', () => {
     for (const w of [chain(), noJob(), promoting(), refusedPulls()]) releaseDocs.push((await run(['--release', '--json'], w)).doc());
     for (const d of releaseDocs) for (const p of paths(d)) emitted.add(p);
     expect(releaseDocs.map((d) => (d.release.error ? 'error' : [d.release.deploys.map((e: Any) => e.job), d.release.promotion?.gates.length ?? null]))).toEqual([
-      [['staging / deploy', 'production / deploy'], null], [['ship', null], null], [['ship'], 5], 'error',
+      [['staging / deploy', 'production / deploy'], null], [['ship', null], null], [['ship'], 6], 'error',
     ]);
 
     const sorted = (s: Set<string>) => [...s].sort();

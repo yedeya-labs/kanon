@@ -63,6 +63,8 @@ describe("this tree's credential-holding runs", () => {
       'promote.yml:promote scripts/metrics/detectors.mjs',
       'promote.yml:promote scripts/lib/reverts.mjs',
       'promote.yml:promote actions/agent-classify/classify-agent-result.mjs',
+      // #1502: the intake gate's comparison, which promote.mjs spawns by its path.
+      'promote.yml:promote infra/telemetry/intake-first.mjs',
     ]) expect(r, hit).toContain(hit);
     // The register job reads with `contents: read` alone, and the smoke's admission jobs with a
     // read grant and no App key: neither holds a credential.

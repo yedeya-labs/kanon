@@ -15,6 +15,9 @@
 #
 # `scripts/promote.mjs check` reads the gates with this job's read-only token and writes each
 # one's verdict and evidence to the step summary, so a held promotion says which gate held it.
+# The sixth, intake (#1502), holds a candidate whose telemetry rows the deployed intake would
+# refuse: it reads the operator's intake record, through a Releaser token narrowed to Contents read
+# on that repository alone, and compares the two releases' schemas in git (below).
 # Only when it decides to promote is the Releaser's token minted, narrowed to Contents write, and
 # `scripts/promote.mjs apply` creates the tag on the candidate's commit, publishes its Release as
 # latest and moves `v0`, as the Releaser, as release.yml creates release tags and moves the major
@@ -79,12 +82,53 @@ jobs:
       actions: read
       checks: read
     steps:
+      # The whole history and its tags: the intake gate compares the candidate's telemetry schema
+      # with the deployed release's, both read from git (`infra/telemetry/intake-first.mjs`).
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
+      # THE INTAKE RECORD (#1502): the operator's repository records the Kanon release production's
+      # intake was deployed from, and the variable `KANON_INTAKE_RECORD` names where,
+      # `<owner>/<repo>:<path>`. The Releaser, installed there too, reads it with a token minted
+      # for that repository alone and narrowed to Contents read; the token reaches no other step,
+      # and the check reads only the file it writes. Neither step fails the job: an unset variable,
+      # a token that can't be minted or a record that can't be read holds the intake gate, which
+      # says which, so the run still reports and the notify step still tells the Owner.
+      - name: Find the intake record
+        id: record
+        env:
+          RECORD: ${{ vars.KANON_INTAKE_RECORD }}
+        run: |
+          if [[ "$RECORD" =~ ^([A-Za-z0-9-]+)/([A-Za-z0-9._-]+):([^[:space:]]+)$ ]]; then
+            { echo "owner=${BASH_REMATCH[1]}"; echo "repo=${BASH_REMATCH[2]}"; echo "path=${BASH_REMATCH[3]}"; } >> "$GITHUB_OUTPUT"
+          fi
+      - name: Mint the Releaser's token for the intake record
+        id: intake-token
+        if: steps.record.outputs.repo != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASER_APP_ID }}
+          private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.record.outputs.owner }}
+          repositories: ${{ steps.record.outputs.repo }}
+          permission-contents: read
+      - name: Read the intake record
+        if: steps.intake-token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.intake-token.outputs.token }}
+          OWNER: ${{ steps.record.outputs.owner }}
+          REPO: ${{ steps.record.outputs.repo }}
+          RECORD_PATH: ${{ steps.record.outputs.path }}
+          OUT: ${{ runner.temp }}/intake-record.md
+        run: |
+          if ! gh api -H 'Accept: application/vnd.github.raw' "repos/$OWNER/$REPO/contents/$RECORD_PATH" > "$OUT" 2> "$OUT.err"; then
+            rm -f "$OUT"
+          fi
       - name: Read the gates
         id: gates
         env:
@@ -95,6 +139,8 @@ jobs:
           REASON: ${{ inputs.reason }}
           PLAN: ${{ runner.temp }}/promotion.json
           OUTCOME: ${{ runner.temp }}/outcome.json
+          INTAKE_RECORD: ${{ vars.KANON_INTAKE_RECORD }}
+          INTAKE_RECORD_FILE: ${{ runner.temp }}/intake-record.md
         run: node scripts/promote.mjs check
       # THE RELEASER'S TOKEN (plan 0005 §3.1, ADR 0013), only to promote, narrowed to Contents
       # write, for the tag, the Release, the major tag and the docs' branch and commit, Pull

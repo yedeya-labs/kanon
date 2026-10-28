@@ -47,6 +47,17 @@
 //            it while the verdict is green. A check run of the same name by any other App is
 //            ignored, so a token that can post check runs can't pass it, and a leaked Reporter
 //            key can't either without a green `verdict` job in the harness (decision 18).
+//   intake   the telemetry intake deployed in production accepts every row the candidate can
+//            write (#1502, `docs/release.md`, "Intake first"): `infra/telemetry/intake-first.mjs`
+//            compares the candidate's schema with the schema of the release intake was deployed
+//            from, both read from git, and exits 0. The deployed release is the one the operator's
+//            intake record names, at `KANON_INTAKE_RECORD` (`<owner>/<repo>:<path>`), which
+//            promote.yml reads with a Releaser token narrowed to Contents read on that repository
+//            and hands this mode as a file (`INTAKE_RECORD_FILE`). A widening holds until intake
+//            is deployed from the candidate and the record names it; a narrowing holds too, since
+//            deploying first doesn't help. A record that is unset, unread or names no release
+//            holds. Only the CLI reads it (`intakeFromEnv`): the status view, which has neither the
+//            record nor the git refs, shows the gate skipped.
 // What a candidate contains is every pull request since the newest STABLE tag below it, so the
 // pull requests of a candidate held and never promoted count against the next one.
 // `urgent` (plan 0009 §7) skips the soak and the six-day spacing, and asks instead that a review
@@ -75,11 +86,13 @@
 //          Kanon's pins, and the soak, start only on a candidate the harness passed.
 //
 // Env: GH_TOKEN, GITHUB_REPOSITORY, DEFAULT_BRANCH (default `main`), HOLD, URGENT, REASON, PLAN,
-// OUTCOME (check, notify), APPLIED (notify), TAG (gate), GITHUB_OUTPUT, GITHUB_STEP_SUMMARY. Node built-ins and `gh` only.
+// OUTCOME (check, notify), INTAKE_RECORD and INTAKE_RECORD_FILE (check), APPLIED (notify), TAG
+// (gate), GITHUB_OUTPUT, GITHUB_STEP_SUMMARY. Node built-ins, `gh`, and `git` through intake-first.
 
-import { execFileSync } from 'node:child_process';
-import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { trustedSearchSync } from './lib/search.mjs';
 import { introducedBy, revertsOf } from './metrics/detectors.mjs';
@@ -161,6 +174,20 @@ const HELD_MARKER = '<!-- kanon:promotion-held';
 export const HELD_LABEL = 'pipeline-improvement';
 export const HELD_MILESTONE = 'Development Automation';
 
+/**
+ * The intake gate's comparison (#1502), run from the checkout's root as a script of its own, so
+ * the status view's import closure never takes it in.
+ */
+export const INTAKE_FIRST = 'infra/telemetry/intake-first.mjs';
+/** The repository variable naming the operator's intake record, `<owner>/<repo>:<path>`. */
+export const INTAKE_VARIABLE = 'KANON_INTAKE_RECORD';
+/** A record's location, as `INTAKE_VARIABLE` names it. */
+export const RECORD_LOCATION = /^([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+):(\S+)$/;
+/** The record's row naming the Kanon release intake was deployed from: `| **Kanon release** | `<tag>` |`. */
+const RECORD_ROW = /^\|\s*\*\*Kanon release\*\*\s*\|\s*`([^`]*)`/gm;
+/** The checkout's root, where intake-first reads the refs from git. */
+const TREE = join(dirname(fileURLToPath(import.meta.url)), '..');
+
 /** Kanon's own manifest, whose version release-please's `node` type writes at each release. */
 export const MANIFEST = 'package.json';
 
@@ -169,6 +196,63 @@ const STABLE = /^v(\d+)\.(\d+)\.(\d+)$/;
 
 /** The pin pull request's title, which S4's pin job opens (plan 0009 §6). @param {string} version */
 export const pinTitle = (version) => `ci(deps): run Kanon on candidate v${version}`;
+
+/**
+ * The release an intake record says intake was deployed from: its one `**Kanon release**` row,
+ * which must name a candidate or stable tag, never anything a command line could read as an option.
+ * @param {string} text
+ * @returns {{ ref: string } | { error: string }}
+ */
+export function deployedIntake(text) {
+  const rows = [...String(text).matchAll(RECORD_ROW)];
+  if (rows.length !== 1) return { error: `has ${rows.length === 0 ? 'no' : rows.length} \`| **Kanon release** | \`<tag>\` |\` row${rows.length === 0 ? '' : 's'}, where it needs exactly one` };
+  const ref = String(rows[0]?.[1] ?? '');
+  if (!CANDIDATE.test(ref) && !STABLE.test(ref)) return { error: `names ${JSON.stringify(ref)}, not a release tag (\`candidate-vX.Y.Z\` or \`vX.Y.Z\`)` };
+  return { ref };
+}
+
+/**
+ * The intake gate's verdict for `candidate` (#1502): from the record's location (`INTAKE_VARIABLE`),
+ * its text (`null` when it wasn't read, with why in `recordError`), and `compare`, which runs
+ * intake-first for the deployed release against the candidate's tag. Anything it can't read holds.
+ * @param {{ location: string, record: string | null, recordError: string, candidate: string,
+ *   compare: (deployed: string, release: string) => { status: number | null, stdout: string, stderr: string } }} args
+ * @returns {Verdict}
+ */
+export function intakeVerdict({ location, record, recordError, candidate, compare }) {
+  if (!location) return { pass: false, evidence: `the intake record isn't configured: set the repository variable \`${INTAKE_VARIABLE}\` to \`<owner>/<repo>:<path>\`, the operator's record of the release intake was deployed from` };
+  if (!RECORD_LOCATION.test(location)) return { pass: false, evidence: `\`${INTAKE_VARIABLE}\` is ${JSON.stringify(location)}, not \`<owner>/<repo>:<path>\`` };
+  if (record === null) return { pass: false, evidence: `the intake record ${location} couldn't be read: ${recordError || "the Releaser's token for its repository wasn't minted"}` };
+  const parsed = deployedIntake(record);
+  if ('error' in parsed) return { pass: false, evidence: `the intake record ${location} ${parsed.error}` };
+  const deployed = parsed.ref;
+  const r = compare(deployed, candidate);
+  const lines = String(r.stdout ?? '').split('\n').filter((l) => /^\s+- /.test(l)).map((l) => l.trim().slice(2));
+  const from = `intake deployed from ${deployed} (${location})`;
+  if (r.status === 0) return { pass: true, evidence: `${from} accepts every row ${candidate} can write` };
+  if (r.status === 1) return { pass: false, evidence: `${from} refuses rows ${candidate} can write: ${lines.join('; ')}. Deploy intake from ${candidate} first` };
+  if (r.status === 3) return { pass: false, evidence: `${candidate} narrows what intake accepts, against ${from}, so deploying first doesn't help: ${lines.join('; ')}` };
+  const why = String(r.stderr ?? '').trim().split('\n')[0] || `exit ${r.status ?? 'by a signal'}`;
+  return { pass: false, evidence: `comparing ${candidate} with ${from} failed: ${why}` };
+}
+
+/**
+ * The CLI's intake gate: the record promote.yml wrote to `INTAKE_RECORD_FILE` (and, when its read
+ * failed, why, beside it as `<file>.err`), and intake-first run in the checkout.
+ * @param {Record<string, string | undefined>} env
+ * @returns {(candidate: Tag) => Verdict}
+ */
+export function intakeFromEnv(env) {
+  const file = String(env.INTAKE_RECORD_FILE ?? '');
+  const record = file && existsSync(file) ? readFileSync(file, 'utf8') : null;
+  const recordError = file && existsSync(`${file}.err`) ? readFileSync(`${file}.err`, 'utf8').trim().split('\n')[0] ?? '' : '';
+  /** @param {string} deployed @param {string} release */
+  const compare = (deployed, release) => {
+    const r = spawnSync(process.execPath, [join(TREE, INTAKE_FIRST), '--deployed', deployed, '--release', release], { cwd: TREE, encoding: 'utf8', timeout: 120_000, maxBuffer: 16 * 1024 * 1024 });
+    return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr || r.error?.message || '' };
+  };
+  return (candidate) => intakeVerdict({ location: String(env.INTAKE_RECORD ?? '').trim(), record, recordError, candidate: candidate.name, compare });
+}
 
 /**
  * The title GitHub stores for agent-classify's `unavailable` notice. The runner splits a workflow
@@ -240,9 +324,11 @@ const notFound = (e) => e instanceof ApiError && e.status === 404;
  *   runsOf: (file: string, status: string) => Listing,
  *   completedOf: (file: string) => number,
  *   explained: Map<number, string>, ignored: string[],
+ *   intake?: (candidate: Tag) => Verdict,
  * }} Context what every gate reads: the candidate, the pull requests it contains, the pin, and
- *   Kanon's lane callers
- * @typedef {{ pass: boolean, evidence: string }} Verdict
+ *   Kanon's lane callers; `intake`, the intake gate's reading, only where the record and the git
+ *   refs are (the CLI)
+ * @typedef {{ pass: boolean, evidence: string, skipped?: boolean }} Verdict
  * @typedef {{ id: string, title: string, when: 'always' | 'normal' | 'urgent', check: (ctx: Context) => Verdict }} Gate
  *   `when`: `normal` gates are skipped by `urgent`, `urgent` ones read only then
  */
@@ -417,6 +503,15 @@ export const GATES = [
     // `always`: `urgent` doesn't skip it (plan 0012 decision 12).
     when: 'always',
     check: ({ api, repo, candidate }) => endToEnd(api, repo, candidate),
+  },
+  {
+    id: 'intake',
+    title: 'Intake accepts it',
+    // `always`: an urgent fix reaches adopters' collectors as surely as a weekly one (#1502).
+    when: 'always',
+    check: ({ intake, candidate }) => (intake
+      ? intake(candidate)
+      : { pass: true, skipped: true, evidence: "not read here: only promote.yml's own run reads the intake record, and compares the schemas in git" }),
   },
   {
     id: 'review',
@@ -730,10 +825,11 @@ const truthy = (v) => /^(true|1|yes)$/i.test(String(v ?? '').trim());
  * The check: what to do with the newest candidate, and why. Throws `Refusal` on a state the
  * promotion must not act on.
  * @param {Record<string, string | undefined>} env
- * @param {{ api?: Api, now?: number, workflows?: Array<{ file: string, text: string }> }} [deps]
+ * @param {{ api?: Api, now?: number, workflows?: Array<{ file: string, text: string }>, intake?: (candidate: Tag) => Verdict }} [deps]
+ *   `intake`: the intake gate's reading; without it the gate is skipped (the status view)
  * @returns {Outcome}
  */
-export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
+export function check(env, { api = ghApi, now = Date.now(), workflows, intake } = {}) {
   if (!env.GITHUB_REPOSITORY) throw new Refusal('GITHUB_REPOSITORY must be set');
   const repo = String(env.GITHUB_REPOSITORY);
   const branch = env.DEFAULT_BRANCH || 'main';
@@ -883,7 +979,7 @@ export function check(env, { api = ghApi, now = Date.now(), workflows } = {}) {
 
   /** @type {Context} */
   const ctx = {
-    repo, branch, now, urgent, api, candidate, previous, cutAt, pin, contained, since, runsOf, completedOf, explained, ignored,
+    repo, branch, now, urgent, api, candidate, previous, cutAt, pin, contained, since, runsOf, completedOf, explained, ignored, intake,
     callers: laneCallers(workflows ?? readWorkflows(), repo),
   };
   const gates = GATES.filter((g) => g.when !== (urgent ? 'normal' : 'urgent')).map((g) => ({ id: g.id, title: g.title, skipped: false, ...g.check(ctx) }));
@@ -963,6 +1059,7 @@ const UNBLOCK = {
   revert: '**No revert.** A pull request the candidate contains was reverted since: the candidate ships the change the revert undid, so the next candidate, which carries the revert, is the one to promote.',
   bug: '**No serious bug.** An open `sev:critical` or `sev:high` bug names a pull request the candidate contains: fix it, and the next candidate carries the fix.',
   e2e: "**End to end.** The harness's red issue for the candidate names the scenario that failed. A fix ships as a new candidate; a scenario that is itself broken is fixed in the harness, and a re-run there reports again.",
+  intake: `**Intake accepts it.** The deployed intake would refuse rows the candidate writes. Deploy intake from the candidate through the operator's deploy lane (its repository moves its pin to the candidate, cuts a release and dispatches the deploy), run Verify, then update the intake record \`${INTAKE_VARIABLE}\` names so its \`**Kanon release**\` row is the candidate; the next run reads it. A narrowing can't be deployed first: decide as \`docs/release.md\`'s "Intake first" says. An unset or unreadable record is fixed where the evidence says.`,
 };
 
 /**
@@ -1054,7 +1151,7 @@ function main() {
   };
   try {
     if (mode === 'check') {
-      const o = check(env);
+      const o = check(env, { intake: intakeFromEnv(env) });
       say(summary(o));
       if (o.plan && env.PLAN) writeFileSync(env.PLAN, JSON.stringify(o.plan));
       if (env.OUTCOME) writeFileSync(env.OUTCOME, JSON.stringify(o));
