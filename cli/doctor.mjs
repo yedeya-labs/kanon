@@ -55,9 +55,9 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { URL } from 'node:url';
 import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
-import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
+import { appSecrets, callerFile, kanonRelease, loadRequirements, TRIGGERS, yamlScalar } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, GITHUB_DEFAULT_LABELS, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
+import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, GITHUB_DEFAULT_LABELS, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, workflowName } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -687,6 +687,41 @@ export const startsOnMerge = (wf, branch) => {
 };
 
 /**
+ * The workflows a caller's `workflow_run` names, by the names GitHub matches them by. None when it
+ * has no `workflow_run`, or `on:` is not a map.
+ * @param {Record<string, any>} wf @returns {string[]}
+ */
+export const runWorkflows = (wf) => {
+  const t = isMap(wf.on) ? wf.on.workflow_run : null;
+  const w = isMap(t) ? t.workflows : null;
+  return typeof w === 'string' ? [w] : Array.isArray(w) ? w.map(String) : [];
+};
+
+/**
+ * The lane callers' names the caller template writes into a lane's `workflow_run` (#1461): the
+ * re-ask's (#1023) and the openers' on the rebase lane (#1427), and whatever entry the template
+ * gains later, READ FROM THE CALLER `callerFile` WRITES, never listed here. Each is a caller the
+ * repository has, by the name `names` gives it, as `kanon init` names it; a lane the repository
+ * doesn't call starts nothing, so it is left out. Empty when the template can't be written for the
+ * lane at this release, which `lane-check` and the other caller findings speak to.
+ * @param {string} lane @param {import('./callers.mjs').Lane} spec
+ * @param {Map<string, string>} names the name of each lane's caller the repository has, by lane
+ * @param {string} defaultBranch @param {typeof callerFile} [template] the caller template, `callerFile`
+ * @returns {string[]}
+ */
+export const templateRunCallers = (lane, spec, names, defaultBranch, template = callerFile) => {
+  let written;
+  try {
+    // The CI's name is no caller's: left empty, it matches none of `names`.
+    written = parseYaml(template(lane, spec, { release: 'v0.0.0', ciName: '', defaultBranch, names }));
+  } catch {
+    return [];
+  }
+  const called = new Set(names.values());
+  return isMap(written) ? runWorkflows(written).filter((n) => called.has(n)) : [];
+};
+
+/**
  * Whether an expression reads the `secrets` context other than by a literal name: an index by an
  * expression (`secrets[format('{0}_APP_ID', x)]`), or the whole context (`toJSON(secrets)`,
  * `secrets.*`, `${{ secrets }}`). Such a read can reach any secret the workflow sees (#440).
@@ -1274,6 +1309,13 @@ export const diagnose = async (deps, opts) => {
     });
   };
 
+  // The name of each lane's caller the repository has, as `kanon init` reads it for the re-ask
+  // (#1023): the one at its lane's file name, else the first, by the name GitHub gives it.
+  const callerNames = new Map(installed.map((l) => {
+    const files = callers.filter((c) => c.lane === l).map((c) => c.file).sort();
+    const file = files.find((f) => f === `.github/workflows/${l}.yml`) ?? /** @type {string} */ (files[0]);
+    return [l, workflowName(texts.get(file) ?? '', file)];
+  }));
   for (const c of callers) {
     const spec = req.lanes[c.lane];
     if (!spec) {
@@ -1376,6 +1418,17 @@ export const diagnose = async (deps, opts) => {
     }
     if (spec.callerRunNameEndsWith && !String(c.wf['run-name'] ?? '').endsWith(` ${spec.callerRunNameEndsWith}`)) {
       find('caller.run-name', c.file, `has a run-name that does not end with \` ${spec.callerRunNameEndsWith}\`; the lane ${c.lane}'s runs are found by it.`, { text: `End the workflow's run-name: with that text, as its last token.` });
+    }
+    // A CALLER WRITTEN BEFORE A TEMPLATE ENTRY KEEPS ITS OLD LIST (#1461): the callers whose runs
+    // start the lane, which the template names in its `workflow_run`, and an upgrade of the pin
+    // alone doesn't add. Without one, the lane waits for its schedule; it blocks nothing.
+    const have = runWorkflows(c.wf);
+    const lacks = templateRunCallers(c.lane, spec, callerNames, s.defaultBranch).filter((n) => !have.includes(n));
+    if (lacks.length) {
+      findItems('caller.workflow-run-missing', c.file, lacks, (xs) => [`starts the lane ${c.lane} on no run of ${xs.join(', ')}: its workflow_run doesn't name ${xs.length > 1 ? 'them' : 'it'}, and the caller kanon init ${kanonRelease()} writes does, so a run of ${xs.length > 1 ? 'one' : 'it'} starts the lane at once, where this caller leaves it to the lane's other triggers and its schedule (docs/lanes.md).`, {
+        text: have.length ? `Name ${xs.length > 1 ? 'them' : 'it'} in the workflow_run's workflows:, or run kanon init again, which writes the caller with ${xs.length > 1 ? 'them' : 'it'}:` : `Add under the caller's on:, or run kanon init again, which writes the caller with ${xs.length > 1 ? 'them' : 'it'}:`,
+        commands: have.length ? [`    workflows: [${[...have, ...xs].map(yamlScalar).join(', ')}]`] : ['  workflow_run:', `    workflows: [${xs.map(yamlScalar).join(', ')}]`, '    types: [completed]'],
+      }]);
     }
   }
   // ── Callers on different Claude credentials (plan 0009 §10, Owner decision 9) ───────────

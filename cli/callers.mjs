@@ -154,7 +154,8 @@ export const callerSecrets = (spec, claudeAuth = 'subscription') => {
 };
 
 /** A YAML scalar, double-quoted when plain would be read as something else. @param {string} s */
-const y = (s) => (/^[A-Za-z0-9_][A-Za-z0-9_ ./()—-]*$/.test(s) && !/[ ]$/.test(s) ? s : JSON.stringify(s));
+export const yamlScalar = (s) => (/^[A-Za-z0-9_][A-Za-z0-9_ ./()—-]*$/.test(s) && !/[ ]$/.test(s) ? s : JSON.stringify(s));
+const y = yamlScalar;
 
 /**
  * One lane's caller, as `lane-check` holds it: `name` (and `run-name` when the lane asks), `on`,
