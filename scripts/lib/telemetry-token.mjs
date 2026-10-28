@@ -16,7 +16,14 @@
 // its lifetime whatever a sweep's length. The token is registered with `::add-mask::` before
 // anything else can print, and is never logged, written to a file or returned to a caller.
 //
+// THE STORE'S 503 `jwks-unavailable` PASSES (#1440). The store answers it to every token while it
+// can't fetch GitHub's signing keys, rather than use a stale one (plan 0008 §2.4), and a container
+// fetches again 5 seconds after a cold try and a minute after a warm one. So a caller asks again,
+// with a fresh token, after waits past each (`retryUnavailable`), and never past its deadline.
+//
 // `node:` built-ins only (`K-SELF-8`).
+
+import { setTimeout as wait } from 'node:timers/promises';
 
 /** The title of the collector's annotation for a store's refusal, which `kanon doctor` reads (`telemetry.refused`). */
 export const REFUSED_TITLE = 'telemetry-refused';
@@ -163,3 +170,38 @@ export async function storeRequest(store, req, { env, fetchImpl = fetch, mask = 
 
 /** An error code from the store's closed list, or null: never a value from the answer. @param {any} json */
 export const codeOf = (json) => (typeof json?.error === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(json.error) ? json.error : null);
+
+/** The store's code while it can't fetch GitHub's signing keys: it verifies no token, whoever sends it. */
+export const UNAVAILABLE = 'jwks-unavailable';
+/** The waits before each retry of it: past a cold container's 5-second refetch, then past a warm one's minute. */
+export const UNAVAILABLE_WAITS_MS = /** @type {readonly number[]} */ (Object.freeze([6_000, 61_000]));
+/** The longest wait a `Retry-After` on it is given. */
+export const MAX_RETRY_AFTER_MS = 90_000;
+
+/** The store's 503 `jwks-unavailable`. @param {{ status: number, json: any }} answer */
+export const isUnavailable = (answer) => answer.status === 503 && codeOf(answer.json) === UNAVAILABLE;
+
+/**
+ * @typedef {{ sleep?: (ms: number) => Promise<void>, clock?: () => number, deadline?: number }} RetryIo
+ *   `sleep` waits, and `clock` reads the time `deadline` is counted in; a test passes its own
+ */
+
+/**
+ * `attempt`, and again after each of `waits` while the store answers 503 `jwks-unavailable`, so a
+ * refusal that passes doesn't fail the caller (#1440). A `Retry-After` in whole seconds replaces a
+ * wait, up to `MAX_RETRY_AFTER_MS`. No wait is begun that would end at or past `deadline`: then,
+ * as after the last wait, the store's 503 is the answer. Any other answer is returned at once.
+ * @template {{ status: number, json: any, retryAfter?: string | null }} A
+ * @param {() => Promise<A>} attempt a whole request, with a fresh token
+ * @param {RetryIo & { waits?: readonly number[] }} [io]
+ * @returns {Promise<A>}
+ */
+export async function retryUnavailable(attempt, { sleep = wait, clock = Date.now, deadline = Infinity, waits = UNAVAILABLE_WAITS_MS } = {}) {
+  for (let n = 0; ; n += 1) {
+    const res = await attempt();
+    if (!isUnavailable(res) || n >= waits.length) return res;
+    const after = /^\d{1,6}$/.test(res.retryAfter ?? '') ? Math.min(Number(res.retryAfter) * 1000, MAX_RETRY_AFTER_MS) : /** @type {number} */ (waits[n]);
+    if (!(deadline - clock() > after)) return res;
+    await sleep(after);
+  }
+}
