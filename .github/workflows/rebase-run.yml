@@ -122,6 +122,13 @@ jobs:
   # AFTER THE AGENT'S JOB, WHATEVER IT DID, whenever it left commits. `!cancelled()` because a
   # failed `resolve` would otherwise skip it. A refusal fails this job, so the entry is red, and
   # the step summary names the commit created, its verification, the branch moved, or why none.
+  #
+  # RE-RUN ON ITS OWN (kanon#1465), as the spine's push job is (kanon#1438). "Re-run failed jobs"
+  # after a failed push re-runs this job alone, in a later attempt, and reuses `resolve`'s outputs;
+  # "Re-run all jobs" would find the head already handed to the agent and refuse it. A job sees
+  # only its own attempt's artifacts unless it names a run and a token, so the download names this
+  # run (`run-id`, never another's) and the bundle `resolve` uploaded in the attempt it ran in, and
+  # reads it with this job's token, which holds `actions: read` for that alone.
   push:
     needs: [resolve]
     if: ${{ !cancelled() && needs.resolve.outputs.commits == 'true' }}
@@ -137,7 +144,8 @@ jobs:
       - uses: $/actions/kanon-path
       # Narrowed to what this job uses (`K-AGENT-46`): the commits and the branch (`contents`),
       # `workflows` because the merge brings the default branch's changes to `.github/workflows/`,
-      # and reading the PR (`pull_requests: read`). Revoked by the action's own post step.
+      # reading the PR (`pull_requests: read`), and the bundle from an earlier attempt of this run
+      # (`actions: read`). Revoked by the action's own post step.
       - name: Mint the push token
         id: push-token
         uses: actions/create-github-app-token@v3
@@ -147,10 +155,13 @@ jobs:
           permission-contents: write
           permission-pull-requests: read
           permission-workflows: write
+          permission-actions: read
       - uses: actions/download-artifact@v8
         with:
-          name: kanon-push-${{ inputs.pr }}-${{ github.run_attempt }}
+          name: kanon-push-${{ inputs.pr }}-${{ needs.resolve.outputs.attempt }}
           path: ${{ runner.temp }}/kanon-push
+          run-id: ${{ github.run_id }}
+          github-token: ${{ steps.push-token.outputs.token }}
       - name: Push the agent's merge
         id: push
         env:

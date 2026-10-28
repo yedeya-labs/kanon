@@ -86,9 +86,10 @@ const MORE: Record<string, Perms> = {
   'agent-implement-revise.yml#fix-token': { contents: 'write', issues: 'write', 'pull-requests': 'write' },
   // The rebase lane's push job (kanon#1384, `[LANE-14]`): re-creates the agent's merge and moves the
   // pull request's branch (`contents`), which may carry the default branch's workflow changes
-  // (`workflows`), after it reads the pull request's head (`pull_requests: read`). Its job checks
-  // nothing out (`K-AGENT-49`).
-  'agent-rebase.yml#push-token': { contents: 'write', 'pull-requests': 'read', workflows: 'write' },
+  // (`workflows`), after it reads the pull request's head (`pull_requests: read`), and reads the
+  // bundle an earlier attempt of the run uploaded, when it is re-run alone (`actions: read`,
+  // kanon#1465). Its job checks nothing out (`K-AGENT-49`).
+  'agent-rebase.yml#push-token': { contents: 'write', 'pull-requests': 'read', workflows: 'write', actions: 'read' },
   // The split lane's push job (kanon#1385, `[LANE-14]`, `[LANE-18]`): replaces the split branch
   // (`contents`) and opens its pull request and labels it (`pull_requests`). The split writes only
   // `docs/projects/`, so no `workflows`. Its job checks nothing out (`K-AGENT-49`). The probe mints
@@ -153,16 +154,18 @@ const SPINE_CALLERS: Record<string, Perms> = {
 };
 /**
  * The spine's push job's token, for each lane that sets `push` (kanon#1383, `[LANE-14]`): it moves
- * the branch (`contents`) and opens the pull request with its labels (`pull-requests`). `workflows`
- * only for a lane that sets `push-workflows`, whose commits may touch `.github/workflows/`. With
- * `push-probe` on, the mint job mints the same set once before the agent and revokes it at once.
+ * the branch (`contents`), opens the pull request with its labels (`pull-requests`), and reads the
+ * bundle an earlier attempt of the run uploaded, when it is re-run alone (`actions: read`,
+ * kanon#1438). `workflows` only for a lane that sets `push-workflows`, whose commits may touch
+ * `.github/workflows/`. With `push-probe` on, the mint job mints the same set once before the
+ * agent and revokes it at once.
  */
 const SPINE_PUSH: Record<string, Perms> = {
-  'agent-implement.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
-  'agent-triage.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
-  'agent-implement-revise.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write' },
-  'agent-lead.yml': { contents: 'write', 'pull-requests': 'write' },
-  'agent-lead-revise.yml': { contents: 'write', 'pull-requests': 'write' },
+  'agent-implement.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write', actions: 'read' },
+  'agent-triage.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write', actions: 'read' },
+  'agent-implement-revise.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write', actions: 'read' },
+  'agent-lead.yml': { contents: 'write', 'pull-requests': 'write', actions: 'read' },
+  'agent-lead-revise.yml': { contents: 'write', 'pull-requests': 'write', actions: 'read' },
 };
 /** Minting steps outside the lanes, and why each is exempt. */
 const EXEMPT: Record<string, string> = {
@@ -404,13 +407,13 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     const probe = (spineDoc.jobs?.mint?.steps ?? []).find((s) => s.id === 'push-probe')!;
     // One set, written once in each place: the probe proves exactly what the push job will ask.
     for (const step of [pushMint, probe]) {
-      expect(requested(step.with)).toEqual({ contents: 'write', 'pull-requests': 'write', workflows: "${{ inputs.push-workflows && 'write' || '' }}" });
+      expect(requested(step.with)).toEqual({ contents: 'write', 'pull-requests': 'write', workflows: "${{ inputs.push-workflows && 'write' || '' }}", actions: 'read' });
     }
     const jobs = Object.values(read(`.github/workflows/${name}`).jobs ?? {}).filter((j) => String(j.uses ?? '').endsWith(`/${SPINE}`));
     expect(jobs.length).toBeGreaterThan(0);
     for (const job of jobs) {
       expect(job.with?.push, `${name} sets push`).toBe(true);
-      const asked: Perms = { contents: 'write', 'pull-requests': 'write', ...(job.with?.['push-workflows'] === true ? { workflows: 'write' } : {}) };
+      const asked: Perms = { contents: 'write', 'pull-requests': 'write', ...(job.with?.['push-workflows'] === true ? { workflows: 'write' } : {}), actions: 'read' };
       expect(asked).toEqual(perms);
       withinGrant(name, job.secrets?.['app-id'], perms);
     }

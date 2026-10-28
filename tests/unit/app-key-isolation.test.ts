@@ -220,13 +220,13 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
     const mint = run.jobs!.mint!;
     const spine = runFile === 'agent-lane.yml';
     // The spine's mint also proves the push job's token can be minted, before the agent's (the
-    // push probe, kanon#1383), and lists the branches that exist before the agent runs: each
-    // only when its switch is on, and none running anything but GitHub's API.
+    // push probe, kanon#1383), only when its switch is on, running nothing but GitHub's API. It
+    // no longer lists the branches before the run: the push job asks GitHub (kanon#1438).
     // The split lane's mint proves the push job's token too, on every run (kanon#1385).
     const split = runFile === 'lead-split-run.yml';
     const core = spine || split ? mint.steps!.filter((s) => s.id === 'app-token' || s.id === 'seal') : mint.steps!;
     if (spine) {
-      expect(mint.steps!.map((s) => s.id ?? s.name)).toEqual(['push-probe', "Revoke the push probe's token", 'Say why the push probe failed', 'app-token', 'seal', 'branches']);
+      expect(mint.steps!.map((s) => s.id ?? s.name)).toEqual(['push-probe', "Revoke the push probe's token", 'Say why the push probe failed', 'app-token', 'seal']);
       for (const s of mint.steps!.filter((x) => !core.includes(x))) expect(s.if, s.name).toMatch(/inputs\.push|steps\.push-probe\./);
     }
     if (split) {
@@ -241,7 +241,6 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
     expect(core[0]!.with).toMatchObject({ 'client-id': '${{ secrets.app-id }}', 'private-key': '${{ secrets.app-private-key }}', 'skip-token-revoke': 'true' });
     expect(mint.outputs).toEqual({
       sealed: '${{ steps.seal.outputs.sealed }}', 'app-slug': '${{ steps.app-token.outputs.app-slug }}', attempt: '${{ github.run_attempt }}',
-      ...(spine ? { branches: '${{ steps.branches.outputs.branches }}' } : {}),
     });
     expect(core[1]!.run).toBe(docs['agent-lane.yml']!.jobs!.mint!.steps!.find((s) => s.id === 'seal')!.run);
     // No gate of its own: it runs when the call does, inside the calling job's scope.

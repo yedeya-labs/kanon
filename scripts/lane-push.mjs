@@ -11,7 +11,7 @@
 //
 // WHICH BRANCHES MOVE:
 // - On a lane that revises a branch (`--ref`), that branch alone, from the commit the agent's job
-//   checked out, without force: it existed before the run, and is the one exception to the rule
+//   checked out, without force: it exists on GitHub, and is the one exception to the rule
 //   below. The helper refuses it if it moved, or if the agent rewrote it (`K-AGENT-34`). With
 //   `--pr`, the pull request's head must be that branch, of this repository, never a fork's.
 // - On the rebase lane (`--merged`, kanon#1384), that branch moves only to a resolution of its
@@ -20,8 +20,8 @@
 //   commit after the merge, such as a fix for a test the merged tree broke, has one parent.
 // - On a lane that opens one branch of its own name (`--replace`, the Lead's split lane, kanon#1385),
 //   that branch alone, in the helper's replace mode (`[LANE-18]`): it may be a dead branch an
-//   earlier run left, whose pull request closed unmerged, so it is the one branch that may have
-//   existed before the run, and the only one the lane may name. It is built over the first commit
+//   earlier run left, whose pull request closed unmerged, so it is the one branch that may
+//   exist already, and the only one the lane may name. It is built over the first commit
 //   GitHub has on its first-parent path, which the helper takes only while GitHub compares it as on
 //   the default branch. It is never replaced while it heads an open pull request. A request must
 //   ask for that branch, into the default branch; with none, the branch is still replaced.
@@ -29,9 +29,14 @@
 //   agent leaves, each branch the bundle carries, so a crashed run's work survives as it did when
 //   the agent pushed mid-run. Each is built on the first commit GitHub has on its first-parent path,
 //   which is the checked-out commit, or the open pull request a follow-up stacks on.
-// - Never the default branch, never a branch that existed before the run (read by the mint job,
-//   before the agent's job started), and never a name a URL could read as another branch. A branch
-//   whose commits carry the request file is refused too: the spine keeps it out of every commit.
+// - Never the default branch, never a branch that exists on GitHub when this job reads it but the
+//   lane's own (`--ref`, `--replace`), and never a name a URL could read as another branch. The
+//   agent's token can't create a branch (`[LANE-13]`), so a branch GitHub has is a person's or an
+//   earlier run's, whenever it was made (kanon#1438: the list of branches the mint job took before
+//   the run outgrew one environment string on a repository of ~4,000 branches). A branch made
+//   after that read, before the helper reads it again, is refused unless it still sits at the
+//   commit the push builds on, and then it moves only without force (`[LANE-10]`). A branch whose
+//   commits carry the request file is refused too: the spine keeps it out of every commit.
 // Every other branch the agent made stays on its runner, and the step summary names it.
 //
 // THE PULL REQUEST is opened only after its branch moved, from the request's branch, base, title and
@@ -39,10 +44,9 @@
 // request that breaks a rule is refused whole: nothing of it is pushed or opened.
 //
 // Usage: node scripts/lane-push.mjs --bundle <file> [--request <file>] --start <sha> [--ref <branch>
-//          [--pr <n>] [--merged <sha>] | --replace <branch>] --before <JSON array> --labels "<names>"
-//          --app-login <slug>[bot]
-// `--before` is not read with `--replace`, which names the one branch that may move.
-// Reads `GH_TOKEN`, `REPO`, `GITHUB_SERVER_URL` and `GITHUB_API_URL`. Writes `heads=<JSON [{ref, sha}]
+//          [--pr <n>] [--merged <sha>] | --replace <branch>] --labels "<names>" --app-login <slug>[bot]
+// Reads `GH_TOKEN`, `REPO`, `GITHUB_SERVER_URL`, `GITHUB_API_URL` and `GITHUB_RUN_ATTEMPT`: on a
+// re-run, a refusal also says what a person does. Writes `heads=<JSON [{ref, sha}]
 // of the branches it moved>`, `base=<the head it built on>` and `pr=<the pull request it opened>` to
 // `$GITHUB_OUTPUT`, and what it did to the step summary. A refusal fails the step, after the outputs.
 
@@ -192,15 +196,29 @@ export async function openPullOn({ api, repo, branch }) {
 }
 
 /**
+ * Why `branch` may not be created in `repo`, or `''` when GitHub has no such branch: read with the
+ * push job's own token, as it pushes (`[LANE-15]`, kanon#1438). Any answer but a 404 is a refusal,
+ * so a branch it can't read is never taken for a new one.
+ *
+ * @param {{api: Api, repo: string, branch: string}} opts
+ */
+export async function existsProblem({ api, repo, branch }) {
+  const r = await api('GET', `repos/${repo}/git/ref/heads/${branch}`);
+  if (r.status === 404) return '';
+  if (r.status === 200) return `it exists on GitHub${r.json?.object?.sha ? ` (at ${String(r.json.object.sha).slice(0, 7)})` : ''}, and this lane moves no branch that exists but its own`;
+  return `asking whether it exists, GitHub answered ${r.status}, so it can't be told new`;
+}
+
+/**
  * Move the branches the rules allow, through the helper, and open the request's pull request.
  *
  * @param {{gitDir: string, prereqs: string[], start: string, ref?: string, merged?: string, pr?: number, replace?: string,
- *          request: {request: PullRequest} | {problem: string} | null, before: string[] | null,
- *          labels: string[], appLogin: string, repo: string, api: Api,
+ *          request: {request: PullRequest} | {problem: string} | null,
+ *          labels: string[], appLogin: string, repo: string, api: Api, attempt?: number,
  *          push?: typeof pushVerified, sleep?: (ms: number) => Promise<void>, log?: (line: string) => void}} opts
  */
 export async function pushLane({
-  gitDir, prereqs, start, ref = '', merged = '', pr: pullNumber, replace = '', request, before, labels, appLogin, repo, api, push = pushVerified, sleep, log = () => {},
+  gitDir, prereqs, start, ref = '', merged = '', pr: pullNumber, replace = '', request, labels, appLogin, repo, api, attempt = 1, push = pushVerified, sleep, log = () => {},
 }) {
   if (!ref && (merged || pullNumber !== undefined)) throw new Error('--merged and --pr name the branch a lane revises, and come only with --ref');
   if (replace && ref) throw new Error('--replace names the one branch a lane opens, and --ref the one it revises: a lane gives one');
@@ -222,10 +240,11 @@ export async function pushLane({
   const carried = gitText(['for-each-ref', '--format=%(refname)', 'refs/bundle/']).split('\n').filter(Boolean)
     .map((r) => r.slice('refs/bundle/'.length));
   const known = new Set([...prereqs, start].filter(Boolean));
-  const existed = Array.isArray(before) ? new Set(before) : null;
 
   /** @type {PullRequest | null} */
   let pull = null;
+  /** The request as the agent wrote it, for the summary after a refusal clears `pull`. */
+  const asked = request && 'request' in request ? request.request : null;
   /** @type {string[]} */
   let wanted;
   if (ref) {
@@ -261,20 +280,18 @@ export async function pushLane({
   }
   const left = carried.filter((b) => !wanted.includes(b));
 
-  /** Why `branch` may not move, or `''`. */
-  const ruleOut = (/** @type {string} */ branch) => {
+  /** Why `branch` may not move, or `''`. The checks that send no request come first. */
+  const ruleOut = async (/** @type {string} */ branch) => {
     if (!SAFE_BRANCH.test(branch)) return 'its name has a character outside letters, digits, `.`, `_`, `-` and `/`, which an API path could read as another branch';
     if (branch === def) return 'it is the default branch';
-    // The lane's own branch, which it revises or replaces, is the one that may have existed before.
-    const own = branch === ref || branch === replace;
-    if (!own && existed === null) return 'the branches that existed before the run are unknown, so it can\'t be told new';
-    if (!own && existed?.has(branch)) return 'it existed before the run';
     if (!carried.includes(branch)) return 'the agent\'s job left no commit on it that GitHub lacks';
-    return '';
+    // The lane's own branch, which it revises or replaces, is the one that may exist already.
+    if (branch === ref || branch === replace) return '';
+    return existsProblem({ api, repo, branch });
   };
   // A request is refused whole when its branch is: nothing of it is pushed or opened.
   if (pull) {
-    const why = ruleOut(pull.branch);
+    const why = await ruleOut(pull.branch);
     if (why) {
       refused.push({ branch: pull.branch, why: `the request is refused: ${why}` });
       wanted = [];
@@ -288,7 +305,7 @@ export async function pushLane({
       lines.push(`**${branch}**: the agent made no commit on it, so nothing moved.`);
       continue;
     }
-    const why = ruleOut(branch);
+    const why = await ruleOut(branch);
     if (why) {
       refused.push({ branch, why });
       continue;
@@ -343,6 +360,14 @@ export async function pushLane({
   }
   if (left.length) lines.push(`Left on the agent's runner, not pushed: ${left.map((b) => `\`${b}\``).join(', ')}.`);
   for (const r of refused) lines.push(`Refused${r.branch ? ` **${r.branch}**` : ''}: ${r.why}.`);
+  // A RE-RUN OF THIS JOB (kanon#1438). An earlier attempt may have pushed the branch and then failed,
+  // before or while it opened the pull request. The helper re-creates commits under new ids, so this
+  // attempt can't tell that push from anyone else's, and refuses the branch. A person can.
+  if (attempt > 1 && refused.some((r) => r.branch)) {
+    lines.push(asked && refused.some((r) => r.branch === asked.branch)
+      ? `This is attempt ${attempt} of the run. If an earlier attempt of this job already pushed **${asked.branch}**, its commits are on GitHub: unless a pull request is open from it, open one by hand, into **${asked.base || def}**, titled "${asked.title}", labelled ${asked.labels.map((l) => `\`${l}\``).join(', ') || 'with nothing'}.`
+      : `This is attempt ${attempt} of the run. If an earlier attempt of this job already pushed a branch refused here, its commits are on GitHub, and nothing is left to push.`);
+  }
   if (!heads.length && !refused.length) lines.push('Nothing moved.');
   return { heads, base, pr, refused, left, lines };
 }
@@ -377,13 +402,9 @@ if (isCliEntry(import.meta.url)) {
     });
     const requestFile = arg('--request');
     const request = requestFile && existsSync(requestFile) ? readRequest(readFileSync(requestFile, 'utf8')) : null;
-    let before = null;
-    try {
-      const b = JSON.parse(arg('--before') || 'null');
-      before = Array.isArray(b) && b.every((x) => typeof x === 'string') ? b : null;
-    } catch { /* unknown: a new branch can't be told from an old one, and none moves */ }
     const r = await pushLane({
-      gitDir: store, prereqs, start, ref: arg('--ref'), merged, ...(prText ? { pr: Number(prText) } : {}), replace: arg('--replace'), request, before, labels: arg('--labels').split(/\s+/).filter(Boolean),
+      gitDir: store, prereqs, start, ref: arg('--ref'), merged, ...(prText ? { pr: Number(prText) } : {}), replace: arg('--replace'), request, labels: arg('--labels').split(/\s+/).filter(Boolean),
+      attempt: Number(process.env.GITHUB_RUN_ATTEMPT) || 1,
       appLogin: arg('--app-login'), repo, api: githubRequest({ token, api: process.env.GITHUB_API_URL || undefined }), log: (line) => console.log(line),
     });
     report(r);
