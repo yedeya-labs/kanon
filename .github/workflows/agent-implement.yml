@@ -102,7 +102,6 @@ jobs:
     outputs:
       member: ${{ steps.gate.outputs.member }}
       since: ${{ steps.before.outputs.since }}
-      branches: ${{ steps.before.outputs.branches }}
     steps:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
       # this lane acts only when the event's actor is a member or a registered agent App.
@@ -115,24 +114,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
 
-      # WHAT EXISTS BEFORE THE AGENT RUNS (plan 0005 §3.3, step L3), for the implementer
-      # status: when the run started and which branches there were, so `implementer-status`
-      # can tell the pull request THIS run opened (after `since`, from a branch not listed
-      # here) from any other. In this job because no agent has run yet, so nothing an agent
-      # wrote can be in it. `continue-on-error`: a failed read must not stop the lane, and
-      # the status job then stamps nothing and says why.
-      - name: Record what exists before the agent runs
+      # WHEN THE RUN STARTED (plan 0005 §3.3, step L3), for the implementer status: so
+      # `implementer-status` can tell the pull request THIS run opened (after `since`, from a
+      # branch the push job moved, at the head it moved it to) from any other. In this job
+      # because no agent has run yet, so nothing an agent wrote can be in it. No list of the
+      # branches is taken: the push job creates no branch GitHub has (`LANE-15`), and the list
+      # outgrew one environment string on a repository of ~4,000 branches (kanon#1508).
+      # `continue-on-error`: a failed step must not stop the lane, and the status job then
+      # stamps nothing and says why.
+      - name: Record when the run started
         id: before
         if: steps.gate.outputs.member == 'true'
         continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          echo "since=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-          branches="$(gh api --paginate "repos/$REPO/branches?per_page=100" --jq '.[].name' | jq -Rsc 'split("\n") | map(select(length > 0))')"
-          echo "branches=$branches" >> "$GITHUB_OUTPUT"
+        run: echo "since=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
   implement:
     # Only what the `filter` job admitted: the lane's admission rule sits on that job (the
@@ -310,7 +304,7 @@ jobs:
         NAME YOUR BRANCH `<type>/<issue>-<slug>` (`K-WS-8`), such as
         `fix/42-empty-cart-total`: crash recovery and the dispatch sweep find an
         issue's branch by that name. A new branch only: the job refuses to move
-        the default branch or one that existed before this run.
+        the default branch or one that exists on GitHub when it pushes.
         If this issue is a FOLLOW-UP whose parent PR is still OPEN (its body says
         "Surfaced by PR #N" and #N isn't merged), branch off that PR's head and set
         the request's `base` to its branch so it STACKS — don't diverge off main.
@@ -350,7 +344,6 @@ jobs:
           app-id: ${{ secrets.AUTHOR_APP_ID }}
           app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           since: ${{ needs.filter.outputs.since }}
-          branches-before: ${{ needs.filter.outputs.branches }}
           # The heads the push job moved, never what the agent's job reports (`LANE-16`).
           heads: ${{ needs.implement.outputs.push-heads }}
 
