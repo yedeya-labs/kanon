@@ -65,7 +65,10 @@ export function pinLaneCheck({ root, release, kanon = KANON }) {
   const r = spawnSync('bash', [join(kanon, 'actions/lane-check/lane-check.sh')], {
     cwd: root,
     encoding: 'utf8',
-    env: { ...process.env, KANON_ROOT: kanon, ACTION_REF: release },
+    // The tree at `root` is judged, never the run's pull request: lane-check's refs-only line
+    // (kanon#1106) reads the event and `GITHUB_HEAD_REF`, and on a Dependabot branch it counts
+    // any tree whose base it can't read as Dependabot's upgrade.
+    env: { ...process.env, GITHUB_EVENT_NAME: '', GITHUB_EVENT_PATH: '', GITHUB_HEAD_REF: '', KANON_ROOT: kanon, ACTION_REF: release },
   });
   const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
   if (r.status === 0) return { ok: true, problems: [], out };

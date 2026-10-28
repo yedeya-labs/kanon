@@ -50,12 +50,6 @@ updates:
     commit-message:
       prefix: ci
       include: scope
-    # HELD: claude-code-action v1.0.248 installs a CLI that failed the Reviewer's and the Lead's
-    # grant probe (`.github/scripts/reviewer-grant-probe.mjs`) on 2026-10-12, where the pinned
-    # v1.0.244's CLI passed it the same day. Lift this once a later version passes the probe.
-    ignore:
-      - dependency-name: "anthropics/claude-code-action"
-        versions: ["1.0.248"]
     groups:
       # First, so Kanon's references land in this group and not in the catch-all below.
       kanon:
