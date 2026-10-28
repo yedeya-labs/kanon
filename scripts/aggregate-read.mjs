@@ -47,7 +47,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { isCliEntry } from './lib/cli-entry.mjs';
-import { HOSTED_AGGREGATE_URL, TokenError, codeOf, runnerMask, storeOf, storeRequest } from './lib/telemetry-token.mjs';
+import { HOSTED_AGGREGATE_URL, TokenError, UNAVAILABLE, codeOf, retryUnavailable, runnerMask, storeOf, storeRequest } from './lib/telemetry-token.mjs';
 
 /** Plan 0002 decision 7: a cross-adopter cell needs at least this many adopters. */
 export const MIN_ADOPTERS = 3;
@@ -356,18 +356,19 @@ export function tokenRefusal(status, code, view) {
   if (status === 403 && code === 'ref') return `${said}: a dispatch runs on the repository's default branch only`;
   if (status === 403 && code === 'workflow') return `${said}: the store admits the Explorer's lane at a Kanon release no older than its minimum, so check the caller's pin`;
   if (status === 429) return `${said}: the repository's hourly request quota is spent; the next run reads again`;
+  if (status === 503 && code === UNAVAILABLE) return `${said}: the store could not fetch GitHub's signing keys, so it verified no token, and still could not after the read waited and asked again; the next run reads again`;
   return said;
 }
 
 /**
  * The read on the token URL: a fresh OIDC token for the store's audience, sent to the store's
  * aggregate URL, and the answer checked field by field (`checkAggregate`, or `checkPage` for the
- * page view). Throws `AggregateError`
- * naming what went wrong, never with the URL, the token or the body in the message.
- * @param {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void, hostedUrl?: string, view?: 'page' }} o
+ * page view). The store's 503 `jwks-unavailable` is asked again after its waits (#1440). Throws
+ * `AggregateError` naming what went wrong, never with the URL, the token or the body in the message.
+ * @param {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void, hostedUrl?: string, view?: 'page', sleep?: (ms: number) => Promise<void> }} o
  * @returns {Promise<any>}
  */
-export async function readAggregateToken({ env, fetchImpl = fetch, mask = runnerMask, hostedUrl = HOSTED_AGGREGATE_URL, view }) {
+export async function readAggregateToken({ env, fetchImpl = fetch, mask = runnerMask, hostedUrl = HOSTED_AGGREGATE_URL, view, sleep }) {
   const store = aggregateStore(env, hostedUrl);
   if (!store.ok) throw new AggregateError(store.why);
   // A self-hosted store's URL is the adopter's to publish or not: masked before anything prints.
@@ -375,7 +376,7 @@ export async function readAggregateToken({ env, fetchImpl = fetch, mask = runner
   /** @type {import('./lib/telemetry-token.mjs').Answer} */
   let res;
   try {
-    res = await storeRequest(store, { method: 'GET', path: '', ...(view === 'page' ? { query: { view: 'page' } } : {}) }, { env, fetchImpl, mask });
+    res = await retryUnavailable(() => storeRequest(store, { method: 'GET', path: '', ...(view === 'page' ? { query: { view: 'page' } } : {}) }, { env, fetchImpl, mask }), sleep ? { sleep } : {});
   } catch (e) {
     if (e instanceof TokenError) throw new AggregateError(e.message);
     throw new AggregateError(`the aggregate function could not be reached (${e instanceof Error ? e.name : 'error'})`);

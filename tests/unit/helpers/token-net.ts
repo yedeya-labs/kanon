@@ -12,7 +12,7 @@ export const HOSTED_URL = 'https://hosted0123.lambda-url.eu-central-1.on.aws/';
 export const TOKEN = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl';
 
 export type StoreCall = { url: string; host: string; path: string; query: Record<string, string>; method: string; auth?: string };
-export type StoreAnswer = { status: number; json?: unknown; text?: string };
+export type StoreAnswer = { status: number; json?: unknown; text?: string; headers?: Record<string, string> };
 
 export function tokenNet(answer: (call: StoreCall) => StoreAnswer | Promise<StoreAnswer>) {
   const calls: StoreCall[] = [];
@@ -27,7 +27,7 @@ export function tokenNet(answer: (call: StoreCall) => StoreAnswer | Promise<Stor
     const call = { url, host: u.host, path: u.pathname, query: Object.fromEntries(u.searchParams), method: init.method ?? 'GET', auth: init.headers?.authorization };
     calls.push(call);
     const a = await answer(call);
-    return new Response(a.text ?? (a.json === undefined ? '' : JSON.stringify(a.json)), { status: a.status });
+    return new Response(a.text ?? (a.json === undefined ? '' : JSON.stringify(a.json)), { status: a.status, headers: a.headers });
   }) as unknown as typeof fetch;
   return { calls, minted, fetchImpl };
 }

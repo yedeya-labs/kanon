@@ -59,6 +59,11 @@
 // with a warning. Any throw on the way, from the report or from the summary's write, is a warning
 // too, and the step exits 0.
 //
+// THE STORE'S 503 `jwks-unavailable` IS ASKED AGAIN (#1440). While the store can't fetch GitHub's
+// signing keys it refuses every token for a minute or so, and never uses a stale key. Each read
+// waits and asks again, twice, inside its deadline (`retryUnavailable`); a 503 still answered holds
+// for every partition, so the read and the report each stop at it, say so, and write nothing.
+//
 // `node:` built-ins, and `gh` for the gate's read of the default branch (`K-SELF-8`).
 
 import { execFileSync } from 'node:child_process';
@@ -71,7 +76,7 @@ import { LANES, RESERVED_PARTITION } from '../infra/telemetry/function/schema.mj
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { readSnapshot } from './lib/lane-caller.mjs';
 import { COLLECTOR_LANE, collectorConsent, hostedRefusal } from './lib/telemetry-consent.mjs';
-import { HOSTED_INGEST_URL, TokenError, codeOf, runnerMask, storeOf, storeRequest } from './lib/telemetry-token.mjs';
+import { HOSTED_INGEST_URL, TokenError, UNAVAILABLE, codeOf, isUnavailable, retryUnavailable, runnerMask, storeOf, storeRequest } from './lib/telemetry-token.mjs';
 import { metricsReport, renderReport } from './metrics/report.mjs';
 import { metricsViews, renderViews } from './metrics/views.mjs';
 import { DAY_MS, TREND_ATTRIBUTES, render as renderTrend, summarize as summarizeTrend } from './lib/token-trend.mjs';
@@ -175,7 +180,8 @@ export function rowOf(row) {
   return out;
 }
 
-/** The store refused the read for the whole registration (plan 0008 §3.1): no other partition is asked. */
+/** The store refused the read for the whole registration (plan 0008 §3.1), or, with 503
+ *  `jwks-unavailable` after the retries, for every caller (#1440): no other partition is asked. */
 export class RefusedError extends Error {
   /** @param {number} status @param {string | null} code */
   constructor(status, code) {
@@ -201,43 +207,51 @@ export function refusalWords(e) {
   if (e.status === 403 && e.code === 'ref') return `${e.message}: the store reads a repository's rows on its default branch only, so a dispatch from another branch reads nothing`;
   if (e.status === 403 && e.code === 'workflow') return `${e.message}: the store admits the Overseer's lane at a Kanon release no older than its minimum, so check the caller's pin`;
   if (e.status === 429) return `${e.message}: the repository's hourly request quota is spent; the next run reads again`;
+  if (e.status === 503 && e.code === UNAVAILABLE) return `${e.message}: the store could not fetch GitHub's signing keys, so it verified no token, and still could not after the read waited and asked again; the next run reads again`;
   return e.message;
 }
 
 /**
  * Every page of one partition of this repository's own rows (`GET /v1/rows/self`), each request
  * with a fresh token, none started after `deadline` and none given longer than what is left of
- * it. Throws `RefusedError` on a 401, 403, 404, 410 or 429, which hold for the whole
- * registration, and `LateError` past the deadline; any other failure throws an `Error` naming it,
- * never with the URL or a token.
+ * it. A page the store answers 503 `jwks-unavailable` is asked again after its waits, inside the
+ * deadline (`retryUnavailable`, #1440). Throws `RefusedError` on a 401, 403, 404, 410 or 429,
+ * which hold for the whole registration, and on that 503 still answered, which holds for every
+ * caller; `LateError` past the deadline; any other failure throws an `Error` naming it, never with
+ * the URL or a token.
  * @param {import('./lib/telemetry-token.mjs').Store} store
  * @param {{ lane: string, from?: string, fields?: readonly string[] }} q
- * @param {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void, clock?: () => number, deadline?: number }} io
+ * @param {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void, clock?: () => number, deadline?: number, sleep?: (ms: number) => Promise<void> }} io
  * @returns {Promise<Record<string, unknown>[]>}
  */
-export async function readPartition(store, q, { env, fetchImpl = fetch, mask = runnerMask, clock = Date.now, deadline = Infinity }) {
+export async function readPartition(store, q, { env, fetchImpl = fetch, mask = runnerMask, clock = Date.now, deadline = Infinity, sleep }) {
   /** @type {Record<string, unknown>[]} */
   const rows = [];
   /** @type {string | undefined} */
   let cursor;
   for (let page = 0; page < MAX_PAGES; page += 1) {
-    const left = deadline - clock();
-    if (!(left > 0)) throw new LateError();
-    const timeout = Math.ceil(Math.min(QUERY_TIMEOUT_MS, left));
-    /** @type {typeof fetch} */
-    const timed = /** @type {any} */ ((/** @type {any} */ url, /** @type {any} */ init) => fetchImpl(url, { ...init, signal: globalThis.AbortSignal.timeout(timeout) }));
     /** @type {Record<string, string>} */
     const query = { lane: q.lane, ...(q.from ? { from: q.from } : {}), ...(q.fields ? { fields: q.fields.join(',') } : {}), ...(cursor ? { cursor } : {}) };
+    // Each try is given what is left of the deadline when it starts, not when the page did.
+    const attempt = () => {
+      const left = deadline - clock();
+      if (!(left > 0)) throw new LateError();
+      const timeout = Math.ceil(Math.min(QUERY_TIMEOUT_MS, left));
+      /** @type {typeof fetch} */
+      const timed = /** @type {any} */ ((/** @type {any} */ url, /** @type {any} */ init) => fetchImpl(url, { ...init, signal: globalThis.AbortSignal.timeout(timeout) }));
+      return storeRequest(store, { method: 'GET', path: 'v1/rows/self', query }, { env, fetchImpl: timed, mask });
+    };
     /** @type {import('./lib/telemetry-token.mjs').Answer} */
     let res;
     try {
-      res = await storeRequest(store, { method: 'GET', path: 'v1/rows/self', query }, { env, fetchImpl: timed, mask });
+      res = await retryUnavailable(attempt, { clock, deadline, ...(sleep ? { sleep } : {}) });
     } catch (e) {
+      if (e instanceof LateError) throw e;
       if (!(deadline - clock() > 0)) throw new LateError();
       if (e instanceof TokenError) throw e;
       throw new Error(`the store could not be reached (${e instanceof Error ? e.name : 'error'})`);
     }
-    if ([401, 403, 404, 410, 429].includes(res.status)) throw new RefusedError(res.status, codeOf(res.json));
+    if ([401, 403, 404, 410, 429].includes(res.status) || isUnavailable(res)) throw new RefusedError(res.status, codeOf(res.json));
     if (res.status !== 200) throw new Error(`the store answered ${res.status}${codeOf(res.json) ? ` (${codeOf(res.json)})` : ''}`);
     const got = res.json?.rows;
     if (!Array.isArray(got)) throw new Error('the store answered no list of rows');
@@ -249,7 +263,7 @@ export async function readPartition(store, q, { env, fetchImpl = fetch, mask = r
 }
 
 /**
- * @typedef {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void, hostedUrl?: string }} StoreIo
+ * @typedef {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void, hostedUrl?: string, sleep?: (ms: number) => Promise<void> }} StoreIo
  */
 
 /**
@@ -267,8 +281,9 @@ function storeFor({ env, mask = runnerMask, hostedUrl = HOSTED_INGEST_URL }, wha
 }
 
 /**
- * The read: both reports from this repository's own rows, or why there are none.
- * @param {StoreIo & { now?: number, workflows?: string }} io
+ * The read: both reports from this repository's own rows, or why there are none. No request is
+ * started after `deadline`, as the report's (#1440): the lane passes `REPORT_BY_MS` after the step's start.
+ * @param {StoreIo & { now?: number, workflows?: string, clock?: () => number, deadline?: number }} io
  * @returns {Promise<{ status: 'ran' | 'not configured' | 'failed', lines: string[], files: Record<string, string> }>}
  */
 export async function read({ now = Date.now(), workflows = WORKFLOWS, ...io }) {
@@ -490,11 +505,13 @@ if (isCliEntry(import.meta.url)) {
     writeOutputs({ reader });
   } else if (mode === 'read') {
     // The job's start, for the report's deadline (kanon#682): this is the job's first step after
-    // Kanon's path. Only a time, under the runner's temp directory, never the uploaded one.
+    // Kanon's path. Only a time, under the runner's temp directory, never the uploaded one. The
+    // read keeps to the same deadline (#1440).
+    const started = Date.now();
     try {
-      if (process.env.RUNNER_TEMP) writeFileSync(join(process.env.RUNNER_TEMP, STARTED_FILE), `${Date.now()}\n`);
+      if (process.env.RUNNER_TEMP) writeFileSync(join(process.env.RUNNER_TEMP, STARTED_FILE), `${started}\n`);
     } catch { /* the report falls back to a budget of its own */ }
-    const { status, files, lines } = await read({ env: process.env });
+    const { status, files, lines } = await read({ env: process.env, deadline: started + REPORT_BY_MS });
     const out = process.env.OUT ?? '';
     if (status === 'ran') {
       mkdirSync(out, { recursive: true });

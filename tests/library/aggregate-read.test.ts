@@ -118,6 +118,20 @@ describe('readAggregateToken: one GET on the token URL, with a fresh OIDC token'
     expect(net.calls[0]!.query).toEqual({ view: 'page' });
   });
 
+  it('asks again after the store\'s 503 jwks-unavailable, a bounded number of times, then names it (#1440)', async () => {
+    let refused = 1;
+    const net = tokenNet(() => (refused-- > 0 ? { status: 503, json: { error: 'jwks-unavailable' } } : { status: 200, json: answer() }));
+    const slept: number[] = [];
+    const sleep = async (ms: number) => { slept.push(ms); };
+    expect(await readAggregateToken({ env: SELF_ENV, fetchImpl: net.fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL, sleep })).toMatchObject({ min_adopters: 3 });
+    expect(net.calls).toHaveLength(2);
+    expect(slept).toEqual([6_000]);
+    const down = tokenNet(() => ({ status: 503, json: { error: 'jwks-unavailable' } }));
+    await expect(readAggregateToken({ env: SELF_ENV, fetchImpl: down.fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL, sleep }))
+      .rejects.toThrow(/answered 503 \(jwks-unavailable\): the store could not fetch GitHub's signing keys/);
+    expect(down.calls).toHaveLength(3);
+  });
+
   it('names each refusal by the store\'s code, never with the URL or the token, and refuses an answer that fails the check', async () => {
     const cases: Array<[number, unknown, RegExp]> = [
       [403, { error: 'invoker' }, /answered 403 \(invoker\): this repository's registration doesn't set `aggregate_invoker`/],

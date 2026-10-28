@@ -36,6 +36,12 @@
 // A dispatch with `erase: yes` calls `DELETE /v1/registrations/self` and sends nothing (§7); one
 // with `register: yes` sends `{ "reregister": true }` first, after an erasure (§3.3).
 //
+// THE STORE'S 503 `jwks-unavailable` DELAYS, NEVER LOSES (#1440). The store answers it to every
+// token while it can't fetch GitHub's signing keys. Each request waits and asks again, twice
+// (`retryUnavailable`); a batch still refused stops the sweep, red, and its rows and every later
+// one are said as delayed, not lost: the watermark stays, so the next sweep sends them again. A
+// lost row is only ever one past the cap, below, and the run says that in its own words.
+//
 // AN ANCHOR, NOT A PERSISTED CURSOR. The function keys a row from its own fields (`recorded_at`,
 // run, attempt, number), so re-sending an artifact overwrites its row identically. Over-sweeping
 // is therefore free, and the span can be derived rather than remembered: each sweep reaches back
@@ -106,7 +112,7 @@ import {
   ARTIFACT_FILE, DELIVERY_ARTIFACT_FILE, DEPLOY_ARTIFACT_FILE, FINDING_ARTIFACT_FILE, ghApi, ghDownload, listTelemetryArtifacts, readZipEntry,
   SMOKE_ARTIFACT_FILE,
 } from './lib/telemetry-artifacts.mjs';
-import { codeOf, HOSTED_INGEST_URL, REFUSED_TITLE, storeOf, storeRequest, TokenError, UNPUBLISHED_JOB } from './lib/telemetry-token.mjs';
+import { codeOf, HOSTED_INGEST_URL, isUnavailable, REFUSED_TITLE, retryUnavailable, storeOf, storeRequest, TokenError, UNPUBLISHED_JOB } from './lib/telemetry-token.mjs';
 import { readUpstreamFindingsFrom, SENT_VALUES } from './lib/upstream-findings.mjs';
 import { ghAsync, workItemStep } from './telemetry-work-items.mjs';
 
@@ -291,25 +297,32 @@ export function refusalOf(status, json, retryAfter = null) {
 
 /**
  * @typedef {import('./lib/telemetry-token.mjs').Store} Store
- * @typedef {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void }} TokenIo
+ * @typedef {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void, sleep?: (ms: number) => Promise<void> }} TokenIo
  */
 
 /**
- * The default `post(rows)`: `POST /v1/rows` with a fresh token. On 404 `not-registered`, the
- * first default-branch run registers, once, with `POST /v1/registrations`, and sends the rows
- * again (plan 0008 §3.2); a registration that isn't answered 200 or 201 is the answer.
+ * One request with a fresh token, asked again while the store answers 503 `jwks-unavailable`.
+ * @param {Store} store @param {Parameters<typeof storeRequest>[1]} req @param {TokenIo} io
+ */
+const ask = (store, req, io) => retryUnavailable(() => storeRequest(store, req, io), io.sleep ? { sleep: io.sleep } : {});
+
+/**
+ * The default `post(rows)`: `POST /v1/rows` with a fresh token, asked again on the store's 503
+ * `jwks-unavailable` (`ask`). On 404 `not-registered`, the first default-branch run registers,
+ * once, with `POST /v1/registrations`, and sends the rows again (plan 0008 §3.2); a registration
+ * that isn't answered 200 or 201 is the answer.
  * @param {Store} store @param {TokenIo} io
  * @returns {Post}
  */
 export const tokenPost = (store, io) => {
   let registered = false;
   return async (rows) => {
-    let res = await storeRequest(store, { method: 'POST', path: 'v1/rows', body: rows }, io);
+    let res = await ask(store, { method: 'POST', path: 'v1/rows', body: rows }, io);
     if (res.status === 404 && codeOf(res.json) === 'not-registered' && !registered) {
       registered = true;
-      const reg = await storeRequest(store, { method: 'POST', path: 'v1/registrations', body: {} }, io);
+      const reg = await ask(store, { method: 'POST', path: 'v1/registrations', body: {} }, io);
       if (reg.status !== 200 && reg.status !== 201) return reg;
-      res = await storeRequest(store, { method: 'POST', path: 'v1/rows', body: rows }, io);
+      res = await ask(store, { method: 'POST', path: 'v1/rows', body: rows }, io);
     }
     return res;
   };
@@ -323,14 +336,14 @@ export const tokenPost = (store, io) => {
  * @returns {Promise<{ status: string } | { refusal: Refusal } | { failure: string }>}
  */
 export async function ensureRegistered(store, io) {
-  const got = await storeRequest(store, { method: 'GET', path: 'v1/registrations/self' }, io);
+  const got = await ask(store, { method: 'GET', path: 'v1/registrations/self' }, io);
   if (got.status === 200 && typeof got.json?.status === 'string') {
     if (got.json.status === 'erased') return { refusal: /** @type {Refusal} */ (refusalOf(410, { error: 'erased' })) };
     if (got.json.status === 'suspended') return { refusal: /** @type {Refusal} */ (refusalOf(403, { error: 'suspended' })) };
     return { status: String(got.json.status) };
   }
   if (got.status === 404 && codeOf(got.json) === 'not-registered') {
-    const reg = await storeRequest(store, { method: 'POST', path: 'v1/registrations', body: {} }, io);
+    const reg = await ask(store, { method: 'POST', path: 'v1/registrations', body: {} }, io);
     if (reg.status === 200 || reg.status === 201) return { status: 'active' };
     const refusal = refusalOf(reg.status, reg.json, reg.retryAfter);
     return refusal ? { refusal } : { failure: `registering: the store answered ${reg.status}${codeOf(reg.json) ? ` (${codeOf(reg.json)})` : ''}` };
@@ -346,7 +359,7 @@ export async function ensureRegistered(store, io) {
  * @returns {Promise<{ lines: string[], failure?: string, refusal?: Refusal }>}
  */
 export async function eraseSelf(store, io) {
-  const del = await storeRequest(store, { method: 'DELETE', path: 'v1/registrations/self' }, io);
+  const del = await ask(store, { method: 'DELETE', path: 'v1/registrations/self' }, io);
   if (del.status === 404 && codeOf(del.json) === 'not-registered') return { lines: ["Telemetry erasure: this repository is not registered with the store, so there is nothing to erase."] };
   if (del.status !== 200 && del.status !== 202) {
     const refusal = refusalOf(del.status, del.json, del.retryAfter);
@@ -627,6 +640,11 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
         refusal = stop;
         break;
       }
+      // Still refused after the post's retries: every later batch would be too, and none is lost.
+      if (isUnavailable(res)) {
+        failures.push(`rows ${i + 1}-${rows.length}: delayed, not lost: the store answered 503 (jwks-unavailable), as it does to every token while it can't fetch GitHub's signing keys, so the sweep stopped here; this run is red, its watermark stays, and the next sweep sends them again`);
+        break;
+      }
       failures.push(`rows ${i + 1}-${i + batch.length}: the store answered ${res.status}${codeOf(res.json) ? ` (${codeOf(res.json)})` : ''}`);
       continue;
     }
@@ -706,7 +724,7 @@ async function main() {
     }
     // RE-REGISTRATION after an erasure (§3.3): a new key, then the sweep as usual.
     if (register) {
-      const reg = await storeRequest(store, { method: 'POST', path: 'v1/registrations', body: { reregister: true } }, io);
+      const reg = await ask(store, { method: 'POST', path: 'v1/registrations', body: { reregister: true } }, io);
       if (reg.status !== 200 && reg.status !== 201) {
         const r = refusalOf(reg.status, reg.json, reg.retryAfter);
         if (r && r.red) refused(r);

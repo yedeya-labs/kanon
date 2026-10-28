@@ -935,6 +935,52 @@ describe('a refusal stops the sweep, said in the store\'s codes (§3.2, §6, §7
   });
 });
 
+describe('the store\'s 503 jwks-unavailable delays the rows, never loses them (#1440)', () => {
+  const UNAVAILABLE = { status: 503, json: { error: 'jwks-unavailable' } };
+  const waits = () => {
+    const slept: number[] = [];
+    return { slept, sleep: async (ms: number) => { slept.push(ms); } };
+  };
+
+  it('stops the sweep at the first batch it refuses, and says the rows from there on are delayed, sent again by the next sweep', async () => {
+    const s = store(() => UNAVAILABLE);
+    const res = await run(github(Array.from({ length: 30 }, (_, i) => artifact(row(i * MIN)))), s);
+    expect(s.posts.length).toBe(1);
+    expect(res.stored).toBe(0);
+    expect(res.refusal).toBeNull();
+    expect(res.failures).toEqual([expect.stringMatching(/^rows 1-30: delayed, not lost: the store answered 503 \(jwks-unavailable\).*the next sweep sends them again/)]);
+  });
+
+  it('keeps the rows it stored before the refusal, and delays only the rest', async () => {
+    let n = 0;
+    const s = store((rows) => (n++ === 0 ? { status: 200, json: { results: rows.map(() => ({ status: 'stored' })) } } : UNAVAILABLE));
+    const res = await run(github(Array.from({ length: 60 }, (_, i) => artifact(row(i * MIN / 2)))), s);
+    expect(s.posts.length).toBe(2);
+    expect(res.stored).toBe(MAX_ROWS);
+    expect(res.failures).toEqual([expect.stringMatching(new RegExp(`^rows ${MAX_ROWS + 1}-60: delayed, not lost`))]);
+  });
+
+  it('tokenPost asks again after its waits, with a fresh token, before the sweep sees a 503', async () => {
+    let refused = 2;
+    const net = fakeNet((_m, _p, body) => (refused-- > 0 ? UNAVAILABLE : { status: 200, json: { results: (body as unknown[]).map(() => ({ status: 'stored' })) } }));
+    const w = waits();
+    const post = tokenPost(SELF, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: () => {}, sleep: w.sleep });
+    expect((await post([{ a: 1 }])).status).toBe(200);
+    expect(net.calls.filter((c) => c.path === '/v1/rows').map((c) => c.auth)).toEqual([`Bearer ${TOKEN}1`, `Bearer ${TOKEN}2`, `Bearer ${TOKEN}3`]);
+    expect(w.slept).toEqual([6_000, 61_000]);
+  });
+
+  it('the registration\'s read asks again too', async () => {
+    let refused = 1;
+    const net = fakeNet(() => (refused-- > 0 ? UNAVAILABLE : { status: 200, json: { status: 'active' } }));
+    const w = waits();
+    expect(await ensureRegistered(SELF, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: () => {}, sleep: w.sleep })).toEqual({ status: 'active' });
+    expect(w.slept).toEqual([6_000]);
+    const down = fakeNet(() => UNAVAILABLE);
+    expect(await ensureRegistered(SELF, { env: RUNNER_ENV, fetchImpl: down.fetchImpl, mask: () => {}, sleep: waits().sleep })).toEqual({ failure: 'reading the registration: the store answered 503 (jwks-unavailable)' });
+  });
+});
+
 describe('erasure is one dispatch (§7)', () => {
   it('DELETE, then says whether the rows are gone yet', async () => {
     const net = fakeNet(() => ({ status: 202, json: { status: 'erased', erased_at: '2026-10-14T10:00:00Z', rows_erased: false } }));

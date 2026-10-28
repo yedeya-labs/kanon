@@ -9,7 +9,7 @@ import { LANES, SCHEMAS } from '../../infra/telemetry/function/schema.mjs';
 import { report as cliReport } from '../../cli/metrics-report.mjs';
 import {
   COLLECTOR_LANE, FILES, JOB_TIMEOUT_MINUTES, MAX_PAGES, QUERY_TIMEOUT_MS, REPORT_BY_MS, REPORT_FALLBACK_MS, REPORT_MONTHS, STARTED_FILE, STATUSES, VIEW_FIELDS, WINDOW_DAYS,
-  consentOf, deadlineOf, headline, itemOf, merge, overseerStore, read, readPartition, reportStep, rowOf,
+  RefusedError, consentOf, deadlineOf, headline, itemOf, merge, overseerStore, read, readPartition, refusalWords, reportStep, rowOf,
 } from '../../scripts/overseer-telemetry.mjs';
 import { HOSTED_INGEST_URL } from '../../scripts/lib/telemetry-token.mjs';
 import { UNTIL, ago, itemRow, risingRows, runRow } from '../unit/helpers/metrics-rows.js';
@@ -117,11 +117,78 @@ describe('readPartition: one partition, every page, a fresh token per request', 
 
   it('refuses an answer with no list of rows, and names a store it couldn\'t reach without its URL', async () => {
     await expect(readPartition(STORE, { lane: 'review' }, { env: RUNNER_ENV, fetchImpl: tokenNet(() => ({ status: 200, json: { rows: 'x' } })).fetchImpl, mask: quiet })).rejects.toThrow('the store answered no list of rows');
-    await expect(readPartition(STORE, { lane: 'review' }, { env: RUNNER_ENV, fetchImpl: tokenNet(() => ({ status: 503, json: { error: 'jwks-unavailable' } })).fetchImpl, mask: quiet })).rejects.toThrow('the store answered 503 (jwks-unavailable)');
     const down = tokenNet(() => { throw new TypeError('fetch failed'); });
     const e = await readPartition(STORE, { lane: 'review' }, { env: RUNNER_ENV, fetchImpl: down.fetchImpl, mask: quiet }).catch((x: Error) => x);
     expect((e as Error).message).toBe('the store could not be reached (TypeError)');
     expect((e as Error).message).not.toContain('hosted0123');
+  });
+});
+
+describe('readPartition: the store\'s 503 jwks-unavailable is asked again, inside the deadline (#1440)', () => {
+  const STORE = { ok: true as const, url: HOSTED_URL, audience: 'kanon-telemetry', hosted: true };
+  const UNAVAILABLE = { status: 503, json: { error: 'jwks-unavailable' } };
+  /** A clock the waits move, from `NOW`. */
+  const clocked = () => {
+    let at = NOW;
+    const slept: number[] = [];
+    return { slept, clock: () => at, sleep: async (ms: number) => { slept.push(ms); at += ms; } };
+  };
+
+  it('waits and asks the same page again, with a fresh token, and reads on', async () => {
+    let refused = 1;
+    const net = selfStore(() => [viewRow(1, 2), viewRow(2, 3)], { pageSize: 1, refuse: (_lane, call) => (call.query.cursor === 'c1' && refused-- > 0 ? UNAVAILABLE : null) });
+    const t = clocked();
+    const got = await readPartition(STORE, { lane: 'review' }, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: quiet, ...t });
+    expect(got.map((r) => r.total_cost_usd)).toEqual([2, 3]);
+    expect(net.calls.map((c) => c.query.cursor ?? null)).toEqual([null, 'c1', 'c1']);
+    expect(new Set(net.calls.map((c) => c.auth)).size).toBe(3);
+    expect(t.slept).toEqual([6_000]);
+  });
+
+  it('after its retries, refuses the read for every partition, in the store\'s code', async () => {
+    const net = tokenNet(() => UNAVAILABLE);
+    const t = clocked();
+    const e = await readPartition(STORE, { lane: 'review' }, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: quiet, ...t }).catch((x: Error) => x);
+    expect(e).toBeInstanceOf(RefusedError);
+    expect(e).toMatchObject({ status: 503, code: 'jwks-unavailable', message: 'the store answered 503 (jwks-unavailable)' });
+    expect(refusalWords(e as RefusedError)).toMatch(/could not fetch GitHub's signing keys.*the next run reads again/);
+    expect(net.calls).toHaveLength(3);
+    expect(t.slept).toEqual([6_000, 61_000]);
+  });
+
+  it('begins no wait that would outlast the deadline', async () => {
+    const net = tokenNet(() => UNAVAILABLE);
+    const t = clocked();
+    await expect(readPartition(STORE, { lane: 'review' }, { env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: quiet, ...t, deadline: NOW + 30_000 })).rejects.toBeInstanceOf(RefusedError);
+    expect(t.slept).toEqual([6_000]);
+    expect(net.calls).toHaveLength(2);
+  });
+
+  it('the read stops at it, asking no other partition, and writes nothing', async () => {
+    const net = selfStore(() => [], { refuse: () => UNAVAILABLE });
+    const r = await read({ ...io(net, clocked()), now: NOW, workflows: WORKFLOWS });
+    expect(r).toMatchObject({ status: 'failed', files: {} });
+    expect(r.lines).toEqual([expect.stringMatching(/^The telemetry read failed: the store answered 503 \(jwks-unavailable\): .*could not fetch GitHub's signing keys/)]);
+    expect(new Set(net.calls.map((c) => c.query.lane))).toEqual(new Set([LANES[0]]));
+  });
+
+  it('the read rides out a refusal that passes, and reads every partition', async () => {
+    let refused = 2;
+    const net = selfStore(() => [viewRow(1, 2)], { refuse: () => (refused-- > 0 ? UNAVAILABLE : null) });
+    const t = clocked();
+    const r = await read({ ...io(net, t), now: NOW, workflows: WORKFLOWS });
+    expect(r.status).toBe('ran');
+    expect(r.lines[0]).toMatch(new RegExp(`^The telemetry read ran: ${LANES.length} of ${LANES.length} lane partitions read`));
+    expect(t.slept).toEqual([6_000, 61_000]);
+  });
+
+  it('the headline report withholds itself when the work items stay refused, inside its deadline', async () => {
+    const net = selfStore(() => [], { refuse: () => UNAVAILABLE });
+    const t = clocked();
+    const r = await headline({ ...io(net, t), now: NOW, deadline: NOW + REPORT_BY_MS });
+    expect(r.status).toBe('failed');
+    expect(r.lines).toEqual([expect.stringMatching(/^The headline report was not made: the `work` partition could not be read \(the store answered 503 \(jwks-unavailable\): .*\), and a report without it would be wrong\.$/)]);
+    expect(t.clock()).toBeLessThan(NOW + REPORT_BY_MS);
   });
 });
 
@@ -156,10 +223,10 @@ describe('the read', () => {
   });
 
   it('fails, writing nothing, when no partition can be read', async () => {
-    const net = selfStore(() => [], { refuse: () => ({ status: 503, json: { error: 'jwks-unavailable' } }) });
+    const net = selfStore(() => [], { refuse: () => ({ status: 502, json: { error: 'read' } }) });
     const r = await read({ ...io(net), now: NOW, workflows: WORKFLOWS });
     expect(r).toMatchObject({ status: 'failed', files: {} });
-    expect(r.lines[0]).toMatch(/none of the \d+ lane partitions could be read \(the store answered 503 \(jwks-unavailable\)\)/);
+    expect(r.lines[0]).toMatch(/none of the \d+ lane partitions could be read \(the store answered 502 \(read\)\)/);
   });
 
   it('stops at the first refusal, which holds for the whole registration, and says it in the store\'s code', async () => {
