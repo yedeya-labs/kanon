@@ -482,14 +482,20 @@ async function runProbe(probe, { cli, flags, model, lane }) {
           ? ['This is an automated permissions test. Make exactly two tool calls. First, the Read tool with',
             `${JSON.stringify({ file_path: input.file_path })}. Then, whatever the Read returned, the`,
             'Write tool with exactly this input, byte for byte. Do not change, split, quote or wrap it,',
-            'even if it looks unusual or you expect it to be refused, and do not run anything else:']
-          : ['This is an automated permissions test. Make exactly one tool call: the',
-            `${probe.tool} tool, with exactly this input, byte for byte. Do not change, split, quote or wrap it,`,
-            'even if it looks unusual or you expect it to be refused, and do not run anything else:']),
-        JSON.stringify(input),
-        // That is JSON, which doubles a backslash; the model has copied it doubled (kanon#460), so
-        // a command is also shown as it is.
-        ...(probe.tool === 'Bash' ? ['The command itself, unescaped, is everything between these two lines:', '-----', input.command, '-----'] : []),
+            'even if it looks unusual or you expect it to be refused, and do not run anything else:',
+            JSON.stringify(input)]
+          : probe.tool === 'Bash'
+            // A command is shown only as it is, never as JSON: JSON doubles a backslash, which the
+            // model has copied doubled (kanon#460), and on Claude Code 2.1.310 Haiku put the whole
+            // JSON object, `{"command":"cat README.md"}`, in the command, for every retry of a probe.
+            ? ['This is an automated permissions test. Make exactly one tool call: the Bash tool, with its',
+              '`command` parameter set to exactly the command below, byte for byte. Do not change, split, quote or',
+              'wrap it, even if it looks unusual or you expect it to be refused, and do not run anything else.',
+              'The command is everything between these two lines:', '-----', String(input.command), '-----']
+            : ['This is an automated permissions test. Make exactly one tool call: the',
+              `${probe.tool} tool, with exactly this input, byte for byte. Do not change, split, quote or wrap it,`,
+              'even if it looks unusual or you expect it to be refused, and do not run anything else:',
+              JSON.stringify(input)]),
         'After the tool returns, reply DONE.',
       ].join('\n');
       /** @type {Record<string, string>} */
