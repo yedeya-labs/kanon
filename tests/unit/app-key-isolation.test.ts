@@ -174,7 +174,10 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
     // entry's pull request after its push (#1379). Each holds the key, so each runs only Kanon's
     // Node, never a checkout of the pull request or the agent (the check above, `lane-push.test.ts`
     // and `implementer-status.test.ts`).
-    const after = runFile === 'agent-lane.yml' ? ['push'] : runFile === 'rebase-run.yml' ? ['push', 'implementer-status'] : [];
+    // The split lane's push job replaces its branch (kanon#1385), and a job after it, holding no
+    // key, asks whether the split's pull request opened.
+    const after = runFile === 'agent-lane.yml' ? ['push'] : runFile === 'rebase-run.yml' ? ['push', 'implementer-status']
+      : runFile === 'lead-split-run.yml' ? ['push', 'check'] : [];
     expect(Object.keys(run.jobs ?? {}).sort()).toEqual([call.name, 'mint', ...after].sort());
     if (runFile === 'rebase-run.yml') {
       for (const name of after) {
@@ -183,6 +186,13 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
       }
       expect(run.jobs!.push!.needs, `${runFile}:push runs after the agent's job`).toEqual([call.name]);
       expect(run.jobs!['implementer-status']!.needs, `${runFile}:implementer-status runs after the push`).toEqual(['push']);
+    }
+    if (runFile === 'lead-split-run.yml') {
+      expect(runsOthersCode(run.jobs!.push!), `${runFile}:push`).toBeUndefined();
+      expect(holdsKey(run.jobs!.push!), `${runFile}:push`).toBe(true);
+      expect(run.jobs!.push!.needs, `${runFile}:push runs after the agent's job`).toEqual([call.name]);
+      expect(runsOthersCode(run.jobs!.check!), `${runFile}:check`).toBeUndefined();
+      expect(holdsKey(run.jobs!.check!), `${runFile}:check`).toBe(false);
     }
     expect(Object.keys(run.on?.workflow_call?.secrets ?? {})).toEqual(expect.arrayContaining(['app-id', 'app-private-key', 'claude-token', 'anthropic-api-key']));
   });
@@ -193,10 +203,20 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
     // The spine's mint also proves the push job's token can be minted, before the agent's (the
     // push probe, kanon#1383), and lists the branches that exist before the agent runs: each
     // only when its switch is on, and none running anything but GitHub's API.
-    const core = spine ? mint.steps!.filter((s) => s.id === 'app-token' || s.id === 'seal') : mint.steps!;
+    // The split lane's mint proves the push job's token too, on every run (kanon#1385).
+    const split = runFile === 'lead-split-run.yml';
+    const core = spine || split ? mint.steps!.filter((s) => s.id === 'app-token' || s.id === 'seal') : mint.steps!;
     if (spine) {
       expect(mint.steps!.map((s) => s.id ?? s.name)).toEqual(['push-probe', "Revoke the push probe's token", 'Say why the push probe failed', 'app-token', 'seal', 'branches']);
       for (const s of mint.steps!.filter((x) => !core.includes(x))) expect(s.if, s.name).toMatch(/inputs\.push|steps\.push-probe\./);
+    }
+    if (split) {
+      expect(mint.steps!.map((s) => s.id ?? s.name)).toEqual(['push-probe', "Revoke the push probe's token", 'Say why the push probe failed', 'app-token', 'seal']);
+      for (const s of mint.steps!.filter((x) => !core.includes(x) && x.id !== 'push-probe')) expect(s.if, s.name).toMatch(/steps\.push-probe\./);
+      const spineMint = docs['agent-lane.yml']!.jobs!.mint!.steps!;
+      const revoke = (steps: typeof spineMint) => steps.find((s) => s.name === "Revoke the push probe's token")!;
+      expect(revoke(mint.steps!).run).toBe(revoke(spineMint).run);
+      expect(revoke(mint.steps!).if).toBe(revoke(spineMint).if);
     }
     expect(core.map((s) => s.uses ?? s.id)).toEqual(['actions/create-github-app-token@v3', 'seal']);
     expect(core[0]!.with).toMatchObject({ 'client-id': '${{ secrets.app-id }}', 'private-key': '${{ secrets.app-private-key }}', 'skip-token-revoke': 'true' });

@@ -83,6 +83,31 @@ export function fakeGitHub({ remote, repo, appLogin, authors = {}, defaultBranch
     if (method === 'GET' && (m = /^pulls\/(\d+)$/.exec(p))) {
       return pulls[m[1] ?? ''] ? answer(200, pulls[m[1] ?? '']) : answer(404, { message: 'Not Found' });
     }
+    // The pull requests listed by `head=<owner>:<branch>` and `state`, which the query carries.
+    if (method === 'GET' && p === 'pulls') {
+      const q = new URL(path, 'http://fake.invalid/').searchParams;
+      const state = q.get('state') ?? 'open';
+      return answer(200, Object.entries(pulls).map(([n, pr]) => ({ number: Number(n), state: 'open', ...pr }))
+        .filter((pr) => (!q.has('head') || `${String(pr.head?.repo?.full_name ?? '').split('/')[0]}:${pr.head?.ref}` === q.get('head'))
+          && (state === 'all' || pr.state === state)));
+    }
+    // Two commits compared as GitHub's `compare/<base>...<head>` answers: `ahead` when `head` has
+    // commits `base` lacks and lacks none of `base`'s, `identical`, `behind` or `diverged`.
+    if (method === 'GET' && (m = /^compare\/(.+?)\.\.\.(.+)$/.exec(p))) {
+      const at = (/** @type {string} */ rev) => (/^[0-9a-f]{40}$/.test(rev) && has(rev, 'commit') ? rev : refOf(rev));
+      const [from, to] = [at(m[1] ?? ''), at(m[2] ?? '')];
+      if (!from || !to) return answer(404, { message: 'Not Found' });
+      const ancestor = (/** @type {string} */ a, /** @type {string} */ b) => {
+        try {
+          git(['merge-base', '--is-ancestor', a, b]);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const status = from === to ? 'identical' : ancestor(from, to) ? 'ahead' : ancestor(to, from) ? 'behind' : 'diverged';
+      return answer(200, { status });
+    }
     if (method === 'GET' && (m = /^git\/commits\/(\w+)$/.exec(p))) {
       return has(m[1] ?? '', 'commit') ? answer(200, { sha: m[1], tree: { sha: git(['rev-parse', `${m[1]}^{tree}`]) } }) : answer(404, { message: 'Not Found' });
     }

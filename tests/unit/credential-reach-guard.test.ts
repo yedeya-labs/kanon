@@ -54,6 +54,10 @@ describe("this tree's credential-holding runs", () => {
       'metrics-page.yml:page scripts/metrics/indicators.mjs',
       'metrics-page.yml:page scripts/metrics/health.mjs',
       'metrics-page.yml:page actions/agent-setup/agent-commits.sh',
+      // kanon#1385: the page's commit is created by the verified-commit helper, run from `main`.
+      'metrics-page.yml:page scripts/lib/verified-commits.mjs',
+      'metrics-page.yml:page scripts/lib/branch-path.mjs',
+      'metrics-page.yml:page scripts/lib/cli-entry.mjs',
       'agent-lanes-smoke.yml:code-audit actions/qa-store/qa-store.mjs',
       'promote.yml:promote scripts/promote.mjs',
       'promote.yml:promote scripts/metrics/detectors.mjs',

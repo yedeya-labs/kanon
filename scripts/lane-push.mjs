@@ -18,6 +18,13 @@
 //   conflict (`[LANE-17]`): one merge commit, whose first parent is `--start` and whose second is
 //   `--merged`, the default branch's head as the agent's job fetched it, before its agent ran. A
 //   commit after the merge, such as a fix for a test the merged tree broke, has one parent.
+// - On a lane that opens one branch of its own name (`--replace`, the Lead's split lane, kanon#1385),
+//   that branch alone, in the helper's replace mode (`[LANE-18]`): it may be a dead branch an
+//   earlier run left, whose pull request closed unmerged, so it is the one branch that may have
+//   existed before the run, and the only one the lane may name. It is built over the first commit
+//   GitHub has on its first-parent path, which the helper takes only while GitHub compares it as on
+//   the default branch. It is never replaced while it heads an open pull request. A request must
+//   ask for that branch, into the default branch; with none, the branch is still replaced.
 // - Otherwise, with a request, the request's branch alone (`[LANE-15]`); with none, as a failed
 //   agent leaves, each branch the bundle carries, so a crashed run's work survives as it did when
 //   the agent pushed mid-run. Each is built on the first commit GitHub has on its first-parent path,
@@ -32,7 +39,9 @@
 // request that breaks a rule is refused whole: nothing of it is pushed or opened.
 //
 // Usage: node scripts/lane-push.mjs --bundle <file> [--request <file>] --start <sha> [--ref <branch>
-//          [--pr <n>] [--merged <sha>]] --before <JSON array> --labels "<names>" --app-login <slug>[bot]
+//          [--pr <n>] [--merged <sha>] | --replace <branch>] --before <JSON array> --labels "<names>"
+//          --app-login <slug>[bot]
+// `--before` is not read with `--replace`, which names the one branch that may move.
 // Reads `GH_TOKEN`, `REPO`, `GITHUB_SERVER_URL` and `GITHUB_API_URL`. Writes `heads=<JSON [{ref, sha}]
 // of the branches it moved>`, `base=<the head it built on>` and `pr=<the pull request it opened>` to
 // `$GITHUB_OUTPUT`, and what it did to the step summary. A refusal fails the step, after the outputs.
@@ -171,17 +180,31 @@ export async function pullHeadProblem({ api, repo, pr, ref }) {
 }
 
 /**
+ * The open pull request whose head is `branch` in `repo`, by number, or `null`; read with the push
+ * job's own token, before replace mode forces the branch (kanon#1385).
+ *
+ * @param {{api: Api, repo: string, branch: string}} opts
+ */
+export async function openPullOn({ api, repo, branch }) {
+  const owner = repo.split('/')[0] ?? '';
+  const r = await api('GET', `repos/${repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open`);
+  if (r.status !== 200 || !Array.isArray(r.json)) throw new Error(`listing the open pull requests on ${branch}: GitHub answered ${r.status}`);
+  return r.json.length ? Number(r.json[0]?.number) : null;
+}
+
+/**
  * Move the branches the rules allow, through the helper, and open the request's pull request.
  *
- * @param {{gitDir: string, prereqs: string[], start: string, ref?: string, merged?: string, pr?: number,
+ * @param {{gitDir: string, prereqs: string[], start: string, ref?: string, merged?: string, pr?: number, replace?: string,
  *          request: {request: PullRequest} | {problem: string} | null, before: string[] | null,
  *          labels: string[], appLogin: string, repo: string, api: Api,
  *          push?: typeof pushVerified, sleep?: (ms: number) => Promise<void>, log?: (line: string) => void}} opts
  */
 export async function pushLane({
-  gitDir, prereqs, start, ref = '', merged = '', pr: pullNumber, request, before, labels, appLogin, repo, api, push = pushVerified, sleep, log = () => {},
+  gitDir, prereqs, start, ref = '', merged = '', pr: pullNumber, replace = '', request, before, labels, appLogin, repo, api, push = pushVerified, sleep, log = () => {},
 }) {
   if (!ref && (merged || pullNumber !== undefined)) throw new Error('--merged and --pr name the branch a lane revises, and come only with --ref');
+  if (replace && ref) throw new Error('--replace names the one branch a lane opens, and --ref the one it revises: a lane gives one');
   const gitText = (/** @type {string[]} */ a) => execFileSync('git', ['--git-dir', gitDir, ...a], { maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }).toString('utf8').trim();
   const lines = /** @type {string[]} */ ([]);
   /** @type {Refusal[]} */
@@ -221,13 +244,21 @@ export async function pushLane({
     pull = request.request;
     wanted = [pull.branch];
     const outside = pull.labels.filter((l) => !labels.includes(l));
-    if (outside.length) {
+    // In replace mode the request is for the lane's branch, into the default branch, or for nothing.
+    const other = !replace ? ''
+      : pull.branch !== replace ? `its branch is not \`${replace}\`, the one this lane replaces`
+        : pull.base && pull.base !== def ? `its base is \`${pull.base}\`, not the default branch, ${def}, which the branch is built over` : '';
+    if (other) {
+      refused.push({ branch: pull.branch, why: `the request is refused: ${other}` });
+      wanted = [];
+      pull = null;
+    } else if (outside.length) {
       refused.push({ branch: pull.branch, why: `the request asks for ${outside.map((l) => `\`${l}\``).join(', ')}, which this lane doesn't apply (its labels: ${labels.map((l) => `\`${l}\``).join(', ') || 'none'})` });
       wanted = [];
       pull = null;
     }
   } else {
-    wanted = carried;
+    wanted = replace ? [replace] : carried;
   }
   const left = carried.filter((b) => !wanted.includes(b));
 
@@ -235,8 +266,10 @@ export async function pushLane({
   const ruleOut = (/** @type {string} */ branch) => {
     if (!SAFE_BRANCH.test(branch)) return 'its name has a character outside letters, digits, `.`, `_`, `-` and `/`, which an API path could read as another branch';
     if (branch === def) return 'it is the default branch';
-    if (branch !== ref && existed === null) return 'the branches that existed before the run are unknown, so it can\'t be told new';
-    if (branch !== ref && existed?.has(branch)) return 'it existed before the run';
+    // The lane's own branch, which it revises or replaces, is the one that may have existed before.
+    const own = branch === ref || branch === replace;
+    if (!own && existed === null) return 'the branches that existed before the run are unknown, so it can\'t be told new';
+    if (!own && existed?.has(branch)) return 'it existed before the run';
     if (!carried.includes(branch)) return 'the agent\'s job left no commit on it that GitHub lacks';
     return '';
   };
@@ -282,7 +315,13 @@ export async function pushLane({
       continue;
     }
     try {
-      const r = await push({ gitDir, tip, branch, head, appLogin, repo, request: api, log, ...(sleep ? { sleep } : {}) });
+      // Replace mode forces the branch, so never while a pull request is open on it.
+      const open = replace ? await openPullOn({ api, repo, branch }) : null;
+      if (open !== null) {
+        refused.push({ branch, why: `it heads the open pull request #${open}, which replacing it would rewrite` });
+        continue;
+      }
+      const r = await push({ gitDir, tip, branch, head, ...(replace ? { replace: true } : {}), appLogin, repo, request: api, log, ...(sleep ? { sleep } : {}) });
       heads.push({ ref: branch, sha: r.head });
       if (!base || branch === pull?.branch) base = r.base;
       lines.push(...summary(r, branch), '');
@@ -343,7 +382,7 @@ if (isCliEntry(import.meta.url)) {
       before = Array.isArray(b) && b.every((x) => typeof x === 'string') ? b : null;
     } catch { /* unknown: a new branch can't be told from an old one, and none moves */ }
     const r = await pushLane({
-      gitDir: store, prereqs, start, ref: arg('--ref'), merged, ...(prText ? { pr: Number(prText) } : {}), request, before, labels: arg('--labels').split(/\s+/).filter(Boolean),
+      gitDir: store, prereqs, start, ref: arg('--ref'), merged, ...(prText ? { pr: Number(prText) } : {}), replace: arg('--replace'), request, before, labels: arg('--labels').split(/\s+/).filter(Boolean),
       appLogin: arg('--app-login'), repo, api: githubRequest({ token, api: process.env.GITHUB_API_URL || undefined }), log: (line) => console.log(line),
     });
     report(r);

@@ -57,7 +57,7 @@ const fixture = (opts: Omit<Parameters<typeof fakeGitHub>[0], 'remote' | 'repo' 
   const slept: number[] = [];
   const at: number[] = [];
   const push = (o: { branch?: string; head?: string; replace?: boolean; tip?: string; appLogin?: string } = {}) => pushVerified({
-    gitDir: join(work, '.git'), tip: o.tip ?? 'HEAD', branch: o.branch ?? 'feature', ...(o.replace ? { replace: true } : { head: o.head ?? base }),
+    gitDir: join(work, '.git'), tip: o.tip ?? 'HEAD', branch: o.branch ?? 'feature', ...(o.replace ? { replace: true, ...(o.head ? { head: o.head } : {}) } : { head: o.head ?? base }),
     appLogin: o.appLogin ?? APP, repo: REPO,
     request: (method: string, path: string, body?: unknown) => { at.push(t); return gh.request(method, path, body); },
     sleep: async (ms: number) => { slept.push(ms); t += ms; }, now: () => t,
@@ -284,6 +284,35 @@ describe('the verified-commit helper (kanon#1382)', () => {
       expect(r).toMatchObject({ base: f.base, move: 'forced' });
       expect(refMoves(f.calls)).toEqual([{ method: 'PATCH', path: `repos/${REPO}/git/refs/heads/split`, body: { sha: r.head, force: true } }]);
       expect(f.onRemote('rev-parse', 'split^')).toBe(f.base);
+    });
+
+    // kanon#1385, the Owner's answer to its plan: a run lasts long enough for the default branch to
+    // move under it, so replace mode builds over the commit the run checked out, when it is given one
+    // GitHub still has on the default branch.
+    it('[LANE-10] replace mode with a head builds over that commit while it is on the default branch, though the default branch moved', async () => {
+      const f = fixture();
+      f.commit('dead', () => f.w('a.txt', 'dead\n'));
+      f.sh(f.work, 'push', '-q', 'origin', 'HEAD:refs/heads/split');
+      f.sh(f.work, 'reset', '-q', '--hard', f.base);
+      f.commit('fresh', () => f.w('a.txt', 'fresh\n'));
+      const tip = f.sh(f.work, 'rev-parse', 'HEAD');
+      // The default branch moves on after the run checked out.
+      f.sh(f.work, 'commit', '-q', '--allow-empty', '-m', 'main moves on');
+      f.sh(f.work, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
+      const r = await f.push({ branch: 'split', replace: true, head: f.base, tip });
+      expect(r).toMatchObject({ base: f.base, move: 'forced' });
+      expect(f.calls.filter((c) => c.path.startsWith(`repos/${REPO}/compare/`)).map((c) => c.path)).toEqual([`repos/${REPO}/compare/${f.base}...main`]);
+      expect(refMoves(f.calls)).toEqual([{ method: 'PATCH', path: `repos/${REPO}/git/refs/heads/split`, body: { sha: r.head, force: true } }]);
+      expect(f.onRemote('rev-parse', 'split^')).toBe(f.base);
+    });
+
+    it('[LANE-10] replace mode refuses a head that is not on the default branch, before it creates anything', async () => {
+      const f = fixture();
+      const elsewhere = f.commit('on another branch', () => f.w('a.txt', 'elsewhere\n'));
+      f.sh(f.work, 'push', '-q', 'origin', 'HEAD:refs/heads/other');
+      f.commit('fresh', () => f.w('a.txt', 'fresh\n'));
+      await expect(f.push({ branch: 'split', replace: true, head: elsewhere })).rejects.toThrow(/is not on main \(GitHub compares it as behind\)/);
+      expect(f.writes()).toEqual([]);
     });
 
     it('[LANE-10] never replaces the default branch', async () => {

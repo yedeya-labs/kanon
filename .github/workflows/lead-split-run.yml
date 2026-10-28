@@ -1,13 +1,20 @@
-# Lead split — mint, then the agent's job
+# Lead split — mint, the agent's job, then the push
 #
-# CALLED ONLY BY `agent-lead-split.yml`, whose `split` job calls it. Two jobs, for `K-AGENT-49` (kanon#279):
+# CALLED ONLY BY `agent-lead-split.yml`, whose `split` job calls it. Four jobs, for `K-AGENT-49` (kanon#279):
 #   • `mint` holds the App's private key and runs nothing else: no checkout, no project code, no
-#     agent. It mints the lane's narrowed token with `skip-token-revoke` and hands it on
-#     hex-encoded, because GitHub drops a job output that holds a masked value.
+#     agent. It proves the App can mint the push job's token, then mints the lane's narrowed
+#     token with `skip-token-revoke` and hands it on hex-encoded, because GitHub drops a job
+#     output that holds a masked value.
 #   • `split` is `lead-split-agent-job.yml`, the lane's agent job, handed the token and never the key.
 #     A called workflow, because its `secrets:` is the one channel that arrives masked; it
-#     masks the token as it decodes it and revokes it as its last step.
-# Both jobs sit inside the lane's `split` job, under its `if`, permissions and any group or
+#     masks the token as it decodes it and revokes it as its last step. The token can't write
+#     code or open a pull request (`[LANE-13]`, kanon#1385): the agent commits the split on its
+#     runner, and the job hands the commit on as an artifact with the pull request it asks for.
+#   • `push` holds the key too, after the agent's job, and runs only Kanon's Node: it replaces the
+#     split branch with the agent's commit, re-created through GitHub with the verified-commit
+#     helper, and opens the pull request (`[LANE-14]`, `[LANE-18]`).
+#   • `check` holds no key, after the push: it asks whether the split's pull request opened.
+# All four sit inside the lane's `split` job, under its `if`, permissions and any group or
 # matrix it carries, so the mint waits with the agent and never mints for a run that is
 # skipped or queued. The spine has the same shape (`agent-lane.yml`), and
 # `tests/unit/app-key-isolation.test.ts` holds this file to it. The lane's header says what the
@@ -58,6 +65,34 @@ jobs:
       # The attempt this token was minted for. A partial re-run reuses this job's outputs.
       attempt: ${{ github.run_attempt }}
     steps:
+      # THE PUSH PROBE, BEFORE THE AGENT'S TOKEN (kanon#1385), as the spine's mint job has it, which
+      # says why: it mints the push job's set once and revokes it at once, so a missing grant fails
+      # here, and the agent's job then fails at `Receive the App token` before any turn is paid for.
+      - name: Prove the push job can mint its token
+        id: push-probe
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          skip-token-revoke: "true"
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Revoke the push probe's token
+        if: always() && steps.push-probe.outputs.token != ''
+        env:
+          TOKEN: ${{ steps.push-probe.outputs.token }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            "$API_URL/installation/token" || true)"
+          if [ "$STATUS" = "204" ]; then echo "push capability confirmed, and the probe's token revoked"; else echo "::warning title=agent-lane::the push probe's token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi
+      - name: Say why the push probe failed
+        if: failure() && steps.push-probe.outcome == 'failure'
+        run: |
+          echo "::error title=agent-lead-split::the App cannot mint the push job's token, so the lead split agent's commit could never reach GitHub. It needs Contents: Read & write and Pull requests: Read & write on the App, AND the installation re-authorized to accept them — a permission change does not take effect until it is accepted. Kanon's apps-check workflow compares the installation's permissions with the App's (Kanon's docs/apps.md, \"Checking the installations later\")."
+          exit 1
+
       - name: Mint lead App token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -66,10 +101,10 @@ jobs:
           private-key: ${{ secrets.app-private-key }}
           # The agent's job revokes it when it ends. The default would revoke it as THIS job ends.
           skip-token-revoke: "true"
-          # Narrowed to what this step uses (#48, `K-AGENT-46`): it pushes the split branch, opens its pull request and comments on the issue; it reads no runs, so no `actions`.
-          permission-contents: write
+          # Narrowed to what this step uses (#48, `K-AGENT-46`): it reads the tree and fetches, reads pull requests, and comments on and labels the issue; it reads no runs, so no `actions`. No `contents: write` and no `pull_requests: write` (`[LANE-13]`, kanon#1385): the push job pushes the split and opens its pull request.
+          permission-contents: read
           permission-issues: write
-          permission-pull-requests: write
+          permission-pull-requests: read
       - name: Seal the token for the agent's job
         id: seal
         env:
@@ -92,3 +127,91 @@ jobs:
       app-token: ${{ needs.mint.outputs.sealed }}
       claude-token: ${{ secrets.claude-token }}
       anthropic-api-key: ${{ secrets.anthropic-api-key }}
+
+  # THE PUSH JOB (kanon#1385, `[LANE-14]`, `[LANE-18]`). The agent committed the split on its runner,
+  # and its job handed the commit on as an artifact, with the pull request it asks for. This job
+  # holds the key and mints its own token, narrowed to the push, as the spine's push job does, so the
+  # mint-and-agent pair above stays two jobs (`K-AGENT-49`). It runs no agent and no project code,
+  # and checks nothing out: Kanon's scripts at the release the lane pinned, and `git` on a bare store.
+  #
+  # IT MOVES ONE BRANCH, THE LANE'S: `split-lineage.mjs branch` names it from the issue this run was
+  # started for, never from anything the agent's job wrote. A branch of that name may be a dead
+  # split's, whose pull request closed unmerged, so it moves in the helper's replace mode, over the
+  # commit the agent's job checked out while GitHub has it on the default branch. It is never
+  # replaced while a pull request is open on it. `scripts/lane-push.mjs --replace` says what else it
+  # refuses: a request for another branch or base, a label the lane doesn't apply.
+  #
+  # AFTER THE AGENT'S JOB, WHATEVER IT DID, whenever it left commits: with no request, as a crashed
+  # agent leaves, the branch is still replaced and no pull request opens, and the next run replaces
+  # it again. `!cancelled()` because a failed `split` would otherwise skip it. A refusal fails this
+  # job, so the lane's run is red, and the step summary names the commit, the branch or the refusal.
+  push:
+    needs: [split]
+    if: ${{ !cancelled() && needs.split.outputs.commits == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: $/actions/kanon-path
+      # Narrowed to what this job uses (`K-AGENT-46`): the commit and the branch (`contents`), and
+      # the pull request and its label (`pull_requests`). The split writes only `docs/projects/`,
+      # so no `workflows`. Revoked by the action's own post step.
+      - name: Mint the push token
+        id: push-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/download-artifact@v8
+        with:
+          name: kanon-push-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kanon-push
+      - name: Push the split, and open its pull request
+        id: push
+        env:
+          GH_TOKEN: ${{ steps.push-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          APP_LOGIN: ${{ steps.push-token.outputs.app-slug }}[bot]
+          START: ${{ needs.split.outputs.start }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+        run: |
+          set -euo pipefail
+          in="$RUNNER_TEMP/kanon-push"
+          branch="$(node "$KANON/scripts/split-lineage.mjs" branch)"
+          node "$KANON/scripts/lane-push.mjs" --bundle "$in/commits.bundle" --request "$in/request.json" \
+            --start "$START" --replace "$branch" --labels review:please --app-login "$APP_LOGIN"
+
+  # NO SILENT ABSENCE. A green run with no split PR would read exactly like success, while the
+  # issue sits labelled with nothing replacing it. After the push, which opens the pull request
+  # (kanon#1385), whether or not it ran, and only when the gate split. On the default token, with
+  # no key: it reads pull requests and the issue, and runs only Kanon's Node.
+  check:
+    needs: [split, push]
+    if: ${{ !cancelled() && needs.split.outputs.act == 'split' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Did a split PR open?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+        run: |
+          set -euo pipefail
+          BRANCH="$(node "$KANON/scripts/split-lineage.mjs" branch)"
+          n=$(gh pr list --repo "$REPO" --state open --head "$BRANCH" --json number --jq 'length')
+          pr=$(gh pr list --repo "$REPO" --state open --head "$BRANCH" --json number --jq '.[0].number // empty')
+          # Every child the PR adds must carry its lineage marker (the Reviewer, RA-2407).
+          if [ -n "$pr" ]; then PR="$pr" node "$KANON/scripts/split-lineage.mjs" check-pr || true; fi
+          # Re-read the label: an agent that could not find the item moves the issue to
+          # qa:needs-info on purpose, and that is a hand-off, not a silent failure.
+          still=$(gh issue view "$ISSUE" --repo "$REPO" --json labels --jq '[.labels[].name] | index("qa:needs-split") != null')
+          if [ "$n" != "0" ]; then
+            echo "split PR open on $BRANCH"
+          elif [ "$still" = "true" ]; then
+            echo "::warning title=agent-lead-split::#$ISSUE: the split run finished with no open PR on $BRANCH — the issue still carries qa:needs-split with nothing replacing it. Read the agent's comment on the issue."
+          else
+            echo "no PR, and the issue left qa:needs-split — the agent handed it on (read its comment)"
+          fi

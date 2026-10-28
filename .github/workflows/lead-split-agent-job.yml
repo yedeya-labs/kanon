@@ -1,6 +1,7 @@
 # Lead split — the agent's job
 #
 # The agent's job of `agent-lead-split.yml`, moved here unchanged apart from its token (kanon#279).
+# Since kanon#1385 its agent no longer pushes or opens the pull request (below).
 #
 # CALLED ONLY BY `lead-split-run.yml`, beside the job that mints this lane's token. The App's private
 # key never enters this job (`K-AGENT-49`): the token arrives hex-encoded as the `app-token`
@@ -10,8 +11,11 @@
 # the lane's inputs arrives as inputs of the same name. The lane's header says what the job
 # does, and `tests/unit/app-key-isolation.test.ts` holds its token steps to the spine's.
 #
-# WHAT THE AGENT CAN STILL REACH HERE: the token it was always given, for at most the hour it
-# lives, and the Claude token. Rewriting a cached action in this job reaches only those.
+# WHAT THE AGENT CAN STILL REACH HERE: its token, for at most the hour it lives, and the Claude
+# token. Rewriting a cached action in this job reaches only those. The token can't write code or
+# open a pull request (`[LANE-13]`, kanon#1385): the agent commits the split on its runner and asks
+# for its pull request in a request file, and this job hands both to `lead-split-run.yml`'s push
+# job, with the spine's own steps, as a git bundle. The push job treats both as untrusted.
 name: Lead split — the agent's job
 
 on:
@@ -53,6 +57,22 @@ on:
         required: false
       anthropic-api-key:
         required: false
+    outputs:
+      # THE GATE'S VERDICT, set before the agent ran: `split` when this run split, which is when
+      # the run's last job asks whether its pull request opened.
+      act:
+        description: The gate's `act`, or empty.
+        value: ${{ jobs.split.outputs.act }}
+      # THE COMMIT THIS JOB CHECKED OUT, BEFORE THE AGENT RAN, as the spine's agent job hands it on:
+      # the push job builds the split over it while GitHub has it on the default branch.
+      start:
+        description: The commit `actions/checkout` checked out (its `commit` output), or empty.
+        value: ${{ jobs.split.outputs.start }}
+      # WHETHER THIS JOB HANDED COMMITS ON (kanon#1385): `true` when the agent left commits GitHub
+      # lacks and their bundle was uploaded, which is when the push job runs.
+      commits:
+        description: "`true` when the agent's commits were handed to the push job."
+        value: ${{ jobs.split.outputs.commits }}
 
 jobs:
   split:
@@ -60,6 +80,11 @@ jobs:
     # Bounds a hang (RA-1336). A split reads one brief and one issue and edits one file;
     # the brief lane's 100 minutes is the ceiling of the same agent doing more.
     timeout-minutes: 60
+    outputs:
+      act: ${{ steps.gate.outputs.act }}
+      # The checkout's own output, set before any step of the agent's could write one.
+      start: ${{ steps.checkout.outputs.commit }}
+      commits: ${{ steps.upload.outcome == 'success' }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
       # it is as close to the job's start as a step can be.
@@ -116,8 +141,8 @@ jobs:
             echo "app-slug=$APP_SLUG"
           } >> "$GITHUB_OUTPUT"
 
-      # Re-checkout on the App token, so the push authenticates as the Lead — the default
-      # token's pushes raise no events, and the PR must reach the Reviewer.
+      # Re-checkout on the App token, with every branch, so the agent's `git fetch` reads as the
+      # Lead. The token reads code and can't push it (`[LANE-13]`): the push job does, as the App.
       - uses: actions/checkout@v7
         id: checkout
         if: steps.gate.outputs.act == 'split'
@@ -160,9 +185,9 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
 
       # A missing grant must be a red run with a readable message, never a 403 discovered
-      # after the reasoning has been paid for — `push-probe` is the brief lane's probe,
-      # moved into the spine by RA-2609 and into this block by RA-2666. It still follows the App-token checkout, whose
-      # persisted credential it pushes with, and precedes the agent.
+      # after the reasoning has been paid for. Since kanon#1385 the push job pushes, so
+      # `lead-split-run.yml`'s mint job proves the App can mint that job's token, before this
+      # job's token exists; a `git push --dry-run` here, on a token that can't push, would fail.
       - uses: $/actions/agent-setup
         id: setup
         if: steps.gate.outputs.act == 'split'
@@ -171,7 +196,18 @@ jobs:
           app-slug: ${{ steps.app-token.outputs.app-slug }}
           # The role, since the Author and the Judge each hold several (plan 0005 §3.3).
           role: Lead
-          push-probe: "true"
+
+      # THE PULL REQUEST'S REQUEST STAYS OUT OF EVERY COMMIT (kanon#1385, `[LANE-15]`), as the
+      # spine's agent job keeps it, which says why: excluded before the agent runs, carried beside
+      # the commits by the handoff below, and refused by the push job in any commit.
+      - name: Keep the pull request's request out of the agent's commits
+        id: exclude-request
+        if: steps.gate.outputs.act == 'split'
+        run: |
+          set -euo pipefail
+          exclude="$(git rev-parse --git-path info/exclude)"
+          mkdir -p "$(dirname "$exclude")"
+          echo '/docs/.kanon-pull-request.json' >> "$exclude"
 
       # CREATE-BEFORE-APPLY (plan 0005 §5.3, `K-WORK-12`): each label this lane's agent may
       # apply and the repository lacks is created first, with the taxonomy's colour and
@@ -254,28 +290,41 @@ jobs:
                is excluded, and the gate never sends you one); a wider edit is a new
                brief, not a split.
 
-            5. VERIFY before you push, and fix until both are clean:
+            5. VERIFY before you commit, and fix until both are clean:
                - `node "$KANON/scripts/brief-guard.mjs"`
                - `node -e "import(process.env.KANON + '/scripts/lead-reconcile.mjs').then(({parseProposed})=>{const p=parseProposed(require('fs').readFileSync('docs/projects/${{ steps.gate.outputs.project }}.md','utf8'));console.log(JSON.stringify({items:p.map(i=>i.key+' '+i.title),residue:p.residue?.length??0,dropped:p.flatMap(i=>[...(i.droppedCloses??[]),...(i.droppedLabels??[]),...(i.droppedDeps??[]),...(i.droppedLines??[])])},null,1))})"`
                  — expect every child listed, `residue: 0`, and nothing dropped.
 
-            6. BRANCH FRESH FROM MAIN: `git checkout -B ${{ steps.gate.outputs.branch }} origin/main`.
+            6. BRANCH FRESH FROM MAIN, AND COMMIT YOUR EDIT ON IT:
+               `git checkout -B ${{ steps.gate.outputs.branch }} origin/main`.
                A branch of that name may already exist on origin from an earlier split
                whose PR was closed unmerged (the gate only runs when no split PR is
-               OPEN); it is dead, so push over it with `git push --force origin HEAD`.
-               OPEN ONE PR from branch `${{ steps.gate.outputs.branch }}`, titled
-               `docs(projects): split #<issue> into <keys>` (e.g. "split #1694 into C1, C2
-               and C3"). The FIRST paragraph of the PR body is exactly
-               `Closes #<issue>.` (plain text, no backticks around it — merging must close
-               the parent). Then: why it exhausted, the table of children (key, title,
-               depends on, criteria), and which seam each boundary follows. Label the PR
-               `review:please` so the Reviewer reviews it. Do NOT milestone the PR (K-WORK-7:
+               OPEN); it is dead, and the job after yours replaces it with your commit.
+
+               YOU COMMIT AND WRITE THE REQUEST; A JOB AFTER YOURS PUSHES (kanon#1385).
+               Your token cannot write code, so `git push` fails. A job after yours
+               pushes your branch and opens the PR from `docs/.kanon-pull-request.json`,
+               which you write: a JSON object with `branch`, `title`, `body` and
+               `labels`. Git ignores it here, so it is never committed; write it last.
+               - `branch` is exactly "${{ steps.gate.outputs.branch }}"; the job refuses any other.
+               - `title` is `docs(projects): split #<issue> into <keys>` (e.g. "split #1694
+                 into C1, C2 and C3").
+               - `body`'s FIRST paragraph is exactly `Closes #<issue>.` (plain text, no
+                 backticks around it — merging must close the parent). Then: why it
+                 exhausted, the table of children (key, title, depends on, criteria), and
+                 which seam each boundary follows.
+               - `labels` is exactly "labels": ["review:please"], so the Reviewer reviews it.
+               With no `base`, the PR goes into the default branch, which is the only base
+               the job accepts. GitHub writes a new commit when the job pushes yours, so
+               cite no commit id from your checkout. Do NOT milestone the PR (K-WORK-7:
                issues only). NEVER merge. Leave `qa:needs-split` on the issue: merging
                the PR closes it.
 
-            7. Comment on the issue with the PR link.
+            7. Comment on the issue naming the branch `${{ steps.gate.outputs.branch }}`:
+               the PR opens after your job ends, and its `Closes #<issue>` links it from
+               the issue.
 
-            ALWAYS leave a comment on the issue before you finish — the PR link, or why
+            ALWAYS leave a comment on the issue before you finish — the branch, or why
             you stopped. Never end with no output.
           claude_args: |
             --model claude-opus-5-5
@@ -285,34 +334,6 @@ jobs:
             --fallback-model claude-opus-5
             --allowedTools Read,Edit,Write,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
-
-      # NO SILENT ABSENCE. A green run with no split PR would read exactly like success,
-      # while the issue sits labelled with nothing replacing it.
-      - name: Did a split PR open?
-        if: steps.gate.outputs.act == 'split'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ steps.gate.outputs.branch }}
-          ISSUE: ${{ github.event.issue.number || inputs.issue }}
-          # From the output, not `$GITHUB_ENV`: the hook and the agent have both run (kanon#110).
-          KANON: ${{ steps.kanon.outputs.path }}
-        run: |
-          set -euo pipefail
-          n=$(gh pr list --repo "$REPO" --state open --head "$BRANCH" --json number --jq 'length')
-          pr=$(gh pr list --repo "$REPO" --state open --head "$BRANCH" --json number --jq '.[0].number // empty')
-          # Every child the PR adds must carry its lineage marker (the Reviewer, RA-2407).
-          if [ -n "$pr" ]; then PR="$pr" node "$KANON/scripts/split-lineage.mjs" check-pr || true; fi
-          # Re-read the label: an agent that could not find the item moves the issue to
-          # qa:needs-info on purpose, and that is a hand-off, not a silent failure.
-          still=$(gh issue view "$ISSUE" --repo "$REPO" --json labels --jq '[.labels[].name] | index("qa:needs-split") != null')
-          if [ "$n" != "0" ]; then
-            echo "split PR open on $BRANCH"
-          elif [ "$still" = "true" ]; then
-            echo "::warning title=agent-lead-split::#$ISSUE: the split run finished with no open PR on $BRANCH — the issue still carries qa:needs-split with nothing replacing it. Read the agent's comment on the issue."
-          else
-            echo "no PR, and the issue left qa:needs-split — the agent handed it on (read its comment)"
-          fi
 
       # THE HOOK GOES BACK (RA-2694), for its toolchain's post step — copied verbatim from
       # `agent-lane.yml`, which says why.
@@ -326,6 +347,44 @@ jobs:
           else
             echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
           fi
+
+      # THE AGENT'S COMMITS GO TO THE PUSH JOB, NOT TO GITHUB (kanon#1385, `[LANE-13]`, `[LANE-14]`),
+      # with the spine's own handoff, whose header says what it bundles and why the push job trusts
+      # none of it. After the agent, whatever it did; a run that left no commit hands on nothing.
+      - name: Hand the agent's commits to the push job
+        id: handoff
+        if: always() && steps.gate.outputs.act == 'split' && steps.agent.outcome != 'skipped'
+        env:
+          START: ${{ steps.checkout.outputs.commit }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/kanon-push"
+          rm -rf "$out"
+          mkdir -p "$out"
+          if ! git -c core.fsmonitor=false bundle create "$out/commits.bundle" --branches --not --remotes "$START" 2>"$out/bundle.err"; then
+            if grep -q 'empty bundle' "$out/bundle.err"; then
+              rm -rf "$out"
+              echo "The agent left no commit GitHub lacks, so there is nothing to push"
+              exit 0
+            fi
+            cat "$out/bundle.err"
+            exit 1
+          fi
+          rm -f "$out/bundle.err"
+          req=docs/.kanon-pull-request.json
+          if [ -f "$req" ] && [ ! -L "$req" ]; then
+            cp "$req" "$out/request.json"
+          fi
+          echo "commits=true" >> "$GITHUB_OUTPUT"
+      - name: Upload the agent's commits for the push job
+        id: upload
+        if: always() && steps.gate.outputs.act == 'split' && steps.handoff.outputs.commits == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-push-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kanon-push/
+          retention-days: 1
+          if-no-files-found: error
 
       # WHY A RED RUN WENT RED (RA-1408), and what the run cost (RA-1485). `always()` AND the
       # gate: a run that declined to act invoked no agent and must not write a

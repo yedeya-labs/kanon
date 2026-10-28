@@ -22,7 +22,8 @@
 // - Every created commit is read back, and must be verified with the App's bot account as its
 //   author, before any branch moves.
 // - The branch is created, moved without force from the head it was given, or refused. Only
-//   replace mode forces, and it builds over the default branch's head.
+//   replace mode forces, and it builds over a commit on the default branch: the head it was given,
+//   when GitHub compares it as on that branch (kanon#1385), else the branch's head.
 // - It reads and moves exactly the branch it was named: each ref path carries the name
 //   percent-encoded, so a `#` or a `%` in it can't name another branch (kanon#1392), and a name
 //   git doesn't allow for a branch is refused before any request.
@@ -31,7 +32,7 @@
 //   that can't finish has moved nothing.
 //
 // Usage: node scripts/lib/verified-commits.mjs --git-dir <store> --tip <commit> --branch <name>
-//          (--head <sha> | --replace) --app-login <slug>[bot]
+//          (--head <sha> | --replace [--head <sha>]) --app-login <slug>[bot]
 // Reads `GH_TOKEN`, `REPO` and `GITHUB_API_URL` (api.github.com when unset). Writes `head=<the
 // branch's new head>`, `base=<the head it built on>` and `created=<each created commit, by commas>`
 // to `$GITHUB_OUTPUT`, and each local commit and the commit created from it to the step summary.
@@ -140,7 +141,7 @@ export async function pushVerified({
   if (!appLogin) throw new Error('no --app-login: the read-back has no bot account to require');
   if (!branch) throw new Error('no --branch to move');
   if (!validBranch(branch)) throw new Error(`--branch ${JSON.stringify(branch)} is not a valid branch name, so nothing was sent`);
-  if (replace === Boolean(head)) throw new Error('give either --head, the commit the branch is expected at, or --replace');
+  if (!replace && !head) throw new Error('give --head, the commit the branch is expected at, or --replace');
   const git = (/** @type {string[]} */ a) => execFileSync('git', ['--git-dir', gitDir, ...a], { maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   const gitText = (/** @type {string[]} */ a) => git(a).toString('utf8').trim();
   const resolve = (/** @type {string} */ rev) => gitText(['rev-parse', '--verify', '--end-of-options', `${rev}^{commit}`]);
@@ -175,16 +176,23 @@ export async function pushVerified({
     return String(ok(r, `reading ${branch}`).object.sha);
   };
 
-  // The head it builds on: the one it was given, or in replace mode the default branch's.
-  let base = head;
+  // The head it builds on: the one it was given, or in replace mode a commit on the default branch.
+  // That is the head it was given, which a run checked out and the default branch may have moved
+  // past since (kanon#1385), only while GitHub compares it as on that branch; with none, the
+  // default branch's head.
+  let base = head ? resolve(head) : '';
   if (replace) {
     const def = String(ok(await call('GET', ''), `reading ${repo}`).default_branch);
     if (def === branch) throw new Error(`replace mode never moves the default branch, ${def}`);
-    const r = await call('GET', `git/ref/heads/${branchPath(def)}`);
-    base = String(ok(r, `reading ${def}`).object.sha);
+    if (base) {
+      const status = String(ok(await call('GET', `compare/${base}...${branchPath(def)}`), `comparing ${base.slice(0, 7)} with ${def}`).status);
+      if (status !== 'identical' && status !== 'ahead') throw new Error(`${base.slice(0, 7)} is not on ${def} (GitHub compares it as ${status}), so replace mode builds nothing over it`);
+    } else {
+      const r = await call('GET', `git/ref/heads/${branchPath(def)}`);
+      base = resolve(String(ok(r, `reading ${def}`).object.sha));
+    }
   }
   const tipSha = resolve(tip);
-  base = resolve(base);
   try {
     git(['merge-base', '--is-ancestor', base, tipSha]);
   } catch {
