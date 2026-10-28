@@ -28,13 +28,16 @@
 // THE LOG (`[MCP-8]`). One line per request, `log.mjs`'s, of closed lists and numbers. Any
 // failure inside the server is caught here and logged as `error`, with nothing of the failure.
 //
+// THE DEPRECATED REVISION (`[MCP-1]`, #1423). `/mcp`'s 401 to a request at 2025-11-25 carries the
+// deprecation's headers, as every answer `handle` gives at that revision does.
+//
 // `node:` built-ins only (decision 11).
 
 import { createHash, randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { URL, URLSearchParams } from 'node:url';
 import { readCache } from './cache.mjs';
-import { MCP_PATH, appReaches, bodyOf, handle } from './index.mjs';
+import { MCP_PATH, appReaches, bodyOf, deprecationHeaders, eraOf, handle } from './index.mjs';
 import { labelsOf, logLine } from './log.mjs';
 import { GITHUB_API, fetchReader } from './reader.mjs';
 
@@ -93,11 +96,13 @@ export function redirectAllowed(uri, allowed) {
  *   log?: (line: string) => void,
  *   now?: () => Date,
  *   release?: string,
+ *   deprecated?: string | null,
  *   api?: string, github?: string,
  * }} ServeDeps the status App's OAuth client; the sealer; the redirect allow-list; the server's
- *   own origin, when it isn't the function URL's; and what tests replace
+ *   own origin, when it isn't the function URL's; the date 2025-11-25 was deprecated, `YYYY-MM-DD`,
+ *   as the deploy names it; and what tests replace
  * @typedef {import('./index.mjs').Reply & { cookies?: string[] }} Reply
- * @typedef {{ route: string, method: string | null, tool: string | null, outcome: string }} Note
+ * @typedef {{ route: string, method: string | null, era?: string | null, tool: string | null, outcome: string }} Note
  */
 
 /** @param {number} statusCode @param {unknown} body @param {Record<string, string>} [headers] @returns {Reply} */
@@ -208,19 +213,24 @@ async function routeOf(event, deps, stats, note) {
 
   // ---------------------------------------------------------------- the MCP endpoint
   if (path === MCP_PATH) {
+    const deprecated = deps.deprecated ?? null;
     const challenge = (/** @type {boolean} */ invalid) => ({
       statusCode: 401,
-      headers: { 'content-type': 'application/json', 'www-authenticate': `Bearer resource_metadata="${metadata}"${invalid ? ', error="invalid_token"' : ''}` },
+      headers: {
+        'content-type': 'application/json',
+        'www-authenticate': `Bearer resource_metadata="${metadata}"${invalid ? ', error="invalid_token"' : ''}`,
+        ...(eraOf(event) === 'legacy' ? deprecationHeaders(deprecated) : {}),
+      },
       body: JSON.stringify({ error: invalid ? 'invalid_token' : 'unauthorized' }),
     });
     const bearer = /^Bearer +(\S+)$/i.exec(headers.authorization ?? '')?.[1];
     if (!bearer) return done('unauthenticated', challenge(false));
     const access = await open('access', bearer);
     if (!access || typeof access.gh !== 'string') return done('invalid_token', challenge(true));
-    Object.assign(note, labelsOf(bodyOf(event)));
+    Object.assign(note, labelsOf(bodyOf(event)), { era: eraOf(event) });
     const cache = deps.cache ?? CONTAINER_CACHE;
     const reader = fetchReader({ token: access.gh, fetch: fetchImpl, api: deps.api ?? GITHUB_API, cache: cache.for(access.gh), stats });
-    const reply = await handle(event, { reader, now, release: deps.release ?? 'unreleased', reach: (repo) => appReaches(reader, repo) });
+    const reply = await handle(event, { reader, now, release: deps.release ?? 'unreleased', reach: (repo) => appReaches(reader, repo), deprecated });
     if (stats.unauthorized) return done('invalid_token', challenge(true));
     return done(outcomeOf(reply), reply);
   }
@@ -393,10 +403,13 @@ async function routeOf(event, deps, stats, note) {
   return done('not_found', { statusCode: 404, headers: {}, body: '' });
 }
 
-/** What an `/mcp` reply came to, for the log. @param {import('./index.mjs').Reply} reply */
+/**
+ * What an `/mcp` reply came to, for the log: 2026-07-28's method-not-found is a 404 with its
+ * JSON-RPC error. @param {import('./index.mjs').Reply} reply
+ */
 function outcomeOf(reply) {
   if (reply.statusCode === 202) return 'ok';
-  if (reply.statusCode !== 200) return 'refused';
+  if (reply.statusCode !== 200 && reply.statusCode !== 404) return 'refused';
   /** @type {any} */
   let body;
   try {
@@ -405,6 +418,7 @@ function outcomeOf(reply) {
     return 'other';
   }
   if (body?.error) return 'rpc_error';
+  if (reply.statusCode !== 200) return 'refused';
   return body?.result?.isError ? 'tool_error' : 'ok';
 }
 

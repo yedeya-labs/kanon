@@ -24,7 +24,7 @@ describe("the hosted status server's entry point", () => {
   it('reads its deps from the environment, the client secret from SSM, decrypted, and proves its key with KMS', async () => {
     const aws = fakeAws();
     const deps = await depsFrom(ENVIRONMENT, { fetch: aws.fetchImpl });
-    expect(deps).toMatchObject({ clientId: 'Iv23liStatusApp', clientSecret: SECRET, redirects: DEFAULT_REDIRECTS, release: 'v0.43.0' });
+    expect(deps).toMatchObject({ clientId: 'Iv23liStatusApp', clientSecret: SECRET, redirects: DEFAULT_REDIRECTS, release: 'v0.43.0', deprecated: '2026-11-02' });
     expect(typeof deps.sealer.seal).toBe('function');
     expect(aws.targets()).toEqual(STARTUP);
     expect(aws.calls.find((c) => c.target === 'AmazonSSM.GetParameter')).toEqual({
@@ -47,9 +47,15 @@ describe("the hosted status server's entry point", () => {
   });
 
   it('refuses an environment the template did not set, before any read', async () => {
-    for (const name of [ENV.keyId, ENV.clientId, ENV.secretParameter]) {
+    for (const name of [ENV.keyId, ENV.clientId, ENV.secretParameter, ENV.deprecated]) {
       const aws = fakeAws();
       await expect(depsFrom({ ...ENVIRONMENT, [name]: '' }, { fetch: aws.fetchImpl }), name).rejects.toMatchObject({ code: 'Unconfigured' });
+      expect(aws.calls).toEqual([]);
+    }
+    // The date 2025-11-25 was deprecated, which every answer at that revision carries, is a date.
+    for (const date of ['soon', '2026-11-2', '2026-13-01', '2026-02-30', '2026-11-02T00:00:00Z']) {
+      const aws = fakeAws();
+      await expect(depsFrom({ ...ENVIRONMENT, [ENV.deprecated]: date }, { fetch: aws.fetchImpl }), date).rejects.toMatchObject({ code: 'Unconfigured' });
       expect(aws.calls).toEqual([]);
     }
   });

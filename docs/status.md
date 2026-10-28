@@ -402,11 +402,15 @@ On a usage error or when it can't run, the document is the error document, `{ "s
 
 The same six views are served read-only to an MCP client, such as Claude Code, claude.ai or the Claude app on a phone, by a hosted MCP server: one request handler in [`infra/status/function/`](../infra/status/function/), with no MCP SDK. Each tool is one view, and returns the same object as that view's section of the JSON output above, for the same reads: the server builds it with the code `kanon status` uses (`scripts/status/views.mjs`). A view whose reads didn't complete answers with its section's `error` and `reads`, as the tool's error. The server reads GitHub with the person's own token, through a reader over `fetch` that can ask only REST `GET`s and GraphQL queries. A GraphQL document holding a mutation or a subscription is refused before anything is sent, whatever ignored tokens (white space, commas, comments, a byte-order mark) stand before it. It writes nothing, to GitHub or anywhere else, and keeps nothing. The server's clauses are the `MCP` area of the spec layer ([`docs/qa/specs/mcp.md`](qa/specs/mcp.md)).
 
-It speaks MCP's Streamable HTTP transport at protocol version `2025-11-25`, at one endpoint, `/mcp`:
+It speaks MCP's Streamable HTTP transport at two protocol revisions, `2026-07-28` and `2025-11-25`, at one endpoint, `/mcp`. A request is a POST of one JSON-RPC message, answered with one JSON object. It is served at the version its `_meta` names in `io.modelcontextprotocol/protocolVersion`, or, when it names none there, at the version of its `MCP-Protocol-Version` header. A request that names neither, as an older client's `initialize` does, is served at `2025-11-25`.
 
-- **A request** is a POST of one JSON-RPC message, answered with one JSON object. The server answers `initialize`, `ping`, `tools/list` and `tools/call`, and any other method with JSON-RPC's method-not-found error. `initialize` answers with `2025-11-25`, whatever version the client asked for.
+- **At `2026-07-28`** the server is stateless, with no handshake. It answers `server/discover`, `tools/list` and `tools/call`, and any other method, `initialize` and `ping` among them, with HTTP 404 and JSON-RPC's method-not-found error.
+  - Every request carries its version and the client's capabilities in its `_meta`. Without them it gets 400 and invalid-params.
+  - A request's headers mirror its body: `MCP-Protocol-Version`, `Mcp-Method`, and, for `tools/call`, `Mcp-Name`, plain or base64-encoded as `=?base64?…?=`. A header that is missing or doesn't match gets 400 and `HeaderMismatch`.
+  - Every result carries `resultType`, `complete`, and the server's name and release in its `_meta`, as `io.modelcontextprotocol/serverInfo`. `server/discover` and `tools/list` also carry `ttlMs`, an hour, and `cacheScope`, `public`: both answers are the same for every person, and change only with a deploy.
+- **At `2025-11-25`**, which is deprecated ([The 2025-11-25 revision is deprecated](#the-2025-11-25-revision-is-deprecated)), the server answers `initialize`, `ping`, `tools/list` and `tools/call`, and any other method with JSON-RPC's method-not-found error. `initialize` answers with `2025-11-25`, whatever version the client asked for.
+- **Any other version**, in `_meta` or in the header, gets 400 and `UnsupportedProtocolVersionError`, whose data lists the two revisions the server serves. A client of both revisions takes that error as a `2026-07-28` server's, and retries at a version it lists rather than falling back to `initialize`.
 - **A notification**, a message with no `id` such as `notifications/initialized`, gets HTTP 202 and no body, whatever its method. So does a client's JSON-RPC response.
-- **The `MCP-Protocol-Version` header**, when a request carries one, must be `2025-11-25`. Any other version gets 400.
 - **Refused by the transport:**
   - a body that isn't one JSON-RPC 2.0 message, such as a batch, gets 400;
   - a GET or DELETE gets 405: the server is stateless, so it opens no stream and holds no session;
@@ -414,6 +418,20 @@ It speaks MCP's Streamable HTTP transport at protocol version `2025-11-25`, at o
 - **An unknown tool** is a protocol error. **Arguments a tool can't take** are the tool's own error, which says what is wrong.
 
 Every request to `/mcp` needs a token the server issued when the person signed in ([Signing in](#signing-in)). Without one, or with one that has expired, it gets 401, and no tool runs. Its address is a placeholder below until the Owner's first deploy ([Deploy](#deploy)).
+
+### The 2025-11-25 revision is deprecated
+
+The server serves both revisions by the Owner's decision of 2026-10-28 ([#1423](https://github.com/yedeya-labs/kanon/issues/1423)). Kanon's own CLI, adopters' coding agents, and claude.ai's web and phone clients must all connect, and it isn't yet confirmed that Claude's clients speak `2026-07-28`. A local proxy speaking `2025-11-25` for Kanon's CLI was considered and rejected: it would put an OAuth refresh token on each machine, and leave remote clients uncovered.
+
+So `2025-11-25` is served as a deprecated path from the first deploy. MCP has no signal inside the protocol that a version a server serves is deprecated, so the signal is HTTP's and the handshake's:
+
+- **`Deprecation`** (RFC 9745), on every response at `2025-11-25`, the sign-in's 401 included. Its value is the date the deploy names ([Deploy](#deploy)), as `@` and that day's Unix time.
+- **`Link`**, `<this note's address>; rel="deprecation"; type="text/html"`, on the same responses.
+- **No `Sunset`** (RFC 8594) yet. It is added once a removal date is chosen.
+- **`initialize`'s `instructions`** say that the revision is deprecated, and to use `2026-07-28`. A client may show them, which it doesn't do with headers.
+- **The log** names each request's era, `modern` or `legacy` ([What the server logs](#what-the-server-logs)), so `2025-11-25`'s use can be counted before the `Sunset` date is chosen.
+
+No `2026-07-28` response carries any of them. Removing `2025-11-25`, once the clients that matter are confirmed on `2026-07-28`, is a later change.
 
 The server's code is more than its own directory: it links the status core, and the core calls the deciders the lanes run, the Lead's reconciler, review recovery, workflow health, the brief guard and what they import, rather than copying them. On Kanon's repository every module it links, directly or through another, is the Owner's merge: each matches an `always` entry in [`docs/qa/escalation-paths.md`](qa/escalation-paths.md), and `tests/unit/hosted-function-closure.test.ts` fails on a new import that reaches one that doesn't ([kanon#1345](https://github.com/yedeya-labs/kanon/issues/1345)).
 
@@ -436,7 +454,7 @@ Every answer that read GitHub carries the time its reads began, as `_meta.readAt
 
 ## Signing in
 
-The server reads GitHub as the person, with their own access. It is its own OAuth 2.1 authorisation server, in front of the sign-in of Kanon's status App on GitHub, as the MCP authorisation specification at protocol version `2025-11-25` describes:
+The server reads GitHub as the person, with their own access. It is its own OAuth 2.1 authorisation server, in front of the sign-in of Kanon's status App on GitHub, as the MCP authorisation specification describes. The flow is the same at both revisions. `2026-07-28` deprecates dynamic client registration in favour of client ID metadata documents, which the server doesn't offer, so clients still register:
 
 - **Discovery.** A 401 names the protected-resource metadata, `/.well-known/oauth-protected-resource/mcp`, which names the server as its own authorisation server. Its metadata is at `/.well-known/oauth-authorization-server`.
 - **Registration.** A client registers itself at `/register`, by dynamic client registration. Only a public client registers, and only with redirects on the server's allow-list. The allow-list is a parameter of the server's deploy, and defaults to Claude's connector callbacks (`https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback`) and any port on the loopback (`http://localhost:*` and `http://127.0.0.1:*`), for Claude Code.
@@ -469,7 +487,7 @@ Every read is sent to GitHub. The server keeps a per-person cache in the warm fu
 
 ### What the server logs
 
-One line per request, a JSON object of exactly these fields: the route, the MCP method, the tool, the outcome, the duration, the number of GitHub requests it made, and GitHub's remaining rate limit. Each value is a number or from a closed list, so a line never holds a token, a login, an error's message or anything GitHub answered. A tool's error may quote GitHub's own message, such as "Not Found": it is returned to the person and never logged. When a container can't read the App's client secret, it also logs `{"startup":"client_secret","code":…}`, whose code is AWS's error code, such as `ParameterNotFound`, or `Unconfigured` or `unknown`, and nothing of AWS's message. When it can't use its KMS key, it logs `{"startup":"key","code":…}` the same way, with a code such as `AccessDeniedException`.
+One line per request, a JSON object of exactly these fields: the route, the MCP method, the era, the tool, the outcome, the duration, the number of GitHub requests it made, and GitHub's remaining rate limit. The era is the revision an `/mcp` request was served at, `modern` for `2026-07-28` or `legacy` for `2025-11-25`, and null for any other request. Each value is a number or from a closed list, so a line never holds a token, a login, an error's message or anything GitHub answered. A tool's error may quote GitHub's own message, such as "Not Found": it is returned to the person and never logged. When a container can't read the App's client secret, it also logs `{"startup":"client_secret","code":…}`, whose code is AWS's error code, such as `ParameterNotFound`, or `Unconfigured` or `unknown`, and nothing of AWS's message. When it can't use its KMS key, it logs `{"startup":"key","code":…}` the same way, with a code such as `AccessDeniedException`.
 
 ## Connecting
 
@@ -494,7 +512,7 @@ No table and no bucket. The outputs are `McpUrl`, the server's address, and `Log
 **It is deployed by the operator's repository, through Kanon's deploy lane,** as the telemetry store is ([the telemetry store's Deploy](telemetry.md#deploy)): the operator's repository pins a released Kanon, declares `production`, and holds the account's inputs as that environment's variables. Production is the Owner's dispatch. Kanon's repository has no deploy caller and no AWS-credentialed job. The operator's three hooks call the scripts beside the template, at the pinned tree that [`kanon-path`](../actions/kanon-path/README.md) puts in `$KANON`:
 
 - **build,** with no credential: `node "$KANON/infra/status/build.mjs" --output "<output>"`. It copies the template, and the function's import closure with the repository's layout kept, which is where the template's `Code` and `Handler` point. The closure is the list in [`infra/status/closure.json`](../infra/status/closure.json), which `tests/unit/status-build.test.ts` holds equal to the walk the escalation test holds to the `always` paths, so what is deployed is what the Owner merged. It refuses a tree that doesn't load on its own, with no `node_modules` above it.
-- **deploy,** with the environment's role: `node "$KANON/infra/status/deploy.mjs" --artifact "<artifact>" --bucket <artifacts bucket> --role-arn <service role> --release "<release>" --client-id <the App's client id>`, and, when the environment sets them, `--redirects`, `--reserved-concurrency` and `--permissions-boundary-arn`. It packages into the artifacts bucket, deploys `kanon-status` through the CloudFormation service role, and prints the stack's status and the server's address, and nothing else. Every parameter is passed on every deploy, so a variable removed resets its parameter. No secret passes through it, so the hook maps no `KANON_DEPLOY_SECRET`.
+- **deploy,** with the environment's role: `node "$KANON/infra/status/deploy.mjs" --artifact "<artifact>" --bucket <artifacts bucket> --role-arn <service role> --release "<release>" --client-id <the App's client id>`, and, when the environment sets them, `--redirects`, `--reserved-concurrency`, `--permissions-boundary-arn` and `--legacy-deprecated-since`. That last is the date `2025-11-25` was deprecated, `YYYY-MM-DD`, which every answer at that revision carries ([The 2025-11-25 revision is deprecated](#the-2025-11-25-revision-is-deprecated)). Without it, the deploy uses its own date, in UTC. It packages into the artifacts bucket, deploys `kanon-status` through the CloudFormation service role, and prints the stack's status and the server's address, and nothing else. Every parameter is passed on every deploy, so a variable removed resets its parameter. No secret passes through it, so the hook maps no `KANON_DEPLOY_SECRET`.
 - **smoke:** `node "$KANON/infra/status/smoke.mjs" --stack`. It passes only when the stack is `CREATE_COMPLETE` or `UPDATE_COMPLETE`, an unauthenticated `tools/list` at `/mcp` gets 401 naming the server's own protected-resource metadata, and that metadata names the server as its resource and its authorisation server (`[MCP-11]`). It signs nobody in and needs no secret. Before a container serves its first request, it reads the App's client secret, and it proves its KMS key by having KMS generate a data key and decrypt it back. A server that can't do either answers that `tools/list` with 500, so it fails too. A failed deploy or smoke files `Deploy to production failed` in the operator's repository, and the next success closes it.
 
 ### Before the first deploy
@@ -539,7 +557,7 @@ These are the Owner's, once:
 
    A grant of `kms:TagResource` held only to the request's tag would let the service role tag someone else's key and then administer it, so check that it is denied on a key without the tag too.
 
-3. **The `production` environment's variables** for the hooks above: the App's client id, and, if they aren't the defaults, the redirect allow-list and the reserved concurrency.
+3. **The `production` environment's variables** for the hooks above: the App's client id, and, if they aren't the defaults, the redirect allow-list and the reserved concurrency. Also the date `2025-11-25` was deprecated, for `--legacy-deprecated-since`: the first deploy's date, which ships the deprecation. Without the variable, every deploy would date it again.
 
 ### Rotating the client secret
 

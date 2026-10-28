@@ -20,7 +20,7 @@ import { writeStub } from './helpers/stub-bin.js';
 const ROLE = `arn:aws:iam::${'1'.repeat(12)}:role/kanon-deploy-cloudformation`;
 const OPTIONS = {
   artifact: '/runner/build', packaged: '/runner/tmp/packaged.yaml', bucket: 'kanon-deploy-artifacts', roleArn: ROLE, region: 'eu-central-1',
-  release: 'v0.43.0', clientId: 'Iv23liStatusApp', secretParameter: '/kanon-status/github-client-secret', redirects: '', reservedConcurrency: '4', permissionsBoundaryArn: '',
+  release: 'v0.43.0', clientId: 'Iv23liStatusApp', secretParameter: '/kanon-status/github-client-secret', redirects: '', reservedConcurrency: '4', permissionsBoundaryArn: '', deprecatedSince: '2026-11-02',
 };
 
 describe("the status server's deploy", () => {
@@ -30,7 +30,7 @@ describe("the status server's deploy", () => {
       ['cloudformation', 'package', '--region', 'eu-central-1', '--template-file', '/runner/build/template.yaml', '--s3-bucket', 'kanon-deploy-artifacts', '--s3-prefix', 'kanon-status', '--output-template-file', '/runner/tmp/packaged.yaml'],
       ['cloudformation', 'deploy', '--region', 'eu-central-1', '--stack-name', 'kanon-status', '--template-file', '/runner/tmp/packaged.yaml', '--role-arn', ROLE,
         '--capabilities', 'CAPABILITY_NAMED_IAM', '--no-fail-on-empty-changeset', '--parameter-overrides',
-        'GitHubClientId=Iv23liStatusApp', 'GitHubClientSecretParameter=/kanon-status/github-client-secret', 'Redirects=', 'Release=v0.43.0', 'ReservedConcurrency=4', 'PermissionsBoundaryArn='],
+        'GitHubClientId=Iv23liStatusApp', 'GitHubClientSecretParameter=/kanon-status/github-client-secret', 'Redirects=', 'Release=v0.43.0', 'ReservedConcurrency=4', 'PermissionsBoundaryArn=', 'LegacyDeprecatedSince=2026-11-02'],
     ]);
   });
 
@@ -65,6 +65,16 @@ if [ "$2" = describe-stacks ]; then ${describe}; fi
     expect(lines.map((l) => l.split(' ').slice(0, 2).join(' '))).toEqual(['cloudformation package', 'cloudformation deploy', 'cloudformation describe-stacks']);
     expect(lines[1]).toContain('ReservedConcurrency=4 PermissionsBoundaryArn=');
     expect(lines[1]).toContain('GitHubClientSecretParameter=/kanon-status/github-client-secret');
+    // With no date given, 2025-11-25's deprecation is dated by this deploy, in UTC.
+    expect(lines[1]).toMatch(/ LegacyDeprecatedSince=\d{4}-\d{2}-\d{2}$/);
+    const dated = lines[1]!.split(' ').at(-1)!.split('=')[1]!;
+    expect([new Date(Date.now() - 86_400_000).toISOString().slice(0, 10), new Date().toISOString().slice(0, 10)]).toContain(dated);
+  });
+
+  it('passes the date the operator gives for 2025-11-25\'s deprecation, so a later deploy keeps it', () => {
+    const { calls, run } = setup("printf 'UPDATE_COMPLETE\\thttps://abc.lambda-url.eu-central-1.on.aws/mcp\\n'");
+    expect(run([...ARGS, '--legacy-deprecated-since', '2026-11-02']).status).toBe(0);
+    expect(readFileSync(calls, 'utf8').split('\n')[1]).toMatch(/ LegacyDeprecatedSince=2026-11-02$/);
   });
 
   it('fails when the stack is not complete', () => {
@@ -80,6 +90,8 @@ if [ "$2" = describe-stacks ]; then ${describe}; fi
       [ARGS.filter((a, i) => a !== '--client-id' && ARGS[i - 1] !== '--client-id'), /--client-id/],
       [ARGS.map((a) => (a === ROLE ? 'kanon-deploy' : a)), /--role-arn/],
       [[...ARGS, '--reserved-concurrency', '0'], /--reserved-concurrency/],
+      [[...ARGS, '--legacy-deprecated-since', 'soon'], /--legacy-deprecated-since/],
+      [[...ARGS, '--legacy-deprecated-since', '2026-02-30'], /--legacy-deprecated-since/],
     ] as const) {
       const { calls, run } = setup('true');
       const r = run([...args]);

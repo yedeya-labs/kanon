@@ -21,7 +21,7 @@ const { sealer } = await import('../../infra/status/function/seal.mjs');
 const { kmsOf, KmsError } = await import('../../infra/status/function/kms.mjs');
 const { readCache, CACHE_TTL_MS } = await import('../../infra/status/function/cache.mjs');
 const { fetchReader } = await import('../../infra/status/function/reader.mjs');
-const { ROUTES, OUTCOMES, FIELDS } = await import('../../infra/status/function/log.mjs');
+const { ROUTES, OUTCOMES, FIELDS, ERAS } = await import('../../infra/status/function/log.mjs');
 const { TOOLS, METHODS } = await import('../../infra/status/function/index.mjs');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -201,6 +201,7 @@ function server(people: Record<string, Person>, opts: { accessLife?: number; ref
     cache: readCache({ now: () => clock }),
     log: (l: string) => lines.push(l),
     now,
+    deprecated: '2026-11-02',
     ...(opts.redirects ? { redirects: opts.redirects } : {}),
   };
   const send = async (e: Ev, extra: Partial<typeof deps> = {}) => {
@@ -486,7 +487,7 @@ describe('[MCP-7] a repository the App can\'t reach with the person\'s access is
 });
 
 describe('[MCP-8] no token, login or read text in any log', () => {
-  it('[MCP-8] logs per request only the method or route, the tool, the outcome, the duration, the GitHub request count and the remaining rate limit, over every tool and the whole authorisation flow', async () => {
+  it('[MCP-8] logs per request only the method or route, the protocol era, the tool, the outcome, the duration, the GitHub request count and the remaining rate limit, over every tool and the whole authorisation flow', async () => {
     // The person's world is switched per call, so every tool runs over every world.
     const world = { current: CASES[0]!.worlds[0]! };
     const octoPerson: Person = { login: 'octo-person', world: () => world.current(), installations: [{ id: 101, owner: 'acme', repos: [REPO] }] };
@@ -509,6 +510,13 @@ describe('[MCP-8] no token, login or read text in any log', () => {
     await mcp(t2, rpc('initialize', { protocolVersion: '2025-11-25' }), t.access_token);
     await mcp(t2, rpc('ghp_0123456789abcdefghijABCDEFGHIJ012345'), t.access_token);
     await mcp(t2, rpc('tools/call', { name: 'octo-person', arguments: {} }), t.access_token);
+    // At 2026-07-28: a discovery, a call, a method it removed, and a version neither revision is.
+    const meta = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {}, 'io.modelcontextprotocol/clientInfo': { name: 'octo-person', version: '1' } };
+    const modern = (method: string, params: Record<string, unknown> = {}) => mcp(t2, rpc(method, { ...params, _meta: meta }), t.access_token, { 'mcp-protocol-version': '2026-07-28', 'mcp-method': method, ...(typeof params.name === 'string' ? { 'mcp-name': params.name } : {}) });
+    expect((await modern('server/discover')).statusCode).toBe(200);
+    expect((await modern('tools/call', { name: 'lanes', arguments: { repo: REPO } })).statusCode).toBe(200);
+    expect((await modern('ping')).statusCode).toBe(404);
+    expect((await mcp(t2, rpc('tools/list'), t.access_token, { 'mcp-protocol-version': '2099-01-01' })).statusCode).toBe(400);
 
     // Every tool, over every world, including views whose reads failed, and a refused repository.
     for (const c of CASES) {
@@ -529,13 +537,16 @@ describe('[MCP-8] no token, login or read text in any log', () => {
     // list or a number.
     const lines = t2.lines;
     expect(lines.length).toBeGreaterThan(30);
-    const methods = [...Object.keys(METHODS), 'notification', 'response', 'other'];
+    const methods = [...new Set(Object.values(METHODS).flatMap((m) => Object.keys(m as object))), 'notification', 'response', 'other'];
     const tools = [...TOOLS.map((x: Any) => x.name), 'other'];
     for (const line of lines) {
       const o = JSON.parse(line);
       expect(Object.keys(o).sort(), line).toEqual([...FIELDS].sort());
       expect(ROUTES, line).toContain(o.route);
       expect(o.method === null || methods.includes(o.method), line).toBe(true);
+      expect(o.era === null || ERAS.includes(o.era), line).toBe(true);
+      // Only a request to /mcp has an era.
+      if (o.route !== '/mcp') expect(o.era, line).toBeNull();
       expect(o.tool === null || tools.includes(o.tool), line).toBe(true);
       expect(OUTCOMES, line).toContain(o.outcome);
       for (const k of ['durationMs', 'githubRequests']) expect(Number.isInteger(o[k]) && o[k] >= 0, line).toBe(true);
@@ -545,6 +556,14 @@ describe('[MCP-8] no token, login or read text in any log', () => {
     expect(parsed.filter((o) => o.method === 'tools/call').map((o) => o.tool)).toEqual(expect.arrayContaining(TOOLS.map((x: Any) => x.name)));
     expect(parsed.some((o) => o.route === '/mcp' && o.tool === 'lanes' && o.githubRequests > 0 && o.rateLimitRemaining !== null)).toBe(true);
     expect(parsed.some((o) => o.outcome === 'error')).toBe(true);
+    // The era counts each revision's use: 2026-07-28's, and 2025-11-25's, deprecated.
+    expect(ERAS).toEqual(['modern', 'legacy']);
+    expect(parsed.filter((o) => o.method === 'server/discover').map((o) => [o.era, o.outcome])).toEqual([['modern', 'ok']]);
+    expect(parsed.filter((o) => o.method === 'initialize' && o.outcome === 'ok').map((o) => o.era)).toEqual(['legacy']);
+    expect(parsed.some((o) => o.method === 'tools/call' && o.tool === 'lanes' && o.era === 'modern')).toBe(true);
+    expect(parsed.some((o) => o.method === 'tools/call' && o.tool === 'lanes' && o.era === 'legacy' && o.outcome === 'ok')).toBe(true);
+    expect(parsed.filter((o) => o.method === 'ping' && o.era === 'modern').map((o) => o.outcome)).toEqual(['rpc_error']);
+    expect(parsed.some((o) => o.route === '/mcp' && o.method === 'tools/list' && o.era === null && o.outcome === 'refused')).toBe(true);
 
     // Never a token, a login, or text read from GitHub: every token and artefact of the flow,
     // the people's logins, the App's secret, and every string GitHub answered with.
@@ -570,13 +589,39 @@ describe('[MCP-8] no token, login or read text in any log', () => {
     // Searched in what the lines say, not their field names, and skipping a fixture string that
     // is part of the log's own closed vocabulary (a tool named `lanes`, say).
     const values = parsed.map((o) => Object.values(o).join(' ')).join('\n');
-    const vocabulary = [...ROUTES, ...OUTCOMES, ...methods, ...tools];
+    const vocabulary = [...ROUTES, ...OUTCOMES, ...methods, ...tools, ...ERAS];
     const texts = [...strings].filter((x) => x.length >= 4 && !vocabulary.some((w) => w.includes(x)));
     expect(texts.length).toBeGreaterThan(50);
     for (const text of texts) expect(values.includes(text), text.slice(0, 40)).toBe(false);
     // It never asks who the person is.
     expect(t2.gh.requests.filter((r) => r.url === `${API}/user` || r.url.startsWith(`${API}/user?`))).toEqual([]);
   }, 120_000);
+});
+
+describe('[MCP-1] the deprecated revision, through the sign-in', () => {
+  it('[MCP-1] marks every /mcp answer at 2025-11-25 deprecated with the deploy\'s date, the sign-in\'s 401 too, and no 2026-07-28 answer', async () => {
+    const s = server({ octo: acme('octo-person') });
+    const t = await signIn(s, 'octo');
+    const deprecation = `@${Date.UTC(2026, 10, 2) / 1000}`;
+    const link = '<https://github.com/yedeya-labs/kanon/blob/main/docs/status.md#the-2025-11-25-revision-is-deprecated>; rel="deprecation"; type="text/html"';
+    const meta = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
+    const modernHeaders = { 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/list' };
+    for (const [what, r] of [
+      ['initialize', await mcp(s, rpc('initialize', { protocolVersion: '2025-11-25' }), t.access_token)],
+      ['tools/list', await mcp(s, rpc('tools/list'), t.access_token, { 'mcp-protocol-version': '2025-11-25' })],
+      ['no credential', await mcp(s, rpc('tools/list'), undefined, { 'mcp-protocol-version': '2025-11-25' })],
+      ['a credential that fails', await mcp(s, rpc('initialize', { protocolVersion: '2025-11-25' }), 'not-a-token')],
+    ] as const) {
+      expect([r.headers.deprecation, r.headers.link], what).toEqual([deprecation, link]);
+    }
+    for (const [what, r] of [
+      ['tools/list', await mcp(s, rpc('tools/list', { _meta: meta }), t.access_token, modernHeaders)],
+      ['no credential', await mcp(s, rpc('tools/list', { _meta: meta }), undefined, modernHeaders)],
+    ] as const) {
+      expect(r.statusCode, what).toBe(what === 'tools/list' ? 200 : 401);
+      expect([r.headers.deprecation, r.headers.link], what).toEqual([undefined, undefined]);
+    }
+  });
 });
 
 describe('[MCP-9] every answer carries its read time, and any cache is per person', () => {
