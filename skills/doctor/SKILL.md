@@ -182,6 +182,7 @@ Propose the bullet and ask for the reason; never invent one. Write it only once 
 | `caller.run-name` | agent | Set the `run-name:` as the fix says. |
 | `caller.claude-both` | agent, decision | Ask which credential that lane runs on, then remove the other's line from the caller's `secrets:`. |
 | `caller.claude-none` | agent, decision | Ask which credential that lane runs on, the subscription's token or an Anthropic API key, then add that one of the two lines the fix lists. |
+| `caller.workflow-run-missing` | agent | Doesn't block. The lane still runs on its other triggers and its schedule. Replace the caller's `workflow_run` `workflows:` line with the fix's line, or add the fix's lines under `on:` where it has none, and show the diff. |
 | `claude.mixed` | decision | Doesn't block. Say which lanes run on which credential; change nothing unless the person wants one credential for every lane. |
 | `apps-check.secret-missing` | agent | Add the lines the fix lists to the `apps-check` caller. |
 | `apps-check.secret-stale` | agent | Remove the lines the fix lists. |

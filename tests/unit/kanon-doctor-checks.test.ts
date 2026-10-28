@@ -2,9 +2,9 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { appSecrets, callerFile, ciFile, hookFile } from '../../cli/callers.mjs';
+import { appSecrets, callerFile, ciFile, hookFile, TRIGGERS } from '../../cli/callers.mjs';
 import { rulesetBody } from '../../cli/init.mjs';
-import { branchPattern, branchWorkflows, checkJobs, checkReporters, doctor, EXIT, parseArgs, SCHEMA, startsOnMerge, WAIVER_LABEL } from '../../cli/doctor.mjs';
+import { branchPattern, branchWorkflows, checkJobs, checkReporters, doctor, EXIT, parseArgs, runWorkflows, SCHEMA, startsOnMerge, templateRunCallers, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { checkout, fakeGitHub, healthyFiles, identitiesOf, ids, LANES, no, ok, PINNED, registerText, REPO, REQ, run, scratch, type Gh, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 import { callerNameFindings, FAILS_FROM, FIXED_CALLERS } from '../../actions/lane-check/caller-names.mjs';
@@ -611,6 +611,99 @@ describe('kanon doctor and a lane a merge queue changes (#452, #484)', () => {
     expect(noteOf(await run(checkout(withMerge()), fakeGitHub(), ['--json']))).toEqual([]);
     expect(noteOf(await run(checkout(withRebase(before484)), fakeGitHub(), ['--json']))).toEqual([]);
     expect(noteOf(await run(checkout(healthyFiles()), queued(), ['--json']))).toEqual([]);
+  });
+});
+
+// #1461: a caller written before a template entry that names other callers in its `workflow_run`
+// (the re-ask, #1023; the rebase lane's openers, #1427) keeps its old list, since an upgrade moves
+// only the pin. Doctor notes each name it lacks, read from the caller the template writes, by the
+// name the repository's caller has, for a lane the repository calls. It blocks nothing.
+describe('kanon doctor on a caller whose workflow_run lacks a caller the template names (#1461)', () => {
+  const ID = 'caller.workflow-run-missing';
+  const at = (lane: string) => `.github/workflows/${lane}.yml`;
+  const write = (lane: string, names = new Map<string, string>()) => callerFile(lane, REQ.lanes[lane]!, { release: PINNED, ciName: 'CI', defaultBranch: 'main', names });
+  const ofId = (r: Result) => r.json.findings.filter((f: { id: string }) => f.id === ID);
+  // The rebase caller as kanon init wrote it before #1427: CI alone.
+  const before1427 = () => {
+    const text = write('agent-rebase').replace(/ {2}# CI, and a run of a lane[^\n]*\n/, '').replace(/workflows: \[CI, [^\]]*\]/, 'workflows: [CI]');
+    expect(text).toContain('    workflows: [CI]\n');
+    return text;
+  };
+  const files = (over: Record<string, string>) => ({ ...healthyFiles(), ...over });
+
+  it('notes nothing for the callers kanon init writes', async () => {
+    const r = await run(checkout(files({ [at('agent-rebase')]: write('agent-rebase'), [at('agent-implement')]: write('agent-implement'), [at('agent-triage')]: write('agent-triage'), [at('agent-dispatch-sweep')]: write('agent-dispatch-sweep') })), fakeGitHub(), ['--json']);
+    expect(ofId(r)).toEqual([]);
+  });
+
+  it('notes a rebase caller from before the openers, with each opener it lacks, without blocking', async () => {
+    const r = await run(checkout(files({ [at('agent-rebase')]: before1427(), [at('agent-implement')]: write('agent-implement'), [at('agent-triage')]: write('agent-triage') })), fakeGitHub(), ['--json']);
+    expect(ofId(r)).toEqual([expect.objectContaining({ category: 'caller', blocking: false, subject: at('agent-rebase') })]);
+    const [f] = ofId(r);
+    expect(f.message).toContain('starts the lane agent-rebase on no run of Implement (Implementer), Triage (Implementer)');
+    expect(f.fix.commands).toEqual(['    workflows: [CI, Implement (Implementer), Triage (Implementer)]']);
+  });
+
+  it('leaves out a lane the repository does not call', async () => {
+    const r = await run(checkout(files({ [at('agent-rebase')]: before1427(), [at('agent-implement')]: write('agent-implement') })), fakeGitHub(), ['--json']);
+    expect(ofId(r).map((f: { message: string }) => f.message.split(':')[0])).toEqual(['starts the lane agent-rebase on no run of Implement (Implementer)']);
+    const lone = await run(checkout(files({ [at('agent-rebase')]: before1427() })), fakeGitHub(), ['--json']);
+    expect(ofId(lone)).toEqual([]);
+  });
+
+  it("expects a caller by the name the repository gives it, as kanon init writes it", async () => {
+    const implement = write('agent-implement').replace(/^name: .*$/m, 'name: Implement');
+    const named = new Map([['agent-implement', 'Implement']]);
+    const ok = await run(checkout(files({ [at('agent-dispatch-sweep')]: write('agent-dispatch-sweep', named), [at('agent-implement')]: implement })), fakeGitHub(), ['--json']);
+    expect(ofId(ok)).toEqual([]);
+    const r = await run(checkout(files({ [at('agent-dispatch-sweep')]: write('agent-dispatch-sweep'), [at('agent-implement')]: implement })), fakeGitHub(), ['--json']);
+    expect(ofId(r).map((f: { subject: string; fix: { commands: string[] } }) => [f.subject, f.fix.commands])).toEqual([[at('agent-dispatch-sweep'), ['    workflows: [Implement (Implementer), Triage (Implementer), Implement]']]]);
+  });
+
+  it('gives the whole trigger to a caller with no workflow_run', async () => {
+    const sweep = write('agent-dispatch-sweep').replace(/ {2}# The re-ask[^\n]*\n[^\n]*\n {2}workflow_run:\n[^\n]*\n[^\n]*\n/, '');
+    expect(sweep).not.toContain('workflow_run');
+    const r = await run(checkout(files({ [at('agent-dispatch-sweep')]: sweep, [at('agent-triage')]: write('agent-triage') })), fakeGitHub(), ['--json']);
+    expect(ofId(r).map((f: { fix: { commands: string[] } }) => f.fix.commands)).toEqual([['  workflow_run:', '    workflows: [Triage (Implementer)]', '    types: [completed]']]);
+  });
+
+  it('can be waived for the names it lists', async () => {
+    const f = files({ [at('agent-rebase')]: before1427(), [at('agent-implement')]: write('agent-implement'), [at('agent-triage')]: write('agent-triage') });
+    f['docs/qa/adoption.md'] += `- **${WAIVER_LABEL}:** \`${ID}\` on \`${at('agent-rebase')}\` for \`Triage (Implementer)\` (triage opens nothing here)\n`;
+    const r = await run(checkout(f), fakeGitHub(), ['--json']);
+    expect(ofId(r).map((x: { message: string }) => x.message.split(':')[0])).toEqual(['starts the lane agent-rebase on no run of Implement (Implementer)']);
+    expect(r.json.waived).toEqual([expect.objectContaining({ id: ID, subject: at('agent-rebase'), items: ['Triage (Implementer)'] })]);
+  });
+});
+
+describe('templateRunCallers: the callers the template names in a lane\'s workflow_run (#1461)', () => {
+  const names = new Map(Object.keys(TRIGGERS).map((l) => [l, TRIGGERS[l]!.name]));
+
+  it('reads the re-ask and the openers from the caller the template writes', () => {
+    expect(templateRunCallers('agent-lead-reconcile', REQ.lanes['agent-lead-reconcile']!, names, 'main')).toEqual(TRIGGERS['agent-lead-reconcile']!.reask!.map((l) => TRIGGERS[l]!.name));
+    expect(templateRunCallers('agent-rebase', REQ.lanes['agent-rebase']!, names, 'main')).toEqual(['Implement (Implementer)', 'Triage (Implementer)']);
+    expect(templateRunCallers('agent-review', REQ.lanes['agent-review']!, names, 'main')).toEqual([]);
+  });
+
+  it('holds an entry the template gains, with no list of its own to update', () => {
+    const merge = TRIGGERS['agent-merge']!;
+    expect(templateRunCallers('agent-merge', REQ.lanes['agent-merge']!, names, 'main')).toEqual([]);
+    merge.openers = ['agent-review'];
+    try {
+      expect(templateRunCallers('agent-merge', REQ.lanes['agent-merge']!, names, 'main')).toEqual(['Review (Reviewer)']);
+    } finally {
+      delete merge.openers;
+    }
+    // A caller the template names by a means TRIGGERS has no field for yet.
+    const gained: typeof callerFile = (...a) => callerFile(...a).replace('    workflows: [', '    workflows: [Lead (Lead) — brief, ');
+    expect(templateRunCallers('agent-merge', REQ.lanes['agent-merge']!, names, 'main', gained)).toEqual(['Lead (Lead) — brief']);
+  });
+
+  it('reads a workflow_run\'s workflows as a list or one name, and none otherwise', () => {
+    expect(runWorkflows({ on: { workflow_run: { workflows: ['CI', 'Implement'] } } })).toEqual(['CI', 'Implement']);
+    expect(runWorkflows({ on: { workflow_run: { workflows: 'CI' } } })).toEqual(['CI']);
+    expect(runWorkflows({ on: { workflow_run: null } })).toEqual([]);
+    expect(runWorkflows({ on: 'workflow_run' })).toEqual([]);
   });
 });
 
