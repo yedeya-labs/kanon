@@ -24,7 +24,7 @@ import {
   sumNumstat,
   run as runTelemetry,
 } from '../../actions/agent-telemetry/agent-telemetry.mjs';
-import { RUNTIME_NOT_INSTALLED, classifyResult, parseObjects } from '../../actions/agent-classify/classify-agent-result.mjs';
+import { RUNTIME_NOT_INSTALLED, classifyResult, parseObjects, runtimeMarker } from '../../actions/agent-classify/classify-agent-result.mjs';
 import { writeStub } from './helpers/stub-bin.js';
 
 /**
@@ -149,9 +149,12 @@ describe('the four states never collapse into a zero', () => {
   it("records a run whose install of Claude Code failed as unavailable, as the notice does (kanon#1470)", () => {
     const dir = mkdtempSync(join(tmpdir(), 'telemetry-runtime-'));
     const absent = join(dir, 'claude-execution-output.json');
-    expect(runTelemetry({ agent: 'reviewer', execution_file: absent }, { RUNNER_TEMP: dir }).outcome).toBe('not-reached');
-    writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), 'the install failed\n');
-    const row = runTelemetry({ agent: 'reviewer', execution_file: absent }, { RUNNER_TEMP: dir });
+    const env = { RUNNER_TEMP: dir, GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review' };
+    expect(runTelemetry({ agent: 'reviewer', execution_file: absent }, env).outcome).toBe('not-reached');
+    writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker({ ...env, GITHUB_RUN_ID: '6' }));
+    expect(runTelemetry({ agent: 'reviewer', execution_file: absent }, env).outcome, "an earlier job's marker").toBe('not-reached');
+    writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker(env, 'the install failed'));
+    const row = runTelemetry({ agent: 'reviewer', execution_file: absent }, env);
     expect(row.outcome).toBe('unavailable');
     expect(row.reason).toMatch(/Claude Code never installed/);
     expect(row.total_cost_usd, 'still unmeasured, never zero').toBeNull();

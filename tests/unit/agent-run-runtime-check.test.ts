@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { RUNTIME_NOT_INSTALLED, readRuntimeNotInstalled } from '../../actions/agent-classify/classify-agent-result.mjs';
+import { RUNTIME_NOT_INSTALLED, readRuntimeNotInstalled, runtimeMarker } from '../../actions/agent-classify/classify-agent-result.mjs';
 import { CLI_PATH, PROMPT_FILE, runtimeCheck } from '../../actions/agent-run/runtime-check.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -81,26 +81,28 @@ describe('the runtime check reads where the action failed', () => {
 
 describe('the runtime check, run as the block runs it', SPAWNS, () => {
   const script = join(process.cwd(), 'actions/agent-run/runtime-check.mjs');
+  const JOB = { GITHUB_RUN_ID: '40715172609', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review' };
   const run = (w: { runnerTemp: string; home: string }, over: Record<string, string> = {}) => spawnSync(process.execPath, [script], {
     encoding: 'utf8',
     env: {
-      PATH: process.env.PATH, RUNNER_TEMP: w.runnerTemp, HOME: w.home,
+      PATH: process.env.PATH, RUNNER_TEMP: w.runnerTemp, HOME: w.home, ...JOB,
       OUTCOME: 'failure', CONCLUSION: '', EXECUTION_FILE: '', STARTED_AT: STARTED, ...over,
     },
   });
 
-  it('writes the marker agent-classify reads, and exits 0', () => {
+  it('writes the marker agent-classify reads, for this job alone, and exits 0', () => {
     const w = world();
     const r = run(w);
     expect(r.status).toBe(0);
     expect(existsSync(join(w.runnerTemp, RUNTIME_NOT_INSTALLED))).toBe(true);
-    expect(readRuntimeNotInstalled(w.runnerTemp)).toBe(true);
+    expect(readRuntimeNotInstalled(w.runnerTemp, { env: JOB })).toBe(true);
+    expect(readRuntimeNotInstalled(w.runnerTemp, { env: { ...JOB, GITHUB_RUN_ID: '1' } }), 'a later job on the runner').toBe(false);
   });
 
   it('writes no marker when the CLI is in place, and still exits 0', () => {
     const w = world({ cli: true });
     expect(run(w).status).toBe(0);
-    expect(readRuntimeNotInstalled(w.runnerTemp)).toBe(false);
+    expect(readRuntimeNotInstalled(w.runnerTemp, { env: JOB })).toBe(false);
   });
 
   it('exits 0 even when it cannot write the marker', () => {
@@ -109,6 +111,50 @@ describe('the runtime check, run as the block runs it', SPAWNS, () => {
     const r = run(w);
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/^::warning title=runtime-check::Could not record/m);
+  });
+});
+
+/**
+ * A marker present before the block starts is not this run's (the PR #1491 review). A
+ * non-ephemeral runner can keep `RUNNER_TEMP`, so an earlier block of the same job, whose marker
+ * names this very job, could otherwise mark a later failure `unavailable`. The block's first step
+ * deletes it, before the agent can run; it is run here as the runner runs it.
+ */
+describe("agent-run's first step clears a marker left before it started", SPAWNS, () => {
+  type Step = { name?: string; run?: string; shell?: string };
+  const first = (parse(readFileSync(join(process.cwd(), 'actions/agent-run/action.yml'), 'utf8')).runs.steps as Step[])[0]!;
+  const runStep = (runnerTemp: string) => {
+    const out = join(runnerTemp, 'out.txt');
+    writeFileSync(out, '');
+    const r = spawnSync('bash', ['-e', '-c', String(first.run)], { encoding: 'utf8', env: { PATH: process.env.PATH, RUNNER_TEMP: runnerTemp, GITHUB_OUTPUT: out } });
+    return { status: r.status, output: readFileSync(out, 'utf8') };
+  };
+
+  it('is the start stamp, under the shell every block step uses', () => {
+    expect(first.name).toBe('Record when the agent started');
+    expect(first.shell).toBe('bash -e {0}');
+  });
+
+  it("deletes the marker, so it isn't read as this run's, and still stamps the start", () => {
+    const { runnerTemp } = world();
+    const JOB = { GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review' };
+    writeFileSync(join(runnerTemp, RUNTIME_NOT_INSTALLED), runtimeMarker(JOB, 'an earlier block'));
+    expect(readRuntimeNotInstalled(runnerTemp, { env: JOB }), 'the check is not vacuous').toBe(true);
+    const r = runStep(runnerTemp);
+    expect(r.status).toBe(0);
+    expect(existsSync(join(runnerTemp, RUNTIME_NOT_INSTALLED))).toBe(false);
+    expect(readRuntimeNotInstalled(runnerTemp, { env: JOB })).toBe(false);
+    expect(r.output).toMatch(/^at=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/m);
+  });
+
+  it('never fails: no marker, or no temp directory, still stamps the start', () => {
+    const { runnerTemp } = world();
+    expect(runStep(runnerTemp).status).toBe(0);
+    const out = join(runnerTemp, 'out2.txt');
+    writeFileSync(out, '');
+    const r = spawnSync('bash', ['-e', '-c', String(first.run)], { encoding: 'utf8', env: { PATH: process.env.PATH, GITHUB_OUTPUT: out } });
+    expect(r.status).toBe(0);
+    expect(readFileSync(out, 'utf8')).toMatch(/^at=/m);
   });
 });
 

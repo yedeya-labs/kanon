@@ -10,7 +10,7 @@ import { readBlock } from './helpers/blocks.js';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import {
   RUNTIME_NOT_INSTALLED, classifyResult, parseObjects, readConfiguredModel, readResult, readRuntimeNotInstalled,
-  renderNotice, retryClass,
+  renderNotice, retryClass, runtimeMarker,
 } from '../../actions/agent-classify/classify-agent-result.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -343,17 +343,40 @@ describe('a run whose install of Claude Code failed (kanon#1470)', () => {
     }
   });
 
+  const JOB = { GITHUB_RUN_ID: '40715172609', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review' };
+
   it("reads the marker only from this job's temp directory, never a relative or empty one", () => {
     const dir = mkdtempSync(join(tmpdir(), 'classify-marker-'));
-    expect(readRuntimeNotInstalled(dir)).toBe(false);
-    writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), 'x\n');
-    expect(readRuntimeNotInstalled(dir)).toBe(true);
+    expect(readRuntimeNotInstalled(dir, { env: JOB })).toBe(false);
+    writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker(JOB, 'the install failed'));
+    expect(readRuntimeNotInstalled(dir, { env: JOB })).toBe(true);
     const seen: string[] = [];
-    const exists = (p: unknown) => { seen.push(String(p)); return true; };
-    expect(readRuntimeNotInstalled('', { exists })).toBe(false);
-    expect(readRuntimeNotInstalled(undefined, { exists })).toBe(false);
-    expect(readRuntimeNotInstalled('relative/tmp', { exists })).toBe(false);
+    const read = (p: unknown) => { seen.push(String(p)); return runtimeMarker(JOB); };
+    expect(readRuntimeNotInstalled('', { env: JOB, read })).toBe(false);
+    expect(readRuntimeNotInstalled(undefined, { env: JOB, read })).toBe(false);
+    expect(readRuntimeNotInstalled('relative/tmp', { env: JOB, read })).toBe(false);
     expect(seen).toEqual([]);
+  });
+
+  // A non-ephemeral self-hosted runner can keep `RUNNER_TEMP` between jobs: a marker an earlier
+  // job wrote must not make this one `unavailable` (the PR #1491 review).
+  it.each([
+    ['another run', { GITHUB_RUN_ID: '1' }],
+    ['another attempt of this run', { GITHUB_RUN_ATTEMPT: '2' }],
+    ['another job of this run', { GITHUB_JOB: 'implement' }],
+  ])('does not read a marker %s left as this run\'s', (_name, other) => {
+    const dir = mkdtempSync(join(tmpdir(), 'classify-marker-'));
+    writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker({ ...JOB, ...other }, 'the install failed'));
+    expect(readRuntimeNotInstalled(dir, { env: JOB })).toBe(false);
+  });
+
+  it('does not read a marker that names no job, or is not one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'classify-marker-'));
+    for (const body of [runtimeMarker({}), 'the install failed\n', '[]', 'null']) {
+      writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), body);
+      expect(readRuntimeNotInstalled(dir, { env: JOB }), body).toBe(false);
+      expect(readRuntimeNotInstalled(dir, { env: {} }), body).toBe(false);
+    }
   });
 });
 
@@ -638,14 +661,15 @@ describe('the CLI, run as the workflow runs it', SPAWNS, () => {
     const dir = mkdtempSync(join(tmpdir(), 'classify-cli-'));
     const file = join(dir, 'claude-execution-output.json');
     if (body !== null) writeFileSync(file, body);
-    if (notInstalled) writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), 'the install failed\n');
+    const job = { GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review' };
+    if (notInstalled) writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker(job, 'the install failed'));
     const out = join(dir, 'out.txt');
     const summary = join(dir, 'summary.md');
     writeFileSync(out, '');
     writeFileSync(summary, '');
     const r = spawnSync(process.execPath, [script, '--file', file, ...extra], {
       encoding: 'utf8',
-      env: { ...process.env, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary, RUNNER_TEMP: dir },
+      env: { ...process.env, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary, RUNNER_TEMP: dir, ...job },
     });
     return {
       status: r.status,

@@ -34,7 +34,7 @@
 // `unavailable` are advice, and calling a real crash an outage tells a human to wait
 // when they should act: the same wrong advice this exists to remove, pointed the other
 // way.
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 
@@ -334,12 +334,30 @@ const readObjects = (path, read) => {
  */
 export const RUNTIME_NOT_INSTALLED = 'kanon-claude-code-not-installed';
 
+/** The job a marker belongs to: its run, attempt and job id, as `GITHUB_*` name them. */
+const MARKER_KEYS = /** @type {const} */ ([['run_id', 'GITHUB_RUN_ID'], ['run_attempt', 'GITHUB_RUN_ATTEMPT'], ['job', 'GITHUB_JOB']]);
+
+/** The marker's content for the job `env` describes: the runtime check writes this. */
+export function runtimeMarker(env, message = '') {
+  return `${JSON.stringify({ ...Object.fromEntries(MARKER_KEYS.map(([k, e]) => [k, env[e] ?? ''])), message })}\n`;
+}
+
 /**
- * Whether this job's `agent-run` recorded that marker. The temp directory is the job's own, so a
- * marker there is this job's. With no absolute `RUNNER_TEMP`, false: never a shared `/tmp`.
+ * Whether THIS job's `agent-run` recorded that marker. A non-ephemeral self-hosted runner can
+ * keep `RUNNER_TEMP` between jobs, so a marker there may be an earlier job's: it counts only when
+ * it names this run, attempt and job, and `agent-run` deletes any marker when it starts, so one
+ * left by an earlier block of the same job doesn't count either. With no absolute `RUNNER_TEMP`,
+ * or a marker that can't be read, false: never a shared `/tmp`, never a guess.
+ *
+ * @param {string | undefined} runnerTemp
+ * @param {{ env?: Record<string, string | undefined>, read?: (path: string, encoding: 'utf8') => string }} [opts]
  */
-export function readRuntimeNotInstalled(runnerTemp, { exists = existsSync } = {}) {
-  return isAbsolute(String(runnerTemp ?? '')) && exists(join(runnerTemp, RUNTIME_NOT_INSTALLED));
+export function readRuntimeNotInstalled(runnerTemp, { env = process.env, read = readFileSync } = {}) {
+  if (!isAbsolute(String(runnerTemp ?? ''))) return false;
+  let marker;
+  try { marker = JSON.parse(String(read(join(runnerTemp, RUNTIME_NOT_INSTALLED), 'utf8'))); } catch { return false; }
+  if (!marker || typeof marker !== 'object') return false;
+  return MARKER_KEYS.every(([k, e]) => typeof marker[k] === 'string' && marker[k] !== '' && marker[k] === env[e]);
 }
 
 /** The model the run was CONFIGURED for, from the `init` message. */

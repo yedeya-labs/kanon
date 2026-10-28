@@ -755,7 +755,7 @@ function collect(args, env) {
     || (args.job_status ?? env.TELEMETRY_JOB_STATUS) === "failure";
   // A RUN WHOSE INSTALL OF CLAUDE CODE FAILED (kanon#1470), from `agent-run`'s marker in this job's
   // temp directory: the row says `unavailable`, as the `agent-classify` notice for the same run does.
-  const runtimeNotInstalled = readRuntimeNotInstalled(env.RUNNER_TEMP);
+  const runtimeNotInstalled = readRuntimeNotInstalled(env.RUNNER_TEMP, { env });
   const classification = classifyResult(result, model, { maxTurns: parseMaxTurns(ctx.claude_args), stepFailed, runtimeNotInstalled });
   return { row: buildRow(result, ctx, classification), classification, path, counts };
 }

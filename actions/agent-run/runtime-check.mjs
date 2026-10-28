@@ -8,8 +8,10 @@
 //
 // The evidence is what the action leaves on disk, never its log. In the pinned action
 // (`run.ts`, v1.0.262) the prepare phase writes the prompt to
-// `$RUNNER_TEMP/claude-prompts/claude-prompt.txt`, and the very next thing it does is the install,
-// which puts the CLI at `$HOME/.local/bin/claude`. So a failed step that set no `conclusion` and
+// `$RUNNER_TEMP/claude-prompts/claude-prompt.txt`, then builds its MCP config, then installs the
+// CLI at `$HOME/.local/bin/claude`. Building the config only assembles it (its one API call
+// swallows its errors), so a failure there is close to unreachable, though it would read as an
+// install failure too: the model wasn't called either way. So a failed step that set no `conclusion` and
 // no `execution_file` (the CLI never returned), with a prompt written during this run and no CLI
 // in place, failed at the install. Any other shape writes nothing:
 //   - no prompt file, or one older than the agent's start stamp (a non-ephemeral runner keeps
@@ -19,16 +21,19 @@
 //   - a `conclusion` or a result file: the CLI ran, and the result file is what classifies it.
 // Every unclear case leaves the marker out, so nothing widens what counts as unreachable.
 //
-// The marker is `RUNTIME_NOT_INSTALLED` in the runner's temp directory, which is the job's own.
-// `agent-classify` and `agent-telemetry` read it, in the same job.
+// The marker is `RUNTIME_NOT_INSTALLED` in the runner's temp directory, and `agent-classify` and
+// `agent-telemetry` read it, in the same job. A non-ephemeral runner can keep that directory
+// between jobs, so the marker names this run, attempt and job (`runtimeMarker`), and is read only
+// by the job it names; `agent-run`'s first step deletes any marker already there.
 //
-// Inputs, by environment only: OUTCOME, CONCLUSION, EXECUTION_FILE, STARTED_AT, RUNNER_TEMP, HOME.
+// Inputs, by environment only: OUTCOME, CONCLUSION, EXECUTION_FILE, STARTED_AT, RUNNER_TEMP, HOME,
+// and GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT and GITHUB_JOB, which the runner sets.
 // ALWAYS EXITS 0: it records evidence about a red run and must never red one.
 
 import { existsSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
-import { RUNTIME_NOT_INSTALLED } from '../agent-classify/classify-agent-result.mjs';
+import { RUNTIME_NOT_INSTALLED, runtimeMarker } from '../agent-classify/classify-agent-result.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 
 /** Where the pinned action's prepare phase writes the prompt, just before it installs the CLI. */
@@ -73,7 +78,7 @@ if (isCliEntry(import.meta.url)) {
       runnerTemp: env.RUNNER_TEMP ?? '',
       home: env.HOME ?? '',
     });
-    if (result.notInstalled) writeFileSync(join(String(env.RUNNER_TEMP), RUNTIME_NOT_INSTALLED), `${result.message}\n`);
+    if (result.notInstalled) writeFileSync(join(String(env.RUNNER_TEMP), RUNTIME_NOT_INSTALLED), runtimeMarker(env, result.message));
     console.log(result.message);
   } catch (e) {
     console.log(`::warning title=runtime-check::Could not record whether Claude Code installed: ${e instanceof Error ? e.message : e}`);

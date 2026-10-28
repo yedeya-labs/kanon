@@ -133,10 +133,18 @@ runs:
     # caller for a timestamp the job already has. UNCONDITIONAL here, where the spine gated
     # it on the quality label: the stamp is an output nobody reads unless agent-finish is
     # given a label, and a block that runs the agent should not need to know about one.
+    #
+    # IT ALSO CLEARS THE INSTALL MARKER (kanon#1470). A non-ephemeral runner can keep `RUNNER_TEMP`
+    # between jobs, so a marker the runtime check below wrote for an earlier job, or an earlier
+    # block of this one, is deleted before this block's agent can run. The marker also names its
+    # job, and is read only by that job. The deletion cannot fail the step: `rm -rf` of a missing
+    # path succeeds, and `|| true` covers the rest.
     - name: Record when the agent started
       id: started
       shell: bash -e {0}
-      run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      run: |
+        if [ -n "$RUNNER_TEMP" ]; then rm -rf -- "$RUNNER_TEMP/kanon-claude-code-not-installed" || true; fi
+        echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
     # A RAISED TURN LIMIT, CHECKED BEFORE ANYTHING ELSE THE AGENT NEEDS (kanon#891). A person may
     # raise the lane's limit for one dispatched run, with a reason, up to the ceiling the lane
