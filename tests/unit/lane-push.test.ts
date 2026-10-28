@@ -93,26 +93,32 @@ const writeRequest = (f: Fixture, request: unknown) => {
   writeFileSync(join(f.work, REQUEST_PATH), typeof request === 'string' ? request : JSON.stringify(request));
 };
 
-/** The double, answering the pull request and its labels as GitHub would. */
-const github = (f: Fixture) => fakeGitHub({
+type Answer = { status: number; headers: Record<string, string>; json: unknown };
+/** The double, answering the pull request and its labels as GitHub would, and `answer` first. */
+const github = (f: Fixture, answer: (call: Call) => Answer | undefined = () => undefined) => fakeGitHub({
   remote: f.remote, repo: REPO, appLogin: APP,
   before: (call: Call) => {
+    const given = answer(call);
+    if (given) return given;
     if (call.method === 'POST' && call.path === `repos/${REPO}/pulls`) return { status: 201, headers: {}, json: { number: 42, html_url: 'https://example.invalid/pull/42' } };
     if (call.method === 'POST' && call.path === `repos/${REPO}/issues/42/labels`) return { status: 200, headers: {}, json: [] };
     return undefined;
   },
 });
 
+/** A branch someone else pushed to the remote, at the default branch's head, as a person's or an earlier run's would be. */
+const existing = (f: Fixture, branch: string) => f.onRemote('update-ref', `refs/heads/${branch}`, 'refs/heads/main');
+
 /** The push job's script, in process: the store from the handed-over bundle, then the push. */
-const push = async (f: Fixture, opts: { ref?: string; before?: string[] | null; labels?: string[] } = {}) => {
-  const gh = github(f);
+const push = async (f: Fixture, opts: { ref?: string; labels?: string[]; attempt?: number; answer?: (call: Call) => Answer | undefined } = {}) => {
+  const gh = github(f, opts.answer);
   const dir = join(f.temp, 'kanon-push');
   const store = join(f.root, `store-${Math.random().toString(36).slice(2)}`);
   const { prereqs } = prepareStore({ store, bundle: join(dir, 'commits.bundle'), start: f.start, server: `file://${f.root}`, repo: REPO, token: 'x' });
   const text = existsSync(join(dir, 'request.json')) ? readFileSync(join(dir, 'request.json'), 'utf8') : '';
   const r = await pushLane({
     gitDir: store, prereqs, start: f.start, ref: opts.ref ?? '', request: text ? readRequest(text) : null,
-    before: opts.before === undefined ? ['main'] : opts.before, labels: opts.labels ?? LABELS,
+    labels: opts.labels ?? LABELS, ...(opts.attempt ? { attempt: opts.attempt } : {}),
     appLogin: APP, repo: REPO, api: gh.request, sleep: async () => {},
   });
   return { ...r, calls: gh.calls as Call[] };
@@ -166,28 +172,57 @@ describe('the push job (kanon#1383)', () => {
     expect(r.pr).toBeUndefined();
   });
 
-  it('[LANE-15] refuses a request whose branch existed before the run, and creates nothing', async () => {
+  it('[LANE-15] refuses a request whose branch exists on GitHub when it pushes, and creates nothing', async () => {
     const f = fixture();
     runAgentJob(f, () => {
       f.sh(f.work, 'switch', '-q', '-c', 'feat/7-thing');
       f.commit('src/thing.txt', 'thing\n');
       writeRequest(f, REQUEST);
     });
-    const r = await push(f, { before: ['main', 'feat/7-thing'] });
-    expect(r.refused).toEqual([expect.objectContaining({ branch: 'feat/7-thing', why: expect.stringMatching(/existed before the run/) })]);
+    // Made during the run, after any list of branches a job could have taken before the agent.
+    existing(f, 'feat/7-thing');
+    const r = await push(f);
+    expect(r.refused).toEqual([expect.objectContaining({ branch: 'feat/7-thing', why: expect.stringMatching(/exists on GitHub/) })]);
+    expect(at(r.calls, 'GET', 'git/ref/heads/feat/7-thing')).toBeGreaterThan(-1);
+    expect(writes(r.calls)).toEqual([]);
+    expect(f.onRemote('rev-parse', 'refs/heads/feat/7-thing')).toBe(f.start);
+  });
+
+  it('[LANE-15] refuses a request when GitHub can\'t say whether its branch exists: it fails closed', async () => {
+    const f = fixture();
+    runAgentJob(f, () => {
+      f.sh(f.work, 'switch', '-q', '-c', 'feat/7-thing');
+      f.commit('src/thing.txt', 'thing\n');
+      writeRequest(f, REQUEST);
+    });
+    const r = await push(f, {
+      answer: (call) => (call.method === 'GET' && call.path === `repos/${REPO}/git/ref/heads/feat/7-thing` ? { status: 502, headers: {}, json: {} } : undefined),
+    });
+    expect(r.refused).toEqual([expect.objectContaining({ branch: 'feat/7-thing', why: expect.stringMatching(/answered 502, so it can't be told new/) })]);
     expect(writes(r.calls)).toEqual([]);
   });
 
-  it('[LANE-15] refuses a request when the branches before the run are unknown: it fails closed', async () => {
+  it('[LANE-15] on a re-run, a refused request\'s summary tells a person to open the pull request by hand (kanon#1438)', async () => {
     const f = fixture();
     runAgentJob(f, () => {
       f.sh(f.work, 'switch', '-q', '-c', 'feat/7-thing');
       f.commit('src/thing.txt', 'thing\n');
       writeRequest(f, REQUEST);
     });
-    const r = await push(f, { before: null });
-    expect(r.refused).toEqual([expect.objectContaining({ branch: 'feat/7-thing', why: expect.stringMatching(/unknown/) })]);
+    // The first attempt pushed the branch, then failed before the pull request opened.
+    const first = await push(f, { answer: (call) => (call.method === 'POST' && call.path === `repos/${REPO}/pulls` ? { status: 502, headers: {}, json: {} } : undefined) }).catch((e: Error) => e);
+    expect(first).toBeInstanceOf(Error);
+    const pushed = f.onRemote('rev-parse', 'refs/heads/feat/7-thing');
+    const r = await push(f, { attempt: 2 });
+    expect(r.refused).toEqual([expect.objectContaining({ branch: 'feat/7-thing', why: expect.stringMatching(/exists on GitHub/) })]);
     expect(writes(r.calls)).toEqual([]);
+    expect(f.onRemote('rev-parse', 'refs/heads/feat/7-thing')).toBe(pushed);
+    const text = r.lines.join('\n');
+    expect(text).toMatch(/attempt 2 of the run/);
+    expect(text).toMatch(/open one by hand, into \*\*main\*\*, titled "feat: the thing", labelled `agent:implement`, `review:please`/);
+    // A first attempt's refusal says nothing of the kind.
+    const once = await push(f);
+    expect(once.lines.join('\n')).not.toMatch(/by hand/);
   });
 
   it('[LANE-15] refuses a request that asks for a label the lane never had, and creates nothing', async () => {
@@ -258,15 +293,17 @@ describe('the push job (kanon#1383)', () => {
     expect(r.lines.join('\n')).toMatch(/no request, so no pull request was opened/i);
   });
 
-  it('with no request, refuses a branch that existed before the run', async () => {
+  it('with no request, refuses a branch that exists on GitHub', async () => {
     const f = fixture();
     runAgentJob(f, () => {
       f.sh(f.work, 'switch', '-q', '-c', 'docs/old');
       f.commit('a.md', 'a\n');
     });
-    const r = await push(f, { before: ['main', 'docs/old'] });
-    expect(r.refused).toEqual([expect.objectContaining({ branch: 'docs/old', why: expect.stringMatching(/existed before the run/) })]);
+    existing(f, 'docs/old');
+    const r = await push(f, { attempt: 2 });
+    expect(r.refused).toEqual([expect.objectContaining({ branch: 'docs/old', why: expect.stringMatching(/exists on GitHub/) })]);
     expect(writes(r.calls)).toEqual([]);
+    expect(r.lines.join('\n')).toMatch(/already pushed a branch refused here, its commits are on GitHub/);
   });
 
   it('with a request, moves only its branch, and leaves the agent\'s other branches local', async () => {
@@ -314,7 +351,7 @@ describe('the push job (kanon#1383)', () => {
       f.sh(f.work, 'switch', '-q', '-c', 'side');
       f.commit('side.txt', 'side\n');
     });
-    const r = await push(f, { ref: 'fix/1-thing', before: ['main', 'fix/1-thing'] });
+    const r = await push(f, { ref: 'fix/1-thing' });
     expect(r.refused).toEqual([]);
     expect(r.heads.map((h) => h.ref)).toEqual(['fix/1-thing']);
     expect(r.base).toBe(f.start);
@@ -385,7 +422,7 @@ describe('the spine\'s steps around it (kanon#1383)', () => {
         env: {
           ...CLEAN_ENV, KANON: process.cwd(), RUNNER_TEMP: f.temp, GH_TOKEN: 'x', REPO,
           GITHUB_SERVER_URL: `file://${f.root}`, GITHUB_API_URL: api.url, APP_LOGIN: APP,
-          START: f.start, REF: '', BEFORE: '["main"]', LABELS: LABELS.join(' '),
+          START: f.start, REF: '', LABELS: LABELS.join(' '),
         },
       });
       const head = f.onRemote('rev-parse', 'refs/heads/feat/7-thing');
@@ -450,9 +487,24 @@ describe('the spine\'s push job holds the key and runs nothing else (kanon#1383)
     // It reads the commit the agent's job checked out from that job's checkout, set before the agent ran.
     expect(pushStep.env?.START).toBe('${{ needs.run.outputs.start }}');
     expect(agentJob.jobs.run.outputs.start).toBe('${{ steps.checkout.outputs.commit }}');
-    // And the branches that existed before the run from the mint job, before the agent's job started.
-    expect(pushStep.env?.BEFORE).toBe('${{ needs.mint.outputs.branches }}');
-    expect(spine.jobs.mint.outputs.branches).toBe('${{ steps.branches.outputs.branches }}');
+    // No list of the branches before the run (kanon#1438): it asks GitHub as it pushes.
+    expect(JSON.stringify(job)).not.toMatch(/BEFORE|--before|outputs\.branches/);
+    expect(spine.jobs.mint.outputs.branches).toBeUndefined();
+  });
+
+  it('[LANE-14] re-run on its own, reads the bundle the agent\'s job uploaded in its attempt, of this run alone (kanon#1438)', () => {
+    const upload = agentSteps.find((s) => s.id === 'upload')!;
+    const download = steps.find((s) => String(s.uses ?? '').startsWith('actions/download-artifact@'))!;
+    // The agent's job names the bundle after its attempt and says which, as an output a partial
+    // re-run reuses; the push job downloads that name, never one from its own attempt.
+    expect(upload.with?.name).toBe('kanon-push-${{ github.run_attempt }}');
+    expect(agentJob.jobs.run.outputs.attempt).toBe('${{ github.run_attempt }}');
+    expect(agentJob.on.workflow_call.outputs.attempt.value).toBe('${{ jobs.run.outputs.attempt }}');
+    expect(download.with?.name).toBe('kanon-push-${{ needs.run.outputs.attempt }}');
+    // An earlier attempt's artifact is read through the API, with this job's token, from this run only.
+    expect(download.with?.['run-id']).toBe('${{ github.run_id }}');
+    expect(download.with?.['github-token']).toBe('${{ steps.push-token.outputs.token }}');
+    expect(download.with).not.toHaveProperty('repository');
   });
 
   it('[LANE-14] mints the Author App\'s token in the job, narrowed to the push, and never hands it on', () => {
@@ -463,6 +515,7 @@ describe('the spine\'s push job holds the key and runs nothing else (kanon#1383)
       'permission-contents': 'write',
       'permission-pull-requests': 'write',
       'permission-workflows': "${{ inputs.push-workflows && 'write' || '' }}",
+      'permission-actions': 'read',
     });
     expect(pushStep.env?.GH_TOKEN).toBe('${{ steps.push-token.outputs.token }}');
     expect(Object.values(job.outputs ?? {}).join(' ')).not.toMatch(/token/);
@@ -546,7 +599,7 @@ const pushRebase = async (f: Conflicting, { merged = f.merged, pull = PULL as un
   const store = join(f.root, `store-${Math.random().toString(36).slice(2)}`);
   const { prereqs } = prepareStore({ store, bundle: join(f.temp, 'kanon-push', 'commits.bundle'), start: f.start, server: `file://${f.root}`, repo: REPO, token: 'x' });
   const r = await pushLane({
-    gitDir: store, prereqs, start: f.start, ref: PR_BRANCH, merged, pr: PR, request: null, before: null, labels: [],
+    gitDir: store, prereqs, start: f.start, ref: PR_BRANCH, merged, pr: PR, request: null, labels: [],
     appLogin: APP, repo: REPO, api: gh.request, sleep: async () => {},
   });
   return { ...r, calls: gh.calls as Call[] };
@@ -870,9 +923,9 @@ const pushSplit = async (f: Fixture, { replace = SPLIT, pulls = {} as Record<str
   const store = join(f.root, `store-${Math.random().toString(36).slice(2)}`);
   const { prereqs } = prepareStore({ store, bundle: join(dir, 'commits.bundle'), start: f.start, server: `file://${f.root}`, repo: REPO, token: 'x' });
   const text = existsSync(join(dir, 'request.json')) ? readFileSync(join(dir, 'request.json'), 'utf8') : '';
-  // No list of the branches before the run: replace mode needs none, since the lane names the one that moves.
+  // Replace mode asks GitHub after no branch: the lane names the one that moves, which may exist.
   const r = await pushLane({
-    gitDir: store, prereqs, start: f.start, replace, ref, request: text ? readRequest(text) : null, before: null, labels: SPLIT_LABELS,
+    gitDir: store, prereqs, start: f.start, replace, ref, request: text ? readRequest(text) : null, labels: SPLIT_LABELS,
     appLogin: APP, repo: REPO, api: gh.request, sleep: async () => {},
   });
   return { ...r, calls: gh.calls as Call[] };

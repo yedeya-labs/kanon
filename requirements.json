@@ -930,6 +930,7 @@
           "issues": "write",
           "pull_requests": "write",
           "workflows": "write",
+          "actions": "read",
           "metadata": "read"
         }
       },

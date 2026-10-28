@@ -7,7 +7,7 @@
     },
     "implementer": {
       "role": "Implementer",
-      "permissions": { "contents": "write", "issues": "write", "pull_requests": "write", "workflows": "write", "metadata": "read" }
+      "permissions": { "contents": "write", "issues": "write", "pull_requests": "write", "workflows": "write", "actions": "read", "metadata": "read" }
     },
     "reviewer": {
       "role": "Reviewer",
