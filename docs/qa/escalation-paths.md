@@ -32,7 +32,7 @@ What ships, and when:
 The hosted stores' trust and code:
 
 - `^infra/telemetry/template\.yaml$` `infra` `always` — the telemetry store's template: its tables' resource policies, its functions' URLs and the roles and aliases that reach them (no role trusts GitHub's OIDC provider since plan 0008 J9)
-- `^infra/telemetry/function/` `infra` `always` — the ingest function, the only code that writes the telemetry table and decides the one key a call may write (from the token's `repository` claim on `live`, or the Owner's `import` and `backfill` aliases' `{ key, rows }` event), and the aggregate function, which publishes only what at least three adopters contribute to
+- `^infra/telemetry/function/` `infra` `always` — the ingest function, the only code that writes the telemetry table and decides the one key a call may write (on `live`, the key of the registration the token's `repository_id` claim finds, or the Owner's `import` and `backfill` aliases' `{ key, rows }` event), and the aggregate function, which publishes only what at least three adopters contribute to
 - `^infra/qa-store/aws/(template\.yaml|provision\.mjs)$` `infra` `always` — the QA store's template and its provisioner, which set the role and the exact subjects it trusts
 - `^infra/status/` `infra` `always` — the hosted status server: what it reads with the token a person signs in with, and the status App's sign-in that issues it (project #1327)
 
