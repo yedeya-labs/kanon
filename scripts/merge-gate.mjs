@@ -1972,9 +1972,16 @@ export const FOLLOW_UP_MS = 24 * 60 * 60 * 1000;
  * right after a squash, but a PR it queues merges later, in the queue, and nothing else of the
  * Merger's sees it again: the sweep reads open PRs only. So each sweep lists the PRs merged in
  * the last `FOLLOW_UP_MS`, in one read, keeps those merged as the Merger, and hands each to
- * `verifyClosed`. Through a queue the merge is recorded as its enqueuer's, measured on Kanon's
- * queue (`mergedBy` is the member who queued it), and GitHub closes the issue as that actor, so
- * the scope `verifyClosed` exists to catch is the Merger's either way.
+ * `verifyClosed`. Through a queue the merge is recorded as its enqueuer's, and GitHub closes the
+ * issue as that actor, so the scope `verifyClosed` exists to catch is the Merger's either way.
+ * MEASURED FOR THE MERGER ITSELF (kanon#1124): on Kanon's queue, the 9 PRs the Merger App added
+ * between 2026-10-22 and 2026-10-25 (#1268, #1269, #1289, #1369, #1405-#1408 and #1417) each read
+ * back with the Merger as the queue event's actor, the merge event's actor and
+ * `mergedBy`, and the two declared issues sampled (#1397 of #1405, #1410 of #1417) were closed
+ * by the Merger's bot two seconds after the merge. `gh pr list --json mergedBy` spells it `{"is_bot":true,"login":"app/<slug>"}`
+ * (GraphQL itself gives the bare slug, the REST events `<slug>[bot]`), which `slug` below reduces
+ * to the register's slug. A PR a person queued reads as that person on all three, never as the
+ * queue's own bot.
  *
  * Why not the merge-reconcile lane, the one reader of a merged PR already there: it is the
  * Reviewer's lane, its filter holds only the workflow's read token, and the comment this posts
@@ -2002,9 +2009,9 @@ export function followQueueMerges(repo, { run = gh, verify = verifyClosed, now =
   const merger = mergerLogin();
   const ours = recent.filter((p) => slug(p?.mergedBy?.login) === merger);
   // SAID EVERY TIME, matched or not (kanon#1117). The rule above that a queue merge is recorded
-  // as its enqueuer's was measured only for a person who queued. If GitHub records an App's as
-  // another actor, nothing here matches, so the line names who merged the rest: an empty check
-  // reads as one, not as the absence of `#n: closed` lines.
+  // as its enqueuer's is measured for a person and for the Merger App (kanon#1124). If GitHub ever
+  // records an App's as another actor, nothing here matches, so the line names who merged the
+  // rest: an empty check reads as one, not as the absence of `#n: closed` lines.
   const others = new Map();
   for (const p of recent.filter((q) => !ours.includes(q))) {
     const by = p?.mergedBy?.login || 'an unknown actor';

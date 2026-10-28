@@ -2868,6 +2868,18 @@ esac
       expect(asked[0].join(' ')).toContain(`merged:>=${new Date(NOW - FOLLOW_UP_MS).toISOString()}`);
     });
 
+    // The shapes `gh pr list --json mergedBy` returned on Kanon's queue (kanon#1124): a PR the
+    // Merger App queued (#1417, 2026-10-25) reads as `app/<slug>` with `is_bot`, and one a person
+    // queued (#1509, 2026-10-28) as that person, never as the queue's own bot.
+    it('keeps a PR the Merger queued, in the shape gh gives an App that merged through the queue (kanon#1124)', () => {
+      const { followed, told } = follow(listed([
+        { number: 1417, mergedBy: { is_bot: true, login: `app/${MERGER_LOGIN}` }, closingIssuesReferences: [{ number: 1410 }] },
+        { number: 1509, mergedBy: { is_bot: false, login: 'a-person' }, closingIssuesReferences: [] },
+      ]));
+      expect(followed).toEqual([1417]);
+      expect(told[0]).toBe(`2 PRs merged in the last day, 1 as the Merger (${MERGER_LOGIN}): checking #1417; the other by a-person (1)`);
+    });
+
     it('leaves a PR someone else merged, and one merged before the window', () => {
       const { followed } = follow(listed([{ mergedBy: { login: 'a-person' } }, { number: 9, mergedAt: '2026-10-16T11:00:00Z' }]));
       expect(followed).toEqual([]);
