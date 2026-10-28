@@ -1054,10 +1054,22 @@ function nextActionsCore(world, {
   // A CLOSING MERGE IN ANOTHER REPOSITORY (kanon#1412). Permanent by construction: it stays
   // merged, and no release of this repository will ever contain it, so every tick would stop
   // here again. It holds (`K-AGENT-32`) and names each merge.
+  //
+  // IT SAYS WHAT WAS CHECKED HERE, AND WHAT WASN'T (kanon#1435). `readDeploy` holds only once
+  // this repository's own merges are deployed or there were none, and the hold names which.
+  // Phase 5 never runs while it stands, so a human closing by hand closes a project whose
+  // acceptance criteria nothing verified: the message says so, and never offers the other
+  // repository's deploy as enough to close on.
   if (phase === 'deploy-merged-elsewhere') {
-    const named = (world.deploy?.merges ?? []).map((m) => `\`${m.repo}#${m.number}\` (closing #${m.issue})`).join(', ') || 'a closing pull request';
-    const why = `phase 4 is \`deploy-merged-elsewhere\`: ${named} merged in another repository, so no release of this one can contain it and ${deployEnvironment(world)} can't be checked for it. Once that work is deployed where it lives, close this project by hand; or, if it doesn't belong to this project, edit that pull request so it no longer closes the issue and remove \`${HELD}\``;
-    return { phase, actions: [], escalateKind: 'stop', escalate: [why], stopped: `${why}. NOT closing it here: the release was never checked for that work` };
+    const d = world.deploy ?? {};
+    const named = (d.merges ?? []).map((m) => `\`${m.repo}#${m.number}\` (closing #${m.issue})`).join(', ') || 'a closing pull request';
+    const here = d.here === 'deployed'
+      ? `This repository's own merges for the project are deployed: \`${d.tag}\` reached ${deployEnvironment(world)} (${d.url ?? 'no run url'})${d.failedAt ? `, though their own release \`${d.failedAt}\` FAILED to deploy (${d.failedUrl ?? 'no run url'})` : ''}`
+      : d.here === 'nothing-to-deploy'
+        ? 'No merge in this repository closed the project\'s issues, so nothing of it was deployed from here'
+        : 'Whether this repository\'s own merges for the project are deployed is UNKNOWN';
+    const why = `phase 4 is \`deploy-merged-elsewhere\`: ${named} merged in another repository, so no release of this one can contain it and ${deployEnvironment(world)} can't be checked for it. ${here}. Phase 5 has NOT run: no tick verifies the project's acceptance criteria on ${deployEnvironment(world)} while this hold stands. If that pull request doesn't belong to this project, edit it so it no longer closes the issue and remove \`${HELD}\`, and the next tick goes on to phase 5. Otherwise close this project by hand only once that work is deployed where it lives AND you have verified the project's acceptance criteria yourself; that other deploy alone is not enough`;
+    return { phase, actions: [], escalateKind: 'stop', escalate: [why], stopped: `${why}. NOT closing it here: the release was never checked for that work, and phase 5 never ran` };
   }
 
   // ── PHASE 5 outcomes ──────────────────────────────────────────────────────
@@ -1904,11 +1916,29 @@ export async function readDeploy(issues, io = {}) {
   const { reader, repo } = { ...tickReads(), ...io };
   const declared = io.declared ?? (async () => referenceDeployAt(await defaultBranchReader(reader, repo)));
   const byIssue = await closingMergesByIssue(issues, { reader, repo });
+  const own = await walkDeploy(byIssue, { reader, repo, declared });
   // NO RELEASE HERE CAN HOLD ANOTHER REPOSITORY'S MERGE (kanon#1412), so neither crediting a
   // release nor dropping the merge is right: the project holds, naming each one, for a human
   // to decide whether that work is deployed where it lives.
+  //
+  // BUT ONLY ONCE THIS REPOSITORY'S OWN MERGES ARE SETTLED (kanon#1435). The hold used to
+  // return before the walk, so the human it handed the project to had no way to tell whether
+  // this repository's own merges were released, deployed or reverted, and was told to close
+  // on the other repository's deploy alone. Now the walk runs first: any state that can't
+  // reach phase 5 is reported as itself, with its own message, and the hold comes only on
+  // top of `deployed` or `nothing-to-deploy`, carrying that verdict (`here`, and the
+  // release's `tag`, `url` and `failedAt` when there is one) for the hold's message.
   const elsewhere = byIssue.flatMap((i) => (i.elsewhere ?? []).map((p) => ({ issue: i.issue, ...p })));
-  if (elsewhere.length) return { state: 'merged-elsewhere', merges: elsewhere };
+  if (!elsewhere.length || !reachesPhase6(own.state)) return own;
+  return { ...own, state: 'merged-elsewhere', here: own.state, merges: elsewhere };
+}
+
+/**
+ * Phase 4's release walk over this repository's own closing merges, `readDeploy`'s verdict
+ * before it folds in any merge from another repository.
+ * @param {{issue: number, shas: string[]}[]} byIssue
+ */
+async function walkDeploy(byIssue, { reader, repo, declared }) {
   const shas = byIssue.flatMap((i) => i.shas);
   if (!shas.length) return classifyDeploy({ shas, tag: null, run: null, deployJob: null });
   const deploy = await declared();
