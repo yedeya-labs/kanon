@@ -66,7 +66,7 @@ The split of plan 0010 §2 holds: Kanon owns the governance, the adopter owns th
 
 ### 4.1 The caller and the workflow
 
-A new reusable workflow in Kanon, `.github/workflows/deploy-smoke.yml`, and a new caller in the adopter's repository, `.github/workflows/smoke.yml`, which `kanon init` writes when the record declares a chain ([§9](#9-doctor-and-init)). The caller holds the triggers (`K-LAYOUT-18`):
+A new reusable workflow in Kanon, `.github/workflows/deploy-smoke.yml`, and a new caller in the adopter's repository, `.github/workflows/smoke.yml`, which `kanon init` writes when the record declares a chain ([§9](#9-doctor-and-init)). The caller holds the triggers, as an `agent-*` lane's caller does under `K-LAYOUT-18`, which fixes the names of those callers only, so `smoke.yml` keeps its own:
 
 ```yaml
 on:
