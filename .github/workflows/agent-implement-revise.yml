@@ -729,6 +729,9 @@ jobs:
     timeout-minutes: 15
     outputs:
       changed: ${{ steps.fix.outputs.changed }}
+      # The attempt this job ran in, which names the artifact it uploaded (kanon#1507). A partial
+      # re-run of `fix-push` alone reuses this output, so it downloads this attempt's files.
+      attempt: ${{ github.run_attempt }}
     steps:
       - uses: $/actions/kanon-path
       - uses: actions/checkout@v7
@@ -757,7 +760,7 @@ jobs:
         if: steps.fix.outputs.changed == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: kanon-revise-fix
+          name: kanon-revise-fix-${{ github.run_attempt }}
           path: ${{ runner.temp }}/kanon-revise-fix/change.json
           retention-days: 1
 
@@ -781,14 +784,23 @@ jobs:
           client-id: ${{ secrets.AUTHOR_APP_ID }}
           private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           # Narrowed to what this job uses (`K-AGENT-46`): the commit and the branch (`contents`),
-          # and the round marker, which GitHub accepts on either of the other two.
+          # the round marker, which GitHub accepts on either of the other two, and the rewritten
+          # files from an earlier attempt of this run (`actions: read`).
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write
+          permission-actions: read
+      # RE-RUN ON ITS OWN (kanon#1507), as the spine's push job is (kanon#1438). "Re-run failed
+      # jobs" after a failed `fix-push` re-runs it alone, in a later attempt, and reuses
+      # `fix-command`'s outputs. A job sees only its own attempt's artifacts unless it names a run
+      # and a token, so the download names this run (`run-id`, never another's) and the files
+      # `fix-command` uploaded in the attempt it ran in, and reads them with this job's token.
       - uses: actions/download-artifact@v8
         with:
-          name: kanon-revise-fix
+          name: kanon-revise-fix-${{ needs.fix-command.outputs.attempt }}
           path: ${{ runner.temp }}/kanon-revise-fix
+          run-id: ${{ github.run_id }}
+          github-token: ${{ steps.fix-token.outputs.token }}
       # Through the verified-commit helper (`[LANE-12]`): the commit is made in a bare object store
       # holding only the handed-back head, which is fetched, never checked out, and GitHub creates
       # it with this job's token, so it is verified as the App's before the branch moves.

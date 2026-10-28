@@ -129,6 +129,23 @@ describe("a hand-back whose failed checks all have a fix command runs it before 
       expect(pushJob.steps.some((st: { uses?: string }) => String(st.uses ?? '').startsWith('actions/checkout'))).toBe(false);
       expect(JSON.stringify(pushJob)).toContain('secrets.AUTHOR_APP_PRIVATE_KEY');
     });
+
+    it('[LANE-14] re-run on its own, the push reads the files the fix job uploaded in its attempt, of this run alone (kanon#1507)', () => {
+      type Step = { id?: string; uses?: string; with?: Record<string, unknown> };
+      const upload = (fixJob.steps as Step[]).find((s) => String(s.uses ?? '').startsWith('actions/upload-artifact@'))!;
+      const download = (pushJob.steps as Step[]).find((s) => String(s.uses ?? '').startsWith('actions/download-artifact@'))!;
+      // The fix job names its files after its attempt and says which, as an output a partial
+      // re-run reuses; the push downloads that name, never one from its own attempt.
+      expect(upload.with?.name).toBe('kanon-revise-fix-${{ github.run_attempt }}');
+      expect(fixJob.outputs.attempt).toBe('${{ github.run_attempt }}');
+      expect(download.with?.name).toBe('kanon-revise-fix-${{ needs.fix-command.outputs.attempt }}');
+      // An earlier attempt's artifact is read through the API, with this job's token, from this run only.
+      expect(download.with?.['run-id']).toBe('${{ github.run_id }}');
+      expect(download.with?.['github-token']).toBe('${{ steps.fix-token.outputs.token }}');
+      expect(download.with).not.toHaveProperty('repository');
+      const steps = pushJob.steps as Step[];
+      expect(steps.findIndex((s) => s.id === 'fix-token')).toBeLessThan(steps.indexOf(download));
+    });
   });
 
   // Runs the fix job's own steps in `bash`, with `node` and `git`, so it takes the spawn budget (#436).

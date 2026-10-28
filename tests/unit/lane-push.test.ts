@@ -1119,8 +1119,20 @@ describe('the split lane\'s push job holds the key and runs nothing else (kanon#
     expect(splitAgent.jobs.split.outputs.commits).toBe("${{ steps.upload.outcome == 'success' }}");
     for (const k of ['commits', 'start', 'act']) expect(splitAgent.on.workflow_call.outputs[k].value, k).toBe(`\${{ jobs.split.outputs.${k} }}`);
     const upload = splitSteps.find((s) => s.id === 'upload')!;
+    expect(upload.with?.name).toBe('kanon-push-${{ github.run_attempt }}');
+  });
+
+  it('[LANE-14] on the split lane: re-run on its own, reads the bundle the agent\'s job uploaded in its attempt, of this run alone (kanon#1507)', () => {
     const download = steps.find((s) => String(s.uses ?? '').startsWith('actions/download-artifact@'))!;
-    expect(download.with?.name).toBe(upload.with?.name);
+    // The agent's job says which attempt it ran in, as an output a partial re-run reuses; the push
+    // job downloads that attempt's bundle, never one from its own attempt.
+    expect(splitAgent.jobs.split.outputs.attempt).toBe('${{ github.run_attempt }}');
+    expect(splitAgent.on.workflow_call.outputs.attempt.value).toBe('${{ jobs.split.outputs.attempt }}');
+    expect(download.with?.name).toBe('kanon-push-${{ needs.split.outputs.attempt }}');
+    // An earlier attempt's artifact is read through the API, with this job's token, from this run only.
+    expect(download.with?.['run-id']).toBe('${{ github.run_id }}');
+    expect(download.with?.['github-token']).toBe('${{ steps.push-token.outputs.token }}');
+    expect(download.with).not.toHaveProperty('repository');
   });
 
   it('[LANE-14] on the split lane: runs no agent and no project code, checks nothing out, and moves the branch with the verified-commit helper', () => {
@@ -1145,6 +1157,7 @@ describe('the split lane\'s push job holds the key and runs nothing else (kanon#
       'private-key': '${{ secrets.app-private-key }}',
       'permission-contents': 'write',
       'permission-pull-requests': 'write',
+      'permission-actions': 'read',
     });
     expect(splitPush?.env?.GH_TOKEN).toBe('${{ steps.push-token.outputs.token }}');
     expect(Object.values(job.outputs ?? {}).join(' ')).not.toMatch(/token/);
