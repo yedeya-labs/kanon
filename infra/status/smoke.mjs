@@ -14,7 +14,8 @@
 //
 // Both are refusals and reads: it signs nobody in, needs no token and no secret, and sends nothing
 // but `tools/list`. A red smoke files the deploy lane's failure issue in the operator's repository.
-// A server whose secret can't be read answers 500 here, so it fails too (`function/handler.mjs`).
+// A server whose secret can't be read, or that can't use its KMS key, answers 500 here, so it fails
+// too: a container reads the one and proves the other before it serves (`function/handler.mjs`).
 
 import { URL } from 'node:url';
 import { parseArgs } from 'node:util';

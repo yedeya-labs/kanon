@@ -9,6 +9,12 @@
 // hold asks KMS to decrypt it, once, and keeps that in memory too. So no key sits in
 // configuration, and a warm container makes no KMS call per request.
 //
+// A CONTAINER PROVES ITS KEY BEFORE IT SERVES (`prove`, which `handler.mjs` calls at startup):
+// it generates its data key and has KMS decrypt it back. Each call is otherwise made only at a
+// first seal or a first open of another container's value, which an unauthenticated request never
+// reaches, so a function that may not use its key would serve the deploy smoke and fail everyone's
+// sign-in.
+//
 // ONE KIND IS NEVER ANOTHER. The kind (`client`, `access`, …) and the audience (the server's
 // `/mcp` resource) are the cipher's additional data, so a value sealed as one kind, or for
 // another server, doesn't open as anything else. A value that doesn't open, has expired, or isn't
@@ -36,9 +42,10 @@ const UNOPENABLE = new Set(['InvalidCiphertextException', 'IncorrectKeyException
  */
 
 /**
- * A sealer under the KMS key `keyId`.
+ * A sealer under the KMS key `keyId`, and its `prove`, which throws KMS's error when the
+ * container can't generate its data key or decrypt it.
  * @param {{ kms: import('./kms.mjs').Kms, keyId: string }} args
- * @returns {Sealer}
+ * @returns {Sealer & { prove: () => Promise<void> }}
  */
 export function sealer({ kms, keyId }) {
   /** @type {Promise<{ key: Buffer, wire: string }> | null} */
@@ -76,6 +83,12 @@ export function sealer({ kms, keyId }) {
   const aad = (/** @type {string} */ kind, /** @type {string} */ audience) => Buffer.from(`${VERSION}|${kind}|${audience}`, 'utf8');
 
   return {
+    async prove() {
+      const { key, wire } = await ownKey();
+      const opened = await kms.decrypt({ keyId, blob: Buffer.from(wire, 'base64url'), context: CONTEXT });
+      if (!opened.equals(key)) throw Object.assign(new Error('KMS decrypted the data key to another key'), { code: 'KeyMismatch' });
+    },
+
     async seal(kind, audience, payload, expiresAt) {
       const { key, wire } = await ownKey();
       const iv = randomBytes(12);
