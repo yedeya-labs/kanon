@@ -251,6 +251,20 @@ describe('kanon doctor on what an installation lacks', () => {
       expect(r.status).toBe(EXIT.findings);
     });
 
+    // kanon#1139: lane-check fails each unreached entry whatever a waiver says, so a waiver of it
+    // is malformed and waives nothing, or doctor would report healthy while the gate is red.
+    it("can't be waived: a waiver of it is malformed, and every entry stays a finding (kanon#1139)", async () => {
+      const files = healthyFiles();
+      files[REQ.hook.path] = pinnedHook(files);
+      files['.github/dependabot.yml'] = forRootAlone(files);
+      files['docs/qa/adoption.md'] += `- **${WAIVER_LABEL}:** \`pin.dependabot-unreached\` on \`.github/dependabot.yml\` (later)\n`;
+      const r = await run(checkout(files), fakeGitHub(), ['--json']);
+      expect(ids(r).sort()).toEqual(['declaration.malformed docs/qa/adoption.md', 'pin.dependabot-unreached .github/dependabot.yml']);
+      expect(r.json.findings.find((f: { id: string }) => f.id === 'declaration.malformed').message).toContain("waives `pin.dependabot-unreached`, which can't be waived");
+      expect(r.json.waived).toEqual([]);
+      expect(r.status).toBe(EXIT.findings);
+    });
+
     it('passes a second entry that ignores Kanon, which proposes no Kanon upgrade (kanon#1111)', async () => {
       const files = healthyFiles();
       files[REQ.hook.path] = pinnedHook(files);

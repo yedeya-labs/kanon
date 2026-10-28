@@ -34,6 +34,7 @@ export const UNWAIVABLE = {
   'ruleset.rule-missing': 'without it nothing enforces that rule of review on the default branch (K-ADOPT-1 step 8)',
   'ruleset.bypass-extra': 'it lets an actor other than the Releaser merge around review (K-MERGE-8)',
   'ruleset.approval-off': 'the adoption record says bootstrap ended, and bootstrap never returns: a ruleset that stopped requiring approval is an incident to fix (K-ADOPT-6)',
+  'pin.dependabot-unreached': 'lane-check fails each Dependabot entry that doesn\'t reach a pin whatever a waiver says, so a waiver would make doctor report healthy while every Kanon upgrade pull request fails (#1139)',
   'upstream.unsent': 'it is about the adoption record itself, which says findings are sent when nothing sends them, and lane-check fails it whatever a waiver says',
   'deploy.declaration-moved': 'it is about the adoption record itself: the reconciler and lane-check read the reference deploy from `## Deploy` alone, and fail on bullets left under `## Choices` whatever a waiver says (plan 0010 D2)',
   'deploy.declaration': 'it protects production: the lane, `kanon init` and the gate read the chain from it, and the gate refuses a record it can\'t read (plan 0010 §12)',
