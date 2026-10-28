@@ -12,6 +12,8 @@ kanon status --repo owner/name --project 12 --pr 40
 kanon status --lanes
 kanon status --repo owner/name --project 12 --lanes --json
 kanon status --needs-owner
+kanon status --inbox
+kanon inbox
 ```
 
 | Option | Meaning |
@@ -21,16 +23,17 @@ kanon status --needs-owner
 | `--lanes` | The lane-health view. |
 | `--pr <n>` | The pull-request readiness view of pull request `<n>` ([below](#the-pull-request-readiness-view)). |
 | `--needs-owner` | The needs-the-Owner view: what waits on a person ([below](#the-needs-the-owner-view)). |
+| `--inbox` | The inbox: the pull requests ready for a person's merge and the decisions asked of a person ([below](#the-inbox)). `kanon inbox` is this view under its own name. |
 | `--repo <owner>/<repo>` | The repository. The default is the origin remote of the checkout you run it from. Neither part may be `.` or `..`. |
 | `--json` | Print one JSON document instead of prose ([below](#the-json-output)). |
 
-Each view you ask for is one section of the answer, and you can ask for more than one at once. All five are built: the project, release, pull-request readiness, lane-health and needs-the-Owner views.
+Each view you ask for is one section of the answer, and you can ask for more than one at once. All six are built: the project, release, pull-request readiness, lane-health and needs-the-Owner views, and the inbox.
 
 ## What it reads
 
 It reads with your own `gh` credential, as [`kanon doctor`](doctor.md) does. `gh` takes its token from `GH_TOKEN`, then `GITHUB_TOKEN`, then its stored login. The command says on standard error which one it used and whose it is, and stops when GitHub refuses it. It reads only what that token can read, and asks GitHub only REST `GET`s and GraphQL queries.
 
-It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record, the escalation file, the exemptions file, the stack document and the workflows. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used only to find the repository when you don't pass `--repo`, so every view runs from any directory, whatever App register it holds, if any: a partial one, a malformed one or none. `--pr` and `--needs-owner` run the merge gate's own verdict function, and judge by the Implementer, Reviewer and Merger logins in the default branch's App register, never the register in the directory you run in. That includes whose `needs:human` hold the gate reads as the Merger's. A repository with no register on its default branch, or one with no row for one of those three roles, has no login to judge by, so those two views stop with an error naming what is missing.
+It reads every declaration from the repository's default branch on GitHub: the brief, the spec layer, the App register, the adoption record, the escalation file, the exemptions file, the stack document and the workflows. It never reads them from your checkout, so a local branch doesn't change the answer. Your checkout is used only to find the repository when you don't pass `--repo`, so every view runs from any directory, whatever App register it holds, if any: a partial one, a malformed one or none. `--pr`, `--needs-owner` and `--inbox` run the merge gate's own verdict function, and judge by the Implementer, Reviewer and Merger logins in the default branch's App register, never the register in the directory you run in. That includes whose `needs:human` hold the gate reads as the Merger's. A repository with no register on its default branch, or one with no row for one of those three roles, has no login to judge by, so those three views stop with an error naming what is missing.
 
 **An incomplete read is no answer.** A read that GitHub refused, that wasn't found, that hit the rate limit or that came back cut short makes that view's answer an error. The error names each read and why it failed, with the time the rate limit resets when that is the cause. A view never answers in part.
 
@@ -61,7 +64,7 @@ A tracking issue with no brief, or a brief whose decomposition doesn't parse, is
 
 For a pull request, `--pr` reads it as the Merger would on its next sweep, through the same reads the merge gate makes, and gives:
 
-- **its checks**, partitioned as the merge gate partitions them: the ones that count (the Reviewer's and the Merger's own runs don't), and of those, the ones still running, cancelled with nothing re-run, and failed;
+- **its checks**, partitioned as the merge gate partitions them: the ones that count (the Reviewer's and the Merger's own runs don't), and of those, the ones still running, cancelled with nothing re-run, and failed. A fine-grained token can't read check runs, since GitHub offers such a token no Checks permission, and an App's token may lack it. When GitHub refuses the token the head's check runs, the view reads the head's workflow runs and its commit statuses in their place, and says so (`checks.source` is `runs`): each workflow run is one check, named by its workflow, so a run with one failed job is one failed check, and a run still going is one check still running;
 - **the Reviewer's latest verdict**, the commit that verdict read, and whether it is current, which it is only when that commit is the head;
 - **the acceptance criteria of the issues it closes**, each with its status in the spec layer;
 - **the merge gate's verdict** for it, `merge`, `wait`, `recover`, `escalate`, `release` or `skip`, with the rule that decided it and its reason;
@@ -71,12 +74,17 @@ For a pull request, `--pr` reads it as the Merger would on its next sweep, throu
 Whether it is ready is never the view's own judgement:
 
 - **The Implementer's pull request** is the Merger's, except when the merge gate escalates it, for any reason, or answers that it is a draft or not open: then it is a person's. It is ready when the merge gate answers `merge`. It is ready for a person's merge when the gate escalates it for an escalation path alone: the gate, asked again with the declared paths lifted, answers `merge`. Any other answer isn't ready, and the gate's rule is what it lacks.
-- **Any other pull request** is a person's to merge, never the Merger's. That is one the gate skips as not provably the Implementer's: a person's, a Lead's brief, a dependency bump, the release pull request. It is ready when three things hold, and the view names each one it lacks:
+- **Any other pull request** is a person's to merge, never the Merger's. That is one the gate skips as not provably the Implementer's: a person's, a Lead's brief, a dependency bump, the release pull request. It is ready when these hold, and the view names each one it lacks:
   - `checks`: the gate's check partition finds at least one check that counts, and none running, cancelled or failed;
-  - `approval`: the Reviewer's verdict on its head, as the review-recovery lane reads it, is an approval;
+  - `mergeable`: GitHub doesn't report it conflicting with its base branch, as `scripts/conflict-state.mjs` reads `mergeable` and `mergeStateStatus`. A mergeability GitHub is still computing doesn't hold it;
+  - `approval`: the Reviewer's verdict on its head, as the review-recovery lane reads it, is an approval. A verdict stamped with an older commit doesn't count, nor does a comment: a review that requests changes on the head, or none at all, leaves it lacking;
   - `decisions`, for a brief only: the brief guard finds no open decision in it. A brief the default branch's `docs/qa/exemptions.md` lists as pre-standard isn't checked.
 
   Nothing else is asked of it: a person merging it reads the rest on GitHub.
+
+- **A decision asked on it holds it** (`[STAT-18]`). A pull request of either kind that would be ready for a person's merge isn't, while it carries `decision:needed` and the decision asked on it waits: it has no ask, or no answer came after its latest ask, each read as [the inbox](#the-inbox) reads it. It lacks `ask`, and the inbox lists it only among the decisions, since merging it would pre-empt the answer. An answer recorded after the latest ask lifts the hold, though the label is still on. A pull request the Merger would merge isn't held: that is the merge gate's to judge ([#1501](https://github.com/yedeya-labs/kanon/issues/1501)).
+
+A person's pull request that GitHub reports conflicting was ready until 2026-10-28: decision 13 of [the status project](projects/1327.md) chose no conflict test. The Owner overturned it on [#1497](https://github.com/yedeya-labs/kanon/pull/1497#issuecomment-6476880831), so that ready means one thing in every view, and a pull request that can't be merged as it stands is never offered.
 
 ## The lane-health view
 
@@ -92,7 +100,7 @@ It has no flake classifier of its own: the classes are the agent classifier's an
 
 ## The needs-the-Owner view
 
-`--needs-owner` lists what in the repository waits on a person now, each with its link and its reason. It lists five things and nothing else, and each is another view's or another lane's own answer:
+`--needs-owner` lists what in the repository waits on a person now, each with its link and its reason. It lists six things and nothing else, and each is another view's or another lane's own answer:
 
 - **the pull requests ready for a person's merge**, `merges`: each open pull request the [readiness view](#the-pull-request-readiness-view) reports ready for a person's merge. That is the Implementer's when the merge gate escalates it for an escalation path alone, and any pull request the gate skips as not the Implementer's: a person's, a Lead's brief, a dependency bump, the release pull request. The reason is the readiness view's;
 - **the Implementer's stops that wait on a person**, `stops`, each open issue with its reasons:
@@ -100,9 +108,39 @@ It has no flake classifier of its own: the classes are the agent classifier's an
   - for an issue carrying `agent:implement` or `qa:needs-triage`, the dispatch sweep's own reading of its conversation, its open pull requests and the lane runs still going: `scope-first-bail` when the Implementer's last word is a scope-first bail that nobody has answered, a bail so fresh that the sweep still reads it as in flight included, and `awaiting-human` when the sweep calls it that: the Implementer has spoken, no person has since, and the last word is two days old. An issue the sweep reads as answered, running or with a pull request isn't listed, nor one it reads as in flight whose last word isn't a scope-first bail;
 - **the Lead's holds**, `holds`: each open issue carrying `needs:human` with the Lead's hold marker in the Lead's own comment, as the reconciler counts it. A copy of the marker in anyone else's comment isn't the Lead's;
 - **each open decision in an open brief pull request**, `decisions`, read at its head as the brief guard reads it;
+- **each decision asked of a person**, `asks`: each open issue and open pull request labelled `decision:needed` (`K-WORK-24`), with the link of the latest decision asked on it in a comment, as [the inbox](#the-inbox) reads it;
 - **the red lanes**, `lanes`: each lane caller the [lane-health view](#the-lane-health-view) reports `red`. A `flaky` lane isn't listed.
 
-It reads a comment only to find a bail or the hold marker, and gives the fact and its link, never a comment's or an issue's text. The dispatch sweep also reads the telemetry store's cost rows, which mark an issue whose last run hit its cap or ended with nothing to show. This view has no store to read, so such an issue reads here as its conversation reads.
+It reads a comment only to find a bail, the hold marker or a decision's marker and parts, and gives the fact and its link, never a comment's or an issue's text. The dispatch sweep also reads the telemetry store's cost rows, which mark an issue whose last run hit its cap or ended with nothing to show. This view has no store to read, so such an issue reads here as its conversation reads.
+
+## The inbox
+
+`kanon inbox`, or `kanon status --inbox`, answers "what is waiting on me?" with two lists, each entry with its link. It is how a person, or the agent they ask, finds what waits on them: read from GitHub when asked, never from what a session remembers (`K-WORK-25`). It is pull-only: it prints when it is run, and sends nothing, to anyone, ever.
+
+- **Ready for your merge**, `merges`: the needs-the-Owner view's `merges`, computed the same way: each open pull request the [readiness view](#the-pull-request-readiness-view) reports ready for a person's merge, by its definition and no other. A pull request is listed only while it is open, so one a person already merged or closed never is, and one with an unanswered decision asked on it is listed only under the decisions.
+- **Decisions waiting on you**, `asks`: each open issue and open pull request labelled `decision:needed`, which is how an agent records a decision it needs from a person before it asks it anywhere else (`K-WORK-24`). For each:
+  - `ask`, the link of the latest comment that asks the decision, the comment whose first line is `<!-- kanon:decision-needed -->`;
+  - `form`, `ok` when that comment has the three parts of the fixed form, each opening a line: `**Question.**`, `**Options.**` and `**Recommendation.**`; `incomplete` when it lacks one; and `missing` when the thread carries the label and no such comment, which is a decision nobody wrote down;
+  - `answered`, true when a comment whose first line is `<!-- kanon:decision-answered -->` came after the ask, so the answer is recorded and the label should come off. Such a pull request is no longer held out of `merges`.
+
+  An App-run agent's comment opens with its persona header (`K-AGENT-1`), so the marker is read on the line after that header too. Anything else before the marker, a quotation included, makes the comment neither an ask nor an answer.
+
+  A closed issue or pull request is never listed: closing the thread ends the question. [`scripts/lib/decision-asks.mjs`](../scripts/lib/decision-asks.mjs) holds the form, and writes an ask's and an answer's body.
+
+The prose looks like this:
+
+```text
+acme/shop, read at 2026-10-28T09:30:00.000Z
+
+Ready for your merge: 1
+  #44 docs: say how to order https://github.com/acme/shop/pull/44
+
+Decisions waiting on you: 2
+  Pull request #49 Rename the plan: labelled decision:needed, with no decision asked in the fixed form: https://github.com/acme/shop/pull/49
+  Issue #60 Pick a payment provider: https://github.com/acme/shop/issues/60#issuecomment-1
+```
+
+It reads a comment only for its marker and its parts, and gives the link, never a comment's text.
 
 ## Exit codes
 
@@ -110,7 +148,7 @@ It reads a comment only to find a bail or the hold marker, and gives the fact an
 |---|---|---|
 | 0 | `ok` | Every view asked for was answered. |
 | 2 | `error` | A usage error: an unknown or malformed flag, or no view named. |
-| 3 | `error` | It couldn't run: no repository to read, a token GitHub refuses, or, for `--pr` or `--needs-owner`, no App register (`docs/qa/agent-identities.md`) on the default branch, or one with no Implementer, Reviewer or Merger row. |
+| 3 | `error` | It couldn't run: no repository to read, a token GitHub refuses, or, for `--pr`, `--needs-owner` or `--inbox`, no App register (`docs/qa/agent-identities.md`) on the default branch, or one with no Implementer, Reviewer or Merger row. |
 | 4 | `incomplete` | A view's reads didn't complete, so that view has no answer. |
 
 The prose and `--json` exit with the same code for the same result.
@@ -234,6 +272,7 @@ A path names a field inside its parent: `project.items[].key` is the `key` of ea
 | `pr.head` | string | Its head commit. |
 | `pr.branch` | string | The default branch the declarations were read from. |
 | `pr.checks` | object | Its checks, partitioned as the merge gate partitions them. |
+| `pr.checks.source` | string | Where they were read from: `rollup`, the head's check runs and statuses; or `runs`, its workflow runs and commit statuses, when GitHub refused the token its check runs. |
 | `pr.checks.relevant` | array | The checks that count, after the gate leaves out its own pipeline's runs. |
 | `pr.checks.relevant[].name` | string | The check's name. |
 | `pr.checks.relevant[].workflow` | string or null | The workflow it ran in, or null for a commit status or another App's check. |
@@ -264,7 +303,7 @@ A path names a field inside its parent: `project.items[].key` is the `key` of ea
 | `pr.readiness` | object | Whether it is ready to merge, and by whom. |
 | `pr.readiness.by` | string | `merger` when it is the Merger's to merge, `person` when it is a person's. |
 | `pr.readiness.ready` | boolean | True when it is ready for that merge. |
-| `pr.readiness.lacks` | array | What it lacks: for a person's pull request, `checks`, `approval` or `decisions`; for the Implementer's, the merge gate's rule that stops it. Empty when it is ready. |
+| `pr.readiness.lacks` | array | What it lacks: for a person's pull request, `checks`, `mergeable`, `approval` or `decisions`; for the Implementer's, the merge gate's rule that stops it; for either that a person would merge, `ask` while a decision asked on it waits. Empty when it is ready. |
 | `pr.readiness.why` | string | A sentence saying why. |
 | `lanes` | object | The lane-health view, when `--lanes` asked for it: the fields below, or, when its reads didn't complete, only `error` and `reads`. |
 | `lanes.error` | string | Why the view has no answer, naming each read that failed. |
@@ -321,17 +360,47 @@ A path names a field inside its parent: `project.items[].key` is the `key` of ea
 | `needsOwner.decisions[].n` | number | The decision's number. |
 | `needsOwner.decisions[].headline` | string | Its headline. |
 | `needsOwner.decisions[].marker` | string | The open mark its headline carries, such as `⛔` or `PROPOSED`. |
+| `needsOwner.asks` | array | Each open issue and pull request labelled `decision:needed`, as `inbox.asks` gives it. |
+| `needsOwner.asks[].number` | number | The issue or pull request. |
+| `needsOwner.asks[].title` | string | Its title. |
+| `needsOwner.asks[].url` | string | Its link. |
+| `needsOwner.asks[].kind` | string | `issue` or `pr`. |
+| `needsOwner.asks[].ask` | string or null | The link of its latest decision comment; null when it has none. |
+| `needsOwner.asks[].form` | string | `ok`, `incomplete` or `missing`. |
+| `needsOwner.asks[].answered` | boolean | An answer was recorded after the ask, with the label left on. |
 | `needsOwner.lanes` | array | The lane callers the lane-health view reports `red`. |
 | `needsOwner.lanes[].file` | string | Its file name in `.github/workflows/`. |
 | `needsOwner.lanes[].url` | string | Its runs on GitHub. |
 | `needsOwner.lanes[].failed` | number | The failed runs the workflow-health check counted. |
 | `needsOwner.lanes[].decisive` | number | The runs it counted, those that ended in success or failure. |
+| `inbox` | object | The inbox, when `kanon inbox` or `--inbox` asked for it: the fields below, or, when its reads didn't complete, only `error` and `reads`. |
+| `inbox.error` | string | Why the inbox has no answer, naming each read that failed. |
+| `inbox.reads` | array | Each read that failed. |
+| `inbox.reads[].read` | string | What was read. |
+| `inbox.reads[].why` | string | Why it failed, as GitHub or `gh` said it. |
+| `inbox.reads[].status` | number or null | The HTTP status, when there is one. |
+| `inbox.reads[].resetAt` | string or null | When the exhausted rate limit resets, ISO 8601, when that is the cause. |
+| `inbox.branch` | string | The default branch the declarations were read from. |
+| `inbox.merges` | array | The open pull requests ready for a person's merge, as `needsOwner.merges` gives them. |
+| `inbox.merges[].number` | number | The pull request. |
+| `inbox.merges[].title` | string | Its title. |
+| `inbox.merges[].url` | string | Its link. |
+| `inbox.merges[].rule` | string | The merge gate's rule for it: `escalating-path` for the Implementer's, `not-the-implementer` or `not-implementer-label` for any other. |
+| `inbox.merges[].reason` | string | Why it is ready, as the readiness view gives it. |
+| `inbox.asks` | array | Each open issue and open pull request labelled `decision:needed`, in number order. |
+| `inbox.asks[].number` | number | The issue or pull request. |
+| `inbox.asks[].title` | string | Its title. |
+| `inbox.asks[].url` | string | Its link. |
+| `inbox.asks[].kind` | string | `issue` or `pr`. |
+| `inbox.asks[].ask` | string or null | The link of its latest comment asking the decision; null when it has none. |
+| `inbox.asks[].form` | string | `ok` when that comment has the fixed form's three parts, `incomplete` when it lacks one, `missing` when there is no such comment. |
+| `inbox.asks[].answered` | boolean | A comment recording the answer came after the ask, and the label is still on. |
 
 On a usage error or when it can't run, the document is the error document, `{ "schema", "kanon", "status": "error", "exitCode", "error" }`.
 
 ## The hosted MCP server
 
-The same five views are served read-only to an MCP client, such as Claude Code, claude.ai or the Claude app on a phone, by a hosted MCP server: one request handler in [`infra/status/function/`](../infra/status/function/), with no MCP SDK. Each tool is one view, and returns the same object as that view's section of the JSON output above, for the same reads: the server builds it with the code `kanon status` uses (`scripts/status/views.mjs`). A view whose reads didn't complete answers with its section's `error` and `reads`, as the tool's error. The server reads GitHub with the person's own token, through a reader over `fetch` that can ask only REST `GET`s and GraphQL queries. A GraphQL document holding a mutation or a subscription is refused before anything is sent, whatever ignored tokens (white space, commas, comments, a byte-order mark) stand before it. It writes nothing, to GitHub or anywhere else, and keeps nothing. The server's clauses are the `MCP` area of the spec layer ([`docs/qa/specs/mcp.md`](qa/specs/mcp.md)).
+The same six views are served read-only to an MCP client, such as Claude Code, claude.ai or the Claude app on a phone, by a hosted MCP server: one request handler in [`infra/status/function/`](../infra/status/function/), with no MCP SDK. Each tool is one view, and returns the same object as that view's section of the JSON output above, for the same reads: the server builds it with the code `kanon status` uses (`scripts/status/views.mjs`). A view whose reads didn't complete answers with its section's `error` and `reads`, as the tool's error. The server reads GitHub with the person's own token, through a reader over `fetch` that can ask only REST `GET`s and GraphQL queries. A GraphQL document holding a mutation or a subscription is refused before anything is sent, whatever ignored tokens (white space, commas, comments, a byte-order mark) stand before it. It writes nothing, to GitHub or anywhere else, and keeps nothing. The server's clauses are the `MCP` area of the spec layer ([`docs/qa/specs/mcp.md`](qa/specs/mcp.md)).
 
 It speaks MCP's Streamable HTTP transport at protocol version `2025-11-25`, at one endpoint, `/mcp`:
 
@@ -359,6 +428,7 @@ A test holds this list to the server's own tools (`[STAT-12]`, `[MCP-2]`). Every
 | `pull_request` | `pr` | `repo`, `number`: the pull request | [The pull-request readiness view](#the-pull-request-readiness-view) |
 | `lanes` | `lanes` | `repo` | [The lane-health view](#the-lane-health-view) |
 | `needs_owner` | `needsOwner` | `repo` | [The needs-the-Owner view](#the-needs-the-owner-view) |
+| `inbox` | `inbox` | `repo` | [The inbox](#the-inbox) |
 
 Before a tool reads a repository, the server checks that Kanon's status App reaches it with the person's access. It reads only the person's installations of the App and the repositories each grants, never the repository itself. A repository on an owner where the App isn't installed is the tool's error, saying so. So is one the installation doesn't grant, or one the person can't read: GitHub gives the same answer for both to the person's token, and only the App's own key could tell them apart, which the server doesn't hold.
 

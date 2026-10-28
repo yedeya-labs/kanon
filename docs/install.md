@@ -90,4 +90,4 @@ The pull request that installs the review lane leaves the repository in bootstra
 
 **[`kanon doctor`](doctor.md) reminds you.** Once the Judge App is installed and the review lane is on the default branch, it reports `ruleset.bootstrap-can-end` while the ruleset requires no approval, with the command that requires it. Once the adoption record says bootstrap ended, it fails a ruleset that stops requiring an approving review (`ruleset.approval-off`): bootstrap never returns.
 
-**[`kanon status`](status.md) shows where things stand,** read live and writing nothing: `kanon status --project <n>` gives a project's phase, its items, their pull requests and what holds each.
+**[`kanon status`](status.md) shows where things stand,** read live and writing nothing: `kanon status --project <n>` gives a project's phase, its items, their pull requests and what holds each, and `kanon inbox` gives what waits on you: the pull requests ready for your merge and the decisions asked of you ([The inbox](status.md#the-inbox)).

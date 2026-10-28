@@ -138,6 +138,7 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | Planned guards the rules name but Kanon hasn't built | `K-PRIN-18`, `K-WORK-22`, `K-SPEC-9`, `K-SPEC-10`, `K-PROJ-14`, `K-OBS-16`, `K-OBS-17`, `K-ADOPT-10` | not yet installed |
 | The sign-off delegation record (`docs/qa/sign-off-delegation.md`), naming the Owner, and Kanon's project-setup hook adding its sign-off to the Implementer's commits | `K-AGENT-44`, `K-LAYOUT-14` | installed 2026-10-04 |
 | The exemptions file (`docs/qa/exemptions.md`), read by the brief guard and the doc-path guard. Kanon has no such file: the brief guard runs here since 2026-10-21 with the default, under which nothing is exempt, and the doc-path guard doesn't run here yet | `K-LAYOUT-15` | not yet installed |
+| `kanon inbox` and the inbox skill: the two lists a person reads when they ask what waits on them, and the `decision:needed` record each decision asked of a person carries. They reach this repository with the release that holds them, and the label with the next run of `kanon init`, or a lane that applies it first | `K-WORK-24`, `K-WORK-25` | not yet installed |
 
 These rules' lines are prose only with a note, and name nothing to install: `K-PRIN-1`, `K-PRIN-7`, `K-PRIN-20`, `K-PROJ-8`, `K-PROJ-15`, `K-OBS-4`, `K-SELF-7`, `K-LAYOUT-1`.
 

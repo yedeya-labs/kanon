@@ -19,6 +19,7 @@
         "actions/notify/hooks/webhook.yml",
         "skills/adopt/SKILL.md",
         "skills/doctor/SKILL.md",
+        "skills/inbox/SKILL.md",
         "skills/upgrade/SKILL.md",
         {
           "type": "json",

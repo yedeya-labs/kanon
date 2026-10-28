@@ -147,9 +147,9 @@ describe('[MCP-2] exactly the listed tools, read-only, each equal to its view\'s
     const rows = [...table!.matchAll(/^\|\s*`([^`]+)`\s*\|\s*`([^`]+)`/gm)].map((m) => [m[1]!, m[2]!]);
     const listed = (await post(rpc('tools/list'))).json().result.tools;
     expect(listed.map((t: Any) => t.name).sort()).toEqual(rows.map(([tool]) => tool).sort());
-    // One per view: each row names the section of kanon-status/v1 the tool returns, and the five
-    // sections are the five views.
-    expect(rows.map(([, key]) => key).sort()).toEqual(['lanes', 'needsOwner', 'pr', 'project', 'release']);
+    // One per view: each row names the section of kanon-status/v1 the tool returns, and the six
+    // sections are the six views.
+    expect(rows.map(([, key]) => key).sort()).toEqual(['inbox', 'lanes', 'needsOwner', 'pr', 'project', 'release']);
     expect(Object.fromEntries(TOOLS.map((t: Any) => [t.name, t.view]))).toEqual(Object.fromEntries(rows));
     for (const t of listed) {
       expect(t.annotations, t.name).toEqual({ title: expect.any(String), readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true });
@@ -247,7 +247,7 @@ describe('[MCP-3] no write and no store', () => {
     // there is nothing else for a request to reach (`[MCP-1]` holds each answer).
     expect(Object.keys(METHODS)).toEqual(['initialize', 'ping', 'tools/list', 'tools/call']);
     // Every tool is a view of the status core, and nothing else.
-    expect(TOOLS.map((t: Any) => t.view).sort()).toEqual(['lanes', 'needsOwner', 'pr', 'project', 'release']);
+    expect(TOOLS.map((t: Any) => t.view).sort()).toEqual(['inbox', 'lanes', 'needsOwner', 'pr', 'project', 'release']);
 
     // The reader the server reads GitHub through asks only GETs and GraphQL queries: a mutation
     // is refused before anything is sent, and so is a next page off GitHub's API.

@@ -56,6 +56,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** The taxonomy gained `lead:file-only`, which a person puts on a project's tracking issue so that the Lead files and reconciles the project's issues but dispatches none of them; `needs:human` keeps its meaning as the escalation that stops the whole tick. [#1113](https://github.com/yedeya-labs/kanon/issues/1113)
 - **2026-10-21.** Deleting GitHub's defaults is no longer prose only: `kanon init` already deleted them with the person's consent, and `kanon doctor` now reports each one a repository still has, without blocking. Kanon itself still had all seven. [#1246](https://github.com/yedeya-labs/kanon/issues/1246)
 - **2026-10-26.** The Owner decided that the Implementer applies `agent:revise` too: the fixed job that sets its status re-adds the label when a changes-request was filed on the head before the status, which the revise lane had skipped for the status the head lacked. The label's description names the Implementer among its appliers. [#1379](https://github.com/yedeya-labs/kanon/issues/1379)
+- **2026-10-28.** The taxonomy gained `decision:needed`, which marks an issue or pull request where an agent asked a person a decision in a comment and waits on the answer (`K-WORK-24`). The Owner decided it is a label of its own rather than `needs:human`, which keeps its meaning as a hold the pipeline placed. [#1497](https://github.com/yedeya-labs/kanon/pull/1497)
 
 ## `K-WORK-14`
 
@@ -64,6 +65,14 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-WORK-23`
 
 - **2026-10-21.** No longer prose only for the tracking issue: the brief guard reads issue `<n>` for each `docs/projects/<n>.md` and fails when it lacks a kind label, isn't on the bucket that matches it, or carries `project:<n>`. Kanon's one brief's tracking issue had no kind label. [#1245](https://github.com/yedeya-labs/kanon/issues/1245)
+
+## `K-WORK-24`
+
+- **2026-10-28.** The Owner decided that each lane gains the capability to post this ask when its escalation needs the Owner's decision, beside its existing `needs:human` and `qa:needs-info` records, which stay. Until it is built the rule binds interactive sessions and their subagents, and the ask's marker may follow an App-run agent's persona header (`K-AGENT-1`), so the two rules hold together. [#1497](https://github.com/yedeya-labs/kanon/pull/1497#issuecomment-6476880831), [#1501](https://github.com/yedeya-labs/kanon/issues/1501)
+
+## `K-WORK-25`
+
+- **2026-10-28.** The Owner decided that a person's pull request that GitHub reports conflicting is ready in no view, which overturns decision 13 of the status project, and that a pull request carrying `decision:needed` whose ask is unanswered is held out of the merges and listed only among the decisions. [#1497](https://github.com/yedeya-labs/kanon/pull/1497#issuecomment-6476880831)
 
 ## `K-AGENT-1`
 

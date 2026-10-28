@@ -12,6 +12,7 @@ import { ownerWorld } from './owner-world.js';
 const { status } = await import('../../../cli/status.mjs');
 const { ReadError } = await import('../../../scripts/status/reader.mjs');
 const { HELD, HELD_MARKER } = await import('../../../scripts/lead-reconcile.mjs');
+const { askBody } = await import('../../../scripts/lib/decision-asks.mjs');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -43,6 +44,7 @@ export const owing = () => ownerWorld({
   issues: [
     { number: 7, title: 'Project: storefront', labels: [HELD], comments: [{ login: 'example-lead', body: `**Lead** <!-- kanon:role=lead -->\n\nheld\n${HELD_MARKER}`, createdAt: '2026-10-01T00:00:00Z' }] },
     { number: 30, title: 'Pick a store', labels: ['qa:needs-info'] },
+    { number: 60, title: 'Pick a payment provider', labels: ['decision:needed'], comments: [{ login: 'octo', body: askBody({ question: 'Which provider?', options: ['One', 'Two'], recommendation: 'One.' }), createdAt: '2026-10-01T00:00:00Z' }] },
   ],
   workflows: { 'implement.yml': laneCaller('implement') },
   runs: { 'implement.yml': [{ id: 1, conclusion: 'failure' }, { id: 2, conclusion: 'failure' }, { id: 3, conclusion: 'failure' }] },
@@ -71,6 +73,7 @@ export const CASES: Array<{ tool: string; args: Record<string, unknown>; argv: s
   { tool: 'pull_request', args: { repo: REPO, number: NUMBER }, argv: ['--pr', String(NUMBER)], key: 'pr', worlds: [() => readerFor(implementerPr()), () => readerFor(briefPr('Which store? ⛔ OPEN'))] },
   { tool: 'lanes', args: { repo: REPO }, argv: ['--lanes'], key: 'lanes', worlds: [() => laneFleet(), () => refusedLanes()] },
   { tool: 'needs_owner', args: { repo: REPO }, argv: ['--needs-owner'], key: 'needsOwner', worlds: [() => owing()] },
+  { tool: 'inbox', args: { repo: REPO }, argv: ['--inbox'], key: 'inbox', worlds: [() => owing()] },
 ];
 
 /**

@@ -1,4 +1,4 @@
-// The hosted status server's request handler (project #1327, Issue G): Kanon's five status views,
+// The hosted status server's request handler (project #1327, Issue G): Kanon's six status views,
 // served read-only as MCP tools over the Streamable HTTP transport (docs/status.md).
 //
 // A SURFACE, NOT A SECOND CORE (`[MCP-2]`). Each tool is one view of the status core, built by
@@ -101,8 +101,16 @@ export const TOOLS = [
   {
     name: 'needs_owner',
     title: 'Needs the Owner',
-    description: "What waits on a person, each with its link and reason: the pull requests ready for a person's merge, the Implementer's stops, the Lead's holds, the open decisions in brief pull requests, and the red lanes.",
+    description: "What waits on a person, each with its link and reason: the pull requests ready for a person's merge, the Implementer's stops, the Lead's holds, the open decisions in brief pull requests, the decisions asked on issues and pull requests, and the red lanes.",
     view: 'needsOwner',
+    n: null,
+    inputSchema: { type: 'object', properties: { repo: REPO }, required: ['repo'], additionalProperties: false },
+  },
+  {
+    name: 'inbox',
+    title: 'Inbox',
+    description: "What waits on you, each with its link: the pull requests ready for a person's merge, and the decisions asked of a person on issues and pull requests labelled `decision:needed`.",
+    view: 'inbox',
     n: null,
     inputSchema: { type: 'object', properties: { repo: REPO }, required: ['repo'], additionalProperties: false },
   },

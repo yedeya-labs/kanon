@@ -1,11 +1,12 @@
 // THE NEEDS-THE-OWNER VIEW (project #1327, Issue F): what in a repository waits on a person now,
 // each with its link and its reason, read live, and nothing written anywhere.
 //
-// A CLOSED LIST, AND EVERY ENTRY ANOTHER DECIDER'S ANSWER (`[STAT-10]`). The view lists five
+// A CLOSED LIST, AND EVERY ENTRY ANOTHER DECIDER'S ANSWER (`[STAT-10]`). The view lists six
 // things and nothing else, and judges none of them itself:
 //   - the pull requests ready for a person's merge: the readiness view's answer for each open
 //     pull request (`readinessOf`), both the Implementer's the merge gate escalates for a path
-//     alone and those it skips as not the Implementer's (`[STAT-7]`, `[STAT-14]`, decision 13);
+//     alone and those it skips as not the Implementer's (`[STAT-7]`, `[STAT-14]`, decision 13 as
+//     the Owner overturned it on kanon#1497), but none held by an unanswered ask (`[STAT-18]`);
 //   - the Implementer's stops that wait on a person: `qa:needs-info` and `qa:needs-split` on an
 //     open issue, and, for an issue in one of the dispatch sweep's lanes, the sweep's own
 //     `classify` over the same conversation, open pull requests and live runs: its
@@ -15,7 +16,14 @@
 //     as the reconciler counts it (`leadComments`, kanon#1399);
 //   - each open decision in an open brief pull request, as the readiness view reads it with the
 //     brief guard's `openDecisions`;
+//   - each open issue or pull request labelled `decision:needed`, with the link of the decision
+//     asked on it, as `askState` reads its comments (`K-WORK-24`);
 //   - the lanes the lane-health view reports `red`.
+//
+// THE INBOX IS TWO OF THEM (`[STAT-16]`). `inboxView` answers "what waits on me?" with the two
+// lists a person acts on from one place, the pull requests ready for their merge and the
+// decisions asked of them, computed the same way and read nowhere else. It is pull-only: it is
+// read when asked, and nothing it reads is ever sent anywhere.
 //
 // A COMMENT'S BODY NEVER LEAVES THE PROCESS (decision 4). It is read to find a bail or a hold
 // marker, and the answer carries only the fact and its link: numbers, titles and links, never a
@@ -30,6 +38,7 @@ import { leadComments, HELD, HELD_MARKER, NEEDS_INFO, issueComments } from '../l
 import { LANES, classify as classifyLane, commentRows, linkedPrIndex, liveRunsByIssue, LIVE_RUN_STATUSES, norm, registerBotLogins } from '../dispatch-sweep.mjs';
 import { asRole } from '../lib/role-marker.mjs';
 import { BAIL_RE } from '../project-digest.mjs';
+import { DECISION_LABEL, askState } from '../lib/decision-asks.mjs';
 import { SPLIT_LABEL } from '../split-lineage.mjs';
 import { laneHealthView } from './lanes.mjs';
 import { IncompleteRead } from './project.mjs';
@@ -46,7 +55,11 @@ const Q_OPEN_PRS = `query OpenPullRequests($owner: String!, $name: String!, $aft
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: 50, after: $after, orderBy: { field: CREATED_AT, direction: ASC }) {
       totalCount
-      nodes { number headRefName closingIssuesReferences(first: 100) { totalCount nodes { number repository { nameWithOwner } } } }
+      nodes {
+        number title url headRefName
+        labels(first: 100) { totalCount nodes { name } }
+        closingIssuesReferences(first: 100) { totalCount nodes { number repository { nameWithOwner } } }
+      }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -70,7 +83,10 @@ const Q_ISSUES = `query OwnerIssues($owner: String!, $name: String!, $labels: [S
  * @property {Array<{ number: number, title: string, url: string, reasons: StopReason[] }>} stops
  * @property {Array<{ number: number, title: string, url: string }>} holds
  * @property {Array<{ number: number, title: string, url: string, brief: string, n: number, headline: string, marker: string }>} decisions
+ * @property {Ask[]} asks
  * @property {Array<{ file: string, url: string, failed: number, decisive: number }>} lanes
+ * @typedef {{ number: number, title: string, url: string, kind: 'issue' | 'pr', ask: string | null, form: 'ok' | 'incomplete' | 'missing', answered: boolean }} Ask
+ * @typedef {{ branch: string, merges: NeedsOwner['merges'], asks: Ask[] }} Inbox
  */
 
 /**
@@ -78,21 +94,103 @@ const Q_ISSUES = `query OwnerIssues($owner: String!, $name: String!, $labels: [S
  * @param {{ reader: import('./reader.mjs').Reader, repo: string, now?: number }} args
  * @returns {Promise<NeedsOwner>}
  */
-export async function needsOwnerView({ reader: given, repo, now = Date.now() }) {
-  const what = 'the needs-the-Owner view';
+export async function needsOwnerView({ reader, repo, now = Date.now() }) {
+  return whole('the needs-the-Owner view', reader, (r) => view({ reader: r, repo, now }));
+}
+
+/**
+ * The inbox of one repository (`[STAT-16]`): the pull requests ready for a person's merge and the
+ * decisions asked of a person, each list as the needs-the-Owner view gives it. Reads only through
+ * `reader`; writes nothing.
+ * @param {{ reader: import('./reader.mjs').Reader, repo: string, now?: number }} args
+ * @returns {Promise<Inbox>}
+ */
+export async function inboxView({ reader, repo, now = Date.now() }) {
+  return whole('the inbox', reader, async (r) => {
+    const context = await readinessContext(r, repo);
+    const prs = await allNodes(r, Q_OPEN_PRS, ownerAndName(repo), (d) => d?.repository?.pullRequests);
+    const { merges } = await readinessOfEach(prs, { reader: r, repo, now, context });
+    const issues = await openIssues(r, repo, [DECISION_LABEL]);
+    return { branch: context.files.branch, merges, asks: await asksOf(r, repo, issues, prs) };
+  });
+}
+
+/**
+ * A view's answer, read through a watched reader, or the error naming every read that failed
+ * (`[STAT-3]`), even one a caller inside tolerated.
+ * @template T
+ * @param {string} what @param {import('./reader.mjs').Reader} given
+ * @param {(reader: import('./reader.mjs').Reader) => Promise<T>} read
+ * @returns {Promise<T>}
+ */
+async function whole(what, given, read) {
   const { reader, failures } = watched(given);
   try {
-    const answer = await view({ reader, repo, now });
+    const answer = await read(reader);
     const failed = failures();
     if (failed.length) throw new IncompleteRead(what, failed);
     return answer;
   } catch (e) {
     if (e instanceof IncompleteRead && e.message.startsWith(what)) throw e;
     const failed = failures();
-    if (e instanceof ReadError && !failed.includes(e)) failed.push(e);
+    if (e instanceof ReadError && !failed.includes(e) && !e.expected) failed.push(e);
     if (failed.length) throw new IncompleteRead(what, failed);
     throw e;
   }
+}
+
+/**
+ * Each open pull request, as the readiness view answers for it: those ready for a person's merge,
+ * and each open decision in a brief.
+ * @param {any[]} prs
+ * @param {{ reader: import('./reader.mjs').Reader, repo: string, now: number, context: Awaited<ReturnType<typeof readinessContext>> }} io
+ */
+async function readinessOfEach(prs, { reader, repo, now, context }) {
+  /** @type {NeedsOwner['merges']} */
+  const merges = [];
+  /** @type {NeedsOwner['decisions']} */
+  const decisions = [];
+  for (const p of prs) {
+    const r = await readinessOf(Number(p.number), { reader, repo, now, context });
+    if (r.readiness.by === 'person' && r.readiness.ready) merges.push({ number: r.number, title: r.title, url: r.url, rule: r.verdict.rule, reason: r.readiness.why });
+    for (const d of r.decisions ?? []) decisions.push({ number: r.number, title: r.title, url: r.url, brief: d.brief, n: d.n, headline: d.headline, marker: d.marker });
+  }
+  return { merges, decisions };
+}
+
+/**
+ * The open issues carrying any of `labels`, each with all its label names.
+ * @param {import('./reader.mjs').Reader} reader @param {string} repo @param {string[]} labels
+ */
+async function openIssues(reader, repo, labels) {
+  return (await allNodes(reader, Q_ISSUES, { ...ownerAndName(repo), labels }, (d) => d?.repository?.issues))
+    .map((i) => ({ number: Number(i.number), title: String(i.title ?? ''), url: String(i.url ?? ''), labels: namesOf(i, reader, graphqlRead(Q_ISSUES)) }));
+}
+
+/**
+ * The decisions asked of a person (`K-WORK-24`): each open issue and open pull request labelled
+ * `decision:needed`, with the link of the latest ask on it, whether that ask has the fixed form,
+ * and whether an answer was recorded after it with the label left on. A comment is read only for
+ * its marker and its parts; its text never leaves (decision 4).
+ * @param {import('./reader.mjs').Reader} reader @param {string} repo
+ * @param {Array<{ number: number, title: string, url: string, labels: string[] }>} issues
+ * @param {any[]} prs the open pull requests, as `Q_OPEN_PRS` reads them
+ * @returns {Promise<Ask[]>}
+ */
+async function asksOf(reader, repo, issues, prs) {
+  const threads = [
+    ...issues.filter((i) => i.labels.includes(DECISION_LABEL)).map((i) => ({ ...i, kind: /** @type {const} */ ('issue') })),
+    ...prs.map((p) => ({ number: Number(p.number), title: String(p.title ?? ''), url: String(p.url ?? ''), labels: namesOf(p, reader, `${graphqlRead(Q_OPEN_PRS)}`), kind: /** @type {const} */ ('pr') }))
+      .filter((p) => p.labels.includes(DECISION_LABEL)),
+  ].sort((a, b) => a.number - b.number);
+  /** @type {Ask[]} */
+  const asks = [];
+  for (const t of threads) {
+    const comments = await listing(reader, `repos/${repo}/issues/${t.number}/comments?per_page=100`);
+    const state = askState(comments.map((c) => ({ body: String(c?.body ?? ''), url: String(c?.html_url ?? '') })));
+    asks.push({ number: t.number, title: t.title, url: t.url, kind: t.kind, ...state });
+  }
+  return asks;
 }
 
 /**
@@ -105,20 +203,11 @@ async function view({ reader, repo, now }) {
   const prs = await allNodes(reader, Q_OPEN_PRS, ownerAndName(repo), (d) => d?.repository?.pullRequests);
 
   // Each open pull request, as the readiness view answers for it.
-  /** @type {NeedsOwner['merges']} */
-  const merges = [];
-  /** @type {NeedsOwner['decisions']} */
-  const decisions = [];
-  for (const p of prs) {
-    const r = await readinessOf(Number(p.number), { reader, repo, now, context });
-    if (r.readiness.by === 'person' && r.readiness.ready) merges.push({ number: r.number, title: r.title, url: r.url, rule: r.verdict.rule, reason: r.readiness.why });
-    for (const d of r.decisions ?? []) decisions.push({ number: r.number, title: r.title, url: r.url, brief: d.brief, n: d.n, headline: d.headline, marker: d.marker });
-  }
+  const { merges, decisions } = await readinessOfEach(prs, { reader, repo, now, context });
 
-  // The open issues that carry a stop, a lane's trigger or a hold.
-  const watchedLabels = [...STOP_LABELS, ...LANES.map((l) => l.label), HELD];
-  const issues = (await allNodes(reader, Q_ISSUES, { ...ownerAndName(repo), labels: watchedLabels }, (d) => d?.repository?.issues))
-    .map((i) => ({ number: Number(i.number), title: String(i.title ?? ''), url: String(i.url ?? ''), labels: namesOf(i, reader) }));
+  // The open issues that carry a stop, a lane's trigger, a hold or an ask.
+  const watchedLabels = [...STOP_LABELS, ...LANES.map((l) => l.label), HELD, DECISION_LABEL];
+  const issues = await openIssues(reader, repo, watchedLabels);
   const isLinked = linkedPrIndex(prs.map((p) => ({ headRefName: p.headRefName, closingIssuesReferences: closingOf(p, repo, reader) })));
   const inLane = issues.filter((i) => LANES.some((l) => i.labels.includes(l.label)));
   const live = inLane.length ? await liveRuns(reader, repo) : [];
@@ -162,18 +251,21 @@ async function view({ reader, repo, now }) {
   const lanes = health.callers.filter((c) => c.health === 'red')
     .map((c) => ({ file: c.file, url: `https://github.com/${repo}/actions/workflows/${encodeURIComponent(c.file)}`, failed: c.failed, decisive: c.decisive }));
 
-  return { branch: context.files.branch, merges, stops, holds, decisions, lanes };
+  // The decisions asked of a person.
+  const asks = await asksOf(reader, repo, issues, prs);
+
+  return { branch: context.files.branch, merges, stops, holds, decisions, asks, lanes };
 }
 
 /**
- * An issue's label names, all of them, or a failed read naming the issue (`[STAT-3]`).
- * @param {any} issue @param {import('./reader.mjs').Reader} reader
+ * An issue's or pull request's label names, all of them, or a failed read naming it (`[STAT-3]`).
+ * @param {any} item @param {import('./reader.mjs').Reader} reader @param {string} read the query's name
  * @returns {string[]}
  */
-function namesOf(issue, reader) {
-  const conn = issue?.labels;
-  if (!conn || !Array.isArray(conn.nodes)) throw new ReadError(`${graphqlRead(Q_ISSUES)} labels of #${issue?.number}`, 'the answer has no such connection');
-  requireComplete(`${graphqlRead(Q_ISSUES)} labels of #${issue.number}`, conn.nodes.length, conn.totalCount, reader);
+function namesOf(item, reader, read) {
+  const conn = item?.labels;
+  if (!conn || !Array.isArray(conn.nodes)) throw new ReadError(`${read} labels of #${item?.number}`, 'the answer has no such connection');
+  requireComplete(`${read} labels of #${item.number}`, conn.nodes.length, conn.totalCount, reader);
   return conn.nodes.map((/** @type {{ name: string }} */ l) => String(l.name));
 }
 

@@ -9,13 +9,14 @@
 // give a different result or exit code.
 //
 // ONE SECTION PER VIEW ASKED FOR. `--project <n>` asks for the project view, `--release` for the
-// release view, `--pr <n>` for the pull-request readiness view, `--lanes` for the lane-health view
-// and `--needs-owner` for the needs-the-Owner view, and any of them may be asked at once. A later
+// release view, `--pr <n>` for the pull-request readiness view, `--lanes` for the lane-health view,
+// `--needs-owner` for the needs-the-Owner view and `--inbox` for the inbox (`kanon inbox`,
+// cli/inbox.mjs), and any of them may be asked at once. A later
 // view adds its own section within v1, which docs/cli-json.md allows. A view whose reads didn't
 // complete answers with an error naming each read (`[STAT-3]`), never a partial answer, and the
 // command exits 4.
 //
-// EVERY VIEW RUNS FROM ANY DIRECTORY. `--pr` and `--needs-owner` run the merge gate's verdict
+// EVERY VIEW RUNS FROM ANY DIRECTORY. `--pr`, `--needs-owner` and `--inbox` run the merge gate's verdict
 // function, and judge by the logins in the default branch's App register, never the checkout's
 // (kanon#1396, docs/status.md). `scripts/status/views.mjs` builds each section, for the hosted
 // server too.
@@ -32,7 +33,7 @@ export const SCHEMA = 'kanon-status/v1';
 /** The exit codes, as docs/status.md documents them. */
 export const EXIT = /** @type {const} */ ({ ok: 0, usage: 2, error: 3, incomplete: 4 });
 
-export const USAGE = `Usage: kanon status [--project <n>] [--release] [--pr <n>] [--lanes] [--needs-owner] [options]
+export const USAGE = `Usage: kanon status [--project <n>] [--release] [--pr <n>] [--lanes] [--needs-owner] [--inbox] [options]
 
 Reads where a repository that runs Kanon stands, live from GitHub, and prints it. Writes
 nothing, anywhere (docs/status.md).
@@ -54,7 +55,10 @@ Options:
   --needs-owner          the needs-the-Owner view: what waits on a person, each with its
                          link and reason: the pull requests ready for a person's merge, the
                          Implementer's stops, the Lead's holds, the open decisions in brief
-                         pull requests, and the red lanes
+                         pull requests, the decisions asked on issues and pull requests, and
+                         the red lanes
+  --inbox                the inbox: the pull requests ready for a person's merge and the
+                         decisions asked of a person (kanon inbox)
   --repo <owner>/<repo>  the repository (default: this checkout's origin remote)
   --json                 print one JSON document (docs/status.md) instead of prose
   -h, --help             this text
@@ -115,8 +119,8 @@ const number = (flag, v) => {
  * @param {string[]} argv
  */
 export const parseArgs = (argv) => {
-  /** @type {{ repo: string, project: number | null, release: boolean, pr: number | null, lanes: boolean, needsOwner: boolean, json: boolean, help: boolean }} */
-  const opts = { repo: '', project: null, release: false, pr: null, lanes: false, needsOwner: false, json: false, help: false };
+  /** @type {{ repo: string, project: number | null, release: boolean, pr: number | null, lanes: boolean, needsOwner: boolean, inbox: boolean, json: boolean, help: boolean }} */
+  const opts = { repo: '', project: null, release: false, pr: null, lanes: false, needsOwner: false, inbox: false, json: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
     const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
@@ -133,13 +137,14 @@ export const parseArgs = (argv) => {
     else if (flag === '--pr') opts.pr = number(flag, value());
     else if (flag === '--lanes' && inline === undefined) opts.lanes = true;
     else if (flag === '--needs-owner' && inline === undefined) opts.needsOwner = true;
+    else if (flag === '--inbox' && inline === undefined) opts.inbox = true;
     else if (flag === '--json') opts.json = true;
     else throw new Error(`unknown argument "${arg}"`);
   }
   if (opts.help && opts.json) throw new Error('--help and --json contradict each other; give one');
   if (opts.help) return opts;
   if (opts.repo && !isRepo(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
-  if (opts.project === null && !opts.release && opts.pr === null && !opts.lanes && !opts.needsOwner) throw new Error('name a view to read: --project <n>, --release, --pr <n>, --lanes or --needs-owner');
+  if (opts.project === null && !opts.release && opts.pr === null && !opts.lanes && !opts.needsOwner && !opts.inbox) throw new Error('name a view to read: --project <n>, --release, --pr <n>, --lanes, --needs-owner or --inbox');
   return opts;
 };
 
@@ -179,6 +184,7 @@ async function document(deps, opts) {
   }
   if (opts.lanes) views.lanes = await section(() => VIEWS.lanes(reads));
   if (opts.needsOwner) views.needsOwner = await section(() => VIEWS.needsOwner(reads));
+  if (opts.inbox) views.inbox = await section(() => VIEWS.inbox(reads));
   const incomplete = Object.values(views).some((v) => 'error' in v);
   const exitCode = incomplete ? EXIT.incomplete : EXIT.ok;
   return { schema: SCHEMA, kanon: deps.release(), status: incomplete ? 'incomplete' : 'ok', exitCode, repo, readAt, ...views };
@@ -187,8 +193,10 @@ async function document(deps, opts) {
 /**
  * `kanon status`. Returns the exit code (`EXIT`).
  * @param {string[]} argv @param {Partial<Deps>} [overrides]
+ * @param {{ name: string, usage: string }} [as] the command a person typed, for its messages:
+ *   `kanon inbox` runs as `kanon status --inbox` (cli/inbox.mjs)
  */
-export const status = async (argv, overrides = {}) => {
+export const status = async (argv, overrides = {}, as = { name: 'kanon status', usage: USAGE }) => {
   const deps = { ...realDeps, ...overrides };
   const wantsJson = argv.includes('--json');
   /** @type {ReturnType<typeof parseArgs>} */
@@ -199,13 +207,13 @@ export const status = async (argv, overrides = {}) => {
     const message = /** @type {Error} */ (e).message;
     if (wantsJson) deps.out(JSON.stringify(errorDocument(deps, EXIT.usage, message), null, 2));
     else {
-      deps.err(`kanon status: ${message}`);
-      deps.err(USAGE);
+      deps.err(`${as.name}: ${message}`);
+      deps.err(as.usage);
     }
     return EXIT.usage;
   }
   if (opts.help) {
-    deps.out(USAGE);
+    deps.out(as.usage);
     return EXIT.ok;
   }
   /** @type {Awaited<ReturnType<typeof document>>} */
@@ -215,7 +223,7 @@ export const status = async (argv, overrides = {}) => {
   } catch (e) {
     const message = e instanceof StatusError ? e.message : `stopped on an unexpected error: ${/** @type {Error} */ (e).message}`;
     if (opts.json) deps.out(JSON.stringify(errorDocument(deps, EXIT.error, message), null, 2));
-    else deps.err(`kanon status: ${message}`);
+    else deps.err(`${as.name}: ${message}`);
     return EXIT.error;
   }
   if (opts.json) deps.out(JSON.stringify(doc, null, 2));
@@ -235,18 +243,39 @@ export function prose(doc) {
   if ('pr' in doc) lines.push('', ...prProse(/** @type {any} */ (doc.pr)));
   if ('lanes' in doc) lines.push('', ...lanesProse(/** @type {any} */ (doc.lanes)));
   if ('needsOwner' in doc) lines.push('', ...needsOwnerProse(/** @type {any} */ (doc.needsOwner)));
+  if ('inbox' in doc) lines.push('', ...inboxProse(/** @type {any} */ (doc.inbox)));
+  return lines;
+}
+
+/** One ask, as a line: its thread, and the state of its record. @param {any} a */
+const askLine = (a) => {
+  const where = `${a.kind === 'pr' ? 'Pull request' : 'Issue'} #${a.number} ${a.title}`;
+  const record = a.form === 'missing'
+    ? `labelled decision:needed, with no decision asked in the fixed form: ${a.url}`
+    : `${a.ask}${a.form === 'incomplete' ? ' (the ask lacks part of the fixed form)' : ''}`;
+  return `  ${where}: ${record}${a.answered ? '; an answer is recorded and the label is still on' : ''}`;
+};
+
+/** @param {any} n the inbox section */
+function inboxProse(n) {
+  if ('error' in n) return [`The inbox has no answer: ${n.error}`];
+  const lines = [n.merges.length ? `Ready for your merge: ${n.merges.length}` : 'Ready for your merge: none'];
+  for (const m of n.merges) lines.push(`  #${m.number} ${m.title} ${m.url}`);
+  lines.push('', n.asks.length ? `Decisions waiting on you: ${n.asks.length}` : 'Decisions waiting on you: none');
+  for (const a of n.asks) lines.push(askLine(a));
   return lines;
 }
 
 /** @param {any} n the needs-the-Owner section */
 function needsOwnerProse(n) {
   if ('error' in n) return [`The needs-the-Owner view has no answer: ${n.error}`];
-  const count = n.merges.length + n.stops.length + n.holds.length + n.decisions.length + n.lanes.length;
+  const count = n.merges.length + n.stops.length + n.holds.length + n.decisions.length + n.asks.length + n.lanes.length;
   const lines = [count ? `Needs a person: ${count} thing(s)` : 'Needs a person: nothing'];
   for (const m of n.merges) lines.push(`  Merge #${m.number} ${m.title}: ${m.reason} ${m.url}`);
   for (const s of n.stops) lines.push(`  Stopped #${s.number} ${s.title}: ${s.reasons.join(', ')} ${s.url}`);
   for (const h of n.holds) lines.push(`  Held by the Lead #${h.number} ${h.title} ${h.url}`);
   for (const d of n.decisions) lines.push(`  Decide #${d.number}, decision ${d.n} in ${d.brief}: ${d.headline} ${d.url}`);
+  for (const a of n.asks) lines.push(`  Decide${askLine(a).slice(1)}`);
   for (const l of n.lanes) lines.push(`  Red lane ${l.file}: ${l.failed} failed of ${l.decisive} decisive ${l.url}`);
   return lines;
 }
@@ -276,7 +305,7 @@ function prProse(p) {
   if (r.lacks.length) lines.push(`  Lacks: ${r.lacks.join(', ')}`);
   lines.push(`  Merge gate: ${p.verdict.action} (${p.verdict.rule}): ${p.verdict.why}`);
   const c = p.checks;
-  lines.push(`  Checks: ${c.relevant.length} relevant; ${c.pending.length} pending, ${c.cancelled.length} cancelled, ${c.failed.length} failed`);
+  lines.push(`  Checks: ${c.relevant.length} relevant; ${c.pending.length} pending, ${c.cancelled.length} cancelled, ${c.failed.length} failed${c.source === 'runs' ? " (read from the head's workflow runs and statuses: GitHub refused this token its check runs)" : ''}`);
   for (const [what, names] of [['pending', c.pending], ['cancelled', c.cancelled], ['failed', c.failed]]) {
     if (names.length) lines.push(`       ${what}: ${names.join(', ')}`);
   }

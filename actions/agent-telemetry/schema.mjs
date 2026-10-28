@@ -209,7 +209,7 @@ export const GUARDS = Object.freeze([
  * added without its id here, or an id here that the rulebook doesn't have, fails.
  */
 export const RULE_IDS = Object.freeze([
-  ...range('PRIN', 20), ...range('WORK', 23), ...range('SPEC', 11), ...range('AGENT', 50),
+  ...range('PRIN', 20), ...range('WORK', 25), ...range('SPEC', 11), ...range('AGENT', 50),
   ...range('MERGE', 17), ...range('WS', 8), ...range('SHIP', 13), ...range('PROJ', 18),
   ...range('OBS', 19), ...range('SELF', 18), ...range('ADOPT', 12), ...range('LAYOUT', 18),
 ]);

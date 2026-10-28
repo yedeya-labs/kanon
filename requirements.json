@@ -1062,6 +1062,7 @@
     "gate-candidate",
     "gate:declined",
     "needs:human",
+    "decision:needed",
     "lead:file-only",
     "blocked",
     "test:characterization",
