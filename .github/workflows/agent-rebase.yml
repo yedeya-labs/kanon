@@ -201,7 +201,8 @@ jobs:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
       # this lane acts only when the event's actor is a member or a registered agent App.
       # `scripts/lane-gate.mjs` says who the actor is for each event — on a finished CI run,
-      # whoever pushed the commit it ran on; on a merged pull request, whoever merged or
+      # whoever pushed the commit it ran on; on a finished implement or triage run, whoever
+      # labelled the issue or dispatched the run; on a merged pull request, whoever merged or
       # queued it; on the schedule, whoever last changed it — and
       # a refusal leaves `member=false`, a notice and a step-summary line, and every later
       # step and job skips.

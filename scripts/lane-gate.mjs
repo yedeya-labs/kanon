@@ -42,10 +42,15 @@
 //                            refused. Anyone may close their own pull request, a fork's
 //                            included, and this event runs with the base's secrets. On a
 //                            merge-queue merge, `merged_by` is the member who queued it.
-//   workflow_run             whoever pushed the commit the finished workflow ran on,
+//   workflow_run             whoever started the finished workflow,
 //                            `workflow_run.triggering_actor` (else `workflow_run.actor`),
-//                            checked the same way. The rebase lane fires on CI finishing on
-//                            the default branch, where the pusher is who acted. With a merge
+//                            checked the same way. That is a pusher only when a push started
+//                            it: CI finishing on the default branch, which the merge and rebase
+//                            lanes fire on. On a lane caller that a label, an opened pull
+//                            request or a dispatch started (the implement and triage runs the
+//                            rebase lane and the dispatch sweep's re-ask follow, the runs the
+//                            Lead reconcile's re-ask follows), it is the person or App who
+//                            labelled, opened or dispatched, never a pusher. With a merge
 //                            queue the pusher is `github-merge-queue[bot]`, an App outside the
 //                            register, so that trigger is refused (kanon#79, docs/lanes.md):
 //                            the merge lane's sweep waits for its schedule, and the rebase
@@ -219,7 +224,7 @@ export function triggeringActor(eventName, event, env) {
     case 'workflow_dispatch':
       return found(env.GITHUB_TRIGGERING_ACTOR || env.GITHUB_ACTOR, 'user who ran it');
     case 'workflow_run':
-      return found(event.workflow_run?.triggering_actor?.login || event.workflow_run?.actor?.login, 'user whose push the finished workflow ran on');
+      return found(event.workflow_run?.triggering_actor?.login || event.workflow_run?.actor?.login, 'user who started the finished workflow');
     case 'schedule':
       // The merge queue, on a schedule alone: admitted, and named by its login (see the header).
       if (env.GITHUB_ACTOR === MERGE_QUEUE_ACTOR || env.GITHUB_ACTOR === MERGE_QUEUE_LOGIN) {

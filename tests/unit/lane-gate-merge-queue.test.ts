@@ -29,7 +29,7 @@ describe('a CI completion on a merge-queue push (kanon#79)', () => {
 
   it('is the queue, not the member who queued the pull request', () => {
     const r = triggeringActor('workflow_run', event, {});
-    expect(r).toEqual({ actor: { login: 'github-merge-queue[bot]', source: 'user whose push the finished workflow ran on' } });
+    expect(r).toEqual({ actor: { login: 'github-merge-queue[bot]', source: 'user who started the finished workflow' } });
   });
 
   it('is refused, by the register alone, as an App outside it', () => {

@@ -287,11 +287,11 @@ describe('who the actor is', () => {
     expect(triggeringActor('pull_request_target', { action: 'opened', sender: { login: 'x' } }, { ...env, LANE_GATE_ISSUE_OPENED: 'anyone' }))
       .toEqual({ actor: { login: 'x', source: 'user who opened it' } });
   });
-  it('a finished workflow: whoever pushed the commit it ran on, never the sender', () => {
+  it('a finished workflow: whoever started it (a pusher, a labeller or a dispatcher), never the sender', () => {
     expect(triggeringActor('workflow_run', { workflow_run: { triggering_actor: { login: 'pusher' }, actor: { login: 'a' } }, sender: { login: 's' } }, env))
-      .toEqual({ actor: { login: 'pusher', source: 'user whose push the finished workflow ran on' } });
+      .toEqual({ actor: { login: 'pusher', source: 'user who started the finished workflow' } });
     expect(triggeringActor('workflow_run', { workflow_run: { actor: { login: 'a' } } }, env))
-      .toEqual({ actor: { login: 'a', source: 'user whose push the finished workflow ran on' } });
+      .toEqual({ actor: { login: 'a', source: 'user who started the finished workflow' } });
   });
   it('a closed issue: whoever closed it, never anyone the payload names otherwise (plan 0004 step 8)', () => {
     expect(triggeringActor('issues', { action: 'closed', sender: { login: 'closer' }, pull_request: { merged_by: { login: 'not-on-an-issue' } } }, env))
