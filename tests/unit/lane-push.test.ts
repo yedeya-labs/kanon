@@ -409,6 +409,9 @@ describe('the spine\'s push job holds the key and runs nothing else (kanon#1383)
   const steps = job.steps ?? [];
   /** The job's `if:`, for these inputs and needs. Only the forms it uses. */
   const gate = (expr: string, { push = true, commits = 'true', result = 'success' }: { push?: boolean; commits?: string; result?: string }) => {
+    // GitHub prefixes `success() &&` to an `if` that calls no status function, so a job gated on
+    // outputs alone is skipped when the job it needs failed (kanon#1476).
+    if (!/\b(always|cancelled|failure|success)\(\)/.test(expr) && result !== 'success') return false;
     const js = String(expr).replace(/^\$\{\{\s*|\s*\}\}$/g, '')
       .replace(/!cancelled\(\)/g, 'true')
       .replace(/inputs\.push\b(?!-)/g, String(push))
@@ -732,6 +735,9 @@ describe('the rebase lane\'s push job holds the key and runs nothing else (kanon
   const steps = job.steps ?? [];
   /** The job's `if:`, for these needs. Only the forms it uses. */
   const gate = (expr: string, { commits = 'true', result = 'success' }: { commits?: string; result?: string }) => {
+    // GitHub prefixes `success() &&` to an `if` that calls no status function, so a job gated on
+    // outputs alone is skipped when the job it needs failed (kanon#1476).
+    if (!/\b(always|cancelled|failure|success)\(\)/.test(expr) && result !== 'success') return false;
     const js = String(expr).replace(/^\$\{\{\s*|\s*\}\}$/g, '')
       .replace(/!cancelled\(\)/g, 'true')
       .replace(/needs\.resolve\.result/g, JSON.stringify(result))
