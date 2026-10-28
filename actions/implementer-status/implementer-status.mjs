@@ -59,6 +59,7 @@ import { branchPath } from '../../scripts/lib/branch-path.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 import { ensureLabels } from '../../scripts/lib/labels.mjs';
 import { IMPLEMENTER_STATUS, implementerStatusOn } from '../../scripts/lib/role-marker.mjs';
+import { verifiedAs } from '../../scripts/lib/verified-commits.mjs';
 
 /** The status context the Merger requires on the head since L4 (`mergeVerdict`). */
 export const CONTEXT = IMPLEMENTER_STATUS;
@@ -66,44 +67,19 @@ export const CONTEXT = IMPLEMENTER_STATUS;
 /** The label that starts the Implementer's revise lane on a pull request (`K-WORK-12`). */
 export const REVISE_LABEL = 'agent:revise';
 
-/** GitHub's own committer for the commits it creates and signs, as the `dco` action reads it. */
-const GITHUB_COMMITTER = 'web-flow';
-
-/** What a GitHub API commit says about who made it, as this module reads it. */
-/**
- * @typedef {{
- *   sha: string, parents?: Array<{ sha: string }>,
- *   author?: { login?: string, type?: string } | null, committer?: { login?: string } | null,
- *   commit?: { verification?: { verified?: unknown, reason?: string } },
- * }} ApiCommit
- */
+/** @typedef {import('../../scripts/lib/verified-commits.mjs').ApiCommit} ApiCommit */
 
 /**
- * Whether GitHub verified `commit` as the App's (#1358): a verified signature, the App's bot
- * account (`<slug>[bot]`, type `Bot`) as its author, and GitHub or the App as its committer. No
- * email is read: GitHub resolves both accounts from the commit's emails, which any pusher sets,
- * and verifies the signature against the committer, so a person who commits under the App's
- * author address and signs with their own key is still the committer. Only GitHub can sign for
- * `web-flow` or for the App.
+ * Whether GitHub verified `commit` as the App's (#1358), by `verifiedAs`: the predicate the
+ * verified-commit helper reads back every commit it creates under (`[LANE-9]`, kanon#1482).
  * @param {ApiCommit | undefined} commit
  * @param {string} slug
  * @returns {{ ok: boolean, why: string }}
  */
 export function verifiedAsApp(commit, slug) {
-  const app = `${slug}[bot]`;
   if (!commit) return { ok: false, why: 'the commit could not be read' };
-  const short = `\`${String(commit.sha ?? '').slice(0, 7)}\``;
-  const v = commit?.commit?.verification;
-  if (v?.verified !== true) return { ok: false, why: `commit ${short} is not verified (${v?.reason || 'no reason given'})` };
-  const author = commit?.author;
-  if (author?.login !== app || author?.type !== 'Bot') {
-    return { ok: false, why: `commit ${short} is verified, but its author is ${author?.login || 'no account'}${author?.login === app ? ` as a ${author?.type || 'typeless'} account` : ''}, not ${app}` };
-  }
-  const committer = commit?.committer?.login;
-  if (committer !== GITHUB_COMMITTER && committer !== app) {
-    return { ok: false, why: `commit ${short} is verified, but its committer is ${committer || 'no account'}, not ${GITHUB_COMMITTER} or ${app}` };
-  }
-  return { ok: true, why: '' };
+  const app = verifiedAs(commit, `${slug}[bot]`);
+  return app.ok ? app : { ok: false, why: `commit \`${String(commit.sha ?? '').slice(0, 7)}\` is ${app.why}` };
 }
 
 /**
