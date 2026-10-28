@@ -33,8 +33,9 @@
 //   lane's own (`--ref`, `--replace`), and never a name a URL could read as another branch. The
 //   agent's token can't create a branch (`[LANE-13]`), so a branch GitHub has is a person's or an
 //   earlier run's, whenever it was made (kanon#1438: the list of branches the mint job took before
-//   the run outgrew one environment string on a repository of ~4,000 branches). The helper creates
-//   a branch only where none is, so one made after the read is never moved either. A branch whose
+//   the run outgrew one environment string on a repository of ~4,000 branches). A branch made
+//   after that read, before the helper reads it again, is refused unless it still sits at the
+//   commit the push builds on, and then it moves only without force (`[LANE-10]`). A branch whose
 //   commits carry the request file is refused too: the spine keeps it out of every commit.
 // Every other branch the agent made stays on its runner, and the step summary names it.
 //

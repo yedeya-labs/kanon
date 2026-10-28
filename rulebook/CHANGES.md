@@ -106,6 +106,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-14.** The Owner decided that the issue backstop admits whoever opens an issue, on `issues: opened` alone, with no permission check, since it runs no model, reads no issue text and writes only a bucket and labels. [#768](https://github.com/yedeya-labs/kanon/issues/768), [#840](https://github.com/yedeya-labs/kanon/pull/840)
 
+## `K-AGENT-46`
+
+- **2026-10-28.** The Owner decided that the push jobs of the Implementer's lanes, and of the Lead's, mint with Actions read, so a push job re-run on its own can read the commits the agent's job handed on in an earlier attempt of the run. The Implementer's row of the roles table gained Actions read for that alone; the Author App already held it. [#1438](https://github.com/yedeya-labs/kanon/issues/1438), [#1465](https://github.com/yedeya-labs/kanon/issues/1465)
+
 ## `K-AGENT-47`
 
 - **2026-10-07.** `lane-check` holds every job that calls a Kanon workflow, the spine `agent-lane.yml` included, to mapping each secret by name or passing none, and fails `secrets: inherit`. Releases before this one let it through on a call to the spine. [#500](https://github.com/yedeya-labs/kanon/issues/500)

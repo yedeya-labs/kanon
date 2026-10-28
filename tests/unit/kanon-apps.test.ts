@@ -1068,11 +1068,16 @@ describe('the register row (K-LAYOUT-6)', () => {
   });
 
   it('replaces the role\'s row when it exists, bold or not', () => {
-    const bold = FIXTURE.replace('| Implementer | `example-implementer` |', '| **Implementer** | **`example-implementer`** |');
+    // An Actions column, since the Implementer holds Actions: Read for its push jobs: with none, the
+    // writer would add Other and touch every row, which the case below covers.
+    const bold = FIXTURE
+      .replace('| Workflows |\n|---|---|---|---|---|---|', '| Workflows | Actions |\n|---|---|---|---|---|---|---|')
+      .replace('| Implementer | `example-implementer` | Read & write | Read & write | Read & write | Read & write |', '| **Implementer** | **`example-implementer`** | Read & write | Read & write | Read & write | Read & write | No access |')
+      .replace('**`example-lead`** | Read & write | Read & write | Read & write | No access |', '**`example-lead`** | Read & write | Read & write | Read & write | No access | Read |');
     const { text, diff } = write(bold, 'Implementer', 'renamed-implementer');
     expect(diff).toEqual([
-      '-| **Implementer** | **`example-implementer`** | Read & write | Read & write | Read & write | Read & write |',
-      '+| Implementer | `renamed-implementer` | Read & write | Read & write | Read & write | Read & write |',
+      '-| **Implementer** | **`example-implementer`** | Read & write | Read & write | Read & write | Read & write | No access |',
+      '+| Implementer | `renamed-implementer` | Read & write | Read & write | Read & write | Read & write | Read |',
     ]);
     expect(slugOf(text, 'Implementer').stdout.trim()).toBe('renamed-implementer');
     expect(text.match(/Implementer \|/g)).toHaveLength(1);
