@@ -56,7 +56,7 @@ path=""; slurp=""
 for a in "$@"; do
   case "$a" in repos/*) path="$a" ;; --slurp) slurp=1 ;; esac
 done
-case "$*" in *"-X POST"*) echo '{}'; exit 0 ;; esac
+case "$*" in *"-X POST"*|*"-X PATCH"*) echo '{}'; exit 0 ;; esac
 f="$FAKE_GH_DIR/$(printf %s "$path" | tr -c 'A-Za-z0-9._-' '_').json"
 [ -f "$f" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
 if [ -n "$slurp" ]; then printf '['; cat "$f"; printf ']'; else cat "$f"; fi
@@ -88,7 +88,7 @@ export const manifestSides = (patch: string) => {
 };
 export const contents = (text: string) => ({ encoding: 'base64', content: Buffer.from(text).toString('base64') });
 
-export const responses = (opts: { prs?: Pr[]; files?: PrFile[]; comments?: Array<{ body: string }>; manifest?: { base: string; head: string } }): Record<string, unknown> => {
+export const responses = (opts: { prs?: Pr[]; files?: PrFile[]; comments?: Array<{ body: string; id?: number; user?: { login: string } }>; manifest?: { base: string; head: string } }): Record<string, unknown> => {
   const patch = opts.files?.find((f) => f.filename === '.release-please-manifest.json')?.patch;
   const sides = opts.manifest ?? (patch === undefined ? undefined : manifestSides(patch));
   return {
@@ -123,5 +123,13 @@ export const runGuard = (answers: Record<string, unknown>) => {
   const calls = existsSync(join(dir, 'calls.log')) ? readFileSync(join(dir, 'calls.log'), 'utf8') : '';
   const posted = calls.split('\n').filter((c) => c.includes('-X POST'));
   const bodyFile = /body=@(\S+)/.exec(posted[0] ?? '')?.[1];
-  return { ...result, calls, posted, comment: bodyFile && existsSync(bodyFile) ? readFileSync(bodyFile, 'utf8') : '' };
+  // Each edit of a comment (#1442), with the body it wrote.
+  const patched = calls
+    .split('\n')
+    .filter((c) => c.includes('-X PATCH'))
+    .map((c) => {
+      const file = /body=@(\S+)/.exec(c)?.[1];
+      return { path: /repos\/\S+/.exec(c)?.[0] ?? '', body: file && existsSync(file) ? readFileSync(file, 'utf8') : '' };
+    });
+  return { ...result, calls, posted, patched, comment: bodyFile && existsSync(bodyFile) ? readFileSync(bodyFile, 'utf8') : '' };
 };

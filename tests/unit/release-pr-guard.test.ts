@@ -63,6 +63,60 @@ describe('#73 the release workflow refuses a release PR that changes more than v
     expect(result.posted).toEqual([]);
   });
 
+  // #1442: the guard comments only on a stale head, and release-please's next refresh usually
+  // rebuilds the branch clean, so a release PR carried nine "close it" verdicts after its head
+  // had passed. A pass now turns each earlier verdict into an all-clear naming the head.
+  describe('#1442 a passing head clears the earlier stale verdicts on the PR', () => {
+    const BOT = { login: 'github-actions[bot]' };
+    const OLD = 'deadbeef';
+    const verdict = (id: number, sha: string, user = BOT) => ({ id, user, body: `<!-- kanon-release-pr-guard ${sha} -->\n**This release PR is stale** ... Close it and delete its branch` });
+
+    it('edits each earlier stale verdict into an all-clear naming the head that passed, without a new comment', () => {
+      const result = runGuard(responses({ files: clean, comments: [verdict(11, OLD), verdict(12, 'cafebabe')] }));
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.posted).toEqual([]);
+      expect(result.patched.map((p) => p.path)).toEqual([`repos/${REPO}/issues/comments/11`, `repos/${REPO}/issues/comments/12`]);
+      expect(result.patched[0]?.body).toMatch(new RegExp(`^<!-- kanon-release-pr-guard ${OLD} passed ${SHA} -->\n`));
+      expect(result.patched[0]?.body).toContain(`The release-PR guard passed on this PR's head, \`${SHA}\``);
+      expect(result.patched[0]?.body).toContain(`found head \`${OLD}\` stale`);
+      expect(result.patched[0]?.body).not.toContain('Close it and delete');
+    });
+
+    it("leaves a verdict already cleared by this head, a person's comment quoting the marker, and a PR never stale alone", () => {
+      const cleared = { id: 13, user: BOT, body: `<!-- kanon-release-pr-guard ${OLD} passed ${SHA} -->\nok` };
+      const quoted = verdict(14, OLD, { login: 'someone' });
+      const result = runGuard(responses({ files: clean, comments: [cleared, quoted, { id: 15, user: BOT, body: 'unrelated' }] }));
+      expect(result.status).toBe(0);
+      expect(result.patched).toEqual([]);
+      expect(result.posted).toEqual([]);
+    });
+
+    it('re-clears a verdict that an earlier head cleared, so it names the current head', () => {
+      const cleared = { id: 16, user: BOT, body: `<!-- kanon-release-pr-guard ${OLD} passed cafebabe -->\nok` };
+      const result = runGuard(responses({ files: clean, comments: [cleared] }));
+      expect(result.patched.map((p) => p.path)).toEqual([`repos/${REPO}/issues/comments/16`]);
+      expect(result.patched[0]?.body).toContain(`<!-- kanon-release-pr-guard ${OLD} passed ${SHA} -->`);
+    });
+
+    it('still refuses a stale head by name, and refuses it again on a head whose earlier verdict a pass had cleared', () => {
+      const cleared = { id: 17, user: BOT, body: `<!-- kanon-release-pr-guard ${SHA} passed cafebabe -->\nok` };
+      const result = runGuard(responses({ files: stale, comments: [verdict(11, OLD), cleared] }));
+      expect(result.status).toBe(1);
+      expect(result.patched).toEqual([]);
+      expect(result.posted).toHaveLength(1);
+      expect(result.comment).toContain(`<!-- kanon-release-pr-guard ${SHA} -->`);
+      expect(result.comment).toContain('docs/lanes.md: -| Verify acceptance criteria |');
+    });
+
+    it('passes with a warning when the comments cannot be read', () => {
+      const answers = responses({ files: clean });
+      delete answers[`repos/${REPO}/issues/68/comments?per_page=100`];
+      const result = runGuard(answers);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('::warning title=Release PR guard comments not cleared::Release PR #68 passed');
+    });
+  });
+
   it.each<[string, PrFile, string]>([
     ['a file outside the release files that changes more than a version', { filename: 'src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n-a 1.0.0\n+b 1.1.0' }, 'src/app.ts: -a 1.0.0'],
     ['a file added outside the release files', { filename: 'src/new.ts', status: 'added', patch: '@@ -0,0 +1 @@\n+x' }, 'src/new.ts: added, and it is not in extra-files'],
