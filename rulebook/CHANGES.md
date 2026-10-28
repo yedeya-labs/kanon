@@ -72,6 +72,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-AGENT-2`
 
 - **2026-10-15.** The Owner decided that the Releaser may open a candidate's pin pull request, the one exception to its touching no file outside the release file set, where the adoption record declares the Workflows write that pull request needs. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
+- **2026-10-28.** The Owner decided that the Releaser promotes a candidate: it tags the stable release on the candidate's commit, publishes its Release, moves the major tag, and opens the pull request that points the docs at the new release, which a person merges. That pull request is the second exception to its touching no file outside the release file set: it changes only the release references `scripts/doc-pins.mjs` moves. The row had named none of this since the promotion was built. [#1474](https://github.com/yedeya-labs/kanon/issues/1474), [#1469](https://github.com/yedeya-labs/kanon/issues/1469)
 
 ## `K-AGENT-3`
 
