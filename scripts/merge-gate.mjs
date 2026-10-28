@@ -1141,7 +1141,7 @@ import { execFileSync } from 'node:child_process';
 import { analyse } from './closing-refs.mjs';
 import { evidenceSha, readTrailer } from './review-trailer.mjs';
 import { CONFLICT_JSON, CONFLICT_WHY, conflictState } from './conflict-state.mjs';
-import { marker as rebaseMarker } from './rebase-lane.mjs';
+import { COMMENTS_JQ as REBASE_COMMENTS_JQ, attemptOn as rebaseAttemptOn } from './rebase-lane.mjs';
 import { appLogin, appLoginAtLoad, appPersona } from './app-register.mjs';
 import { IMPLEMENTER_STATUS, asRole, implementerStatusOn, signed } from './lib/role-marker.mjs';
 import { escalatingPaths, printDefaults, readEscalationFileAt } from './lib/escalation-paths.mjs';
@@ -1521,6 +1521,10 @@ export function fixKeysOf(failed, repo) {
  * that then crashed; that is exactly the reading the Merger wants, since a crashed attempt
  * leaves a PR no less stuck.
  *
+ * The lane's read and its author filter are imported too: a marker counts only from the
+ * Implementer App (kanon#1486). Anyone may comment on a public PR, and a forged marker read
+ * here would make this escalate, and `needs:human` switches the lane off (RA-2218, above).
+ *
  * TAKES `readPr`'S OWN `gh`, not the module-level one. `readPr` is driven in tests by a
  * stubbed `gh` on PATH via `opts.env`, and a helper that reached past `opts` would be
  * unreachable from that harness — which is how the first version of this shipped with
@@ -1532,13 +1536,14 @@ function rebaseAttemptedOn(meta, repo, gh) {
   if (conflictState({ mergeable: meta.mergeable, mergeStateStatus: meta.mergeStateStatus }) !== 'conflicting') {
     return false;
   }
+  let comments;
   try {
-    const body = gh(['pr', 'view', String(meta.number), '--repo', repo, '--json', 'comments',
-      '--jq', '[.comments[].body] | join("\n")']);
-    return body.includes(rebaseMarker(meta.headRefOid));
+    comments = JSON.parse(gh(['pr', 'view', String(meta.number), '--repo', repo, '--json', 'comments',
+      '--jq', REBASE_COMMENTS_JQ]));
   } catch {
     return null;
   }
+  return rebaseAttemptOn(comments, meta.headRefOid, { implementer: implementerLogin() });
 }
 
 /**

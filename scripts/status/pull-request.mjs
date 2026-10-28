@@ -34,7 +34,7 @@ import { ADOPTION_RECORD } from '../lib/reference-deploy.mjs';
 import { asRole, slugOf } from '../lib/role-marker.mjs';
 import { isSpecFile, specPromotions } from '../lib/spec-promotions.mjs';
 import { LAPSES_WITH_HEAD, checkPartition, mergeVerdict } from '../merge-gate.mjs';
-import { marker as rebaseMarker } from '../rebase-lane.mjs';
+import { attemptOn as rebaseAttemptOn } from '../rebase-lane.mjs';
 import { verdictOnHead } from '../review-recovery.mjs';
 import { evidenceSha, readTrailer } from '../review-trailer.mjs';
 import { isAcDeclaration } from '../verify-acs.mjs';
@@ -143,10 +143,11 @@ function wholeConnection(conn, name, reader) {
  * @param {import('./reader.mjs').Reader} reader
  * @param {string} repo `owner/name`
  * @param {number} number
- * @param {{ merger: string }} logins the Merger's login, whose comments say what it did: the
- *   default branch's register's, never the working directory's (kanon#1396)
+ * @param {{ merger: string, implementer: string }} logins the Merger's login, whose comments say
+ *   what it did, and the Implementer's, whose comments alone carry the rebase lane's attempt
+ *   (kanon#1486): the default branch's register's, never the working directory's (kanon#1396)
  */
-export async function readPullRequest(reader, repo, number, { merger }) {
+export async function readPullRequest(reader, repo, number, { merger, implementer }) {
   const data = /** @type {any} */ (await reader.graphql(Q_PR, { ...ownerAndName(repo), number }));
   const node = data?.repository?.pullRequest;
   if (!node) throw new ReadError(graphqlRead(Q_PR), `${repo} has no pull request #${number}`);
@@ -207,7 +208,7 @@ export async function readPullRequest(reader, repo, number, { merger }) {
       repo,
       issuesReadable: true,
     }),
-    rebaseAttempted: conflicting ? (await comments()).map((c) => c.body).join('\n').includes(rebaseMarker(head)) : false,
+    rebaseAttempted: conflicting ? rebaseAttemptOn(await comments(), head, { implementer }) : false,
     hold: labels.includes('needs:human') ? await holdOf(reader, `${base}/issues/${number}/events?per_page=100`, await comments(), byMerger) : undefined,
     handback: checkPartition(checks).failed.length
       ? ((found) => (found ? { at: found.at } : false))((await comments()).find((c) => byMerger(c) && c.body.includes(mergerMarker(HANDBACK, head))))
@@ -392,7 +393,7 @@ export async function readinessContext(reader, repo) {
  */
 export async function readinessOf(number, { reader, repo, now, context }) {
   const { files, logins, escalations } = context;
-  const { pr, node, changed } = await readPullRequest(reader, repo, number, { merger: logins.merger });
+  const { pr, node, changed } = await readPullRequest(reader, repo, number, { merger: logins.merger, implementer: logins.implementer });
   const gate = { escalations, now, implementer: logins.implementer, reviewer: logins.reviewer, merger: logins.merger };
   const verdict = mergeVerdict(pr, gate);
   const parts = checkPartition(pr.checks);

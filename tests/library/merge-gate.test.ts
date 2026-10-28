@@ -1624,10 +1624,13 @@ describe('who owns a conflicting PR — the Merger or the rebase lane (RA-2218)'
       commits: [{ messageHeadline: 'x', messageBody: '' }],
       mergeStateStatus: 'DIRTY', mergeable: 'CONFLICTING',
     };
-    const withComments = (bodies: string[]) => {
+    // `gh pr view --json comments` spells an App author as its bare slug. `null` bodies make
+    // the comments read fail, as an unreadable one does.
+    const withComments = (bodies: string[] | null, login = 'example-implementer') => {
+      const read = bodies === null ? 'exit 1' : `printf '%s' ${JSON.stringify(JSON.stringify(bodies.map((body) => ({ login, body }))))}`;
       writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
 case "$*" in
-  *"--json comments"*)  printf '%s' ${JSON.stringify(bodies.join('\n'))} ;;
+  *"--json comments"*)  ${read} ;;
   "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
   *"/statuses"*)        printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
   *"/files"*)           printf '%s\\n' 'src/a.ts' ;;
@@ -1644,6 +1647,12 @@ esac
       'the lane\'s marker for THIS head → tried').toBe(true);
     // A marker for a DIFFERENT head is not this head's attempt — a push re-opens the lane.
     expect(withComments([`<!-- rebase-lane:attempt:${OLD.slice(0, 12)} -->`]).rebaseAttempted).toBe(false);
+    // Anyone may comment on a public PR. A forged marker read as "tried" would escalate, and
+    // `needs:human` switches the lane off (kanon#1486): it counts only from the Implementer App.
+    for (const login of ['octo', 'example-reviewer', 'example-merger']) {
+      expect(withComments([`<!-- rebase-lane:attempt:${HEAD.slice(0, 12)} -->`], login).rebaseAttempted, `a marker ${login} posted`).toBe(false);
+    }
+    expect(withComments(null).rebaseAttempted, 'an unreadable read is still null, which escalates').toBeNull();
   });
 
   it('does not pay for the comments read on a PR that is not conflicting', () => {
@@ -1677,8 +1686,10 @@ esac
     // A second copy of "what an attempt looks like" is a copy that drifts; the same
     // argument that made `conflictState` shared.
     const src = readFileSync(join(ROOT, 'scripts/merge-gate.mjs'), 'utf8');
-    expect(src).toMatch(/marker as rebaseMarker.*from '\.\/rebase-lane\.mjs'/);
-    expect(src).toMatch(/rebaseMarker\(meta\.headRefOid\)/);
+    // And its read and author filter (kanon#1486), so the two answer "has the lane tried?" alike.
+    expect(src).toMatch(/COMMENTS_JQ as REBASE_COMMENTS_JQ, attemptOn as rebaseAttemptOn \} from '\.\/rebase-lane\.mjs'/);
+    expect(src).toMatch(/'--jq', REBASE_COMMENTS_JQ\]/);
+    expect(src).toMatch(/rebaseAttemptOn\(comments, meta\.headRefOid, \{ implementer: implementerLogin\(\) \}\)/);
   });
 });
 

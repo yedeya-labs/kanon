@@ -131,12 +131,19 @@ export function implementerBodies(comments, { implementer = implementerLogin() }
   return comments.filter((c) => normaliseLogin(c?.login ?? c?.author?.login) === app).map((c) => c.body);
 }
 
+/** Has the Implementer App posted this head's attempt marker? Three-state: null for an
+ *  unreadable read, which each caller resolves its own way. The Merger, which imports this,
+ *  escalates on null (`merge-gate.mjs`'s `rebaseAttemptedOn`), and the lane suppresses. */
+export function attemptOn(comments, sha, opts = {}) {
+  const b = implementerBodies(comments, opts);
+  return b === null ? null : b.some((body) => String(body).includes(marker(sha)));
+}
+
 /** Has this head been handed to the agent? Unreadable comments mean "may already have
  *  attempted": suppress, never repeat. An agent handed the same head twice is the
  *  expensive direction. */
 export function attempted(comments, sha, opts = {}) {
-  const b = implementerBodies(comments, opts);
-  return b === null || b.some((body) => String(body).includes(marker(sha)));
+  return attemptOn(comments, sha, opts) !== false;
 }
 
 /** What the lane says on the PR before handing it over, so a human reading the PR in
