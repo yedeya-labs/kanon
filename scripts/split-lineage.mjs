@@ -255,3 +255,13 @@ if (IS_CLI && process.argv[2] === 'check-pr') {
     if (!missing.length) console.log(`every child PR #${pr} adds carries its lineage marker`);
   }
 }
+// The split lane's branch for `ISSUE` (kanon#1385): its push job and its last job name the branch
+// from the issue the run was started for, never from anything the agent's job wrote.
+if (IS_CLI && process.argv[2] === 'branch') {
+  const issue = String(process.env.ISSUE ?? '');
+  if (!/^[1-9]\d*$/.test(issue)) {
+    console.error(`split-lineage: ISSUE ${JSON.stringify(issue)} is not an issue number, so the split lane names no branch`);
+    process.exit(2);
+  }
+  process.stdout.write(splitBranch(issue));
+}

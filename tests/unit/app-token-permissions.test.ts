@@ -31,8 +31,9 @@ const DIRECT: Record<string, { step: string; perms: Perms }> = {
   'agent-verify-acs.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write', 'pull-requests': 'read' } },
   // Reads the tree and the pull requests that touched a failing route; files and comments on issues.
   'agent-explore.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write', 'pull-requests': 'read' } },
-  // Pushes the split branch, opens its pull request, comments on the issue.
-  'agent-lead-split.yml': { step: 'app-token', perms: { contents: 'write', issues: 'write', 'pull-requests': 'write' } },
+  // Reads the tree and fetches, reads pull requests, comments on and labels the issue. Its commit
+  // goes to the push job, which pushes it and opens the pull request (kanon#1385, `[LANE-13]`).
+  'agent-lead-split.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write', 'pull-requests': 'read' } },
   // Reads the tree and fetches; comments and labels. Its merge goes to the push job, which pushes
   // it (kanon#1384, `[LANE-13]`).
   'agent-rebase.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write', 'pull-requests': 'write' } },
@@ -88,6 +89,12 @@ const MORE: Record<string, Perms> = {
   // (`workflows`), after it reads the pull request's head (`pull_requests: read`). Its job checks
   // nothing out (`K-AGENT-49`).
   'agent-rebase.yml#push-token': { contents: 'write', 'pull-requests': 'read', workflows: 'write' },
+  // The split lane's push job (kanon#1385, `[LANE-14]`, `[LANE-18]`): replaces the split branch
+  // (`contents`) and opens its pull request and labels it (`pull_requests`). The split writes only
+  // `docs/projects/`, so no `workflows`. Its job checks nothing out (`K-AGENT-49`). The probe mints
+  // the same set before the agent's token, and revokes it at once.
+  'agent-lead-split.yml#push-token': { contents: 'write', 'pull-requests': 'write' },
+  'agent-lead-split.yml#push-probe': { contents: 'write', 'pull-requests': 'write' },
   // On a re-ask only, lists the caller's own runs and their jobs, to tell whether a sweep ran
   // in the last 20 hours (kanon#813, `scripts/reask-due.mjs`). Read-only.
   'agent-dispatch-sweep.yml#reask-token': { actions: 'read' },
@@ -166,8 +173,8 @@ const authorBroadened = (JSON.parse(readFileSync(join(fileURLToPath(new URL('../
 const PERMISSIONS = ['contents', 'issues', 'pull-requests', 'workflows', 'actions'];
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-type Step = { id?: string; uses?: string; with?: Record<string, unknown> };
-type Job = { uses?: string; with?: Record<string, unknown>; secrets?: Record<string, string>; steps?: Step[] };
+type Step = { id?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, string> };
+type Job = { uses?: string; with?: Record<string, unknown>; secrets?: Record<string, string>; outputs?: Record<string, string>; steps?: Step[] };
 type Doc = { jobs?: Record<string, Job>; runs?: { steps?: Step[] } };
 const read = (file: string) => parse(readFileSync(join(root, file), 'utf8')) as Doc;
 const yamls = [
@@ -358,6 +365,27 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     expect(perms.workflows ?? 'none').not.toBe('write');
     // And the agent's job mints nothing of its own.
     const agentJob = read('.github/workflows/rebase-agent-job.yml');
+    expect(Object.values(agentJob.jobs ?? {}).flatMap((j) => j.steps ?? []).some((s) => String(s.uses ?? '').startsWith('actions/create-github-app-token@'))).toBe(false);
+  });
+
+  it('[LANE-13] on the split lane, the agent\'s token holds neither contents: write nor workflows: write', () => {
+    const run = read('.github/workflows/lead-split-run.yml');
+    // The token the agent's job is handed is the mint job's `app-token`, and only it.
+    expect(run.jobs?.split?.secrets?.['app-token']).toBe('${{ needs.mint.outputs.sealed }}');
+    const mint = run.jobs?.mint?.steps ?? [];
+    expect(mint.find((s) => s.id === 'seal')?.env?.TOKEN).toBe('${{ steps.app-token.outputs.token }}');
+    const perms = requested(mint.find((s) => s.id === 'app-token')!.with);
+    expect(perms.contents ?? 'none').not.toBe('write');
+    expect(perms.workflows ?? 'none').not.toBe('write');
+    // The push probe's token is revoked in the mint job, and never sealed or handed on.
+    expect(JSON.stringify(run.jobs?.split ?? {})).not.toMatch(/push-probe/);
+    expect(JSON.stringify(run.jobs?.mint?.outputs ?? {})).not.toMatch(/push-probe/);
+    // One set, written once in each place: the probe proves exactly what the push job will ask.
+    const probe = mint.find((s) => s.id === 'push-probe')!;
+    const push = (run.jobs?.push?.steps ?? []).find((s) => s.id === 'push-token')!;
+    expect(requested(probe.with)).toEqual(requested(push.with));
+    // And the agent's job mints nothing of its own.
+    const agentJob = read('.github/workflows/lead-split-agent-job.yml');
     expect(Object.values(agentJob.jobs ?? {}).flatMap((j) => j.steps ?? []).some((s) => String(s.uses ?? '').startsWith('actions/create-github-app-token@'))).toBe(false);
   });
 

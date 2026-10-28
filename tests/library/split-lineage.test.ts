@@ -13,6 +13,7 @@ import { writeStub } from '../unit/helpers/stub-bin.js';
 import { laneBlockOf, stepsAsRun } from '../unit/helpers/spine.js';
 import { readFlattened, workflowText } from '../unit/helpers/called-workflow.js';
 import { SPAWNS } from '../unit/helpers/spawns.js';
+import { parse as yamlParse } from 'yaml';
 const { isPreStandard } = await import('../../scripts/brief-guard.mjs');
 
 /**
@@ -281,24 +282,17 @@ describe('the split lane’s wiring', () => {
     expect(steps.indexOf(agent!)).toBeGreaterThan(gateAt);
   });
 
-  it('probes that the App can push, after the App-token checkout and the project setup (RA-2658, RA-2694)', () => {
-    // The lane's own probe became `agent-setup`'s `push-probe` switch; resolved through the
-    // block, the step must still run. Since RA-2694 it follows the project-setup hook, which
-    // runs after the checkout and BEFORE `agent-setup` (Kanon plan 0001 §5) and holds the
-    // install: the one ordering the hook boundary changes, still before any turn.
+  it("proves the App can mint the push job's token before the agent's token exists, and probes no push in the agent's job (kanon#1385)", () => {
+    // The agent's token can't push since kanon#1385 (`[LANE-13]`), so `agent-setup`'s
+    // `git push --dry-run` would fail every run. Instead the mint job mints the push job's set
+    // first and revokes it at once, as the spine's does: a missing grant still fails before any turn.
     const run = stepsAsRun(steps);
-    const name = (s: { name?: string; uses?: string; run?: string }) => s.name ?? s.uses ?? s.run ?? '';
-    const probe = run.findIndex((s) => name(s).startsWith('Probe that the App can push'));
-    const appCheckout = run.findIndex((s) => String(s.uses).startsWith('actions/checkout') && String(s.with?.token).includes('steps.app-token.outputs.token'));
-    const npmCi = run.findIndex((s) => s.run === 'npm ci');
-    const action = run.findIndex((s) => String(s.uses).startsWith('anthropics/claude-code-action'));
-    expect(probe, 'the split lane no longer runs the push probe').toBeGreaterThanOrEqual(0);
-    expect(run[probe].run).toContain('git push --dry-run');
-    expect(appCheckout).toBeGreaterThanOrEqual(0);
-    expect(probe).toBeGreaterThan(appCheckout);
-    expect(npmCi).toBeGreaterThanOrEqual(0);
-    expect(probe).toBeGreaterThan(npmCi);
-    expect(probe).toBeLessThan(action);
+    expect(run.some((s) => String(s.run ?? '').includes('git push --dry-run'))).toBe(false);
+    const mint = (yamlParse(readFileSync(join(ROOT, '.github/workflows/lead-split-run.yml'), 'utf8')) as {
+      jobs: { mint: { steps: Array<{ id?: string; name?: string }> } };
+    }).jobs.mint.steps.map((s) => s.id ?? s.name);
+    expect(mint.indexOf('push-probe')).toBeGreaterThanOrEqual(0);
+    expect(mint.indexOf('push-probe')).toBeLessThan(mint.indexOf('app-token'));
   });
 
   it('the prompt carries the lineage marker, closes the parent, and forbids adopting it', () => {

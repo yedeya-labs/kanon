@@ -784,3 +784,312 @@ describe('the rebase lane\'s push job holds the key and runs nothing else (kanon
     expect(r.outputs).toMatchObject({ base: f.start, ref: PR_BRANCH, merged: f.merged });
   });
 });
+
+// ── The Lead's split lane's push job (kanon#1385, docs/projects/1373.md Issue D) ──────────────
+
+const splitRun = parse(readFileSync('.github/workflows/lead-split-run.yml', 'utf8'));
+const splitAgent = parse(readFileSync('.github/workflows/lead-split-agent-job.yml', 'utf8'));
+const splitSteps = splitAgent.jobs.split.steps as WorkflowStep[];
+const splitPush = (splitRun.jobs.push?.steps as WorkflowStep[] | undefined)?.find((s) => s.id === 'push');
+
+const SPLIT = 'lead/split-7';
+const SPLIT_LABELS = ['review:please'];
+const SPLIT_REQUEST = { branch: SPLIT, base: 'main', title: 'docs(projects): split #7 into C1 and C2', body: 'Closes #7.\n\nWhy it exhausted.', labels: SPLIT_LABELS };
+
+/** A dead split branch on the remote: an earlier split's, whose pull request closed unmerged. */
+const deadSplit = (f: Fixture) => {
+  const person = join(f.root, 'person');
+  f.sh(f.root, 'clone', '-q', f.remote, person);
+  f.sh(person, 'switch', '-q', '-c', SPLIT);
+  writeFileSync(join(person, 'dead.md'), 'an earlier split\n');
+  f.sh(person, 'add', '.');
+  f.sh(person, '-c', 'user.name=Pat', '-c', 'user.email=pat@example.invalid', 'commit', '-qm', 'an earlier split');
+  f.sh(person, 'push', '-q', 'origin', `HEAD:refs/heads/${SPLIT}`);
+  return f.onRemote('rev-parse', `refs/heads/${SPLIT}`);
+};
+
+/** The split agent's job's own steps, run in its checkout: the exclusion before the agent, the handoff after. */
+const splitAgentJob = (f: Fixture, agent: () => void) => {
+  const env = { ...CLEAN_ENV, RUNNER_TEMP: f.temp, START: f.start };
+  const excluded = runWorkflowStep(splitSteps.find((s) => s.id === 'exclude-request')!, { cwd: f.work, env });
+  expect(excluded.status, excluded.output).toBe(0);
+  agent();
+  const handed = runWorkflowStep(splitSteps.find((s) => s.id === 'handoff')!, { cwd: f.work, env });
+  expect(handed.status, handed.output).toBe(0);
+  return handed;
+};
+
+/** The split agent's work, as its prompt has it: a branch fresh from the default branch, one commit. */
+const split = (f: Fixture, request: unknown = SPLIT_REQUEST) => () => {
+  f.sh(f.work, 'checkout', '-q', '-B', SPLIT, 'origin/main');
+  f.commit('docs/projects/1.md', '### Issue C1\n### Issue C2\n', 'docs(projects): split #7 into C1 and C2');
+  if (request) writeRequest(f, request);
+};
+
+/** The split lane's push, in process: replace mode on the branch the lane names. */
+const pushSplit = async (f: Fixture, { replace = SPLIT, pulls = {} as Record<string, unknown>, ref = '' } = {}) => {
+  const gh = fakeGitHub({
+    remote: f.remote, repo: REPO, appLogin: APP, pulls,
+    before: (call: Call) => {
+      if (call.method === 'POST' && call.path === `repos/${REPO}/pulls`) return { status: 201, headers: {}, json: { number: 42 } };
+      if (call.method === 'POST' && call.path === `repos/${REPO}/issues/42/labels`) return { status: 200, headers: {}, json: [] };
+      return undefined;
+    },
+  });
+  const dir = join(f.temp, 'kanon-push');
+  const store = join(f.root, `store-${Math.random().toString(36).slice(2)}`);
+  const { prereqs } = prepareStore({ store, bundle: join(dir, 'commits.bundle'), start: f.start, server: `file://${f.root}`, repo: REPO, token: 'x' });
+  const text = existsSync(join(dir, 'request.json')) ? readFileSync(join(dir, 'request.json'), 'utf8') : '';
+  // No list of the branches before the run: replace mode needs none, since the lane names the one that moves.
+  const r = await pushLane({
+    gitDir: store, prereqs, start: f.start, replace, ref, request: text ? readRequest(text) : null, before: null, labels: SPLIT_LABELS,
+    appLogin: APP, repo: REPO, api: gh.request, sleep: async () => {},
+  });
+  return { ...r, calls: gh.calls as Call[] };
+};
+
+describe('the split lane\'s push (kanon#1385)', () => {
+  it('[LANE-18] replaces a dead split branch in the helper\'s replace mode, then opens the pull request from the agent\'s request', async () => {
+    const f = fixture({ depth: 0 });
+    const dead = deadSplit(f);
+    splitAgentJob(f, split(f));
+    const r = await pushSplit(f);
+    expect(r.refused).toEqual([]);
+    const head = f.onRemote('rev-parse', `refs/heads/${SPLIT}`);
+    expect(head).not.toBe(dead);
+    expect(f.onRemote('log', '-1', '--format=%an', head)).toBe(APP);
+    // Built over the commit the run checked out, which GitHub still has on the default branch.
+    expect(f.onRemote('rev-parse', `${head}^`)).toBe(f.start);
+    expect(r.calls.some((c) => c.path === `repos/${REPO}/compare/${f.start}...main`)).toBe(true);
+    expect(r.heads).toEqual([{ ref: SPLIT, sha: head }]);
+    expect(r.base).toBe(f.start);
+    // Forced, and only after the read-back; the pull request only after the move.
+    const moved = r.calls.findIndex((c) => c.method === 'PATCH');
+    expect(r.calls[moved]).toEqual({ method: 'PATCH', path: `repos/${REPO}/git/refs/heads/${SPLIT}`, body: { sha: head, force: true } });
+    const opened = at(r.calls, 'POST', 'pulls');
+    expect(opened).toBeGreaterThan(moved);
+    expect(r.calls[opened]!.body).toEqual({ head: SPLIT, base: 'main', title: SPLIT_REQUEST.title, body: SPLIT_REQUEST.body });
+    expect(r.calls[at(r.calls, 'POST', 'issues/42/labels')]!.body).toEqual({ labels: SPLIT_LABELS });
+    expect(r.pr).toBe(42);
+    expect(r.lines.join('\n')).toMatch(new RegExp(`\\*\\*${SPLIT}\\*\\* replaced`));
+  });
+
+  it('[LANE-18] creates the split branch when none exists yet', async () => {
+    const f = fixture({ depth: 0 });
+    splitAgentJob(f, split(f));
+    const r = await pushSplit(f);
+    expect(r.refused).toEqual([]);
+    expect(at(r.calls, 'POST', 'git/refs')).toBeGreaterThan(-1);
+    expect(f.onRemote('rev-parse', `refs/heads/${SPLIT}^`)).toBe(f.start);
+    expect(r.pr).toBe(42);
+  });
+
+  it('[LANE-15] in replace mode, refuses a request for any branch but the one the lane names, and creates nothing', async () => {
+    const f = fixture({ depth: 0 });
+    splitAgentJob(f, () => {
+      split(f, { ...SPLIT_REQUEST, branch: 'lead/split-8' })();
+      f.sh(f.work, 'branch', 'lead/split-8');
+    });
+    const r = await pushSplit(f);
+    expect(r.refused).toEqual([expect.objectContaining({ branch: 'lead/split-8', why: expect.stringMatching(/the request is refused: .*lead\/split-7/) })]);
+    expect(writes(r.calls)).toEqual([]);
+    expect(r.heads).toEqual([]);
+  });
+
+  it('[LANE-15] in replace mode, refuses a request whose base is not the default branch, and creates nothing', async () => {
+    const f = fixture({ depth: 0 });
+    splitAgentJob(f, split(f, { ...SPLIT_REQUEST, base: 'release' }));
+    const r = await pushSplit(f);
+    expect(r.refused).toEqual([expect.objectContaining({ branch: SPLIT, why: expect.stringMatching(/base/) })]);
+    expect(writes(r.calls)).toEqual([]);
+  });
+
+  it('[LANE-15] in replace mode, refuses a request with a label the lane never had, and creates nothing', async () => {
+    const f = fixture({ depth: 0 });
+    splitAgentJob(f, split(f, { ...SPLIT_REQUEST, labels: ['review:please', 'agent:merge'] }));
+    const r = await pushSplit(f);
+    expect(r.refused).toEqual([expect.objectContaining({ branch: SPLIT, why: expect.stringMatching(/agent:merge/) })]);
+    expect(writes(r.calls)).toEqual([]);
+  });
+
+  it('[LANE-18] refuses to replace a branch that heads an open pull request, before it creates anything', async () => {
+    const f = fixture({ depth: 0 });
+    const dead = deadSplit(f);
+    splitAgentJob(f, split(f));
+    const r = await pushSplit(f, { pulls: { 5: { head: { ref: SPLIT, repo: { full_name: REPO } } } } });
+    expect(r.refused).toEqual([expect.objectContaining({ branch: SPLIT, why: expect.stringMatching(/open pull request #5/) })]);
+    expect(writes(r.calls)).toEqual([]);
+    expect(f.onRemote('rev-parse', `refs/heads/${SPLIT}`)).toBe(dead);
+    // It asked GitHub about exactly that branch, of this repository.
+    expect(r.calls.some((c) => c.method === 'GET' && c.path === `repos/${REPO}/pulls?head=${encodeURIComponent(`example-org:${SPLIT}`)}&state=open`)).toBe(true);
+  });
+
+  it('[LANE-18] with no request, as a crashed agent leaves, still replaces the branch, opens no pull request, and leaves the agent\'s other branches on its runner', async () => {
+    const f = fixture({ depth: 0 });
+    deadSplit(f);
+    splitAgentJob(f, () => {
+      f.sh(f.work, 'switch', '-q', '-c', 'scratch');
+      f.commit('scratch.txt', 'try\n');
+      split(f, null)();
+    });
+    const r = await pushSplit(f);
+    expect(r.refused).toEqual([]);
+    expect(r.heads.map((h) => h.ref)).toEqual([SPLIT]);
+    expect(f.onRemote('rev-parse', `refs/heads/${SPLIT}`)).toBe(r.heads[0]!.sha);
+    expect(r.left).toEqual(['scratch']);
+    expect(at(r.calls, 'POST', 'pulls')).toBe(-1);
+    expect(r.lines.join('\n')).toMatch(/no request, so no pull request was opened/i);
+  });
+
+  it('[LANE-18] never replaces the default branch, whatever the lane names', async () => {
+    const f = fixture({ depth: 0 });
+    splitAgentJob(f, () => { f.commit('on-main.txt', 'not here\n'); });
+    const r = await pushSplit(f, { replace: 'main' });
+    expect(r.refused).toEqual([expect.objectContaining({ branch: 'main', why: expect.stringMatching(/default branch/) })]);
+    expect(writes(r.calls)).toEqual([]);
+    expect(f.onRemote('rev-parse', 'refs/heads/main')).toBe(f.start);
+  });
+
+  it('replace mode names the one branch a lane opens, so it comes with no --ref', async () => {
+    const f = fixture({ depth: 0 });
+    splitAgentJob(f, split(f));
+    await expect(pushSplit(f, { ref: 'fix/1-thing' })).rejects.toThrow(/--replace/);
+  });
+
+  it('[LANE-18] the split push job\'s own step: works out the branch from the issue, replaces it, and writes its outputs', async () => {
+    const f = fixture({ depth: 0 });
+    deadSplit(f);
+    splitAgentJob(f, split(f));
+    const served = join(f.root, 'served');
+    mkdirSync(served);
+    const api = await serveFake({ remote: f.remote, repo: REPO, appLogin: APP, dir: served });
+    try {
+      const r = runWorkflowStep(splitPush!, {
+        env: {
+          ...CLEAN_ENV, KANON: process.cwd(), RUNNER_TEMP: f.temp, GH_TOKEN: 'x', REPO, GITHUB_REPOSITORY: REPO,
+          GITHUB_SERVER_URL: `file://${f.root}`, GITHUB_API_URL: api.url, APP_LOGIN: APP, START: f.start, ISSUE: '7',
+        },
+      });
+      const head = f.onRemote('rev-parse', `refs/heads/${SPLIT}`);
+      expect(f.onRemote('log', '-1', '--format=%an', head)).toBe(APP);
+      expect(JSON.parse(r.outputs.heads ?? '')).toEqual([{ ref: SPLIT, sha: head }]);
+      expect(r.outputs.base).toBe(f.start);
+      const calls = api.calls() as Call[];
+      expect(calls.some((c) => c.method === 'PATCH' && c.path === `repos/${REPO}/git/refs/heads/${SPLIT}` && c.body?.force === true)).toBe(true);
+      expect(calls.some((c) => c.method === 'POST' && c.path === `repos/${REPO}/pulls`)).toBe(true);
+      // The double opens no pull request, so the step fails, by name.
+      expect(r.status).not.toBe(0);
+      expect(r.output).toMatch(/pull request/);
+    } finally {
+      api.stop();
+    }
+  });
+
+  it('the split push job\'s step refuses an issue that is not a number, before any request', () => {
+    const r = runWorkflowStep(splitPush!, {
+      env: { ...CLEAN_ENV, KANON: process.cwd(), RUNNER_TEMP: tmpdir(), GH_TOKEN: 'x', REPO, GITHUB_REPOSITORY: REPO, APP_LOGIN: APP, START: 'a'.repeat(40), ISSUE: '7/../main' },
+    });
+    expect(r.status).not.toBe(0);
+    expect(r.output).toMatch(/issue/);
+  });
+});
+
+describe('the split lane\'s push job holds the key and runs nothing else (kanon#1385)', () => {
+  type Job = { needs?: string | string[]; if?: string; steps?: WorkflowStep[]; outputs?: Record<string, string>; uses?: string };
+  const job = (splitRun.jobs.push ?? {}) as Job;
+  const steps = job.steps ?? [];
+  /** The job's `if:`, for these needs. Only the forms it uses. */
+  const gate = (expr: string, { commits = 'true', result = 'success', act = 'split' }: { commits?: string; result?: string; act?: string }) => {
+    const js = String(expr).replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+      .replace(/!cancelled\(\)/g, 'true')
+      .replace(/needs\.split\.result/g, JSON.stringify(result))
+      .replace(/needs\.split\.outputs\.commits/g, JSON.stringify(commits))
+      .replace(/needs\.split\.outputs\.act/g, JSON.stringify(act))
+      .replace(/'([^']*)'/g, (_, s: string) => JSON.stringify(s));
+    expect(js, `an expression this evaluator doesn't read: ${expr}`).toMatch(/^[\s"\w!=&|()-]*$/);
+    return Boolean(new Function(`return (${js});`)());
+  };
+
+  it('[LANE-14] on the split lane: runs after the agent\'s job whenever it left commits, a failed run\'s included', () => {
+    expect([job.needs].flat()).toEqual(['split']);
+    expect(gate(job.if!, {})).toBe(true);
+    expect(gate(job.if!, { result: 'failure' })).toBe(true);
+    expect(gate(job.if!, { commits: '' })).toBe(false);
+    expect(gate(job.if!, { commits: 'false' })).toBe(false);
+    // The agent's job hands its commits on whatever the agent did: always(), never success().
+    for (const id of ['handoff', 'upload']) expect(splitSteps.find((s) => s.id === id)?.if, id).toMatch(/^always\(\)/);
+    expect(splitAgent.jobs.split.outputs.commits).toBe("${{ steps.upload.outcome == 'success' }}");
+    for (const k of ['commits', 'start', 'act']) expect(splitAgent.on.workflow_call.outputs[k].value, k).toBe(`\${{ jobs.split.outputs.${k} }}`);
+    const upload = splitSteps.find((s) => s.id === 'upload')!;
+    const download = steps.find((s) => String(s.uses ?? '').startsWith('actions/download-artifact@'))!;
+    expect(download.with?.name).toBe(upload.with?.name);
+  });
+
+  it('[LANE-14] on the split lane: runs no agent and no project code, checks nothing out, and moves the branch with the verified-commit helper', () => {
+    expect(steps.map((s) => s.uses ?? s.id)).toEqual(['$/actions/kanon-path', 'actions/create-github-app-token@v3', 'actions/download-artifact@v8', 'push']);
+    expect(JSON.stringify(job)).not.toMatch(/claude|npm|\bmake\b|actions\/checkout|"\.\//i);
+    expect(splitPush?.run).toMatch(/node "\$KANON\/scripts\/lane-push\.mjs"/);
+    expect(splitPush?.run).toMatch(/--replace "\$branch"/);
+    expect(splitPush?.run).not.toMatch(/--ref\b/);
+    // The branch is the lane's, from the issue the run was started for, never from the agent's job.
+    expect(splitPush?.run).toMatch(/branch="\$\(node "\$KANON\/scripts\/split-lineage\.mjs" branch\)"/);
+    expect(splitPush?.env?.ISSUE).toBe('${{ github.event.issue.number || inputs.issue }}');
+    expect(JSON.stringify(splitPush?.env)).not.toMatch(/needs\.split\.outputs\.(?!start)/);
+    // The commit the agent's job checked out, set by its checkout before the agent ran.
+    expect(splitPush?.env?.START).toBe('${{ needs.split.outputs.start }}');
+    expect(splitAgent.jobs.split.outputs.start).toBe('${{ steps.checkout.outputs.commit }}');
+  });
+
+  it('[LANE-14] on the split lane: mints the Author App\'s token in the job, narrowed to the push, and never hands it on', () => {
+    const mint = steps.find((s) => s.id === 'push-token')!;
+    expect(mint.with).toEqual({
+      'client-id': '${{ secrets.app-id }}',
+      'private-key': '${{ secrets.app-private-key }}',
+      'permission-contents': 'write',
+      'permission-pull-requests': 'write',
+    });
+    expect(splitPush?.env?.GH_TOKEN).toBe('${{ steps.push-token.outputs.token }}');
+    expect(Object.values(job.outputs ?? {}).join(' ')).not.toMatch(/token/);
+  });
+
+  it('[LANE-18] the split agent is told to commit and write its request, and never to push or open the pull request', () => {
+    const agent = splitSteps.find((s) => s.id === 'agent')!;
+    const prompt = String(agent.with?.prompt);
+    // It may say that a push fails, as the spine's prompts do; it never says to make one.
+    expect(prompt).not.toMatch(/git push (--force|origin)|push over it/);
+    expect(prompt).toMatch(/`git push` fails/);
+    expect(prompt).not.toMatch(/OPEN ONE PR/);
+    expect(prompt).toContain(REQUEST_PATH);
+    expect(prompt).toMatch(/"labels": \["review:please"\]/);
+    // Nothing in the agent's job pushes, or probes a push its token can't make.
+    expect(JSON.stringify(splitAgent)).not.toMatch(/git push (--force|--dry-run|origin)|push-probe/);
+  });
+
+  it('the split agent\'s job keeps the request out of its commits and hands them on with the spine\'s own steps', () => {
+    for (const id of ['exclude-request', 'handoff']) {
+      const mine = splitSteps.find((s) => s.id === id)!;
+      const spines = agentSteps.find((s) => s.id === id)!;
+      expect(mine.run, id).toBe(spines.run);
+      expect(mine.env ?? {}, id).toEqual(spines.env ?? {});
+      expect(String(mine.if), id).toMatch(/steps\.gate\.outputs\.act == 'split'/);
+    }
+    const at = (id: string) => splitSteps.findIndex((s) => s.id === id);
+    expect(at('exclude-request')).toBeLessThan(at('agent'));
+    expect(at('handoff')).toBeGreaterThan(at('agent'));
+    expect(at('upload')).toBe(at('handoff') + 1);
+  });
+
+  it('asks whether a split pull request opened only after the push, on the default token, holding no key', () => {
+    const check = splitRun.jobs.check as Job & { steps: WorkflowStep[] };
+    expect([check.needs].flat().sort()).toEqual(['push', 'split']);
+    expect(check.if).toMatch(/!cancelled\(\)/);
+    expect(check.if).toMatch(/needs\.split\.outputs\.act == 'split'/);
+    expect(JSON.stringify(check)).not.toMatch(/app-private-key|app-token|actions\/checkout|claude/);
+    const step = check.steps.find((s) => /split PR open/.test(String(s.name)))!;
+    expect(step.env?.GH_TOKEN).toBe('${{ github.token }}');
+    expect(step.run).toMatch(/split-lineage\.mjs" check-pr/);
+    expect(step.run).toContain('the split run finished with no open PR on $BRANCH');
+    // Not in the agent's job any more, where it would always find nothing.
+    expect(splitSteps.some((s) => /split PR open/.test(String(s.name)))).toBe(false);
+  });
+});
