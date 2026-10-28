@@ -31,7 +31,9 @@
 #      changes or adds) and must not go backwards (#90), and it may add, remove or
 #      rename no file. Release PRs run no CI and merge through the admin
 #      bypass, so on 0.10.0 a release PR built from stale `extra-files` reverted #67's
-#      documentation (db99870) and nothing noticed.
+#      documentation (db99870) and nothing noticed. When a later head passes, it edits
+#      each of its earlier stale comments on that PR into an all-clear naming the head
+#      that passed (#1442), so "close it" never outlives the head it was about.
 #
 # One optional pair of secrets, RELEASER_APP_ID and RELEASER_APP_PRIVATE_KEY: the Releaser App
 # (plan 0005 §3.1, decision 2; ADR 0013), mapped by name by a caller that has one. With them,
@@ -58,6 +60,8 @@
 # merge-settings fields to a workflow token only when it can push. With metadata or
 # contents: read alone they come back null or absent, and the guard then fails closed,
 # saying it could not read them, instead of passing.
+# The release-PR guard's comments, and its edits to them, ride on pull-requests: write:
+# a release PR's comments are issue comments on a pull request.
 #
 # The guard and the failure explanation are inline scripts (shell: node {0}) rather than
 # a composite action, because a reusable workflow can't reach its own repository's files
@@ -410,6 +414,37 @@ jobs:
           // GitHub's ceiling on the files one `compare` lists (#246).
           const COMPARE_FILE_CAP = 300;
 
+          // The guard's own comments on a release PR: posted by this workflow's token, opening with
+          // the marker that names the head they judged, and, once a later head passed, that head
+          // too (#1442). A person's comment that quotes the marker is never one of them.
+          const VERDICT = /^<!-- kanon-release-pr-guard (\S+?)(?: passed (\S+?))? -->/;
+          const verdicts = (pr) =>
+            pages(`repos/${repo}/issues/${pr.number}/comments?per_page=100`).flatMap((c) => {
+              const m = c.user?.login === 'github-actions[bot]' ? VERDICT.exec(c.body ?? '') : null;
+              return m ? [{ id: c.id, judged: m[1], passed: m[2] }] : [];
+            });
+
+          // On a pass, each earlier stale verdict on the PR becomes an all-clear naming the head
+          // that passed (#1442). The guard comments only on a stale head, and release-please's next
+          // refresh usually rebuilds the branch clean, so without this the PR's last word from the
+          // guard stays "Close it" after the head it judged is gone. An edit, not a new comment:
+          // no notification, and a PR that was never stale gets no comment at all.
+          const allClear = (pr) => {
+            const run = process.env.GITHUB_RUN_ID ? ` ([run](${process.env.GITHUB_SERVER_URL}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}))` : '';
+            for (const v of verdicts(pr)) {
+              if (v.passed === pr.head.sha) continue;
+              const file = `${mkdtempSync(`${tmpdir()}/release-pr-guard-`)}/body.md`;
+              writeFileSync(
+                file,
+                `<!-- kanon-release-pr-guard ${v.judged} passed ${pr.head.sha} -->\n` +
+                  `**The release-PR guard passed on this PR's head, \`${pr.head.sha}\`**${run}: it changes only version strings, each to a version it releases. ` +
+                  `An earlier run found head \`${v.judged}\` stale; release-please has since rebuilt the branch, so that verdict, and its instruction to close this PR, no longer stand. ` +
+                  `If the PR's head is no longer \`${pr.head.sha}\`, this is not the latest verdict: the guard comments again on a stale head.`,
+              );
+              gh(['api', '-X', 'PATCH', `repos/${repo}/issues/comments/${v.id}`, '-F', `body=@${file}`]);
+            }
+          };
+
           let failed = false;
           for (let pr of releasePrs) {
             // Re-read the PR until it records the branch's head; a PR that still doesn't fails
@@ -478,6 +513,12 @@ jobs:
 
             if (problems.length === 0) {
               console.log(`Release PR #${pr.number} changes only version strings, each to a version it releases (${[...released].join(', ')}), outside the changelog and the version files.`);
+              // The verdict stands whatever happens to the comments, so a failed edit warns.
+              try {
+                allClear(pr);
+              } catch (error) {
+                console.log(`::warning title=Release PR guard comments not cleared::Release PR #${pr.number} passed, but its earlier stale verdicts could not be marked passed: ${String(error.message).trim()}`);
+              }
               continue;
             }
             failed = true;
@@ -491,6 +532,8 @@ jobs:
               `Don't merge it. Close it and delete its branch, \`${pr.head.ref}\`, and the next push to \`${pr.base.ref}\` opens a fresh one; or re-run the Release workflow on \`${pr.base.ref}\` and check that this comment doesn't come back.`;
             console.log(`::error title=Release PR is stale::Release PR #${pr.number} would revert changes on ${pr.base.ref}: ${problems.length} line(s) beyond version strings.`);
             console.error(body);
+            // Once per stale head. A verdict on this head that a later pass marked passed doesn't
+            // count: the head is stale again, so the PR gets the refusal again.
             const comments = pages(`repos/${repo}/issues/${pr.number}/comments?per_page=100`);
             if (!comments.some((c) => (c.body ?? '').includes(marker))) {
               const file = `${mkdtempSync(`${tmpdir()}/release-pr-guard-`)}/body.md`;
