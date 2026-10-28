@@ -375,8 +375,8 @@ const notFound = (e) => e instanceof ApiError && e.status === 404;
  *   explained: Map<number, string>, ignored: string[],
  *   intake?: (candidate: Tag) => Verdict,
  * }} Context what every gate reads: the candidate, the pull requests it contains, the pin, and
- *   Kanon's lane callers; `intake`, the intake gate's reading, only where the record and the git
- *   refs are (the CLI)
+ *   Kanon's lane callers; `intake`, the intake gate's reading, only in the CLI's check, from the
+ *   verdict the keyless `intake` job wrote (`intakeFromVerdict`)
  * @typedef {{ pass: boolean, evidence: string, skipped?: boolean }} Verdict
  * @typedef {{ id: string, title: string, when: 'always' | 'normal' | 'urgent', check: (ctx: Context) => Verdict }} Gate
  *   `when`: `normal` gates are skipped by `urgent`, `urgent` ones read only then
