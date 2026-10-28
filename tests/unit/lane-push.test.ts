@@ -700,6 +700,30 @@ describe('the rebase lane\'s push (kanon#1384)', () => {
       api.stop();
     }
   });
+
+  it('[LANE-17] the push job\'s own step refuses an empty recorded merge, and moves nothing (kanon#1466)', async () => {
+    const f = conflicting();
+    // Commits that hold no merge: an empty `--merged` read as absent would push them as a revise.
+    rebaseAgentJob(f, () => { f.commit('one.txt', 'only my side\n', 'not a merge'); });
+    const served = join(f.root, 'served');
+    mkdirSync(served);
+    writeFileSync(join(served, 'pulls.json'), JSON.stringify({ [PR]: PULL }));
+    const api = await serveFake({ remote: f.remote, repo: REPO, appLogin: APP, dir: served });
+    try {
+      const r = runWorkflowStep(rebasePush!, {
+        env: {
+          ...CLEAN_ENV, KANON: process.cwd(), RUNNER_TEMP: f.temp, GH_TOKEN: 'x', REPO,
+          GITHUB_SERVER_URL: `file://${f.root}`, GITHUB_API_URL: api.url, APP_LOGIN: APP,
+          PR: String(PR), START: f.start, MERGED: '', REF: PR_BRANCH,
+        },
+      });
+      expect(r.status, r.output).not.toBe(0);
+      expect(r.output).toMatch(/--merged ""/);
+      expect(f.onRemote('rev-parse', `refs/heads/${PR_BRANCH}`)).toBe(f.start);
+    } finally {
+      api.stop();
+    }
+  });
 });
 
 describe('the rebase lane\'s push job holds the key and runs nothing else (kanon#1384)', () => {
