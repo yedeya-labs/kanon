@@ -1000,6 +1000,9 @@ describe('the split lane\'s push job holds the key and runs nothing else (kanon#
   const steps = job.steps ?? [];
   /** The job's `if:`, for these needs. Only the forms it uses. */
   const gate = (expr: string, { commits = 'true', result = 'success', act = 'split' }: { commits?: string; result?: string; act?: string }) => {
+    // GitHub prefixes `success() &&` to an `if` that calls no status function, so a job gated on
+    // outputs alone is skipped when the job it needs failed.
+    if (!/\b(always|cancelled|failure|success)\(\)/.test(expr) && result !== 'success') return false;
     const js = String(expr).replace(/^\$\{\{\s*|\s*\}\}$/g, '')
       .replace(/!cancelled\(\)/g, 'true')
       .replace(/needs\.split\.result/g, JSON.stringify(result))
