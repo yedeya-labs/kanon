@@ -7,7 +7,7 @@ import { parse } from 'yaml';
 import { SPAWNS } from './helpers/spawns.js';
 import { writeStub } from './helpers/stub-bin.js';
 
-const { CONTEXT, byApp, carryDecision, patchFingerprint, pickOpened, redeliverDecision } = await import('../../actions/implementer-status/implementer-status.mjs');
+const { CONTEXT, carryDecision, patchFingerprint, pickOpened, redeliverDecision, verifiedAsApp } = await import('../../actions/implementer-status/implementer-status.mjs');
 
 /**
  * The implementer commit status, `kanon/role: implementer` (plan 0005 §3.3, question 6; step
@@ -18,18 +18,35 @@ const { CONTEXT, byApp, carryDecision, patchFingerprint, pickOpened, redeliverDe
 
 const REPO = 'acme/widgets';
 const SLUG = 'acme-implementer';
-const EMAIL = `42+${SLUG}[bot]@users.noreply.github.com`;
+const APP = `${SLUG}[bot]`;
+const EMAIL = `42+${APP}@users.noreply.github.com`;
 const SINCE = '2026-10-05T10:00:00Z';
 const before = ['main', 'feat/1-old'];
 const sha = (c: string) => c.repeat(40);
-const commitBy = (s: string, email = EMAIL, parents: string[] = []) => ({ sha: s, parents: parents.map((p) => ({ sha: p })), commit: { author: { email } } });
+/** What GitHub's API says of a commit: the accounts it resolved from the commit's emails, and its verification. */
+type Who = { verified?: unknown; reason?: string; login?: string; type?: string; committer?: string; email?: string };
+// A commit the Author App's token created through the API: GitHub signed it, and the App's account is its author.
+const APP_COMMIT: Who = { verified: true, reason: 'valid', login: APP, type: 'Bot', committer: 'web-flow', email: EMAIL };
+// A person's push: unsigned, under their own account.
+const PERSON: Who = { verified: false, reason: 'unsigned', login: 'a-person', type: 'User', committer: 'a-person', email: 'person@example.com' };
+const commitBy = (s: string, who: Who = APP_COMMIT, parents: string[] = []) => {
+  const w = { ...APP_COMMIT, ...who };
+  return {
+    sha: s, parents: parents.map((p) => ({ sha: p })),
+    author: { login: w.login, type: w.type }, committer: { login: w.committer },
+    commit: { author: { email: w.email }, verification: { verified: w.verified, reason: w.reason } },
+  };
+};
+// #1358: a person's commit under the App's noreply address. GitHub resolves the App's account
+// from that email, as author and committer, but nothing signed it.
+const FORGED: Who = { verified: false, reason: 'unsigned' };
 const pr = (number: number, ref: string, head: string, created = '2026-10-05T10:30:00Z', repo = REPO) =>
   ({ number, created_at: created, head: { ref, sha: head, repo: { full_name: repo } } });
 // The heads this run's agent job held when the agent finished (#324). By default, the one head
 // `sha('a')`, on the branch the cases below call this run's.
 const ours = [{ ref: 'feat/1-new', sha: sha('a') }, { ref: 'HEAD', sha: sha('a') }];
 const opened = (prs: ReturnType<typeof pr>[], commits: Record<string, ReturnType<typeof commitBy>>, over: Record<string, unknown> = {}) =>
-  pickOpened({ prs, repo: REPO, since: SINCE, branchesBefore: before, email: EMAIL, heads: ours, headCommit: (s: string) => commits[s], ...over });
+  pickOpened({ prs, repo: REPO, since: SINCE, branchesBefore: before, slug: SLUG, heads: ours, headCommit: (s: string) => commits[s], ...over });
 
 // Its cases run the step in `bash` against a stub `gh`, so the block takes the spawn budget (#436).
 describe('the summary an adopter reads when the App lacks Commit statuses write (L4)', SPAWNS, () => {
@@ -106,15 +123,59 @@ describe('open: the first status goes only on the pull request this run opened',
   });
 
   it('refuses a head the App did not author, a fork\'s branch, and an unknown start or snapshot', () => {
-    expect(opened([pr(7, 'feat/1-new', sha('a'))], { [sha('a')]: commitBy(sha('a'), 'person@example.com') })).toHaveProperty('none');
+    expect(opened([pr(7, 'feat/1-new', sha('a'))], { [sha('a')]: commitBy(sha('a'), PERSON) })).toHaveProperty('none');
     expect(opened([pr(7, 'feat/1-new', sha('a'), undefined, 'fork/widgets')], { [sha('a')]: commitBy(sha('a')) })).toHaveProperty('none');
     expect(opened([pr(7, 'feat/1-new', sha('a'))], { [sha('a')]: commitBy(sha('a')) }, { since: '' })).toMatchObject({ none: expect.stringMatching(/start time/) });
     expect(opened([pr(7, 'feat/1-new', sha('a'))], { [sha('a')]: commitBy(sha('a')) }, { branchesBefore: null })).toMatchObject({ none: expect.stringMatching(/branches/) });
   });
 
-  it('recognises the App by its noreply email, not the persona in the author\'s name', () => {
-    expect(byApp({ sha: 'x', commit: { author: { email: EMAIL.toUpperCase() } } }, EMAIL)).toBe(true);
-    expect(byApp({ sha: 'x', commit: { author: { email: 'implementer@example.com' } } }, EMAIL)).toBe(false);
+  it('[LANE-20] stamps only a head GitHub verified, with the App\'s bot account as its author', () => {
+    const one = (who: Who) => opened([pr(7, 'feat/1-new', sha('a'))], { [sha('a')]: commitBy(sha('a'), who) });
+    expect(one(APP_COMMIT)).toEqual({ pr: 7, sha: sha('a') });
+    // #1358: the App's address, so the App's account, but unsigned.
+    expect(one(FORGED)).toMatchObject({ none: expect.stringMatching(/`aaaaaaa` is not verified \(unsigned\)/) });
+    // Verified, but another account's: a person's signed commit, or another App's.
+    expect(one({ login: 'a-person', type: 'User', committer: 'a-person' })).toMatchObject({ none: expect.stringMatching(/author is a-person, not acme-implementer\[bot\]/) });
+    expect(one({ login: 'acme-lead[bot]' })).toMatchObject({ none: expect.stringMatching(/author is acme-lead\[bot\]/) });
+    // The App's account as author, but a person committed and signed it with their own key.
+    expect(one({ committer: 'a-person' })).toMatchObject({ none: expect.stringMatching(/committer is a-person/) });
+    // A head commit that could not be read stamps nothing.
+    expect(opened([pr(7, 'feat/1-new', sha('a'))], {})).toHaveProperty('none');
+  });
+});
+
+describe('verifiedAsApp: GitHub\'s verification and accounts, never an email', () => {
+  const check = (who: Who) => verifiedAsApp(commitBy(sha('2'), who), SLUG);
+
+  it('holds for a verified commit, the App\'s bot account its author, GitHub or the App its committer', () => {
+    expect(check(APP_COMMIT)).toEqual({ ok: true, why: '' });
+    expect(check({ committer: APP })).toEqual({ ok: true, why: '' });
+  });
+
+  it('fails an unverified commit, naming GitHub\'s reason, whatever account it names', () => {
+    expect(check(FORGED)).toEqual({ ok: false, why: 'commit `2222222` is not verified (unsigned)' });
+    expect(check({ verified: 'true' }).ok).toBe(false);
+    expect(verifiedAsApp({ sha: sha('2'), author: { login: APP, type: 'Bot' }, committer: { login: 'web-flow' } }, SLUG)).toEqual({ ok: false, why: 'commit `2222222` is not verified (no reason given)' });
+  });
+
+  it('fails a verified commit whose author is not the App\'s bot account, or whose committer is a person', () => {
+    expect(check({ login: 'a-person', type: 'User' })).toMatchObject({ ok: false, why: expect.stringMatching(/author is a-person, not acme-implementer\[bot\]/) });
+    // Another App's commit, which GitHub signed for that App.
+    expect(check({ login: 'acme-lead[bot]' })).toMatchObject({ ok: false, why: expect.stringMatching(/author is acme-lead\[bot\], not/) });
+    expect(check({ type: 'User' })).toMatchObject({ ok: false, why: expect.stringMatching(/as a User account/) });
+    expect(check({ login: '', type: '' })).toMatchObject({ ok: false, why: expect.stringMatching(/author is no account/) });
+    expect(check({ committer: 'a-person' })).toMatchObject({ ok: false, why: expect.stringMatching(/committer is a-person, not web-flow or acme-implementer\[bot\]/) });
+    expect(check({ committer: 'acme-lead[bot]' })).toMatchObject({ ok: false, why: expect.stringMatching(/committer is acme-lead\[bot\]/) });
+    expect(check({ committer: '' })).toMatchObject({ ok: false, why: expect.stringMatching(/committer is no account/) });
+    expect(verifiedAsApp(undefined, SLUG).ok).toBe(false);
+  });
+
+  it('[LANE-19] reads no email: the App\'s address is not the App, and a stranger\'s address on a verified App commit is', () => {
+    expect(check({ ...FORGED, email: EMAIL }).ok).toBe(false);
+    expect(check({ email: 'someone-else@example.com' }).ok).toBe(true);
+    // And the module keeps no email check of its own, nor the account read that built the address.
+    const src = readFileSync('actions/implementer-status/implementer-status.mjs', 'utf8');
+    expect(src).not.toMatch(/byApp|\.email\b|users\//);
   });
 });
 
@@ -123,8 +184,8 @@ describe('carry: the status is a chain, not a stamp', () => {
   const mine = { context: CONTEXT, state: 'success', creator: { login: `${SLUG}[bot]` } };
   // By default the run's agent job checked out the start and left the branch at `sha('3')`.
   const carry = (over: Record<string, unknown>) => carryDecision({
-    startHead: start, head: sha('3'), slug: SLUG, email: EMAIL, startStatuses: [mine],
-    compare: { status: 'ahead', commits: [commitBy(sha('2'), EMAIL, [start]), commitBy(sha('3'), EMAIL, [sha('2')])] },
+    startHead: start, head: sha('3'), slug: SLUG, startStatuses: [mine],
+    compare: { status: 'ahead', commits: [commitBy(sha('2'), APP_COMMIT, [start]), commitBy(sha('3'), APP_COMMIT, [sha('2')])] },
     heads: [{ ref: 'feat/1-new', sha: sha('3') }, { ref: 'HEAD', sha: sha('3') }], base: start, fixSha: '',
     ...over,
   });
@@ -134,8 +195,8 @@ describe('carry: the status is a chain, not a stamp', () => {
   });
 
   it('carries through the rebase lane\'s merge: the default branch\'s commits are its second parent', () => {
-    const merge = commitBy(sha('3'), EMAIL, [start, sha('9')]);
-    expect(carry({ compare: { status: 'ahead', commits: [commitBy(sha('9'), 'person@example.com', [sha('8')]), merge] } })).toEqual({ carry: sha('3') });
+    const merge = commitBy(sha('3'), APP_COMMIT, [start, sha('9')]);
+    expect(carry({ compare: { status: 'ahead', commits: [commitBy(sha('9'), PERSON, [sha('8')]), merge] } })).toEqual({ carry: sha('3') });
   });
 
   it('refuses a forged PR: no status on the start, or one another App created, or one not successful', () => {
@@ -146,14 +207,44 @@ describe('carry: the status is a chain, not a stamp', () => {
   });
 
   it('a person\'s push ends the chain', () => {
-    const v = carry({ compare: { status: 'ahead', commits: [commitBy(sha('2'), 'person@example.com', [start]), commitBy(sha('3'), EMAIL, [sha('2')])] } });
+    const v = carry({ compare: { status: 'ahead', commits: [commitBy(sha('2'), PERSON, [start]), commitBy(sha('3'), APP_COMMIT, [sha('2')])] } });
     expect(v).toMatchObject({ none: expect.stringMatching(/a person's push ends the chain/) });
+  });
+
+  describe('only across commits GitHub verified as the App\'s (#1358)', () => {
+    const path = (mid: Who, tip: Who = APP_COMMIT) => ({ status: 'ahead', commits: [commitBy(sha('2'), mid, [start]), commitBy(sha('3'), tip, [sha('2')])] });
+
+    it('[LANE-19] an unverified commit under the App\'s noreply email, below a verified head, ends the chain', () => {
+      const v = carry({ compare: path(FORGED) });
+      expect(v).toEqual({ none: 'the path since `1111111` is not all the App\'s, as GitHub verified it: commit `2222222` is not verified (unsigned), and a person\'s push ends the chain' });
+    });
+
+    it('[LANE-19] a verified commit under another account, or committed by a person, ends the chain', () => {
+      expect(carry({ compare: path({ login: 'a-person', type: 'User', committer: 'a-person' }) })).toMatchObject({ none: expect.stringMatching(/`2222222`.*author is a-person/) });
+      expect(carry({ compare: path({ login: 'acme-lead[bot]' }) })).toMatchObject({ none: expect.stringMatching(/author is acme-lead\[bot\]/) });
+      expect(carry({ compare: path({ committer: 'a-person' }) })).toMatchObject({ none: expect.stringMatching(/committer is a-person/) });
+      // The head itself, too.
+      expect(carry({ compare: path(APP_COMMIT, FORGED) })).toMatchObject({ none: expect.stringMatching(/commit `3333333` is not verified/) });
+    });
+
+    it('[LANE-19] a merge whose first parent is unverified ends the chain; its second parent\'s commits are not walked', () => {
+      const merge = commitBy(sha('3'), APP_COMMIT, [sha('2'), sha('9')]);
+      expect(carry({ compare: { status: 'ahead', commits: [commitBy(sha('2'), FORGED, [start]), commitBy(sha('9'), PERSON, [sha('8')]), merge] } }))
+        .toMatchObject({ none: expect.stringMatching(/commit `2222222` is not verified/) });
+      expect(carry({ compare: { status: 'ahead', commits: [commitBy(sha('2'), APP_COMMIT, [start]), commitBy(sha('9'), FORGED, [sha('8')]), merge] } }))
+        .toEqual({ carry: sha('3') });
+    });
+
+    it('[LANE-19] compares no email: a verified chain under strangers\' addresses carries, the App\'s address unverified doesn\'t', () => {
+      expect(carry({ compare: path({ email: 'stranger@example.com' }, { email: 'other@example.com' }) })).toEqual({ carry: sha('3') });
+      expect(carry({ compare: path({ ...PERSON, email: EMAIL }) })).toHaveProperty('none');
+    });
   });
 
   it('refuses a head that doesn\'t descend from the start, an unreadable path, and an unknown start', () => {
     expect(carry({ compare: { status: 'diverged', commits: [] } })).toMatchObject({ none: expect.stringMatching(/does not descend/) });
     expect(carry({ compare: null })).toMatchObject({ none: expect.stringMatching(/unreadable/) });
-    expect(carry({ compare: { status: 'ahead', commits: [commitBy(sha('3'), EMAIL, [sha('2')])] } })).toMatchObject({ none: expect.stringMatching(/could not be read whole/) });
+    expect(carry({ compare: { status: 'ahead', commits: [commitBy(sha('3'), APP_COMMIT, [sha('2')])] } })).toMatchObject({ none: expect.stringMatching(/could not be read whole/) });
     expect(carry({ startHead: '' })).toMatchObject({ none: expect.stringMatching(/unknown/) });
   });
 
@@ -164,7 +255,7 @@ describe('carry: the status is a chain, not a stamp', () => {
   // #1263: the App's email binds nothing; the carry is bound to what this run checked out and pushed.
   describe('bound to what this run checked out and pushed (#1263)', () => {
     it('a legitimate multi-commit revise still carries', () => {
-      const commits = [commitBy(sha('2'), EMAIL, [start]), commitBy(sha('4'), EMAIL, [sha('2')]), commitBy(sha('3'), EMAIL, [sha('4')])];
+      const commits = [commitBy(sha('2'), APP_COMMIT, [start]), commitBy(sha('4'), APP_COMMIT, [sha('2')]), commitBy(sha('3'), APP_COMMIT, [sha('4')])];
       expect(carry({ compare: { status: 'ahead', commits } })).toEqual({ carry: sha('3') });
     });
 
@@ -172,23 +263,23 @@ describe('carry: the status is a chain, not a stamp', () => {
       // A person pushed `P` under the App's address before the agent's job checked out; the agent
       // built `H` on it, and its job held `H`. Every commit on the path reads as the App's.
       const P = sha('2');
-      const v = carry({ base: P, compare: { status: 'ahead', commits: [commitBy(P, EMAIL, [start]), commitBy(sha('3'), EMAIL, [P])] } });
+      const v = carry({ base: P, compare: { status: 'ahead', commits: [commitBy(P, FORGED, [start]), commitBy(sha('3'), APP_COMMIT, [P])] } });
       expect(v).toMatchObject({ none: expect.stringMatching(/checked out `2222222`, not `1111111`.*not the Implementer's/) });
     });
 
     it('refuses a person\'s push after the agent, though it carries the App\'s address', () => {
       const Q = sha('5');
-      const commits = [commitBy(sha('2'), EMAIL, [start]), commitBy(sha('3'), EMAIL, [sha('2')]), commitBy(Q, EMAIL, [sha('3')])];
+      const commits = [commitBy(sha('2'), APP_COMMIT, [start]), commitBy(sha('3'), APP_COMMIT, [sha('2')]), commitBy(Q, APP_COMMIT, [sha('3')])];
       const v = carry({ head: Q, compare: { status: 'ahead', commits } });
       expect(v).toMatchObject({ none: expect.stringMatching(/`5555555` is not one this run pushed \(its agent's job held 3333333\)/) });
     });
 
     it('the fix-push path carries: no agent job ran, the fix commit is the head and was made on the start', () => {
       const F = sha('6');
-      const v = carry({ head: F, heads: null, base: start, fixSha: F, compare: { status: 'ahead', commits: [commitBy(F, EMAIL, [start])] } });
+      const v = carry({ head: F, heads: null, base: start, fixSha: F, compare: { status: 'ahead', commits: [commitBy(F, APP_COMMIT, [start])] } });
       expect(v).toEqual({ carry: F });
       // And a push on top of the fix is not the fix.
-      const after = carry({ head: sha('7'), heads: null, base: start, fixSha: F, compare: { status: 'ahead', commits: [commitBy(F, EMAIL, [start]), commitBy(sha('7'), EMAIL, [F])] } });
+      const after = carry({ head: sha('7'), heads: null, base: start, fixSha: F, compare: { status: 'ahead', commits: [commitBy(F, APP_COMMIT, [start]), commitBy(sha('7'), APP_COMMIT, [F])] } });
       expect(after).toMatchObject({ none: expect.stringMatching(/not one this run pushed \(the heads its agent's job held are unknown, its fix pushed `6666666`\)/) });
     });
 
@@ -262,7 +353,6 @@ describe('re-delivery: the job re-adds `agent:revise` with its third token, and 
   const STUB = `#!/usr/bin/env bash
 printf '%s|%s\\n' "$GH_TOKEN" "$*" >> "$CALLS"
 case "$*" in
-  "api users/"*) echo '{"id":42}' ;;
   "api -X POST repos/acme/widgets/statuses/"*) [ -n "\${STATUS_FAILS:-}" ] && { echo 'HTTP 403' >&2; exit 1; }; echo '{"created_at":"2026-10-23T14:32:20Z"}' ;;
   "api --paginate --slurp repos/acme/widgets/commits/"*) printf '[%s]' "$STATUSES" ;;
   "api --paginate --slurp repos/acme/widgets/pulls/7/reviews"*) printf '[%s]' "$REVIEWS" ;;
@@ -286,7 +376,7 @@ esac
           APP_SLUG: SLUG, READ_TOKEN: 'read-tok', STATUS_TOKEN: 'status-tok', PR_TOKEN: prToken,
           START_HEAD: START, HEAD_SHA: H, BASE: START, FIX_SHA: '', HEADS: JSON.stringify([{ ref: 'feat/7-x', sha: H }]),
           STATUSES: JSON.stringify([{ context: CONTEXT, state: 'success', creator: { login: `${SLUG}[bot]` } }]),
-          COMPARE: JSON.stringify({ status: 'ahead', commits: [commitBy(H, EMAIL, [START])] }),
+          COMPARE: JSON.stringify({ status: 'ahead', commits: [commitBy(H, APP_COMMIT, [START])] }),
           REVIEWS: JSON.stringify(reviews), STATUS_FAILS: statusFails ? '1' : '',
         },
       });
@@ -532,8 +622,8 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
         expect(checked).toEqual({ pr: 7, base: fetched, heads: headsText });
         // And the carry reads exactly that shape.
         const v = carryDecision({
-          startHead: fetched, head: pushed, slug: SLUG, email: EMAIL, startStatuses: [{ context: CONTEXT, state: 'success', creator: { login: `${SLUG}[bot]` } }],
-          compare: { status: 'ahead', commits: [commitBy(pushed, EMAIL, [fetched, merged])] }, heads: JSON.parse(checked.heads), base: checked.base, fixSha: '',
+          startHead: fetched, head: pushed, slug: SLUG, startStatuses: [{ context: CONTEXT, state: 'success', creator: { login: `${SLUG}[bot]` } }],
+          compare: { status: 'ahead', commits: [commitBy(pushed, APP_COMMIT, [fetched, merged])] }, heads: JSON.parse(checked.heads), base: checked.base, fixSha: '',
         });
         expect(v).toEqual({ carry: pushed });
       } finally {
@@ -582,7 +672,7 @@ describe('the push job records the heads it moved, for the open pick', () => {
     const mine = 'a'.repeat(40);
     const theirs = 'b'.repeat(40);
     const heads = [{ ref: 'feat/7-mine', sha: mine }];
-    const v = pickOpened({ prs: [pr(7, 'feat/7-mine', mine), pr(8, 'feat/8-theirs', theirs)], repo: REPO, since: SINCE, branchesBefore: ['main'], email: EMAIL, heads, headCommit: (x: string) => commitBy(x) });
+    const v = pickOpened({ prs: [pr(7, 'feat/7-mine', mine), pr(8, 'feat/8-theirs', theirs)], repo: REPO, since: SINCE, branchesBefore: ['main'], slug: SLUG, heads, headCommit: (x: string) => commitBy(x) });
     expect(v).toEqual({ pr: 7, sha: mine });
   });
 });

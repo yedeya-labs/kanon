@@ -29,8 +29,8 @@ Seeded by project [#1373](https://github.com/yedeya-labs/kanon/issues/1373)'s br
 
 ### The implementer status
 
-- `[LANE-19]` `[seed]` `carryDecision` carries `kanon/role: implementer` to a new head only when every commit on the first-parent path from that head back to the head the run started from is `verification.verified: true` with the Author App's bot account as its author. A commit that isn't ends the chain, whatever email it carries, and no part of the decision compares a commit's author email.
-- `[LANE-20]` `[seed]` In `open` mode, the implementer status sets `kanon/role: implementer` only on a pull request whose head commit is `verification.verified: true` with the Author App's bot account as its author.
+- `[LANE-19]` `[seed]` `carryDecision` carries `kanon/role: implementer` to a new head only when every commit on the first-parent path from that head back to the head the run started from is `verification.verified: true` with the Author App's bot account as its author and GitHub's `web-flow` or that bot account as its committer. A commit that isn't ends the chain, whatever email it carries, and no part of the decision compares a commit's author email.
+- `[LANE-20]` `[seed]` In `open` mode, the implementer status sets `kanon/role: implementer` only on a pull request whose head commit is `verification.verified: true` with the Author App's bot account as its author and GitHub's `web-flow` or that bot account as its committer.
 
 ### The docs
 
