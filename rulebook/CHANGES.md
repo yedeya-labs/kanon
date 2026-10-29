@@ -307,6 +307,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** The `## Deploy` section gained an optional `Smoke schedule` bullet: one code span per environment, its name and then a five-field cron, no environment twice and no two environments sharing a cron string, since the cron is what tells one scheduled run from another. [Plan 0013](../docs/plans/0013-smoke-lifecycle.md) §4.3, [#1165](https://github.com/yedeya-labs/kanon/issues/1165)
 
 - **2026-10-21.** The mechanism list takes a third status, `not applicable`, and `## Choices` its reason, one `Mechanism not applicable` bullet per such mechanism, naming its row's rules. [#1236](https://github.com/yedeya-labs/kanon/issues/1236)
+- **2026-10-29.** The sentence on which findings can't be waived names every kind of reason doctor gives, production and a finding `lane-check` fails whatever a waiver says among them, and points to `docs/doctor.md` for each finding's own; it had named only the record, independent review and the repository's secrets. A test fails a reason in the code that falls under no kind the rule names. [#1515](https://github.com/yedeya-labs/kanon/issues/1515)
 
 ## `K-LAYOUT-13`
 

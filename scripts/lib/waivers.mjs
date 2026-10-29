@@ -17,9 +17,12 @@ export const WAIVER_LABEL = 'Waived doctor finding';
 
 /**
  * The finding ids no waiver waives, each with why (docs/doctor.md, "Waiving a finding"). A
- * waiver of one is malformed. The record's own findings can't be waived, or a waiver could hide
- * a broken or stale waiver; an id-token holder has its own form of waiver, the acceptance above;
- * and the rest protect a rule that keeps review independent or keeps secrets in their place.
+ * waiver of one is malformed. Each is here for one or more of these reasons, which the rule
+ * (`K-LAYOUT-10`) names too: it is about the record itself, where a waiver could hide a broken or
+ * stale waiver; an id-token holder has its own form of waiver, the acceptance above; it protects
+ * independent review, the repository's secrets or production; or `lane-check` fails it whatever
+ * a waiver says, so a waiver would make doctor disagree with the gate.
+ * `tests/unit/kanon-doctor.test.ts` fails a reason that matches none of these.
  * @type {Record<string, string>}
  */
 export const UNWAIVABLE = {
