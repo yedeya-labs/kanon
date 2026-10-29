@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { RUNTIME_NOT_INSTALLED, readRuntimeNotInstalled, runtimeMarker } from '../../actions/agent-classify/classify-agent-result.mjs';
+import { CHECK_RUN_ID_ENV, RUNTIME_NOT_INSTALLED, readRuntimeNotInstalled, runtimeMarker } from '../../actions/agent-classify/classify-agent-result.mjs';
 import { CLI_PATH, PROMPT_FILE, runtimeCheck } from '../../actions/agent-run/runtime-check.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -81,7 +81,7 @@ describe('the runtime check reads where the action failed', () => {
 
 describe('the runtime check, run as the block runs it', SPAWNS, () => {
   const script = join(process.cwd(), 'actions/agent-run/runtime-check.mjs');
-  const JOB = { GITHUB_RUN_ID: '40715172609', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review' };
+  const JOB = { GITHUB_RUN_ID: '40715172609', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review', KANON_JOB_CHECK_RUN_ID: '58200000001' };
   const run = (w: { runnerTemp: string; home: string }, over: Record<string, string> = {}) => spawnSync(process.execPath, [script], {
     encoding: 'utf8',
     env: {
@@ -97,6 +97,7 @@ describe('the runtime check, run as the block runs it', SPAWNS, () => {
     expect(existsSync(join(w.runnerTemp, RUNTIME_NOT_INSTALLED))).toBe(true);
     expect(readRuntimeNotInstalled(w.runnerTemp, { env: JOB })).toBe(true);
     expect(readRuntimeNotInstalled(w.runnerTemp, { env: { ...JOB, GITHUB_RUN_ID: '1' } }), 'a later job on the runner').toBe(false);
+    expect(readRuntimeNotInstalled(w.runnerTemp, { env: { ...JOB, KANON_JOB_CHECK_RUN_ID: '58200000002' } }), 'a sibling matrix entry').toBe(false);
   });
 
   it('writes no marker when the CLI is in place, and still exits 0', () => {
@@ -137,7 +138,7 @@ describe("agent-run's first step clears a marker left before it started", SPAWNS
 
   it("deletes the marker, so it isn't read as this run's, and still stamps the start", () => {
     const { runnerTemp } = world();
-    const JOB = { GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review' };
+    const JOB = { GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review', KANON_JOB_CHECK_RUN_ID: '58200000001' };
     writeFileSync(join(runnerTemp, RUNTIME_NOT_INSTALLED), runtimeMarker(JOB, 'an earlier block'));
     expect(readRuntimeNotInstalled(runnerTemp, { env: JOB }), 'the check is not vacuous').toBe(true);
     const r = runStep(runnerTemp);
@@ -183,6 +184,26 @@ describe("agent-run runs the check after the action, and only after it failed", 
       CONCLUSION: '${{ steps.agent.outputs.conclusion }}',
       EXECUTION_FILE: '${{ steps.agent.outputs.execution_file }}',
       STARTED_AT: '${{ steps.started.outputs.at }}',
+      KANON_JOB_CHECK_RUN_ID: '${{ job.check_run_id }}',
     });
+  });
+});
+
+/**
+ * The marker names this job execution's check run (kanon#1499), and the runner sets no variable
+ * for it: the step that writes the marker and each step that reads it pass `job.check_run_id`
+ * themselves. A step that dropped it would leave the id empty, and the marker would never count.
+ */
+describe("the marker's writer and readers each pass this job's check run", () => {
+  type Step = { name?: string; env?: Record<string, string> };
+  const steps = (action: string) => parse(readFileSync(join(process.cwd(), `actions/${action}/action.yml`), 'utf8')).runs.steps as Step[];
+  it.each([
+    ['agent-run', 'Record whether claude-code-action failed to install Claude Code'],
+    ['agent-classify', 'Say whether the model was unreachable or the run genuinely failed'],
+    ['agent-telemetry', 'Normalize and summarize'],
+  ])('%s: %s', (action, name) => {
+    const step = steps(action).find((s) => s.name === name);
+    expect(step, `${action} has the step`).toBeDefined();
+    expect(step!.env?.[CHECK_RUN_ID_ENV]).toBe('${{ job.check_run_id }}');
   });
 });

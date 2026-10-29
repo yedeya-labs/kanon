@@ -23,11 +23,13 @@
 //
 // The marker is `RUNTIME_NOT_INSTALLED` in the runner's temp directory, and `agent-classify` and
 // `agent-telemetry` read it, in the same job. A non-ephemeral runner can keep that directory
-// between jobs, so the marker names this run, attempt and job (`runtimeMarker`), and is read only
-// by the job it names; `agent-run`'s first step deletes any marker already there.
+// between jobs, so the marker names this run, attempt and job, and this job execution's check run
+// (`runtimeMarker`), and is read only by the job execution it names: the job id alone is shared by
+// every entry of a matrix (kanon#1499). `agent-run`'s first step deletes any marker already there.
 //
 // Inputs, by environment only: OUTCOME, CONCLUSION, EXECUTION_FILE, STARTED_AT, RUNNER_TEMP, HOME,
-// and GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT and GITHUB_JOB, which the runner sets.
+// GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT and GITHUB_JOB, which the runner sets, and
+// KANON_JOB_CHECK_RUN_ID, which the step sets to `job.check_run_id`.
 // ALWAYS EXITS 0: it records evidence about a red run and must never red one.
 
 import { existsSync, statSync, writeFileSync } from 'node:fs';

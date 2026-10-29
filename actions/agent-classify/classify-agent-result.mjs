@@ -334,8 +334,23 @@ const readObjects = (path, read) => {
  */
 export const RUNTIME_NOT_INSTALLED = 'kanon-claude-code-not-installed';
 
-/** The job a marker belongs to: its run, attempt and job id, as `GITHUB_*` name them. */
-const MARKER_KEYS = /** @type {const} */ ([['run_id', 'GITHUB_RUN_ID'], ['run_attempt', 'GITHUB_RUN_ATTEMPT'], ['job', 'GITHUB_JOB']]);
+/**
+ * The variable a block step that writes or reads the marker sets to `${{ job.check_run_id }}`:
+ * the check run of this one job execution (kanon#1499). The runner sets no variable for it, so
+ * `agent-run`'s runtime check, `agent-classify` and `agent-telemetry` each pass it in their
+ * step's `env:` (`agent-run-runtime-check.test.ts` holds all three to that).
+ */
+export const CHECK_RUN_ID_ENV = 'KANON_JOB_CHECK_RUN_ID';
+
+/**
+ * The job execution a marker belongs to: its run, attempt and job id, as `GITHUB_*` name them,
+ * and its check run. The job id is the same for every entry of a matrix and every call of one
+ * reusable workflow in a run (kanon#1499); each of those is its own check run, as is each
+ * attempt, so the check run is what tells a sibling's marker from this job's.
+ */
+const MARKER_KEYS = /** @type {const} */ ([
+  ['run_id', 'GITHUB_RUN_ID'], ['run_attempt', 'GITHUB_RUN_ATTEMPT'], ['job', 'GITHUB_JOB'], ['check_run_id', CHECK_RUN_ID_ENV],
+]);
 
 /** The marker's content for the job `env` describes: the runtime check writes this. */
 export function runtimeMarker(env, message = '') {
@@ -345,9 +360,12 @@ export function runtimeMarker(env, message = '') {
 /**
  * Whether THIS job's `agent-run` recorded that marker. A non-ephemeral self-hosted runner can
  * keep `RUNNER_TEMP` between jobs, so a marker there may be an earlier job's: it counts only when
- * it names this run, attempt and job, and `agent-run` deletes any marker when it starts, so one
- * left by an earlier block of the same job doesn't count either. With no absolute `RUNNER_TEMP`,
- * or a marker that can't be read, false: never a shared `/tmp`, never a guess.
+ * it names this run, attempt, job and check run, so a sibling matrix entry or reusable-workflow
+ * call that failed before its own `agent-run` doesn't read it (kanon#1499), and `agent-run`
+ * deletes any marker when it starts, so one left by an earlier block of the same job doesn't
+ * count either. With no absolute `RUNNER_TEMP`, a marker that can't be read, or no check run id
+ * on either side (GitHub Enterprise Server has no `job.check_run_id`), false: never a shared
+ * `/tmp`, never a guess.
  *
  * @param {string | undefined} runnerTemp
  * @param {{ env?: Record<string, string | undefined>, read?: (path: string, encoding: 'utf8') => string }} [opts]

@@ -329,6 +329,8 @@ runs:
         TELEMETRY_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
         TELEMETRY_PROMPT_CACHE_TTL: ${{ inputs.prompt_cache_ttl }}
         TELEMETRY_AUTH: ${{ inputs.auth }}
+        # The check run `agent-run`'s install marker must name to count (kanon#1499).
+        KANON_JOB_CHECK_RUN_ID: ${{ job.check_run_id }}
       run: |
         rm -f kanon-telemetry.json
         node "${{ github.action_path }}/agent-telemetry.mjs" \
