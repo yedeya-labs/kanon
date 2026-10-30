@@ -82,8 +82,9 @@ const MORE: Record<string, Perms> = {
   'agent-explore-telemetry.yml#names-token': { issues: 'read', 'pull-requests': 'read' },
   // Commits the files a hand-back's fix commands rewrote over the API and moves the pull request's
   // branch (`contents`), and comments the round marker, which either of the other two allows
-  // (kanon#1173). Its job checks nothing out (`K-AGENT-49`).
-  'agent-implement-revise.yml#fix-token': { contents: 'write', issues: 'write', 'pull-requests': 'write' },
+  // (kanon#1173), and reads the files an earlier attempt of the run uploaded, when it is re-run alone
+  // (`actions: read`, kanon#1507). Its job checks nothing out (`K-AGENT-49`).
+  'agent-implement-revise.yml#fix-token': { contents: 'write', issues: 'write', 'pull-requests': 'write', actions: 'read' },
   // The rebase lane's push job (kanon#1384, `[LANE-14]`): re-creates the agent's merge and moves the
   // pull request's branch (`contents`), which may carry the default branch's workflow changes
   // (`workflows`), after it reads the pull request's head (`pull_requests: read`), and reads the
@@ -91,11 +92,12 @@ const MORE: Record<string, Perms> = {
   // kanon#1465). Its job checks nothing out (`K-AGENT-49`).
   'agent-rebase.yml#push-token': { contents: 'write', 'pull-requests': 'read', workflows: 'write', actions: 'read' },
   // The split lane's push job (kanon#1385, `[LANE-14]`, `[LANE-18]`): replaces the split branch
-  // (`contents`) and opens its pull request and labels it (`pull_requests`). The split writes only
-  // `docs/projects/`, so no `workflows`. Its job checks nothing out (`K-AGENT-49`). The probe mints
-  // the same set before the agent's token, and revokes it at once.
-  'agent-lead-split.yml#push-token': { contents: 'write', 'pull-requests': 'write' },
-  'agent-lead-split.yml#push-probe': { contents: 'write', 'pull-requests': 'write' },
+  // (`contents`) and opens its pull request and labels it (`pull_requests`), and reads the bundle an
+  // earlier attempt of the run uploaded, when it is re-run alone (`actions: read`, kanon#1507). The
+  // split writes only `docs/projects/`, so no `workflows`. Its job checks nothing out (`K-AGENT-49`).
+  // The probe mints the same set before the agent's token, and revokes it at once.
+  'agent-lead-split.yml#push-token': { contents: 'write', 'pull-requests': 'write', actions: 'read' },
+  'agent-lead-split.yml#push-probe': { contents: 'write', 'pull-requests': 'write', actions: 'read' },
   // On a re-ask only, lists the caller's own runs and their jobs, to tell whether a sweep ran
   // in the last 20 hours (kanon#813, `scripts/reask-due.mjs`). Read-only.
   'agent-dispatch-sweep.yml#reask-token': { actions: 'read' },

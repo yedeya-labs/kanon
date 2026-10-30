@@ -77,6 +77,7 @@ jobs:
           skip-token-revoke: "true"
           permission-contents: write
           permission-pull-requests: write
+          permission-actions: read
       - name: Revoke the push probe's token
         if: always() && steps.push-probe.outputs.token != ''
         env:
@@ -90,7 +91,7 @@ jobs:
       - name: Say why the push probe failed
         if: failure() && steps.push-probe.outcome == 'failure'
         run: |
-          echo "::error title=agent-lead-split::the App cannot mint the push job's token, so the lead split agent's commit could never reach GitHub. It needs Contents: Read & write and Pull requests: Read & write on the App, AND the installation re-authorized to accept them — a permission change does not take effect until it is accepted. Kanon's apps-check workflow compares the installation's permissions with the App's (Kanon's docs/apps.md, \"Checking the installations later\")."
+          echo "::error title=agent-lead-split::the App cannot mint the push job's token, so the lead split agent's commit could never reach GitHub. It needs Contents: Read & write, Pull requests: Read & write and Actions: Read on the App, AND the installation re-authorized to accept them — a permission change does not take effect until it is accepted. Kanon's apps-check workflow compares the installation's permissions with the App's (Kanon's docs/apps.md, \"Checking the installations later\")."
           exit 1
 
       - name: Mint lead App token
@@ -145,6 +146,13 @@ jobs:
   # agent leaves, the branch is still replaced and no pull request opens, and the next run replaces
   # it again. `!cancelled()` because a failed `split` would otherwise skip it. A refusal fails this
   # job, so the lane's run is red, and the step summary names the commit, the branch or the refusal.
+  #
+  # RE-RUN ON ITS OWN (kanon#1507), as the spine's push job is (kanon#1438). "Re-run failed jobs"
+  # after a failed push re-runs this job alone, in a later attempt, and reuses `split`'s outputs, so
+  # the agent isn't paid for again. A job sees only its own attempt's artifacts unless it names a run
+  # and a token, so the download names this run (`run-id`, never another's) and the bundle `split`
+  # uploaded in the attempt it ran in, and reads it with this job's token, which holds `actions: read`
+  # for that alone.
   push:
     needs: [split]
     if: ${{ !cancelled() && needs.split.outputs.commits == 'true' }}
@@ -153,8 +161,9 @@ jobs:
     steps:
       - uses: $/actions/kanon-path
       # Narrowed to what this job uses (`K-AGENT-46`): the commit and the branch (`contents`), and
-      # the pull request and its label (`pull_requests`). The split writes only `docs/projects/`,
-      # so no `workflows`. Revoked by the action's own post step.
+      # the pull request and its label (`pull_requests`), and the bundle from an earlier attempt of
+      # this run (`actions: read`). The split writes only `docs/projects/`, so no `workflows`.
+      # Revoked by the action's own post step.
       - name: Mint the push token
         id: push-token
         uses: actions/create-github-app-token@v3
@@ -163,10 +172,13 @@ jobs:
           private-key: ${{ secrets.app-private-key }}
           permission-contents: write
           permission-pull-requests: write
+          permission-actions: read
       - uses: actions/download-artifact@v8
         with:
-          name: kanon-push-${{ github.run_attempt }}
+          name: kanon-push-${{ needs.split.outputs.attempt }}
           path: ${{ runner.temp }}/kanon-push
+          run-id: ${{ github.run_id }}
+          github-token: ${{ steps.push-token.outputs.token }}
       - name: Push the split, and open its pull request
         id: push
         env:

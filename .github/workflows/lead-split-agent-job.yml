@@ -73,6 +73,11 @@ on:
       commits:
         description: "`true` when the agent's commits were handed to the push job."
         value: ${{ jobs.split.outputs.commits }}
+      # THE ATTEMPT THIS JOB RAN IN, WHICH NAMES THE BUNDLE IT UPLOADED (kanon#1507). A partial
+      # re-run of the push job alone reuses this output, so it downloads this attempt's bundle.
+      attempt:
+        description: The run attempt this job ran in, which names its `kanon-push-<attempt>` artifact.
+        value: ${{ jobs.split.outputs.attempt }}
 
 jobs:
   split:
@@ -85,6 +90,7 @@ jobs:
       # The checkout's own output, set before any step of the agent's could write one.
       start: ${{ steps.checkout.outputs.commit }}
       commits: ${{ steps.upload.outcome == 'success' }}
+      attempt: ${{ github.run_attempt }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
       # it is as close to the job's start as a step can be.

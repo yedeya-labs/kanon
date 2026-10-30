@@ -118,6 +118,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-AGENT-46`
 
 - **2026-10-28.** The Owner decided that the push jobs of the Implementer's lanes, and of the Lead's, mint with Actions read, so a push job re-run on its own can read the commits the agent's job handed on in an earlier attempt of the run. The Implementer's row of the roles table gained Actions read for that alone; the Author App already held it. [#1438](https://github.com/yedeya-labs/kanon/issues/1438), [#1465](https://github.com/yedeya-labs/kanon/issues/1465)
+- **2026-10-28.** The same Actions read reaches the Lead's split lane's push job and the revise lane's no-model fix push, so each can be re-run on its own too. Both roles' rows already held it, so no grant changed. [#1507](https://github.com/yedeya-labs/kanon/issues/1507)
 
 ## `K-AGENT-47`
 
