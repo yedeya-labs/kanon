@@ -1,6 +1,6 @@
 // The hosted status server's two KMS calls (project #1327, Issue H): `GenerateDataKey`, for the
-// data key a container seals with, and `Decrypt`, for a data key another container generated.
-// Over `aws.mjs`'s caller, with the telemetry function's SigV4 signer (decision 11: `node:`
+// data key a container seals with, and `Decrypt`, for a data key another container generated and
+// for the container's own, which `seal.mjs`'s `prove` has KMS decrypt back at startup. Over `aws.mjs`'s caller, with the telemetry function's SigV4 signer (decision 11: `node:`
 // built-ins only, no SDK).
 //
 // AN ERROR NAMES THE OPERATION AND AWS'S ERROR CODE ONLY, as the telemetry function's do: nothing
