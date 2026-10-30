@@ -714,6 +714,30 @@ describe('the JSON contract (ADR 0014, docs/doctor.md)', () => {
     expect(listed).toEqual([...Object.keys(UNWAIVABLE), ...Object.keys(UNWAIVABLE_UNDER)].sort());
   });
 
+  // The rule and the JSDoc above `UNWAIVABLE` summarise why a finding can't be waived. Each
+  // reason the code gives must fall under a kind both summaries name, so a reader of either never
+  // concludes that a finding can be waived when it can't (kanon#1515): an id added for a new kind
+  // of reason fails here until both summaries name it.
+  it('summarises, in the rule and above the list, every kind of reason a finding can\'t be waived', () => {
+    const kinds: Array<[string, RegExp]> = [
+      ['the record itself', /adoption record itself/],
+      ['id-token', /accepted as an id-token holder by its own bullet/],
+      ['independent review', /\breview\b|approval|K-LAYOUT-6/],
+      ['secrets', /every secret/],
+      ['production', /production/],
+      ['lane-check', /lane-check fails/],
+    ];
+    const reasons = { ...UNWAIVABLE, ...Object.fromEntries(Object.entries(UNWAIVABLE_UNDER).map(([id, u]) => [id, u.why])) };
+    for (const [id, why] of Object.entries(reasons)) expect(kinds.some(([, re]) => re.test(why)), `${id}: ${why}`).toBe(true);
+    const rule = readFileSync(join(ROOT, 'rulebook/11-repository-layout.md'), 'utf8').split('### `K-LAYOUT-10`')[1]!.split('\n### ')[0]!;
+    const sentence = rule.split('\n').find((l) => l.startsWith('A waived finding no longer sets'))!;
+    const jsdoc = readFileSync(join(ROOT, 'scripts/lib/waivers.mjs'), 'utf8').split('export const UNWAIVABLE =')[0]!.split('/**').pop()!;
+    for (const [kind] of kinds) {
+      expect(sentence, `K-LAYOUT-10 names ${kind}`).toContain(kind);
+      expect(jsdoc, `UNWAIVABLE's JSDoc names ${kind}`).toContain(kind);
+    }
+  });
+
   it('documents every exit code', () => {
     for (const [name, code] of Object.entries(EXIT)) expect(doc, name).toMatch(new RegExp(`^\\| ${code} \\| \`${name}\` \\|`, 'm'));
   });

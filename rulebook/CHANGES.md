@@ -142,6 +142,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-07.** The grant probe battery covers both Lead lanes' flags, and the Owner decided the deny list that refuses a program handed to `git push` or `git fetch` for the far end. [#405](https://github.com/yedeya-labs/kanon/issues/405)
 - **2026-10-14.** The Owner decided that the `notify` job of `K-OBS-19` joins the guard's named exceptions in that rule's exact shape, and that it runs the adopter's notify hook at the run's commit on any branch, accepting that whoever can push a branch and dispatch a notifying lane can read that lane's chat secret. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)
 - **2026-10-28.** The Owner decided the accepted exception's wording now that the revise and rebase lanes' agent no longer pushes: it runs the tests on what it commits, beside a token it comments and labels with, which holds no contents or workflows write. A `push` job after the agent's, which runs none of the code, holds that write, so code planted on the implementer's branch no longer reaches a token that writes code or workflow files. The exception itself stands. [#1387](https://github.com/yedeya-labs/kanon/issues/1387)
+- **2026-10-29.** The Enforced-by line names `tests/unit/app-token-permissions.test.ts`, which already held the accepted implementer lanes' agent token to no contents or workflows write, as the guard of that clause; `tests/unit/pr-code-token-isolation.test.ts` passes those lanes whatever their token holds. [#1488](https://github.com/yedeya-labs/kanon/issues/1488)
 
 ## `K-MERGE-4`
 
@@ -307,6 +308,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** The `## Deploy` section gained an optional `Smoke schedule` bullet: one code span per environment, its name and then a five-field cron, no environment twice and no two environments sharing a cron string, since the cron is what tells one scheduled run from another. [Plan 0013](../docs/plans/0013-smoke-lifecycle.md) §4.3, [#1165](https://github.com/yedeya-labs/kanon/issues/1165)
 
 - **2026-10-21.** The mechanism list takes a third status, `not applicable`, and `## Choices` its reason, one `Mechanism not applicable` bullet per such mechanism, naming its row's rules. [#1236](https://github.com/yedeya-labs/kanon/issues/1236)
+- **2026-10-29.** The sentence on which findings can't be waived names every kind of reason doctor gives, production and a finding `lane-check` fails whatever a waiver says among them, and points to `docs/doctor.md` for each finding's own; it had named only the record, independent review and the repository's secrets. A test fails a reason in the code that falls under no kind the rule names. [#1515](https://github.com/yedeya-labs/kanon/issues/1515)
 
 ## `K-LAYOUT-13`
 
