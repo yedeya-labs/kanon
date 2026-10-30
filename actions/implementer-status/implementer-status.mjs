@@ -12,9 +12,12 @@
 //   open   (implement, triage): the FIRST status, only on the pull request THIS run opened. It
 //          is never found by its link to the issue, its label or its author, all of which an
 //          agent can forge. It is the one pull request that was opened after the run started,
-//          from a branch that didn't exist before the run (the filter job's snapshot), whose
-//          head commit GitHub verified as the App's (`LANE-20`), AT A HEAD THIS RUN'S PUSH JOB
-//          MOVED (the lane spine's `push-heads` output, #324; never the agent's job, `LANE-16`).
+//          whose head commit GitHub verified as the App's (`LANE-20`), FROM A BRANCH THIS RUN'S
+//          PUSH JOB MOVED, AT THE HEAD IT MOVED IT TO (the lane spine's `push-heads` output,
+//          #324; never the agent's job, `LANE-16`). That job creates only a branch GitHub doesn't
+//          have when it pushes (`LANE-15`), so the branch is one this run made; no list of the
+//          branches before the run is taken, which outgrew one environment string on a
+//          repository of ~4,000 branches (kanon#1508, as kanon#1438 for the push job).
 //          GitHub's verification alone binds nothing: every run of the shared Author App
 //          commits as it, so two overlapping runs would each see both pull requests, and a run
 //          that opened none would stamp another lane's. None, or more than one, and it stamps
@@ -48,7 +51,7 @@
 //
 // Inputs, by environment: MODE, GITHUB_REPOSITORY, READ_TOKEN (contents and pull requests
 // read), STATUS_TOKEN (Commit statuses write), PR_TOKEN (pull requests write), APP_SLUG,
-// RUN_URL, and SINCE + BRANCHES_BEFORE + HEADS (open) or PR + START_HEAD + HEADS + BASE +
+// RUN_URL, and SINCE + HEADS (open) or PR + START_HEAD + HEADS + BASE +
 // FIX_SHA (carry).
 
 import { execFileSync } from 'node:child_process';
@@ -87,26 +90,28 @@ export function verifiedAsApp(commit, slug) {
  *
  * @param {{
  *   prs: Array<{ number: number, created_at: string, head: { ref: string, sha: string, repo?: { full_name?: string } | null } }>,
- *   repo: string, since: string, branchesBefore: string[] | null, slug: string,
+ *   repo: string, since: string, slug: string,
  *   heads: Array<{ ref?: string, sha?: string }> | null,
  *   headCommit: (sha: string) => ApiCommit | undefined,
  * }} input
  * @returns {{ pr: number, sha: string } | { none: string }}
  */
-export function pickOpened({ prs, repo, since, branchesBefore, slug, heads, headCommit }) {
+export function pickOpened({ prs, repo, since, slug, heads, headCommit }) {
   const t = Date.parse(since);
   if (Number.isNaN(t)) return { none: 'the run\'s start time is unknown, so no pull request can be shown to be this run\'s' };
-  if (!Array.isArray(branchesBefore)) return { none: 'the branches that existed before the run are unknown, so no branch can be shown to be first pushed in it' };
   if (!Array.isArray(heads)) return { none: 'the heads the agent\'s job held are unknown, so no pull request\'s head can be shown to be the one this run pushed' };
-  const before = new Set(branchesBefore);
-  // THE BINDING (#324): the head this run's agent job held. GitHub's verification, checked
-  // below too, is every run's of the App and every Author lane's, so it binds nothing alone.
-  const pushed = new Set(heads.map((h) => String(h?.sha ?? '').toLowerCase()).filter((x) => /^[0-9a-f]{40}$/.test(x)));
+  // THE BINDING (#324, kanon#1508): the branch this run's push job moved, at the head it moved
+  // it to. That job creates no branch GitHub has when it pushes (`LANE-15`), so the branch is
+  // first pushed in this run, which a list of the branches before it used to show. GitHub's
+  // verification, checked below too, is every run's of the App and every Author lane's, so it
+  // binds nothing alone.
+  const at = (/** @type {string} */ ref, /** @type {string} */ sha) => `${ref}\0${sha.toLowerCase()}`;
+  const valid = heads.filter((h) => typeof h?.ref === 'string' && h.ref && /^[0-9a-f]{40}$/i.test(String(h?.sha ?? '')));
+  const pushed = new Set(valid.map((h) => at(String(h.ref), String(h.sha))));
   const bound = prs.filter((p) =>
     p.head?.repo?.full_name === repo
-    && !before.has(p.head.ref)
     && Date.parse(p.created_at) >= t
-    && pushed.has(String(p.head.sha).toLowerCase()));
+    && pushed.has(at(String(p.head.ref), String(p.head.sha))));
   // [LANE-20] The head commit verified as the App's.
   const checked = bound.map((p) => ({ p, v: verifiedAsApp(headCommit(p.head.sha), slug) }));
   const candidates = checked.filter(({ v }) => v.ok).map(({ p }) => p);
@@ -114,7 +119,7 @@ export function pickOpened({ prs, repo, since, branchesBefore, slug, heads, head
     return { none: `no pull request this run opened is at a head GitHub verified as the App's (${checked.map(({ p, v }) => `#${p.number}: ${v.why}`).join('; ')})` };
   }
   if (candidates.length === 0) {
-    return { none: `no open pull request was opened after the run started, from a branch first pushed in it, at a head this run's agent job pushed (${pushed.size ? `it held ${heads.slice(0, 5).map((h) => `${h.ref}@${String(h.sha).slice(0, 7)}`).join(', ')}${heads.length > 5 ? ', …' : ''}` : 'it held none'})` };
+    return { none: `no open pull request was opened after the run started, from a branch this run's push job moved, at the head it moved it to (${pushed.size ? `it moved ${valid.slice(0, 5).map((h) => `${h.ref}@${String(h.sha).slice(0, 7)}`).join(', ')}${valid.length > 5 ? ', …' : ''}` : 'it moved none'})` };
   }
   if (candidates.length > 1) {
     return { none: `${candidates.length} pull requests match (#${candidates.map((p) => p.number).join(', #')}), so none is provably this run's` };
@@ -250,15 +255,12 @@ function main() {
 
   let target;
   if (env.MODE === 'open') {
-    /** @type {string[] | null} */
-    let branchesBefore;
-    try { branchesBefore = JSON.parse(String(env.BRANCHES_BEFORE ?? '')); } catch { branchesBefore = null; }
     /** @type {Array<{ ref?: string, sha?: string }> | null} */
     let heads;
     try { heads = JSON.parse(String(env.HEADS ?? '')); } catch { heads = null; }
     const prs = ghJson(['api', '--paginate', '--slurp', `repos/${repo}/pulls?state=open&per_page=100`], read).flat();
     const verdict = pickOpened({
-      prs, repo, since: String(env.SINCE ?? ''), branchesBefore, slug, heads,
+      prs, repo, since: String(env.SINCE ?? ''), slug, heads,
       headCommit: (sha) => ghJson(['api', `repos/${repo}/commits/${sha}`], read),
     });
     if ('none' in verdict) return say(`${lead} not set: ${verdict.none}.`);

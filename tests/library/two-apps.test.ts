@@ -99,8 +99,12 @@ describe('L4: the implement lane stamps only the PR its own run opened', () => {
     const forged = pr(5, 'fix/3-forged', '2026-10-05T09:00:00Z', HEAD);
     const ours = pr(6, 'feat/3-thing', '2026-10-05T10:05:00Z', HEAD);
     // `heads`: what the run's agent job held after the agent (#324), its own branch's head.
-    const picked = pickOpened({ prs: [forged, ours], repo: 'o/r', since, branchesBefore: ['main', 'fix/3-forged'], slug: AUTHOR, heads: [{ ref: 'feat/3-thing', sha: HEAD }], headCommit: (sha: string) => appCommit(sha) });
+    const picked = pickOpened({ prs: [forged, ours], repo: 'o/r', since, slug: AUTHOR, heads: [{ ref: 'feat/3-thing', sha: HEAD }], headCommit: (sha: string) => appCommit(sha) });
     expect(picked).toEqual({ pr: 6, sha: HEAD });
+    // Re-opened during the run at the very head the run pushed, it is still not from a branch the
+    // push job moved (#1508: the binding is the branch and its head, not a pre-run branch list).
+    const reopened = pr(5, 'fix/3-forged', '2026-10-05T10:04:00Z', HEAD);
+    expect(pickOpened({ prs: [reopened, ours], repo: 'o/r', since, slug: AUTHOR, heads: [{ ref: 'feat/3-thing', sha: HEAD }], headCommit: (sha: string) => appCommit(sha) })).toEqual({ pr: 6, sha: HEAD });
     // So the forged PR's head has no status, and the Merger still refuses it.
     expect(verdict(authorPr({ number: 5, headStatuses: [] })).rule).toBe('not-the-implementer');
   });
@@ -108,7 +112,7 @@ describe('L4: the implement lane stamps only the PR its own run opened', () => {
   it('stamps neither of two candidates, and says so by number', () => {
     const a = pr(6, 'feat/3-a', '2026-10-05T10:05:00Z', HEAD);
     const b = pr(8, 'feat/3-b', '2026-10-05T10:06:00Z', HEAD);
-    const picked = pickOpened({ prs: [a, b], repo: 'o/r', since, branchesBefore: ['main'], slug: AUTHOR, heads: [{ ref: 'feat/3-a', sha: HEAD }, { ref: 'feat/3-b', sha: HEAD }], headCommit: (sha: string) => appCommit(sha) });
+    const picked = pickOpened({ prs: [a, b], repo: 'o/r', since, slug: AUTHOR, heads: [{ ref: 'feat/3-a', sha: HEAD }, { ref: 'feat/3-b', sha: HEAD }], headCommit: (sha: string) => appCommit(sha) });
     expect(picked).toHaveProperty('none');
     expect(String((picked as { none: string }).none)).toMatch(/#6, #8/);
   });

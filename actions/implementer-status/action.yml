@@ -41,16 +41,13 @@ inputs:
     description: "`open`: when the run started, stamped by the lane's filter job before the agent."
     required: false
     default: ""
-  branches-before:
-    description: "`open`: a JSON array of the branch names that existed before the agent ran."
-    required: false
-    default: ""
   heads:
     description: >-
       `open` and `carry`: a JSON array of `{ ref, sha }`, the branch heads the lane spine's push
       job moved (its `push-heads` output), never what the agent's job reports (`LANE-16`). Only a
-      pull request at one of these heads is this run's (#324), and only such a head takes a
-      carried status (#1263).
+      pull request from one of these branches, at the head it was moved to, is this run's (#324):
+      the push job creates no branch GitHub has, so no list of the branches before the run is
+      needed (#1508). Only such a head takes a carried status (#1263).
     required: false
     default: ""
   base:
@@ -113,7 +110,6 @@ runs:
         PR_TOKEN: ${{ steps.pr-token.outputs.token }}
         APP_SLUG: ${{ steps.read-token.outputs.app-slug }}
         SINCE: ${{ inputs.since }}
-        BRANCHES_BEFORE: ${{ inputs.branches-before }}
         HEADS: ${{ inputs.heads }}
         BASE: ${{ inputs.base }}
         FIX_SHA: ${{ inputs.fix-sha }}

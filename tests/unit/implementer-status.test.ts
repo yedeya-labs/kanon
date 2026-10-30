@@ -21,7 +21,6 @@ const SLUG = 'acme-implementer';
 const APP = `${SLUG}[bot]`;
 const EMAIL = `42+${APP}@users.noreply.github.com`;
 const SINCE = '2026-10-05T10:00:00Z';
-const before = ['main', 'feat/1-old'];
 const sha = (c: string) => c.repeat(40);
 /** What GitHub's API says of a commit: the accounts it resolved from the commit's emails, and its verification. */
 type Who = { verified?: unknown; reason?: string; login?: string; type?: string; committer?: string; email?: string };
@@ -46,7 +45,7 @@ const pr = (number: number, ref: string, head: string, created = '2026-10-05T10:
 // `sha('a')`, on the branch the cases below call this run's.
 const ours = [{ ref: 'feat/1-new', sha: sha('a') }, { ref: 'HEAD', sha: sha('a') }];
 const opened = (prs: ReturnType<typeof pr>[], commits: Record<string, ReturnType<typeof commitBy>>, over: Record<string, unknown> = {}) =>
-  pickOpened({ prs, repo: REPO, since: SINCE, branchesBefore: before, slug: SLUG, heads: ours, headCommit: (s: string) => commits[s], ...over });
+  pickOpened({ prs, repo: REPO, since: SINCE, slug: SLUG, heads: ours, headCommit: (s: string) => commits[s], ...over });
 
 // Its cases run the step in `bash` against a stub `gh`, so the block takes the spawn budget (#436).
 describe('the summary an adopter reads when the App lacks Commit statuses write (L4)', SPAWNS, () => {
@@ -76,11 +75,16 @@ describe('open: the first status goes only on the pull request this run opened',
   });
 
   it('never stamps a forged PR already open before the run, though it closes the same issue', () => {
-    // Opened before `since`, from a branch the snapshot lists: two independent refusals.
+    // Opened before `since`, from a branch the push job didn't move: two independent refusals.
     const forged = pr(6, 'feat/1-old', sha('f'), '2026-10-05T09:00:00Z');
     expect(opened([forged], { [sha('f')]: commitBy(sha('f')) })).toMatchObject({ none: expect.stringMatching(/no open pull request/) });
-    // Even opened during the run, a branch that existed before it is not this run's.
+    // Even opened during the run, a branch the push job didn't move is not this run's.
     expect(opened([pr(6, 'feat/1-old', sha('f'))], { [sha('f')]: commitBy(sha('f')) })).toMatchObject({ none: expect.any(String) });
+    // #1508: nor at the very head the push job moved another branch to. An agent could open a pull
+    // request from an earlier run's branch and have a new branch pushed at that branch's head; the
+    // binding is the branch the push job moved AND its head, which the pre-run branch list held.
+    expect(opened([pr(6, 'feat/1-old', sha('a'))], { [sha('a')]: commitBy(sha('a')) })).toMatchObject({ none: expect.stringMatching(/from a branch this run's push job moved, at the head it moved it to/) });
+    expect(opened([pr(6, 'feat/1-old', sha('a')), pr(7, 'feat/1-new', sha('a'))], { [sha('a')]: commitBy(sha('a')) })).toEqual({ pr: 7, sha: sha('a') });
     // And beside the real one, it changes nothing.
     expect(opened([forged, pr(7, 'feat/1-new', sha('a'))], { [sha('f')]: commitBy(sha('f')), [sha('a')]: commitBy(sha('a')) })).toEqual({ pr: 7, sha: sha('a') });
   });
@@ -110,11 +114,11 @@ describe('open: the first status goes only on the pull request this run opened',
     const lanes = [pr(9, 'feat/3-lead', sha('c'))];
     const commits = { [sha('c')]: commitBy(sha('c')) };
     // Its job held only the default branch's head it checked out, or nothing at all.
-    expect(opened(lanes, commits, { heads: [{ ref: 'main', sha: sha('0') }, { ref: 'HEAD', sha: sha('0') }] })).toMatchObject({ none: expect.stringMatching(/at a head this run's agent job pushed \(it held main@0000000, HEAD@0000000\)/) });
-    expect(opened(lanes, commits, { heads: [] })).toMatchObject({ none: expect.stringMatching(/it held none/) });
+    expect(opened(lanes, commits, { heads: [{ ref: 'main', sha: sha('0') }, { ref: 'HEAD', sha: sha('0') }] })).toMatchObject({ none: expect.stringMatching(/at the head it moved it to \(it moved main@0000000, HEAD@0000000\)/) });
+    expect(opened(lanes, commits, { heads: [] })).toMatchObject({ none: expect.stringMatching(/it moved none/) });
   });
 
-  it('matches the head, not the branch name: a PR whose branch the job held at another commit is not this run\'s', () => {
+  it('matches the branch and its head: a PR whose branch the push job moved to another commit is not this run\'s', () => {
     expect(opened([pr(7, 'feat/1-new', sha('d'))], { [sha('d')]: commitBy(sha('d')) })).toHaveProperty('none');
   });
 
@@ -122,11 +126,10 @@ describe('open: the first status goes only on the pull request this run opened',
     expect(opened([pr(7, 'feat/1-new', sha('a'))], { [sha('a')]: commitBy(sha('a')) }, { heads: null })).toMatchObject({ none: expect.stringMatching(/heads the agent's job held are unknown/) });
   });
 
-  it('refuses a head the App did not author, a fork\'s branch, and an unknown start or snapshot', () => {
+  it('refuses a head the App did not author, a fork\'s branch, and an unknown start', () => {
     expect(opened([pr(7, 'feat/1-new', sha('a'))], { [sha('a')]: commitBy(sha('a'), PERSON) })).toHaveProperty('none');
     expect(opened([pr(7, 'feat/1-new', sha('a'), undefined, 'fork/widgets')], { [sha('a')]: commitBy(sha('a')) })).toHaveProperty('none');
     expect(opened([pr(7, 'feat/1-new', sha('a'))], { [sha('a')]: commitBy(sha('a')) }, { since: '' })).toMatchObject({ none: expect.stringMatching(/start time/) });
-    expect(opened([pr(7, 'feat/1-new', sha('a'))], { [sha('a')]: commitBy(sha('a')) }, { branchesBefore: null })).toMatchObject({ none: expect.stringMatching(/branches/) });
   });
 
   it('[LANE-20] stamps only a head GitHub verified, with the App\'s bot account as its author', () => {
@@ -474,7 +477,8 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
     const inputs = Object.values(call.with ?? {}).join(' ');
     if (mode === 'open') {
       expect(call.with?.since).toBe('${{ needs.filter.outputs.since }}');
-      expect(call.with?.['branches-before']).toBe('${{ needs.filter.outputs.branches }}');
+      // #1508: no pre-run branch list, which outgrew one environment string at ~4,000 branches.
+      expect(call.with?.['branches-before']).toBeUndefined();
       // The one input read from the lane's call (#324): the heads its push job moved, which bind
       // the pick to the head this run pushed (`[LANE-16]`). Nothing else of that call.
       expect(call.with?.heads).toBe(`\${{ needs.${agent}.outputs.push-heads }}`);
@@ -639,13 +643,16 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
     expect(callers.sort()).toEqual(Object.values(LANES).map(({ file }) => `${file}:implementer-status`).sort());
   });
 
-  it.each(['agent-implement.yml', 'agent-triage.yml'])('%s snapshots the start and the branches in its filter job, never failing it', (file) => {
+  it.each(['agent-implement.yml', 'agent-triage.yml'])('%s records the start in its filter job, and no branch list, never failing it', (file) => {
     const filter = wf(file).jobs.filter!;
-    expect(filter.outputs).toMatchObject({ since: '${{ steps.before.outputs.since }}', branches: '${{ steps.before.outputs.branches }}' });
+    expect(filter.outputs).toMatchObject({ since: '${{ steps.before.outputs.since }}' });
+    // #1508: the push job creates no branch GitHub has (`LANE-15`), so the pick binds to the branch
+    // it moved; a list of every branch overflowed one environment string at ~4,000 branches.
+    expect(filter.outputs?.branches).toBeUndefined();
     const step = (filter.steps ?? []).find((s) => s.id === 'before')!;
     expect(step['continue-on-error']).toBe(true);
-    // The time first, so nothing the listing takes can push a branch before it.
-    expect(step.run!.indexOf('since=')).toBeLessThan(step.run!.indexOf('branches'));
+    expect(step.run).toMatch(/since=/);
+    expect(step.run).not.toMatch(/branches/);
   });
 
   it('the rebase lane records each PR\'s head in its filter job', () => {
@@ -673,7 +680,7 @@ describe('the push job records the heads it moved, for the open pick', () => {
     const mine = 'a'.repeat(40);
     const theirs = 'b'.repeat(40);
     const heads = [{ ref: 'feat/7-mine', sha: mine }];
-    const v = pickOpened({ prs: [pr(7, 'feat/7-mine', mine), pr(8, 'feat/8-theirs', theirs)], repo: REPO, since: SINCE, branchesBefore: ['main'], slug: SLUG, heads, headCommit: (x: string) => commitBy(x) });
+    const v = pickOpened({ prs: [pr(7, 'feat/7-mine', mine), pr(8, 'feat/8-theirs', theirs)], repo: REPO, since: SINCE, slug: SLUG, heads, headCommit: (x: string) => commitBy(x) });
     expect(v).toEqual({ pr: 7, sha: mine });
   });
 });
