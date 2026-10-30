@@ -80,7 +80,7 @@ Whether it is ready is never the view's own judgement:
   - `approval`: the Reviewer's verdict on its head, as the review-recovery lane reads it, is an approval. A verdict stamped with an older commit doesn't count, nor does a comment: a review that requests changes on the head, or none at all, leaves it lacking;
   - `decisions`, for a brief only: the brief guard finds no open decision in it. A brief the default branch's `docs/qa/exemptions.md` lists as pre-standard isn't checked.
 
-  Nothing else is asked of it: a person merging it reads the rest on GitHub.
+  Nothing else is asked of it but the hold below, while a decision asked on it waits: a person merging it reads the rest on GitHub.
 
 - **A decision asked on it holds it** (`[STAT-18]`). A pull request of either kind that would be ready for a person's merge isn't, while it carries `decision:needed` and the decision asked on it waits: it has no ask, or no answer came after its latest ask, each read as [the inbox](#the-inbox) reads it. It lacks `ask`, and the inbox lists it only among the decisions, since merging it would pre-empt the answer. An answer recorded after the latest ask lifts the hold, though the label is still on. A pull request the Merger would merge isn't held: that is the merge gate's to judge ([#1501](https://github.com/yedeya-labs/kanon/issues/1501)).
 
@@ -419,6 +419,8 @@ It speaks MCP's Streamable HTTP transport at two protocol revisions, `2026-07-28
 
 Every request to `/mcp` needs a token the server issued when the person signed in ([Signing in](#signing-in)). Without one, or with one that has expired, it gets 401, and no tool runs. Its address is a placeholder below until the Owner's first deploy ([Deploy](#deploy)).
 
+The server's code is more than its own directory: it links the status core, and the core calls the deciders the lanes run, the Lead's reconciler, review recovery, workflow health, the brief guard and what they import, rather than copying them. On Kanon's repository every module it links, directly or through another, is the Owner's merge: each matches an `always` entry in [`docs/qa/escalation-paths.md`](qa/escalation-paths.md), and `tests/unit/hosted-function-closure.test.ts` fails on a new import that reaches one that doesn't ([kanon#1345](https://github.com/yedeya-labs/kanon/issues/1345)).
+
 ### The 2025-11-25 revision is deprecated
 
 The server serves both revisions by the Owner's decision of 2026-10-28 ([#1423](https://github.com/yedeya-labs/kanon/issues/1423)). Kanon's own CLI, adopters' coding agents, and claude.ai's web and phone clients must all connect, and it isn't yet confirmed that Claude's clients speak `2026-07-28`. A local proxy speaking `2025-11-25` for Kanon's CLI was considered and rejected: it would put an OAuth refresh token on each machine, and leave remote clients uncovered.
@@ -432,8 +434,6 @@ So `2025-11-25` is served as a deprecated path from the first deploy. MCP has no
 - **The log** names each request's era, `modern` or `legacy` ([What the server logs](#what-the-server-logs)), so `2025-11-25`'s use can be counted before the `Sunset` date is chosen.
 
 No `2026-07-28` response carries any of them. Removing `2025-11-25`, once the clients that matter are confirmed on `2026-07-28`, is a later change.
-
-The server's code is more than its own directory: it links the status core, and the core calls the deciders the lanes run, the Lead's reconciler, review recovery, workflow health, the brief guard and what they import, rather than copying them. On Kanon's repository every module it links, directly or through another, is the Owner's merge: each matches an `always` entry in [`docs/qa/escalation-paths.md`](qa/escalation-paths.md), and `tests/unit/hosted-function-closure.test.ts` fails on a new import that reaches one that doesn't ([kanon#1345](https://github.com/yedeya-labs/kanon/issues/1345)).
 
 ## The hosted server's tools
 
