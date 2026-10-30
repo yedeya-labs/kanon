@@ -3,8 +3,8 @@
 // and refresh tokens, is a payload encrypted and authenticated under the server's KMS key and
 // carried by the client, the browser or GitHub. The server keeps none of them.
 //
-// ENVELOPE ENCRYPTION. A container asks KMS for one data key the first time it seals, and keeps
-// it in memory. A sealed value is `ks1.<data key, as KMS encrypted it>.<iv>.<ciphertext>.<tag>`:
+// ENVELOPE ENCRYPTION. A container asks KMS for one data key when it proves its key (below), or at
+// its first seal if it never proves it, and keeps it in memory. A sealed value is `ks1.<data key, as KMS encrypted it>.<iv>.<ciphertext>.<tag>`:
 // AES-256-GCM of the payload, under the data key. A container that meets a data key it doesn't
 // hold asks KMS to decrypt it, once, and keeps that in memory too. So no key sits in
 // configuration, and a warm container makes no KMS call per request.
