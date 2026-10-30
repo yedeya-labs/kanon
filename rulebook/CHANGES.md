@@ -119,6 +119,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-28.** The Owner decided that the push jobs of the Implementer's lanes, and of the Lead's, mint with Actions read, so a push job re-run on its own can read the commits the agent's job handed on in an earlier attempt of the run. The Implementer's row of the roles table gained Actions read for that alone; the Author App already held it. [#1438](https://github.com/yedeya-labs/kanon/issues/1438), [#1465](https://github.com/yedeya-labs/kanon/issues/1465)
 - **2026-10-28.** The same Actions read reaches the Lead's split lane's push job and the revise lane's no-model fix push, so each can be re-run on its own too. Both roles' rows already held it, so no grant changed. [#1507](https://github.com/yedeya-labs/kanon/issues/1507)
+- **2026-10-30.** The Implementer's row of the roles table names both uses of its Actions read: its push jobs read the agent's commits, and the revise lane's no-model fix push reads the files the fix command rewrote. The grant did not change. [#1524](https://github.com/yedeya-labs/kanon/issues/1524)
 
 ## `K-AGENT-47`
 
@@ -143,6 +144,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-14.** The Owner decided that the `notify` job of `K-OBS-19` joins the guard's named exceptions in that rule's exact shape, and that it runs the adopter's notify hook at the run's commit on any branch, accepting that whoever can push a branch and dispatch a notifying lane can read that lane's chat secret. [Plan 0011](../docs/plans/0011-notifications.md), [#839](https://github.com/yedeya-labs/kanon/issues/839)
 - **2026-10-28.** The Owner decided the accepted exception's wording now that the revise and rebase lanes' agent no longer pushes: it runs the tests on what it commits, beside a token it comments and labels with, which holds no contents or workflows write. A `push` job after the agent's, which runs none of the code, holds that write, so code planted on the implementer's branch no longer reaches a token that writes code or workflow files. The exception itself stands. [#1387](https://github.com/yedeya-labs/kanon/issues/1387)
 - **2026-10-29.** The Enforced-by line names `tests/unit/app-token-permissions.test.ts`, which already held the accepted implementer lanes' agent token to no contents or workflows write, as the guard of that clause; `tests/unit/pr-code-token-isolation.test.ts` passes those lanes whatever their token holds. [#1488](https://github.com/yedeya-labs/kanon/issues/1488)
+- **2026-10-30.** The Enforced-by line's sentence on `tests/unit/app-token-permissions.test.ts` moved after the `notify` job's, so `tests/unit/pr-code-token-isolation.test.ts`'s named exceptions read in one piece. No requirement or guard changed. [#1525](https://github.com/yedeya-labs/kanon/issues/1525)
 
 ## `K-MERGE-4`
 

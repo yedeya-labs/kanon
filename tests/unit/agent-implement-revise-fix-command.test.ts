@@ -130,7 +130,7 @@ describe("a hand-back whose failed checks all have a fix command runs it before 
       expect(JSON.stringify(pushJob)).toContain('secrets.AUTHOR_APP_PRIVATE_KEY');
     });
 
-    it('[LANE-14] re-run on its own, the push reads the files the fix job uploaded in its attempt, of this run alone (kanon#1507)', () => {
+    it('[LANE-12] re-run on its own, the push reads the files the fix job uploaded in its attempt, of this run alone (kanon#1507)', () => {
       type Step = { id?: string; uses?: string; with?: Record<string, unknown> };
       const upload = (fixJob.steps as Step[]).find((s) => String(s.uses ?? '').startsWith('actions/upload-artifact@'))!;
       const download = (pushJob.steps as Step[]).find((s) => String(s.uses ?? '').startsWith('actions/download-artifact@'))!;
