@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   backstop:
-    uses: yedeya-labs/kanon/.github/workflows/agent-issue-backstop.yml@candidate-v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-issue-backstop.yml@candidate-v0.43.0
     with:
       issue_number: ${{ inputs.issue_number }}
       apply: ${{ inputs.apply }}

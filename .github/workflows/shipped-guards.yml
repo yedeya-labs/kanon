@@ -57,7 +57,7 @@ jobs:
         with:
           sparse-checkout: docs/qa/specs
           persist-credentials: false
-      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.42.0
+      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.43.0
         id: kanon
       - name: spec-guard (Kanon's, at the pinned release)
         env:
@@ -79,7 +79,7 @@ jobs:
             docs/projects
             docs/qa
           persist-credentials: false
-      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.42.0
+      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.43.0
         id: kanon
       - name: brief-guard (Kanon's, at the pinned release)
         env:
@@ -98,7 +98,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.42.0
+      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.43.0
         id: kanon
       - name: label-guard (Kanon's, at the pinned release)
         env:
