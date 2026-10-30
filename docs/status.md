@@ -80,7 +80,7 @@ Whether it is ready is never the view's own judgement:
   - `approval`: the Reviewer's verdict on its head, as the review-recovery lane reads it, is an approval. A verdict stamped with an older commit doesn't count, nor does a comment: a review that requests changes on the head, or none at all, leaves it lacking;
   - `decisions`, for a brief only: the brief guard finds no open decision in it. A brief the default branch's `docs/qa/exemptions.md` lists as pre-standard isn't checked.
 
-  Nothing else is asked of it: a person merging it reads the rest on GitHub.
+  Nothing else is asked of it but the hold below, while a decision asked on it waits: a person merging it reads the rest on GitHub.
 
 - **A decision asked on it holds it** (`[STAT-18]`). A pull request of either kind that would be ready for a person's merge isn't, while it carries `decision:needed` and the decision asked on it waits: it has no ask, or no answer came after its latest ask, each read as [the inbox](#the-inbox) reads it. It lacks `ask`, and the inbox lists it only among the decisions, since merging it would pre-empt the answer. An answer recorded after the latest ask lifts the hold, though the label is still on. A pull request the Merger would merge isn't held: that is the merge gate's to judge ([#1501](https://github.com/yedeya-labs/kanon/issues/1501)).
 
