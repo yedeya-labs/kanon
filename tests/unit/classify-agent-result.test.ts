@@ -343,7 +343,7 @@ describe('a run whose install of Claude Code failed (kanon#1470)', () => {
     }
   });
 
-  const JOB = { GITHUB_RUN_ID: '40715172609', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review' };
+  const JOB = { GITHUB_RUN_ID: '40715172609', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review', KANON_JOB_CHECK_RUN_ID: '58200000001' };
 
   it("reads the marker only from this job's temp directory, never a relative or empty one", () => {
     const dir = mkdtempSync(join(tmpdir(), 'classify-marker-'));
@@ -364,9 +364,20 @@ describe('a run whose install of Claude Code failed (kanon#1470)', () => {
     ['another run', { GITHUB_RUN_ID: '1' }],
     ['another attempt of this run', { GITHUB_RUN_ATTEMPT: '2' }],
     ['another job of this run', { GITHUB_JOB: 'implement' }],
+    // The job id is shared by every entry of a matrix and every call of one reusable workflow in
+    // a run; each is its own check run (kanon#1499).
+    ['a sibling matrix entry, or reusable-workflow call, of this job', { KANON_JOB_CHECK_RUN_ID: '58200000002' }],
   ])('does not read a marker %s left as this run\'s', (_name, other) => {
     const dir = mkdtempSync(join(tmpdir(), 'classify-marker-'));
     writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker({ ...JOB, ...other }, 'the install failed'));
+    expect(readRuntimeNotInstalled(dir, { env: JOB })).toBe(false);
+  });
+
+  it('does not read a marker when the job has no check run id, as on GitHub Enterprise Server (kanon#1499)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'classify-marker-'));
+    const noCheckRun = { ...JOB, KANON_JOB_CHECK_RUN_ID: '' };
+    writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker(noCheckRun, 'the install failed'));
+    expect(readRuntimeNotInstalled(dir, { env: noCheckRun }), 'two empty ids are not a match').toBe(false);
     expect(readRuntimeNotInstalled(dir, { env: JOB })).toBe(false);
   });
 
@@ -657,12 +668,12 @@ describe('renderNotice', () => {
 describe('the CLI, run as the workflow runs it', SPAWNS, () => {
   const script = join(process.cwd(), 'actions/agent-classify/classify-agent-result.mjs');
 
-  const run = (body: string | null, extra: string[] = [], { notInstalled = false } = {}) => {
+  const run = (body: string | null, extra: string[] = [], { notInstalled = false, markerFrom = {} as Record<string, string> } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'classify-cli-'));
     const file = join(dir, 'claude-execution-output.json');
     if (body !== null) writeFileSync(file, body);
-    const job = { GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review' };
-    if (notInstalled) writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker(job, 'the install failed'));
+    const job = { GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review', KANON_JOB_CHECK_RUN_ID: '58200000001' };
+    if (notInstalled) writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker({ ...job, ...markerFrom }, 'the install failed'));
     const out = join(dir, 'out.txt');
     const summary = join(dir, 'summary.md');
     writeFileSync(out, '');
@@ -734,6 +745,16 @@ describe('the CLI, run as the workflow runs it', SPAWNS, () => {
     expect(r.stdout).toMatch(/Claude Code never installed/);
     expect(r.outputs).toContain('kind=unavailable');
     expect(r.outputs).toContain('retry=unreachable');
+    expect(r.status).toBe(0);
+  });
+
+  // A persistent runner keeps `RUNNER_TEMP`: matrix entry 1's install failed and wrote the marker,
+  // and entry 2 failed at its checkout, before its own `agent-run` could delete it (kanon#1499).
+  it("does not call a sibling matrix entry that failed before agent-run unavailable from entry 1's marker", () => {
+    const r = run(null, ['--arm', 'review agent'], { notInstalled: true, markerFrom: { KANON_JOB_CHECK_RUN_ID: '58200000002' } });
+    expect(r.stdout).not.toMatch(/Claude Code never installed/);
+    expect(r.outputs).not.toContain('kind=unavailable');
+    expect(r.outputs).toContain('kind=not-reached');
     expect(r.status).toBe(0);
   });
 
@@ -810,7 +831,7 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS
     expect(step.env).toEqual({
       ARM: '${{ inputs.arm }}', RECOVER: '${{ inputs.recover }}', NON_FATAL: '${{ inputs.non-fatal }}',
       CLAUDE_ARGS: '${{ inputs.claude-args }}', AGENT_OUTCOME: '${{ inputs.agent-outcome }}',
-      RAISABLE: '${{ inputs.raisable }}',
+      RAISABLE: '${{ inputs.raisable }}', KANON_JOB_CHECK_RUN_ID: '${{ job.check_run_id }}',
     });
     expect(String(step.run), 'no input is spliced into the script text').not.toMatch(/\$\{\{/);
     expect(block.outputs?.kind?.value).toBe('${{ steps.classify.outputs.kind }}');

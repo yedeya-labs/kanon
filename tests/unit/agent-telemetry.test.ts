@@ -149,10 +149,14 @@ describe('the four states never collapse into a zero', () => {
   it("records a run whose install of Claude Code failed as unavailable, as the notice does (kanon#1470)", () => {
     const dir = mkdtempSync(join(tmpdir(), 'telemetry-runtime-'));
     const absent = join(dir, 'claude-execution-output.json');
-    const env = { RUNNER_TEMP: dir, GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review' };
+    const env = { RUNNER_TEMP: dir, GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'review', KANON_JOB_CHECK_RUN_ID: '58200000001' };
     expect(runTelemetry({ agent: 'reviewer', execution_file: absent }, env).outcome).toBe('not-reached');
     writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker({ ...env, GITHUB_RUN_ID: '6' }));
     expect(runTelemetry({ agent: 'reviewer', execution_file: absent }, env).outcome, "an earlier job's marker").toBe('not-reached');
+    // A sibling matrix entry, or reusable-workflow call, of this job: same run, attempt and job id,
+    // its own check run (kanon#1499). It failed before its agent-run, and the job is red.
+    writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker({ ...env, KANON_JOB_CHECK_RUN_ID: '58200000002' }, 'the install failed'));
+    expect(runTelemetry({ agent: 'reviewer', execution_file: absent }, { ...env, TELEMETRY_JOB_STATUS: 'failure' }).outcome, "a sibling entry's marker").toBe('not-reached');
     writeFileSync(join(dir, RUNTIME_NOT_INSTALLED), runtimeMarker(env, 'the install failed'));
     const row = runTelemetry({ agent: 'reviewer', execution_file: absent }, env);
     expect(row.outcome).toBe('unavailable');

@@ -137,7 +137,7 @@ runs:
     # IT ALSO CLEARS THE INSTALL MARKER (kanon#1470). A non-ephemeral runner can keep `RUNNER_TEMP`
     # between jobs, so a marker the runtime check below wrote for an earlier job, or an earlier
     # block of this one, is deleted before this block's agent can run. The marker also names its
-    # job, and is read only by that job. The deletion cannot fail the step: `rm -rf` of a missing
+    # job execution's check run, and is read only by that job execution (kanon#1499). The deletion cannot fail the step: `rm -rf` of a missing
     # path succeeds, and `|| true` covers the rest.
     - name: Record when the agent started
       id: started
@@ -302,4 +302,7 @@ runs:
         CONCLUSION: ${{ steps.agent.outputs.conclusion }}
         EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
         STARTED_AT: ${{ steps.started.outputs.at }}
+        # This job execution's check run, which the marker names (kanon#1499): a matrix's entries
+        # share the job id, never the check run.
+        KANON_JOB_CHECK_RUN_ID: ${{ job.check_run_id }}
       run: node "$GITHUB_ACTION_PATH/runtime-check.mjs"

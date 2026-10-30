@@ -109,6 +109,8 @@ runs:
         CLAUDE_ARGS: ${{ inputs.claude-args }}
         AGENT_OUTCOME: ${{ inputs.agent-outcome }}
         RAISABLE: ${{ inputs.raisable }}
+        # The check run `agent-run`'s install marker must name to count (kanon#1499).
+        KANON_JOB_CHECK_RUN_ID: ${{ job.check_run_id }}
       run: |
         set -- --arm "$ARM"
         if [ -n "$RECOVER" ]; then set -- "$@" --recover "$RECOVER"; fi
