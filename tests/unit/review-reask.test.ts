@@ -61,10 +61,19 @@ describe('reaskPlan: one re-ask, or none, per state (kanon#1197)', () => {
     expect(asked(pr(2, { labels: [{ name: 'agent:implement' }] }))).toEqual([]);
   });
 
-  it("asks nothing when a Reviewer review's trailer names the current head", () => {
-    for (const state of ['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED']) {
+  it("asks nothing when a Reviewer verdict's trailer names the current head", () => {
+    for (const state of ['APPROVED', 'CHANGES_REQUESTED']) {
       expect(asked(pr(3, { reviews: [reviewerReview(HEAD, state)] })), state).toEqual([]);
     }
+  });
+
+  // kanon#1528: the lane's filter reads `already reviewed` from APPROVED and CHANGES_REQUESTED
+  // only, so a head carrying no verdict is one the lane would review, and the sweep re-asks it.
+  it("re-asks when the Reviewer's only review on the head is not a verdict (kanon#1528)", () => {
+    for (const state of ['COMMENTED', 'DISMISSED', 'PENDING']) {
+      expect(asked(pr(3, { reviews: [reviewerReview(HEAD, state)] })), state).toEqual([3]);
+    }
+    expect(asked(pr(3, { reviews: [reviewerReview(HEAD, 'COMMENTED'), reviewerReview(HEAD, 'APPROVED')] }))).toEqual([]);
   });
 
   it("re-asks when the Reviewer's only review names an earlier head (the head check)", () => {
