@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.44.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.43.0...candidate-v0.44.0) (2026-10-31)
+
+
+### Features
+
+* **promote:** hold a candidate whose telemetry rows the deployed intake would refuse ([#1504](https://github.com/yedeya-labs/kanon/issues/1504)) ([51266dd](https://github.com/yedeya-labs/kanon/commit/51266dd1a944aae8a83b04537429fa5df9c0fcad))
+* **status:** serve MCP 2026-07-28 beside a deprecated 2025-11-25 ([#1509](https://github.com/yedeya-labs/kanon/issues/1509)) ([abed009](https://github.com/yedeya-labs/kanon/commit/abed009059a9f6c6cc3dfeddaddb5c30ca29e0df))
+
+
+### Bug Fixes
+
+* **agent-classify:** bind the install marker to the job's check run, so a sibling matrix entry can't read it ([#1521](https://github.com/yedeya-labs/kanon/issues/1521)) ([9d36aad](https://github.com/yedeya-labs/kanon/commit/9d36aad5590ba03817fedb71573f1a540b4a7fa9))
+* **docs:** state the Overseer's capability bound as one per scan, as K-SELF-17 does ([#1535](https://github.com/yedeya-labs/kanon/issues/1535)) ([ba1ec2b](https://github.com/yedeya-labs/kanon/commit/ba1ec2be263d26299322ceb576284f40b23f7093))
+* **doctor:** pin.dependabot-unreached can't be waived, since lane-check fails it anyway ([#1513](https://github.com/yedeya-labs/kanon/issues/1513)) ([96194f6](https://github.com/yedeya-labs/kanon/commit/96194f612e7a9463ff391649ca643523b2ffc2d7))
+* **implementer-status:** bind the first status to the branch the push job moved, without a branch list ([#1517](https://github.com/yedeya-labs/kanon/issues/1517)) ([c69b684](https://github.com/yedeya-labs/kanon/commit/c69b684e3522a38a4469722509e94826296d75f8))
+* **lanes:** re-run the push jobs on their own, and check branches at push time ([#1506](https://github.com/yedeya-labs/kanon/issues/1506)) ([aacf47c](https://github.com/yedeya-labs/kanon/commit/aacf47c145aa922c5727f893893fe6ca1e323e47))
+* **lanes:** the split lane's push and the revise lane's fix-push can be re-run on their own ([#1518](https://github.com/yedeya-labs/kanon/issues/1518)) ([5071c00](https://github.com/yedeya-labs/kanon/commit/5071c006a6181225b6dc6a5527dc9a3ca27281ef))
+* **review-reask:** count only a Reviewer verdict as reviewing the head ([#1536](https://github.com/yedeya-labs/kanon/issues/1536)) ([a16b2ac](https://github.com/yedeya-labs/kanon/commit/a16b2ac4894a877b6bd24579d2828c57ce1e30d0))
+* **telemetry:** ask the store again on its 503 jwks-unavailable, and delay the rows it still refuses ([#1498](https://github.com/yedeya-labs/kanon/issues/1498)) ([90c37fe](https://github.com/yedeya-labs/kanon/commit/90c37fe5e082cd9c6fa8af640a7703b42a9655da))
+
+
+### Documentation
+
+* name every kind of unwaivable finding, verifiedAs in the escalation file, and K-AGENT-50's guard ([#1519](https://github.com/yedeya-labs/kanon/issues/1519)) ([bfe06f9](https://github.com/yedeya-labs/kanon/commit/bfe06f98bd8834494c557cb6fcdcac349774c535))
+* **rulebook:** K-LAYOUT-18 names the agent lanes' callers only ([#1514](https://github.com/yedeya-labs/kanon/issues/1514)) ([fb7ef51](https://github.com/yedeya-labs/kanon/commit/fb7ef517c67ca934f76342238e865a076a2f827a))
+* **rulebook:** name fix-push's Actions read under [LANE-12], and keep K-AGENT-50's exceptions in one piece ([#1526](https://github.com/yedeya-labs/kanon/issues/1526)) ([431d84e](https://github.com/yedeya-labs/kanon/commit/431d84e338668a0a1db27f7582c4652cca35015c))
+* **status:** say the seal and KMS headers' calls happen at the startup key proof ([#1522](https://github.com/yedeya-labs/kanon/issues/1522)) ([ed255e5](https://github.com/yedeya-labs/kanon/commit/ed255e55214e45b00c8200450ef03bd195112140))
+* **status:** the person's-PR readiness line names the decision hold, and the closure paragraph moves back ([#1523](https://github.com/yedeya-labs/kanon/issues/1523)) ([adfdfd1](https://github.com/yedeya-labs/kanon/commit/adfdfd1af41cde628169416a45541605375dba0e))
+
+
+### Tests
+
+* **merge-gate:** record that GitHub names the Merger App as mergedBy for its queued merges ([#1516](https://github.com/yedeya-labs/kanon/issues/1516)) ([448d027](https://github.com/yedeya-labs/kanon/commit/448d027b6d0df69224a519fe96315740fb9bb058))
+
 ## [0.43.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.42.0...candidate-v0.43.0) (2026-10-28)
 
 
