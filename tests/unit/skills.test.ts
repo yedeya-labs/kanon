@@ -7,6 +7,7 @@ import { CHAT_QUESTION, CHAT_QUESTION_BOTH, CHAT_QUESTION_DEPLOY, CHAT_QUESTION_
 import { REVIEW_LABELS } from '../../scripts/lane-gate.mjs';
 import { FILE_ONLY } from '../../scripts/lead-reconcile.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL } from '../../scripts/lib/upstream-findings.mjs';
+import { FINDINGS } from '../../scripts/lib/waivers.mjs';
 
 /**
  * The agent skills (plan 0005 step L11, ADR 0014 audience 1; docs/skills.md) are held to the
@@ -854,6 +855,18 @@ describe('each skill is held to the kanon command it drives', () => {
       expect(handled.length, s.dir).toBeGreaterThanOrEqual(4);
       expect(handled, s.dir).toEqual(statusPairs(documented));
     }
+  });
+
+  // #1533: doctor exits 0, `healthy`, with the findings that don't block (`blocking: false`, such
+  // as `pin.candidate`) still in `.findings`, and the doctor skill's table gives each its own row.
+  // So its exit-0 row goes on to explain them, as the exit-4 row does, and stops only when none is
+  // left to explain; a row that just stops leaves every one of them unsaid.
+  it("goes on to the findings that don't block when doctor exits 0", () => {
+    expect(Object.values(FINDINGS).some((f) => !f.blocking)).toBe(true);
+    const healthy = rows(section(skill('doctor').body, /^## Steps$/)!).find((c) => c[1] === '`healthy`')!;
+    expect(healthy[0]).toBe('0');
+    expect(healthy[2]).toMatch(/When `\.findings` lists a finding you haven't explained yet \(none blocks\), go on to step 2/);
+    expect(healthy[2]).toMatch(/; otherwise stop\.$/);
   });
 
   it('states what it never does, and what only a person can do', () => {

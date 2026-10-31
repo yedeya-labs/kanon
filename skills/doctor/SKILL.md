@@ -45,7 +45,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 
    | Code | Status | What you do |
    |---|---|---|
-   | 0 | `healthy` | Say so, list `.notes` and `.waived`, and stop. |
+   | 0 | `healthy` | Nothing blocks. Say so, and list `.notes` and `.waived`. When `.findings` lists a finding you haven't explained yet (none blocks), go on to step 2 for it, as for code 4; otherwise stop. |
    | 1 | `findings` | Go on to step 2. |
    | 2 | `usage` | This skill passed something the command refused: show `.error`, and stop. It is a bug in the skill, not the repository. |
    | 3 | `error` | Show `.error` in plain words. Usually: not a checkout, a release's requirements file that can't be read, or nothing pins Kanon yet, which is the adopt skill's job. |
