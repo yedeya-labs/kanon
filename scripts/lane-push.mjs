@@ -36,7 +36,8 @@
 //   the run outgrew one environment string on a repository of ~4,000 branches). A branch made
 //   after that read, before the helper reads it again, is refused unless it still sits at the
 //   commit the push builds on, and then it moves only without force (`[LANE-10]`). A branch whose
-//   commits carry the request file is refused too: the spine keeps it out of every commit.
+//   commits carry the request file is refused too: the spine keeps it out of every commit. So is
+//   one with a commit that brings the starting map or the playbook excerpt (`K-AGENT-41`).
 // Every other branch the agent made stays on its runner, and the step summary names it.
 //
 // THE PULL REQUEST is opened only after its branch moved, from the request's branch, base, title and
@@ -59,6 +60,11 @@ import { githubRequest, pushVerified, summary } from './lib/verified-commits.mjs
 
 /** Where the agent writes its request: under `docs/`, the one path every lane's agent may write. */
 export const REQUEST_PATH = 'docs/.kanon-pull-request.json';
+
+/** What a lane writes for its agent to read and never to commit (`K-AGENT-41`): the starting map,
+ *  which holds the issue and its comments, and the playbook excerpt. The spine's agent job keeps
+ *  both out of `git add -A`, and the push job refuses a commit that brings either. */
+export const AGENT_INPUTS = ['.agent/starting-map.md', '.agent/reviewer-playbook-excerpt.md'];
 
 /** GitHub's own limits on a pull request's title and body. */
 const TITLE_MAX = 256;
@@ -315,6 +321,17 @@ export async function pushLane({
     const own = gitText(['rev-list', tip, '--not', ...known]).split('\n').filter(Boolean);
     if (own.some((c) => gitText(['ls-tree', '--name-only', c, '--', REQUEST_PATH]) !== '')) {
       refused.push({ branch, why: `a commit on it carries ${REQUEST_PATH}, which the spine keeps out of every commit` });
+      continue;
+    }
+    // Nor bring an agent's input: one whose copy no parent holds. A map the default branch already
+    // holds is not this run's, and refusing it would refuse every branch built on it.
+    const blob = (/** @type {string} */ c, /** @type {string} */ path) => gitText(['ls-tree', c, '--', path]).split(/\s/)[2] ?? '';
+    const brought = AGENT_INPUTS.find((path) => own.some((c) => {
+      const mine = blob(c, path);
+      return mine !== '' && gitText(['rev-list', '--parents', '-n', '1', c]).split(' ').slice(1).every((p) => blob(p, path) !== mine);
+    }));
+    if (brought) {
+      refused.push({ branch, why: `a commit on it brings ${brought}, which a lane writes for its agent to read and never to commit (\`K-AGENT-41\`)` });
       continue;
     }
     // The rebase lane's resolution is one merge of the recorded default branch, and nothing else.

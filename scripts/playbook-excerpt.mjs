@@ -44,7 +44,8 @@ import { pathToFileURL } from 'node:url';
 
 export const PLAYBOOK = 'docs/qa/reviewer-playbook.md';
 
-/** Gitignored, and `.agent/` is in runner-artifact-guard's DIRS, so it cannot be committed. */
+/** One of lane-push's AGENT_INPUTS, so the push job refuses a commit that brings it; the arm that
+ *  writes it pushes nothing anyway. */
 export const EXCERPT_PATH = '.agent/reviewer-playbook-excerpt.md';
 
 /** Level-2 headings kept, matched as a PREFIX of the heading text, in output order. */
