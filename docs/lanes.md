@@ -741,7 +741,7 @@ It needs the Author App (the Lead's), with `Issues: write`, `Pull requests: read
 
 **It re-asks a review that never landed** ([#1197](https://github.com/yedeya-labs/kanon/issues/1197)). CI's completion starts the review lane once per head, and a run dropped on the way leaves the pull request labelled, green and unreviewed, with nothing to say so. So on the same run the sweep re-asks the review of each open pull request that carries `review:please` and:
 
-- has no Reviewer review whose `<!-- reviewed: sha=… -->` names its current head (in any state; a review with no trailer counts by the commit GitHub filed it under);
+- has no Reviewer verdict whose `<!-- reviewed: sha=… -->` names its current head (an approval or a changes-request, the two the review lane counts as reviewing a head, so a head with only a comment-review is re-asked, [#1528](https://github.com/yedeya-labs/kanon/issues/1528); a review with no trailer counts by the commit GitHub filed it under);
 - has no Review run queued or in progress on that head;
 - has CI completed on that head, read from your `ci.yml`'s runs as the review lane's filter reads them, so the dispatch sweep's caller needs that file too (`K-LAYOUT-18`);
 - was pushed at least 4 hours ago, the reconciler's stall window, which is fixed and not a setting, and is not from a fork, which the review lane refuses;

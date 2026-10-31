@@ -14,10 +14,12 @@
 //
 // ── WHAT IT RE-ASKS ─────────────────────────────────────────────────────────
 // An open pull request that carries `review:please` and:
-//   - has no Reviewer review on its current head: a review by the Reviewer's App, with the
+//   - has no Reviewer verdict on its current head: a review by the Reviewer's App, with the
 //     Reviewer's role marker, whose `<!-- reviewed: sha=… -->` trailer names the head (a review
 //     with no trailer counts by the commit GitHub filed it under, as `review-recovery.mjs` reads
-//     one). Any state, a COMMENT included: the lane skips a head the Reviewer has reviewed;
+//     one). APPROVED or CHANGES_REQUESTED only, a COMMENT excluded: the lane's filter reads
+//     `already reviewed` from those two states alone, so it reviews a head carrying only a
+//     COMMENT, and the sweep re-asks one (kanon#1528);
 //   - has no Review run queued or in progress on that head (`review-run-evidence.mjs`);
 //   - whose `ci.yml` runs on that head have all completed, as the review lane's filter reads CI;
 //   - whose head was pushed at least the reconciler's stall window ago, `AWAITING_REVIEW_HOURS`
@@ -158,14 +160,18 @@ export function declinedByDesign(decision) {
 const carriesLabel = (pr) => (pr.labels ?? []).some((l) => ((typeof l === 'string' ? l : l?.name) ?? '').toLowerCase() === REASK_LABEL);
 
 /**
- * Does a Reviewer review name this pull request's current head? The trailer decides; a review
- * without one counts by the commit GitHub filed it under.
+ * Does a Reviewer verdict name this pull request's current head? The trailer decides; a review
+ * without one counts by the commit GitHub filed it under. Only APPROVED and CHANGES_REQUESTED
+ * count, the two states the lane's filter reads `already reviewed` from (kanon#1528), as
+ * `verdictOnHead` in `review-recovery.mjs` reads them: a head carrying only a COMMENT is one
+ * the lane would review.
  * @param {Pr} pr
  */
 export function reviewedHead(pr) {
   const head = String(pr.headRefOid ?? '').toLowerCase();
   return (pr.reviews ?? []).some((r) =>
     asRole('Reviewer', { login: r.author?.login, expected: REVIEWER_LOGIN, body: r.body })
+    && (r.state === 'APPROVED' || r.state === 'CHANGES_REQUESTED')
     && String(readTrailer(r).reviewedSha ?? r.commit?.oid ?? '').toLowerCase() === head);
 }
 
