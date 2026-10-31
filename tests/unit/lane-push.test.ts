@@ -7,7 +7,9 @@ import { parse } from 'yaml';
 import { SPAWNS } from './helpers/spawns.js';
 import { fakeGitHub, serveFake } from './helpers/fake-git-data-api.mjs';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
-import { REQUEST_PATH, bundleHeader, prepareStore, pushLane, readRequest } from '../../scripts/lane-push.mjs';
+import { AGENT_INPUTS, REQUEST_PATH, bundleHeader, prepareStore, pushLane, readRequest } from '../../scripts/lane-push.mjs';
+import { MAP_PATH } from '../../scripts/starting-map.mjs';
+import { EXCERPT_PATH } from '../../scripts/playbook-excerpt.mjs';
 
 // Every case builds real repositories with `git`, so every case takes the spawn budget (#436).
 vi.setConfig({ testTimeout: SPAWNS.timeout });
@@ -33,9 +35,10 @@ const pushStep = (spine.jobs.push.steps as WorkflowStep[]).find((s) => s.id === 
 
 /**
  * A remote with `main` at `example-org/example-repo` under the root, so `file://<root>` is its
- * server, and a one-commit-deep clone of it, as the implement lane's checkout is.
+ * server, and a one-commit-deep clone of it, as the implement lane's checkout is. `files` are in
+ * `main`'s last commit.
  */
-const fixture = ({ depth = 1, branch = '' } = {}) => {
+const fixture = ({ depth = 1, branch = '', files = {} as Record<string, string> } = {}) => {
   const root = mkdtempSync(join(tmpdir(), 'lane-push-'));
   const remote = join(root, REPO);
   const work = join(root, 'work');
@@ -50,6 +53,10 @@ const fixture = ({ depth = 1, branch = '' } = {}) => {
   sh(root, 'clone', '-q', remote, seed);
   for (const n of ['one', 'two']) {
     writeFileSync(join(seed, `${n}.txt`), `${n}\n`);
+    for (const [file, text] of n === 'two' ? Object.entries(files) : []) {
+      mkdirSync(join(seed, file, '..'), { recursive: true });
+      writeFileSync(join(seed, file), text);
+    }
     sh(seed, 'add', '.');
     sh(seed, '-c', 'user.name=Pat', '-c', 'user.email=pat@example.invalid', 'commit', '-qm', n);
   }
@@ -265,6 +272,36 @@ describe('the push job (kanon#1383)', () => {
     expect(writes(r.calls)).toEqual([]);
   });
 
+  it('refuses a branch whose commits carry the starting map or the playbook excerpt (`K-AGENT-41`)', async () => {
+    for (const input of [MAP_PATH, EXCERPT_PATH]) {
+      const f = fixture();
+      runAgentJob(f, () => {
+        f.sh(f.work, 'switch', '-q', '-c', 'feat/7-thing');
+        f.commit('src/thing.txt', 'thing\n');
+        mkdirSync(join(f.work, input, '..'), { recursive: true });
+        writeFileSync(join(f.work, input), '# the issue, and its comments\n');
+        f.sh(f.work, 'add', '-f', input);
+        f.sh(f.work, 'commit', '-qm', 'commit the map');
+        writeRequest(f, REQUEST);
+      });
+      const r = await push(f);
+      expect(r.refused, input).toEqual([expect.objectContaining({ branch: 'feat/7-thing', why: expect.stringContaining(input) })]);
+      expect(writes(r.calls), input).toEqual([]);
+    }
+  });
+
+  it('pushes a branch over a default branch that already holds a starting map: only a commit that brings one is refused', async () => {
+    const f = fixture({ files: { [MAP_PATH]: '# committed before this run\n' } });
+    runAgentJob(f, () => {
+      f.sh(f.work, 'switch', '-q', '-c', 'feat/7-thing');
+      f.commit('src/thing.txt', 'thing\n');
+      writeRequest(f, REQUEST);
+    });
+    const r = await push(f);
+    expect(r.refused).toEqual([]);
+    expect(r.pr).toBe(42);
+  });
+
   it('refuses a branch name a URL could read as another branch, before any request', async () => {
     const f = fixture();
     runAgentJob(f, () => {
@@ -393,6 +430,26 @@ describe('the spine\'s steps around it (kanon#1383)', () => {
     expect(handed.outputs.commits).toBe('true');
     expect(f.sh(f.work, 'ls-tree', '-r', '--name-only', 'HEAD')).not.toContain(REQUEST_PATH);
     expect(JSON.parse(readFileSync(join(f.temp, 'kanon-push', 'request.json'), 'utf8'))).toEqual(REQUEST);
+  });
+
+  it('the agent\'s `git add -A` leaves the starting map and the playbook excerpt out (`K-AGENT-41`)', () => {
+    const f = fixture();
+    const handed = runAgentJob(f, () => {
+      f.sh(f.work, 'switch', '-q', '-c', 'feat/7-thing');
+      for (const input of [MAP_PATH, EXCERPT_PATH]) {
+        mkdirSync(join(f.work, input, '..'), { recursive: true });
+        writeFileSync(join(f.work, input), '# the issue, and its comments\n');
+      }
+      f.commit('src/thing.txt', 'thing\n');
+    });
+    expect(handed.outputs.commits).toBe('true');
+    const tree = f.sh(f.work, 'ls-tree', '-r', '--name-only', 'HEAD').split('\n');
+    expect(tree).toContain('src/thing.txt');
+    for (const input of [MAP_PATH, EXCERPT_PATH]) expect(tree, input).not.toContain(input);
+  });
+
+  it('the inputs the push job refuses are the paths the scripts write', () => {
+    expect([...AGENT_INPUTS].sort()).toEqual([EXCERPT_PATH, MAP_PATH].sort());
   });
 
   it('the agent\'s job hands on no request that is a symlink', () => {

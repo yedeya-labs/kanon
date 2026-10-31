@@ -30,8 +30,8 @@ import { DECL, SPEC_DIR, idPattern, parseAll } from './spec-lib.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 
-/** Where the map is written, relative to the checkout. Gitignored, and named in
- *  runner-artifact-guard's DIRS, so an agent's `git add -A` cannot commit it. */
+/** Where the map is written, relative to the checkout. One of lane-push's AGENT_INPUTS: the
+ *  spine's agent job keeps it out of `git add -A`, and the push job refuses a commit that brings it. */
 export const MAP_PATH = '.agent/starting-map.md';
 
 /** Bounds, so a long comment thread cannot turn the map into the cost it exists to cut. */

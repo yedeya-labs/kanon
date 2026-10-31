@@ -206,7 +206,7 @@ jobs:
       # THE PULL REQUEST'S REQUEST STAYS OUT OF EVERY COMMIT (kanon#1385, `[LANE-15]`), as the
       # spine's agent job keeps it, which says why: excluded before the agent runs, carried beside
       # the commits by the handoff below, and refused by the push job in any commit.
-      - name: Keep the pull request's request out of the agent's commits
+      - name: Keep the pull request's request and the agent's inputs out of its commits
         id: exclude-request
         if: steps.gate.outputs.act == 'split'
         run: |
@@ -214,6 +214,7 @@ jobs:
           exclude="$(git rev-parse --git-path info/exclude)"
           mkdir -p "$(dirname "$exclude")"
           echo '/docs/.kanon-pull-request.json' >> "$exclude"
+          printf '/%s\n' .agent/starting-map.md .agent/reviewer-playbook-excerpt.md >> "$exclude"
 
       # CREATE-BEFORE-APPLY (plan 0005 §5.3, `K-WORK-12`): each label this lane's agent may
       # apply and the repository lacks is created first, with the taxonomy's colour and

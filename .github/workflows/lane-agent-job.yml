@@ -443,7 +443,9 @@ jobs:
       # path every lane's agent may write (the Lead's `Edit(/docs/**)`). Excluded here, before the
       # agent runs, so `git add -A` leaves it untracked; the handoff below carries it beside the
       # commits, and the push job refuses a branch whose commits hold it.
-      - name: Keep the pull request's request out of the agent's commits
+      # The starting map and the playbook excerpt (`K-AGENT-41`) are excluded with it, never handed
+      # on, and refused by the push job in a commit that brings one (lane-push's AGENT_INPUTS).
+      - name: Keep the pull request's request and the agent's inputs out of its commits
         id: exclude-request
         if: inputs.push
         run: |
@@ -451,6 +453,7 @@ jobs:
           exclude="$(git rev-parse --git-path info/exclude)"
           mkdir -p "$(dirname "$exclude")"
           echo '/docs/.kanon-pull-request.json' >> "$exclude"
+          printf '/%s\n' .agent/starting-map.md .agent/reviewer-playbook-excerpt.md >> "$exclude"
 
       # CREATE-BEFORE-APPLY (plan 0005 §5.3, `K-WORK-12`): each label the lane's agent may apply
       # and the repository lacks is created first, with the taxonomy's colour and description,
