@@ -429,6 +429,22 @@ describe('renderContext', () => {
     expect(text).toContain('aaaaaaa..bbbbbbb');
     expect(text).toContain('+second');
   });
+
+  // The lane runs Kanon's copy from the action cache at the pinned tag, never a branch's
+  // (the header's "HOW THE WORKFLOW RUNS THIS"), so the provenance line names that (#1531).
+  it('names Kanon at the pinned tag as the scope’s origin, not a branch of the repository', () => {
+    const x = 'a'.repeat(40);
+    const text = renderContext({
+      scope: { mode: 'incremental', kind: 'descends', reason: 'r', priorSha: x, review: verdict(x, { id: 55 }), from: x },
+      headSha: 'b'.repeat(40),
+      comments: [],
+      log: '',
+      stat: '',
+      diff: '',
+    });
+    expect(text).toContain("Written by Kanon's review lane, from Kanon's `scripts/incremental-review.mjs` at the tag the lane pins (RA-2455), not by the PR.");
+    expect(text).not.toMatch(/BASE branch/i);
+  });
 });
 
 // Its cases build a git history, so the block takes the spawn budget (#436).
