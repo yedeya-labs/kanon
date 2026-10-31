@@ -1,11 +1,11 @@
 {
-  "action": "v1.0.262",
-  "cli": "2.1.310",
+  "action": "v1.0.263",
+  "cli": "2.1.311",
   "flags_sha256": "602cc955ca769fd80a7ee154146e58430e231df75ce983dd39028c627a3d6c63",
   "battery_sha256": "0490f03d83017ac45a3a8f272fc761e46bd0db507607d0e2a8791ce978e2cbb6",
   "model": "haiku",
   "driver": "claude -p --output-format stream-json, with the Reviewer's flags and agent-run's user scope",
-  "ran_on": "2026-10-28",
+  "ran_on": "2026-10-31",
   "results": [
     {
       "id": "sh-file",
