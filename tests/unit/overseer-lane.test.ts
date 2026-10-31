@@ -401,6 +401,17 @@ describe('the capability interlock: the agent runs the script, and the query it 
     const quoted = [...flat.matchAll(/q='([^']*label:capability[^']*)'/g)].map((m) => m[1]);
     expect(quoted).toEqual([unlinkedQuery('${{ github.repository }}')]);
   });
+
+  // kanon#1530: the rule bounds filings per scan, and the filing step holds one per run, so the
+  // lane contract says per scan. The runtime-version trigger scans more than once a week by design.
+  it('the lane contract states the bound the rule states: one per scan, not one a week', () => {
+    const rule = /### `K-SELF-17`[\s\S]*?\*\*Rule\.\*\*([^\n]*)/.exec(readFileSync('rulebook/09-self-maintenance.md', 'utf8'))![1]!;
+    expect(rule).toContain('at most one per scan');
+    const bullet = readFileSync('docs/lanes.md', 'utf8').split('\n').find((l) => l.startsWith('- **A capability investigation**'))!;
+    expect(bullet).toContain('at most one per scan');
+    expect(bullet).not.toMatch(/a week \(`K-SELF-17`\)|one a week/);
+    expect(readFileSync('scripts/overseer-file.mjs', 'utf8')).toContain("'one capability investigation is filed per run'");
+  });
 });
 
 /**
