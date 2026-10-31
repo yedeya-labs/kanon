@@ -37,7 +37,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.42.0
+      - uses: yedeya-labs/kanon/actions/kanon-path@candidate-v0.43.0
         id: kanon
       - name: force-push-notice (Kanon's, at the pinned release)
         env:

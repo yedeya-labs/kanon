@@ -27,4 +27,4 @@ permissions:
 
 jobs:
   red-test:
-    uses: yedeya-labs/kanon/.github/workflows/red-test.yml@candidate-v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/red-test.yml@candidate-v0.43.0

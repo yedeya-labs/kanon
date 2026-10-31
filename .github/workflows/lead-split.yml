@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   split:
-    uses: yedeya-labs/kanon/.github/workflows/agent-lead-split.yml@candidate-v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-lead-split.yml@candidate-v0.43.0
     with:
       issue: ${{ inputs.issue }}
     secrets:
