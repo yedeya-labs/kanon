@@ -347,7 +347,7 @@ export function renderContext({ scope, headSha, reviews = [], comments = [], log
   return [
     `# Incremental re-review context — ${x}..${h}`,
     '',
-    `Written by the review workflow from the BASE branch's \`scripts/incremental-review.mjs\` (RA-2455), not by the PR.`,
+    `Written by Kanon's review lane, from Kanon's \`scripts/incremental-review.mjs\` at the tag the lane pins (RA-2455), not by the PR.`,
     `Your last verdict on this PR was \`${r.state}\` (review ${r.id}${r.submitted_at ? `, ${r.submitted_at}` : ''}), formed on \`${scope.priorSha}\`.`,
     ...scopeStatement(scope, headSha),
     '',
