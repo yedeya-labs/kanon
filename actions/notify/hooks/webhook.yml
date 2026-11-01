@@ -30,7 +30,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: yedeya-labs/kanon/actions/notify/webhook@v0.43.0 # x-release-please-version
+    - uses: yedeya-labs/kanon/actions/notify/webhook@v0.44.0 # x-release-please-version
       with:
         message-v1: ${{ inputs.message-v1 }}
         text: ${{ inputs.text }}
