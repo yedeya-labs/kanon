@@ -106,7 +106,7 @@ export const TRIGGERS = {
   'agent-merge-reconcile': { name: 'Merge Reconcile (Reviewer)', job: 'reconcile', pr: ['closed'], review: true, dispatch: { pr_number: true } },
   'agent-review': { name: 'Review (Reviewer)', job: 'review', ci: 'any', prTarget: ['opened', 'labeled'], dispatch: { pr_number: true } },
   'agent-verify-acs': { name: 'Verify acceptance criteria (Explorer)', job: 'verify', issues: ['labeled'], dispatch: { project: false, ref: false } },
-  'agent-lead': { name: 'Lead (Lead) — brief', job: 'brief', dispatch: { mandate: true, context: false } },
+  'agent-lead': { name: 'Lead (Lead) — brief', job: 'brief', dispatch: { mandate: true, context: true } },
   'agent-lead-split': { name: 'Lead (Lead) — split', job: 'split', issues: ['labeled'], dispatch: { issue: true } },
   'agent-rebase': { name: 'Rebase (Implementer)', job: 'rebase', ci: 'default', openers: ['agent-implement', 'agent-triage'], merged: true, schedule: '17 5 * * *', dispatch: { pr_number: false } },
   'agent-lead-reconcile': { name: 'Lead (Lead) — reconcile', job: 'reconcile', pr: ['closed'], issues: ['closed'], schedule: '7 * * * *', dispatch: { project: false, apply: false },

@@ -153,6 +153,8 @@ for (const lane of LANES) {
       // must not start at all. The TTL record (#546) is the fourth: like the start stamp, it runs
       // only `case` and `echo`, so it cannot fail on its own. The turn-budget check (kanon#891) is
       // the fifth: it fails only on a raised `max_turns` the lane refuses, and then the agent
+      // must not start. The refusal step (kanon#1558) is the sixth: it fails only on a `refusal`
+      // its lane hands in, such as the brief lane's missing tracking issue, and then the agent
       // must not start.
       const agent = (spine.jobs.run.steps ?? []).find((s) => s.id === 'agent');
       const block = laneBlockOf(agent);
@@ -169,7 +171,8 @@ for (const lane of LANES) {
         .toBe("!cancelled() && steps.agent.outcome == 'failure'");
       const fallible = inner.slice(0, action).filter((s) => s['continue-on-error'] !== true).map((s) => s.name);
       expect(fallible).toEqual([
-        'Record when the agent started', 'Check the turn limit raised for this run', 'Record the prompt-cache TTL the agent is pinned at', 'Check the Claude credential',
+        'Record when the agent started', 'Check the turn limit raised for this run', "Refuse a run its lane's precondition stops",
+        'Record the prompt-cache TTL the agent is pinned at', 'Check the Claude credential',
         'Give the agent a user scope this job made, if its flags load no project settings',
       ]);
     });

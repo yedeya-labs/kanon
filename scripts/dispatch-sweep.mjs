@@ -41,7 +41,7 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync } from 'node:fs';
 import { exhaustedRoute, projectOf } from './split-lineage.mjs';
-import { APP_REGISTER, appLogin, appPersona, loadAppRegister } from './app-register.mjs';
+import { APP_REGISTER, OPTIONAL_ROLES, appLogin, appPersona, loadAppRegister } from './app-register.mjs';
 import { asRole, markedRole, signed, slugOf } from './lib/role-marker.mjs';
 import { queryCostRows } from '../infra/qa-store/aws/cost-rows.mjs';
 import { costRowsProblem } from '../actions/qa-store/qa-store.mjs';
@@ -108,12 +108,26 @@ export const sweepLogin = () => appLogin('Lead');
 // all six rows. A script that compares logins still fails by name on a missing row, at
 // its first comparison; the sweep and the reconciler call `botLogins()` first thing in
 // `main()`, so they still fail before they read or change anything.
+//
+// EXCEPT AN OPTIONAL APP'S ROW (kanon#1558). The Releaser's App is optional
+// (`OPTIONAL_ROLES`): no lane takes it, and `kanon init` offers it only to a repository that
+// calls Kanon's release workflow, so an install without one has no Releaser row, and requiring
+// it stopped the sweep and the reconciler there. Its login joins the set when the register
+// lists it. With no row there is no Releaser App, so no comment is its: leaving the login out
+// reads no person's comment as an App's, since the set only loses a login, and no App's as a
+// person's, since none comments as it.
 const BOT_ROLES = ['Implementer', 'Lead', 'Reviewer', 'Explorer', 'Overseer', 'Releaser'];
 const GITHUB_BOTS = ['github-actions', 'dependabot'];
 /** @type {Set<string> | undefined} */
 let botSet;
-/** Every Kanon App's login and GitHub's own bots. Throws, naming the role, when the register lacks one. */
-export const botLogins = () => (botSet ??= new Set([...BOT_ROLES.map((role) => appLogin(role)), ...GITHUB_BOTS]));
+/**
+ * Every Kanon App's login and GitHub's own bots. Throws, naming the role, when the register lacks
+ * one, unless the role's App is optional: then its login is in the set only when the register lists it.
+ */
+export const botLogins = () => (botSet ??= new Set([
+  ...BOT_ROLES.flatMap((role) => (OPTIONAL_ROLES.has(role) && !loadAppRegister().get(role) ? [] : [appLogin(role)])),
+  ...GITHUB_BOTS,
+]));
 
 /**
  * The register's rows, role → login, for a caller that only REPORTS, the project digest. No
@@ -751,7 +765,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
     // Defaults to the implement lane so every existing caller — and every existing
     // test — keeps its exact meaning (RA-1336).
     lane = LANES[0],
-    // WHICH LOGINS ARE APPS (kanon#1316). Defaults to `isBot`, every role's row required.
+    // WHICH LOGINS ARE APPS (kanon#1316). Defaults to `isBot`, every role's row required but an optional App's (kanon#1558).
     // Only the project digest and the status view (`scripts/status/project.mjs`), which
     // report and never act, pass a predicate over the rows their register has
     // (`listedBotLogins`, `registerBotLogins`).
@@ -1748,7 +1762,7 @@ export function costSourceLine(source, reads) {
 const costLines = (source, reads) => [costSourceLine(source, reads), costReadLine(reads)].filter(Boolean).join('\n\n');
 
 function main() {
-  // Every App row, read before anything else, so a missing one stops the sweep by name
+  // Every required App row, read before anything else, so a missing one stops the sweep by name
   // before it reads or changes an issue — as it did when the set was built at load.
   botLogins();
   if (!REPO) {

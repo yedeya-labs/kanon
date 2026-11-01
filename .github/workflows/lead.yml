@@ -9,8 +9,8 @@ on:
         description: "What to plan — one paragraph, in your own words"
         required: true
       context:
-        description: "Issue numbers this covers, comma-separated (optional)"
-        required: false
+        description: "The project's tracking issue number, then any other issue numbers this covers, comma-separated. Without it the Lead is not started (K-AGENT-30)."
+        required: true
 
 permissions:
   contents: read

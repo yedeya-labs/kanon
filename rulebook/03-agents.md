@@ -340,7 +340,7 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Why.** The brief merge is the one human gate per project, and it replaces a human decision per PR. A brief with no tracking issue can never be reconciled.
 
-**Enforced by.** The brief workflow can only be started by hand; the tracking-issue refusal is in its prompt and a workflow warning.
+**Enforced by.** The brief workflow can only be started by hand. Its filter job refuses a dispatch whose `context` names no tracking issue (`scripts/lead-tracking-issue.mjs`), and `actions/agent-run` fails the run on that refusal before any model call; the prompt stops on a tracking issue it can't find among the issues it was given.
 
 **Class.** framework
 

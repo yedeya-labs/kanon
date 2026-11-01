@@ -462,7 +462,7 @@
         },
         "context": {
           "type": "string",
-          "description": "Issue numbers this covers, comma-separated (optional)"
+          "description": "The project's tracking issue number, then any other issue numbers this covers, comma-separated. Without it the Lead is not started (K-AGENT-30)."
         },
         "max_turns": {
           "type": "string",
