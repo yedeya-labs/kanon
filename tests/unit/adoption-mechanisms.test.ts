@@ -181,15 +181,22 @@ const atOrBelow = (a: string, b: string): boolean => {
  * lane delivers it, so the lane callers' pin says nothing about it: the plugin arrives at the
  * marketplace `ref` `.claude/settings.json` declares, and the skill runs the CLI at the release
  * its `npx` line names. It runs when both releases ship #`pr`, and the `npx` line's release is
- * tagged. While the pins name a candidate, the skills' `npx` names the stable `vX.Y.Z` it will be
- * promoted to, which isn't tagged until then. The checkout can't list tags, so it reads the
- * latest stable release from the README's install command, which the promotion moves and CI's
- * `doc-pins.mjs check` holds to a published tag: a release at or below it is tagged. The skill is
- * read on `main`, where release-please moves its `npx` line with the plugin's `ref`.
+ * tagged through every candidate's soak, not only between a promotion and the next release.
+ *
+ * While release-please's `extra-files` moves the skill, each release commit names in its `npx`
+ * line the stable `vX.Y.Z` the candidate will be promoted to, a tag release-please never cuts (it
+ * tags `<component>-vX.Y.Z`), so through each soak the skill names a tag that doesn't exist yet
+ * (#1548). The CLI then runs through the skill only from a promotion to the next release commit.
+ * So the row is not installed whichever of those PRs a checkout is: a release PR moves the `npx`
+ * line and the `ref`, a promotion's docs PR moves the README, and neither moves the config.
+ *
+ * Otherwise the checkout can't list tags, so it reads the latest stable release from the README's
+ * install command, which the promotion moves and CI's `doc-pins.mjs check` holds to a published
+ * tag: a release at or below it is tagged.
  */
 const cli = (skill: string, command: string, pr: number): Detector => ({
   kind: 'detect',
-  what: `the plugin's ref and skills/${skill}'s npx line at releases that ship #${pr}, the npx one tagged`,
+  what: `the plugin's ref and skills/${skill}'s npx line at releases that ship #${pr}, the npx one tagged through each soak`,
   detect: (repo) => {
     const read = (path: string) => (existsSync(join(repo.root, path)) ? readFileSync(join(repo.root, path), 'utf8') : '');
     const settings = read('.claude/settings.json');
@@ -201,6 +208,12 @@ const cli = (skill: string, command: string, pr: number): Detector => ({
     const stable = scanDoc(read('README.md')).flatMap((l) => (l.covered ? l.refs : [])).find((r) => STABLE.test(r))?.slice(1);
     if (!listed(repo, pr, plugin)) return { runs: false, evidence: `the CHANGELOG lists #${pr} at no release up to ${plugin}, the plugin's ref` };
     if (!listed(repo, pr, npx)) return { runs: false, evidence: `the CHANGELOG lists #${pr} at no release up to ${npx}, the one skills/${skill}'s npx line runs` };
+    const config = read('release-please-config.json');
+    type Package = { component?: string; 'include-component-in-tag'?: boolean; 'extra-files'?: Array<string | { path?: string }> };
+    const moves = Object.values((config ? (JSON.parse(config) as { packages?: Record<string, Package> }).packages : undefined) ?? {}).some(
+      (p) => Boolean(p.component) && p['include-component-in-tag'] === true && (p['extra-files'] ?? []).some((f) => (typeof f === 'string' ? f : f.path) === `skills/${skill}/SKILL.md`),
+    );
+    if (moves) return { runs: false, evidence: `release-please-config.json's extra-files moves skills/${skill}'s npx line to each release's stable vX.Y.Z, which release-please doesn't tag, so through every candidate's soak the skill runs kanon ${command} at a tag that doesn't exist yet (#1548)` };
     if (!stable || !atOrBelow(npx, stable)) return { runs: false, evidence: `skills/${skill}'s npx line runs v${npx}, not tagged yet: the README's install command names ${stable ? `v${stable}` : 'no stable release'}` };
     return { runs: true, evidence: `the plugin's ref (${String(ref)}) ships #${pr}, and skills/${skill} runs kanon ${command} at v${npx}, tagged at or below the README's v${stable}` };
   },
@@ -450,6 +463,8 @@ describe('the check fails each way a row can be wrong', () => {
     const settings = (ref: string) => JSON.stringify({ extraKnownMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref } } } });
     const readme = (v: string) => `# Kanon\n\n<!-- x-release-please-start-version -->\n\n\`\`\`sh\nclaude plugin marketplace add yedeya-labs/kanon#${v}\n\`\`\`\n\n<!-- x-release-please-end -->\n`;
     const skill = (v: string) => `# Inbox\n\n\`\`\`sh\nnpx --yes --package github:yedeya-labs/kanon#${v} kanon inbox --json\n\`\`\`\n`;
+    const config = (extra: string[]) => JSON.stringify({ packages: { '.': { component: 'candidate', 'include-component-in-tag': true, 'extra-files': [...extra, { type: 'json', path: '.claude/settings.json', jsonpath: '$.extraKnownMarketplaces.kanon.source.ref' }] } } });
+    // `main` during candidate-v0.43.0's soak: the release commit moved the npx line and the ref.
     const soak = {
       ...files,
       // The lane callers pin the candidate, which ships #1497: the old detector read only this.
@@ -458,24 +473,46 @@ describe('the check fails each way a row can be wrong', () => {
       '.claude/settings.json': settings('candidate-v0.43.0'),
       'skills/inbox/SKILL.md': skill('v0.43.0'),
       'README.md': readme('v0.42.0'),
+      'release-please-config.json': config(['skills/inbox/SKILL.md']),
     };
+    // The promotion's docs PR moves only the README; `main` after it merges looks the same.
+    const docsPR = { ...soak, 'README.md': readme('v0.43.0') };
+    // The next release PR moves the npx line, the ref and the CHANGELOG, but not the README.
+    const releasePR = {
+      ...docsPR,
+      'CHANGELOG.md': LOG.replace('# Changelog\n\n', '# Changelog\n\n## [0.44.0](https://x) (2026-11-04)\n\n* newer\n\n'),
+      '.claude/settings.json': settings('candidate-v0.44.0'),
+      'skills/inbox/SKILL.md': skill('v0.44.0'),
+    };
+    // Release mechanics that stop moving the skill to an untagged release (#1548's open question).
+    const unmoved = { ...soak, 'release-please-config.json': config([]) };
     const inbox: Array<[string, Detector]> = [...table, ['`kanon inbox`', cli('inbox', 'inbox', 1497)]];
     const rows = (status: string) => good.replace('| The sweep |', `| \`kanon inbox\` and the inbox skill | \`K-A-5\` | ${status} |\n| The sweep |`);
 
     it("fails an installed row during a candidate's soak, when the skill's npx names a stable tag not cut yet", () => {
       const lanePin = shipped(1497);
       expect(lanePin.kind === 'detect' && lanePin.detect(readRepo(repo(soak))).runs).toBe(true);
-      expect(problems(repo(soak), rows('installed 2026-10-31'), inbox).join('\n')).toMatch(/"`kanon inbox` and the inbox skill" is marked "installed 2026-10-31", but nothing here runs it .*skills\/inbox's npx line runs v0\.43\.0, not tagged yet: the README's install command names v0\.42\.0/);
+      expect(problems(repo(soak), rows('installed 2026-10-31'), inbox).join('\n')).toMatch(/"`kanon inbox` and the inbox skill" is marked "installed 2026-10-31", but nothing here runs it .*release-please-config\.json's extra-files moves skills\/inbox's npx line to each release's stable vX\.Y\.Z, which release-please doesn't tag/);
       expect(problems(repo(soak), rows('not yet installed'), inbox)).toEqual([]);
     });
 
-    it('names the row to flip to installed once the release is promoted and the README names it', () => {
-      expect(problems(repo({ ...soak, 'README.md': readme('v0.43.0') }), rows('not yet installed'), inbox).join('\n')).toMatch(/is marked "not yet installed", but the plugin's ref \(candidate-v0\.43\.0\) ships #1497, and skills\/inbox runs kanon inbox at v0\.43\.0, tagged at or below the README's v0\.43\.0/);
-      expect(problems(repo({ ...soak, 'README.md': readme('v0.43.0') }), rows('installed 2026-11-04'), inbox)).toEqual([]);
+    it("keeps one status through a release cycle: neither the promotion's docs PR nor the next release PR turns the row red", () => {
+      for (const [name, state] of Object.entries({ soak, docsPR, releasePR })) {
+        expect([name, problems(repo(state), rows('not yet installed'), inbox)]).toEqual([name, []]);
+        expect([name, problems(repo(state), rows('installed 2026-11-04'), inbox).length]).toEqual([name, 1]);
+      }
+    });
+
+    it("once release-please stops moving the skill, dates the row by the README's stable tag", () => {
+      expect(problems(repo(unmoved), rows('installed 2026-10-31'), inbox).join('\n')).toMatch(/skills\/inbox's npx line runs v0\.43\.0, not tagged yet: the README's install command names v0\.42\.0/);
+      expect(problems(repo(unmoved), rows('not yet installed'), inbox)).toEqual([]);
+      const promoted = { ...unmoved, 'README.md': readme('v0.43.0') };
+      expect(problems(repo(promoted), rows('not yet installed'), inbox).join('\n')).toMatch(/is marked "not yet installed", but the plugin's ref \(candidate-v0\.43\.0\) ships #1497, and skills\/inbox runs kanon inbox at v0\.43\.0, tagged at or below the README's v0\.43\.0/);
+      expect(problems(repo(promoted), rows('installed 2026-11-04'), inbox)).toEqual([]);
     });
 
     it("fails an installed row when the plugin's ref, or the npx line's release, doesn't ship the change", () => {
-      const promoted = { ...soak, 'README.md': readme('v0.43.0') };
+      const promoted = { ...unmoved, 'README.md': readme('v0.43.0') };
       expect(problems(repo({ ...promoted, '.claude/settings.json': settings('v0.42.0') }), rows('installed 2026-11-04'), inbox).join('\n')).toMatch(/at no release up to 0\.42\.0, the plugin's ref/);
       expect(problems(repo({ ...promoted, 'skills/inbox/SKILL.md': skill('v0.42.0') }), rows('installed 2026-11-04'), inbox).join('\n')).toMatch(/at no release up to 0\.42\.0, the one skills\/inbox's npx line runs/);
       expect(problems(repo({ ...promoted, '.claude/settings.json': '{}' }), rows('installed 2026-11-04'), inbox).join('\n')).toMatch(/declares Kanon's plugin at no release/);
