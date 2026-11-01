@@ -341,7 +341,8 @@ export const realDeps = {
       child.stdin.end(input ?? '');
     }),
   git: (args) => {
-    const r = spawnSync('git', args, { encoding: 'utf8' });
+    // Never a prompt: the anonymous read of Kanon's tags (`anonymousTag`) must fail, not wait.
+    const r = spawnSync('git', args, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
     return { status: r.status, stdout: r.stdout ?? '', stderr: r.error ? String(r.error.message) : (r.stderr ?? '') };
   },
   env: process.env,
@@ -2872,7 +2873,7 @@ const run = async (deps, opts, req, rep) => {
 
   // THE PIN (plan 0012 decision 5, CLI-1): the release this tree is when Kanon has its tag, else
   // its candidate's tag, else nothing to pin, and it stops before reading anything else.
-  const pinned = await releasePin(deps.gh, deps.release());
+  const pinned = await releasePin(deps.gh, deps.release(), deps.git);
   if (pinned.refusal !== null) return stop(1, [pinned.refusal]);
   const release = pinned.pin;
   rep.pin = release;

@@ -152,7 +152,7 @@ Every Kanon reference `init` writes, each caller's `uses:`, `lane-check`'s actio
 
 - **`vX.Y.Z`** when that tag exists, whether or not its candidate does too: the stable release;
 - else **`candidate-vX.Y.Z`** when that tag exists: running ahead of stable, which [`kanon doctor`](doctor.md) allows and reports as `pin.candidate`;
-- else it **refuses**, naming both tags it looked for, and changes nothing (exit 1, the error document). A checkout of a commit that is neither a release nor a candidate is such a case. If GitHub can't answer whether a tag exists, other than that it doesn't, `init` refuses too rather than guess.
+- else it **refuses**, naming both tags it looked for, and changes nothing (exit 1, the error document). A checkout of a commit that is neither a release nor a candidate is such a case. If GitHub refuses the token on Kanon's repository (401 or 403), as the `yedeya-labs` organisation does a fine-grained token whose lifetime is over 366 days, `init` reads the tag anonymously instead, with `git ls-remote` over HTTPS and every credential helper off, since Kanon's repository is public ([#1551](https://github.com/yedeya-labs/kanon/issues/1551)). If neither can answer whether a tag exists, other than that it doesn't, `init` refuses too rather than guess.
 
 The pin is `pin` in the JSON document, and the summary's *Pin* line; `kanon` stays the version of the `init` that ran.
 

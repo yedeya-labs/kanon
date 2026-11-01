@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { CONFLICTS, laneCatalogue, parseArgs, SCHEMA, usage, USAGE } from '../../cli/init.mjs';
+import { CONFLICTS, laneCatalogue, parseArgs, realDeps, SCHEMA, usage, USAGE } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { consentQuestion } from '../../cli/init.mjs';
 import { SPAWNS } from './helpers/spawns.js';
@@ -343,6 +343,33 @@ describe('kanon init pins the release it runs from (plan 0012 decision 5, CLI-1)
     expect(writes(github.calls)).toEqual([]);
     expect(tree(dir)).toEqual([]);
     expect(r.appsCalls).toEqual([]);
+  });
+
+  // An organisation's policy can refuse the person's fine-grained token on Kanon's repository
+  // (one whose lifetime is over 366 days) while it works on their own (#1551). Kanon's
+  // repository is public, so the tag is read anonymously instead, with no credential.
+  it('reads the tag anonymously when GitHub refuses the token on Kanon\'s repository', async () => {
+    const POLICY = "gh: The 'yedeya-labs' organization forbids access via a fine-grained personal access tokens if the token's lifetime is greater than 366 days. (HTTP 403)";
+    const remote: string[][] = [];
+    const tags = new Set([CANDIDATE]);
+    const git = (args: string[]) => {
+      if (!args.includes('ls-remote')) return realDeps.git(args);
+      remote.push(args);
+      const ref = args[args.length - 1]!;
+      return tags.has(ref.replace('refs/tags/', '')) ? { status: 0, stdout: `0123abcd\t${ref}\n`, stderr: '' } : { status: 2, stdout: '', stderr: '' };
+    };
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub({ kanonTagsFail: POLICY }), ['--yes', '--json'], undefined, REQ, { git });
+    expect(r.status, r.err).toBe(0);
+    expect(parse(r).pin).toBe(CANDIDATE);
+    expect(remote.map((a) => a[a.length - 1])).toEqual([`refs/tags/${PINNED}`, `refs/tags/${CANDIDATE}`]);
+    // With no credential helper, so neither the token nor gh's login is sent.
+    for (const a of remote) expect(a.slice(0, 2)).toEqual(['-c', 'credential.helper=']);
+    // An anonymous read that fails too leaves the tag unknown, and init refuses as before.
+    const down = (args: string[]) => (args.includes('ls-remote') ? { status: 128, stdout: '', stderr: 'fatal: unable to access' } : realDeps.git(args));
+    const refused = await run(checkout(), fakeGitHub({ kanonTagsFail: POLICY }), ['--yes', '--json'], undefined, REQ, { git: down });
+    expect(refused.status).toBe(1);
+    expect(parse(refused).error).toContain('reading it anonymously failed too (fatal: unable to access)');
   });
 
   it("refuses when it can't tell whether a tag exists, rather than guess", async () => {

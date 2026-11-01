@@ -49,25 +49,50 @@ const KANON = 'yedeya-labs/kanon';
  * code before it is promoted (plan 0009), when that tag exists; else none. A tree run from a
  * candidate's commit carries the version it will be promoted to, a tag that doesn't exist yet,
  * so pinning `vX.Y.Z` there would write callers that call nothing. Each tag is looked for with
- * `gh api`, as everything `init` reads from GitHub: a 404 says it is absent, and any other
- * failure leaves it unknown, so `init` refuses rather than guess.
+ * `gh api`, as everything `init` reads from GitHub: a 404 says it is absent. A token GitHub
+ * refuses on Kanon's repository (401 or 403) is not a reason to stop (#1551): an organisation
+ * can refuse a fine-grained token by its policy, such as one whose lifetime is over 366 days,
+ * while it works on the person's own repository. Kanon's repository is public, so the tag is
+ * then read anonymously, with `git ls-remote` and no credential (`anonymous`). Any other failure,
+ * or an anonymous read that fails too, leaves it unknown, so `init` refuses rather than guess.
  * @param {(args: string[]) => Promise<{ status: number | null, stdout: string, stderr: string }>} gh
  * @param {string} release `vX.Y.Z`, as `kanonRelease` names it
+ * @param {((args: string[]) => { status: number | null, stdout: string, stderr: string }) | null} [git] runs `git`, for the anonymous read; null reads through `gh` alone
  * @returns {Promise<{ pin: string, refusal: null } | { pin: null, refusal: string }>}
  */
-export const releasePin = async (gh, release) => {
+export const releasePin = async (gh, release, git = null) => {
   const tags = [release, `candidate-${release}`];
   for (const tag of tags) {
     const r = await gh(['api', `repos/${KANON}/git/ref/tags/${encodeURIComponent(tag)}`, '--jq', '.ref']);
     if (r.status === 0) return { pin: tag, refusal: null };
-    if (!/HTTP 404|Not Found/i.test(r.stderr)) {
-      return { pin: null, refusal: `could not tell whether ${KANON} has the tag ${tag} (${r.stderr.trim() || `exit ${r.status}`}), so it can't tell which release to pin. Nothing was changed.` };
+    if (/HTTP 404|Not Found/i.test(r.stderr)) continue;
+    const why = r.stderr.trim() || `exit ${r.status}`;
+    if (git && /HTTP 40[13]\b/.test(r.stderr)) {
+      const a = anonymousTag(git, tag);
+      if (a.found === true) return { pin: tag, refusal: null };
+      if (a.found === false) continue;
+      return { pin: null, refusal: `could not tell whether ${KANON} has the tag ${tag}: GitHub refused the token (${why}), and reading it anonymously failed too (${a.why}), so it can't tell which release to pin. Nothing was changed.` };
     }
+    return { pin: null, refusal: `could not tell whether ${KANON} has the tag ${tag} (${why}), so it can't tell which release to pin. Nothing was changed.` };
   }
   return {
     pin: null,
     refusal: `this is Kanon ${release}, and ${KANON} has neither the tag ${tags[0]} nor ${tags[1]}, so every reference init would write would call a release that doesn't exist. Run the init of a Kanon release or candidate tag, as docs/install.md runs it. Nothing was changed.`,
   };
+};
+
+/**
+ * Whether Kanon's public repository has the tag, read with no credential at all: `git ls-remote`
+ * over HTTPS with every credential helper turned off, so neither the person's token nor `gh`'s
+ * login is sent. `--exit-code` exits 2 when no ref matches. `found` is null when git failed.
+ * @param {(args: string[]) => { status: number | null, stdout: string, stderr: string }} git @param {string} tag
+ * @returns {{ found: boolean | null, why: string }}
+ */
+export const anonymousTag = (git, tag) => {
+  const r = git(['-c', 'credential.helper=', 'ls-remote', '--exit-code', '--tags', '--refs', `https://github.com/${KANON}.git`, `refs/tags/${tag}`]);
+  if (r.status === 0) return { found: r.stdout.includes(`refs/tags/${tag}`), why: '' };
+  if (r.status === 2) return { found: false, why: '' };
+  return { found: null, why: r.stderr.trim() || `git ls-remote exited ${r.status}` };
 };
 
 /**
