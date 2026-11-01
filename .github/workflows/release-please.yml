@@ -131,7 +131,8 @@ jobs:
 
   # Opens `ci(deps): run Kanon on candidate vX.Y.Z` as the Releaser, with the edit
   # `scripts/move-pins.mjs` makes at the triggering commit: every `yedeya-labs/kanon` pin under
-  # `.github/` and the plugin's `ref` in `.claude/settings.json`. The Owner merges it, and its
+  # `.github/`, and the plugin's `ref` in `.claude/settings.json` when the release commit left it
+  # behind; its body names only the files it moved. The Owner merges it, and its
   # merge starts the candidate's soak. When the candidate's own `lane-check` fails on the moved
   # callers, `scripts/pin-lane-check.mjs` lists each one, and the pull request opens as a draft
   # with that list in its body (kanon#1074): the job moves the pins only, and a person makes the
@@ -250,7 +251,15 @@ jobs:
               variables: {input: {branch: {repositoryNameWithOwner: $repo, branchName: $branch}, expectedHeadOid: $head,
                 message: {headline: $headline}, fileChanges: {additions: $additions[0]}}}}' > "$RUNNER_TEMP/commit.json"
           gh api graphql --input "$RUNNER_TEMP/commit.json" --jq .data.createCommitOnBranch.commit.oid
-          body="Moves every Kanon pin under \`.github/\`, and the plugin's \`ref\` in \`.claude/settings.json\`, to the candidate \`$TAG\`, with \`scripts/move-pins.mjs\` (plan 0009 §6, step S4). Kanon runs each candidate on itself before it is promoted; this pull request's merge starts the candidate's 72-hour soak."
+          # The body is the squash commit's message (K-SHIP-3), so it names only what this commit
+          # moves: the release commit already moves the plugin's `ref`, through release-please's
+          # extra-files, so the script moves it only when it was left behind (kanon#1541).
+          pins="every Kanon pin under \`.github/\`"
+          ref="the plugin's \`ref\` in \`.claude/settings.json\`"
+          if ! printf '%s\n' "${files[@]}" | grep -Fqx '.claude/settings.json'; then what="$pins"
+          elif printf '%s\n' "${files[@]}" | grep -q '^\.github/'; then what="$pins, and $ref,"
+          else what="$ref"; fi
+          body="Moves $what to the candidate \`$TAG\`, with \`scripts/move-pins.mjs\` (plan 0009 §6, step S4). Kanon runs each candidate on itself before it is promoted; this pull request's merge starts the candidate's 72-hour soak."
           draft=()
           if [[ -s "$RUNNER_TEMP/callers.md" ]]; then
             draft=(--draft)

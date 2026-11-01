@@ -617,6 +617,26 @@ describe("K-SHIP-7 Kanon's release caller", () => {
       expect(create).toContain('--base main --head kanon/pins-candidate-v0.40.0 --title ci(deps): run Kanon on candidate v0.40.0 --body');
     });
 
+    // kanon#1541: the body becomes the squash commit's message (K-SHIP-3), so it names only the
+    // files the pull request changes. The release commit moves the plugin's `ref` itself, so a pin
+    // pull request names it only when `move-pins.mjs` moved it too.
+    it('names the plugin ref in its body only when it moved .claude/settings.json', () => {
+      const body = (moved: string[]) => {
+        const r = opener(moved);
+        expect(r.status, r.err).toBe(0);
+        return r.create[r.create.indexOf('--body') + 1] ?? '';
+      };
+      const pinsOnly = body(['.github/workflows/ci.yml', '.github/workflows/review.yml']);
+      expect(pinsOnly).toMatch(/^Moves every Kanon pin under `\.github\/` to the candidate `candidate-v0\.40\.0`, with /);
+      expect(pinsOnly).not.toContain('settings.json');
+      expect(body(['.github/workflows/ci.yml', '.claude/settings.json'])).toMatch(
+        /^Moves every Kanon pin under `\.github\/`, and the plugin's `ref` in `\.claude\/settings\.json`, to the candidate `candidate-v0\.40\.0`, with /,
+      );
+      const refOnly = body(['.claude/settings.json']);
+      expect(refOnly).toMatch(/^Moves the plugin's `ref` in `\.claude\/settings\.json` to the candidate `candidate-v0\.40\.0`, with /);
+      expect(refOnly).not.toContain('.github/');
+    });
+
     it('opens it ready for review when no caller needs a change', () => {
       const r = opener(['.github/workflows/ci.yml']);
       expect(r.status, r.err).toBe(0);
