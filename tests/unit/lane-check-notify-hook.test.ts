@@ -21,9 +21,9 @@ laneCheck(() => {
     /** Kanon's prebuilt hook `name` as `kanon init` writes it, pinned at `tag`. */
     const hook = (name: 'slack' | 'webhook', tag: string) => (t: Tree) => {
       const text = readFileSync(join(ROOT, `actions/notify/hooks/${name}.yml`), 'utf8');
-      expect(text).toMatch(new RegExp(`yedeya-labs/kanon/actions/notify/${name}@v\\d+\\.\\d+\\.\\d+`));
+      expect(text).toMatch(new RegExp(`yedeya-labs/kanon/actions/notify/${name}@(?:candidate-)?v\\d+\\.\\d+\\.\\d+`));
       mkdirSync(join(t.dir, '.github/actions/notify'), { recursive: true });
-      t.write(HOOK, text.replace(new RegExp(`(yedeya-labs/kanon/actions/notify/${name})@v\\d+\\.\\d+\\.\\d+`), `$1@${tag}`));
+      t.write(HOOK, text.replace(new RegExp(`(yedeya-labs/kanon/actions/notify/${name})@(?:candidate-)?v\\d+\\.\\d+\\.\\d+`), `$1@${tag}`));
     };
     /** lane-check at the fixture's pin, as the action runs at the version the callers pin. */
     const AT = { ACTION_REF: 'v1.2.3' };

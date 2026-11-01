@@ -25,7 +25,10 @@ describe('kanon init and the chat channel (plan 0011 N11)', () => {
   const PROJECT = '.github/workflows/agent-project-digest.yml';
   const WEEKLY = '.github/workflows/agent-weekly-digest.yml';
   const NOTIFY = (REQ as unknown as { notify: { hook: { inputs: string[] } } }).notify;
-  const prebuilt = (name: string) => read(ROOT, `actions/notify/hooks/${name}.yml`);
+  // Kanon's copy pins its step at the candidate's tag (#1557); init writes it pinned at the release
+  // it pins, the stable one here.
+  const kanonCopy = (name: string) => read(ROOT, `actions/notify/hooks/${name}.yml`);
+  const prebuilt = (name: string) => kanonCopy(name).replace(/@candidate-v\d+\.\d+\.\d+ /, `@${PINNED} `);
   const choices = (dir: string) => read(dir, 'docs/qa/adoption.md').split('## Choices\n\n')[1]?.split('\n\n')[0]?.split('\n') ?? [];
   const chatSteps = (d: Doc) => d.findings.filter((f) => f.id.startsWith('secret.chat-'));
   const jobSecrets = (dir: string, p: string) => Object.keys(Object.values(parseYaml(read(dir, p)).jobs as Record<string, { secrets?: Record<string, string> }>).find((j) => j.secrets)?.secrets ?? {});
@@ -72,8 +75,11 @@ describe('kanon init and the chat channel (plan 0011 N11)', () => {
     }
   });
 
-  it('--chat slack and --chat webhook write the prebuilt hook byte for byte, pinned at the release init runs from', async () => {
+  it('--chat slack and --chat webhook write the prebuilt hook byte for byte but for its pin, the release init runs from', async () => {
     for (const chat of ['slack', 'webhook']) {
+      // Kanon's copy names the candidate's tag, and a stable pin replaces it (#1557).
+      expect(kanonCopy(chat)).toMatch(new RegExp(`^ {4}- uses: yedeya-labs/kanon/actions/notify/${chat}@candidate-${PINNED.replace(/\./g, '\\.')} `, 'm'));
+      expect(prebuilt(chat)).not.toBe(kanonCopy(chat));
       const { dir, d } = await initWith(['--feature', 'full', '--chat', chat]);
       expect(read(dir, HOOK), chat).toBe(prebuilt(chat));
       expect(read(dir, HOOK)).toMatch(new RegExp(`^ {4}- uses: yedeya-labs/kanon/actions/notify/${chat}@${PINNED.replace(/\./g, '\\.')} `, 'm'));

@@ -1221,9 +1221,10 @@ export const chatHookStub = (inputs) => {
 /**
  * The hook file a chat answer writes at `.github/actions/notify/action.yml` (plan 0011 §7.1):
  * Kanon's prebuilt hook for `slack` and `webhook`, its one step's Kanon reference pinned at
- * `release`, the pin `init` writes everywhere (plan 0012 decision 5): byte for byte Kanon's copy on
- * a stable pin, and the candidate's tag on a candidate's, since `vX.Y.Z` doesn't exist until the
- * candidate is promoted. The stub for `hook`; nothing for `none`.
+ * `release`, the pin `init` writes everywhere (plan 0012 decision 5): byte for byte Kanon's copy
+ * but for that pin. Kanon's copy names the candidate's tag, which exists from the candidate's cut
+ * (kanon#1557), and a stable pin writes `vX.Y.Z` in its place. The stub for `hook`; nothing for
+ * `none`.
  * @param {Chat | null} chat @param {Requirements} req @param {string} release
  * @returns {string | null}
  */
