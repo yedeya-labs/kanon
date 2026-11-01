@@ -93,6 +93,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-12.** The Reviewer's token mint asks for Checks, Commit statuses and Actions read again, after a narrowing of its permissions dropped the reads this rule depends on; a test now fails a mint that drops any of the three. [#691](https://github.com/yedeya-labs/kanon/issues/691)
 - **2026-10-20.** The Reviewer's flags also grant the filing skill's plan command, as `kanon-plan`, a wrapper the job puts on the agent's PATH that runs Kanon's planning script and nothing else; the test runs the wrapper, and the probe battery gains a probe that it is allowed and two that a command chained or redirected after it is refused. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 
+## `K-AGENT-30`
+
+- **2026-11-01.** The tracking-issue refusal is no longer the prompt's alone: the brief lane's filter job refuses a dispatch whose `context` names no tracking issue, and `agent-run` fails the run on it before any model call, so it ends red and its telemetry row records `not-reached`. A dispatch with an empty `context` had run the Lead and ended green with nothing. [#1558](https://github.com/yedeya-labs/kanon/issues/1558)
+
 ## `K-AGENT-36`
 
 - **2026-10-21.** No longer prose only: the line names what already enforces it for every lane, `actions/agent-run`'s settings that keep a headless run's commands in the foreground and the test that pins them. Polling in the foreground stays prose only. [#1252](https://github.com/yedeya-labs/kanon/issues/1252)

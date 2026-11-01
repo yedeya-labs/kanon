@@ -97,6 +97,16 @@ export const APP_OF = (() => {
 })();
 
 /**
+ * The roles of an App the same `apps` block marks `optional`: the Releaser's, which no lane takes
+ * and `kanon init` offers only to a repository that calls Kanon's release workflow (kanon#1558).
+ * A register without such a role's row has no such App installed.
+ * @type {ReadonlySet<string>}
+ */
+export const OPTIONAL_ROLES = new Set(
+  Object.values(PERMISSIONS.apps).filter((app) => app.optional).flatMap((app) => app.roles.map((key) => PERMISSIONS.roles[key]?.role ?? key[0].toUpperCase() + key.slice(1))),
+);
+
+/**
  * Each of Kanon's Apps' shared grant (`K-ADOPT-8`), from the same `apps` block: App key (`author`,
  * `judge`, `releaser`) → permission → `read` | `write`.
  * @type {Record<string, Record<string, string>>}

@@ -7,7 +7,8 @@
 # the TTL record before the action cannot fail, and the one step after it, the runtime check,
 # cannot either (kanon#1470). The user-scope step can, only when the
 # runner gives it no usable temp directory, and then the agent must not start (kanon#283). So
-# can the turn-budget check, only on a raised `max_turns` the lane refuses (kanon#891).
+# can the turn-budget check, only on a raised `max_turns` the lane refuses (kanon#891), and
+# the refusal step, only on a `refusal` the lane hands in (kanon#1558).
 #
 # NOTHING TO TAKE BACK OUT OF THE TREE (RA-2697). Lanes call this block as
 # `$/actions/agent-run`, which the runner downloads into its action cache at the
@@ -90,6 +91,14 @@ inputs:
       Required when `max-turns` is set; written to the run's step summary.
     required: false
     default: ""
+  refusal:
+    description: >-
+      Why this run must not start its agent, from a precondition its lane checked before this
+      block, such as the brief lane's tracking issue (kanon#1558). Empty runs the agent. Set, the
+      block fails with it as its error before any model call, as on a refused turn-limit raise,
+      so the run is red and its telemetry row records `not-reached`.
+    required: false
+    default: ""
   full-transcript:
     description: >-
       'true' prints the agent's whole transcript into the job log — `show_full_output`
@@ -165,6 +174,27 @@ runs:
         # only on a dispatch.
         EVENT_NAME: ${{ github.event_name }}
       run: node "$GITHUB_ACTION_PATH/turn-budget.mjs"
+
+    # A LANE'S PRECONDITION, REFUSED BEFORE ANY MODEL CALL (kanon#1558). A lane that can tell
+    # before its agent runs that the agent could only stop, such as the brief lane with no
+    # tracking issue (`K-AGENT-30`), hands the reason in as `refusal`. The block then fails here,
+    # by that reason, as it does on a refused turn-limit raise: the run is red, not green and
+    # silent, and its telemetry row records `not-reached`, never `ok`. The reason reaches the step
+    # through `env:` only (`K-AGENT-45`), with `%`, CR and LF encoded, so it can't write a
+    # workflow command of its own.
+    - name: Refuse a run its lane's precondition stops
+      id: refusal
+      if: inputs.refusal != ''
+      shell: bash -e {0}
+      env:
+        REFUSAL: ${{ inputs.refusal }}
+      run: |
+        msg="${REFUSAL//'%'/%25}"
+        msg="${msg//$'\r'/%0D}"
+        msg="${msg//$'\n'/%0A}"
+        echo "::error title=agent-run::$msg"
+        printf '### Refused before the agent started\n\n%s\n' "$REFUSAL" >> "$GITHUB_STEP_SUMMARY"
+        exit 1
 
     # THE TTL THIS RUN IS PINNED AT, FOR ITS TELEMETRY ROW (#546). The cache-TTL detector judges a
     # pin (did it take effect, do its runs idle past it) on the rows that ran under it, so the row

@@ -449,7 +449,7 @@ A `code` tree is your own source: `citation-shift` reads its comments, and the s
 
 ## The App register
 
-The revise lanes find their own App's login in the App register, and the scripts the lanes run read every role's login from it, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks. Since plan 0005's L4 the rows of one App's roles name that App's slug: the Author's four one, the Judge's two another, and the Releaser's, if you have one, a third. `lane-check` fails a register in which one App's roles name two slugs, or two of those Apps share one (§3.4). Each lane says which role it runs as on a `# KANON ROLE:` line, which `lane-check` reads.
+The revise lanes find their own App's login in the App register, and the scripts the lanes run read every role's login from it, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks. Since plan 0005's L4 the rows of one App's roles name that App's slug: the Author's four one, the Judge's two another, and the Releaser's, if you have one, a third. Without a Releaser there is no Releaser row, and the dispatch sweep and the reconciler run without it: they read no Releaser login, and every other role's missing row stops them by name ([#1558](https://github.com/yedeya-labs/kanon/issues/1558)). `lane-check` fails a register in which one App's roles name two slugs, or two of those Apps share one (§3.4). Each lane says which role it runs as on a `# KANON ROLE:` line, which `lane-check` reads.
 
 Every post a lane writes as one of your Apps opens with a persona header and a hidden role marker, `**Implementer** <!-- kanon:role=implementer -->` (plan 0005 §3.3). Every agent commit is authored by the App's bot account, not the persona (`K-AGENT-1`, [How an Author lane commits](#how-an-author-lane-commits)). The Implementer's lanes also set a `kanon/role: implementer` commit status, from a job after the agent's, with a token narrowed to Commit statuses write. To have it set, grant your Author App (the Implementer's) **Commit statuses: Read & write** and record that broadened permission in the register (`K-AGENT-3`). The Author's manifest from `kanon apps` already includes it. Until then the job says so in the run's summary and changes nothing.
 
@@ -676,6 +676,10 @@ The Merger reads it from your default branch, so the pull request that adds it i
 A Kanon release older than the marker fails by name on an entry that carries it, rather than reading it without it, so add the marker with, or after, the upgrade that brings it. Kanon doesn't check that the environment really has a required reviewer, or that no deploy can skip it: make the declaration only if both hold. The human gate moves to the promotion, where one approval covers every change in the deploy.
 
 On a review, the lane first reads the Merger's and the Implementer's logins from the App register on your default branch, in a job of their own. That job starts no runner for a review on a pull request that is closed, a draft or carries neither lane label. The sweep needs no login, so CI's completion, the schedule and a dispatch start the Merger's own job alone, and bill one runner each.
+
+## Start a project
+
+File the project's tracking issue with its mandate as the body, then dispatch the brief lane with its number as `context`: `gh workflow run agent-lead.yml -f mandate='<one paragraph>' -f context=<n>`, or run the [mandate skill](skills.md), which does both. A dispatch whose `context` names no tracking issue is refused before any model call: the run is red, its error says what to do, and its telemetry row records `not-reached` (`K-AGENT-30`, [#1558](https://github.com/yedeya-labs/kanon/issues/1558)).
 
 ## The reconciler
 
