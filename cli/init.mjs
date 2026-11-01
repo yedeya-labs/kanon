@@ -815,7 +815,17 @@ export const inspect = async (deps, repo) => {
   const kind = r.owner?.type === 'Organization' ? 'Organization' : 'User';
   const isPrivate = Boolean(r.private);
   const defaultBranch = String(r.default_branch ?? 'main');
-  const admin = Boolean(r.permissions?.admin);
+  // Whether the token's grants reach the repository at all (#1551): a fine-grained token whose
+  // repository access leaves it out can still read a public repository, and GitHub's
+  // `permissions` are the account's role there, not the token's, so `admin` alone would say yes
+  // while every write fails. Listing the collaborators needs only Metadata: read, which every
+  // fine-grained token holds on each repository it covers, and GitHub refuses it to one that
+  // doesn't cover the repository. Null when the answer says neither, as a classic token without
+  // push access gets.
+  const probe = await deps.gh(['api', `repos/${repo}/collaborators?per_page=1`, '--jq', 'length']);
+  /** @type {boolean | null} */
+  const tokenCovers = probe.status === 0 ? true : NOT_COVERED.test(probe.stderr) ? false : null;
+  const admin = Boolean(r.permissions?.admin) && tokenCovers !== false;
   const branch = await deps.gh(['api', `repos/${repo}/branches/${encodeURIComponent(defaultBranch)}`, '--jq', '.name']);
   const hasCommits = branch.status === 0;
 
@@ -864,6 +874,7 @@ export const inspect = async (deps, repo) => {
     isPrivate,
     defaultBranch,
     admin,
+    tokenCovers,
     hasCommits,
     rulesets,
     mergeQueue,
@@ -892,6 +903,9 @@ export const inspect = async (deps, repo) => {
 };
 
 /** @typedef {Awaited<ReturnType<typeof inspect>>} Inspection */
+
+/** GitHub's refusal to a fine-grained token on a repository its repository access leaves out. */
+export const NOT_COVERED = /Resource not accessible by personal access token/i;
 
 /** The merge settings of `K-SHIP-3`: squash only, the PR's title and body as the commit's. */
 export const MERGE_SETTINGS = { allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false, squash_merge_commit_title: 'PR_TITLE', squash_merge_commit_message: 'PR_BODY' };
@@ -2886,6 +2900,7 @@ const run = async (deps, opts, req, rep) => {
     defaultBranch: s.defaultBranch,
     hasCommits: s.hasCommits,
     admin: s.admin,
+    tokenCoversRepository: s.tokenCovers,
     rulesets: s.rulesets,
     mergeQueue: s.mergeQueue,
     defaultBranchMergeQueue: mergesThroughQueue(s),
@@ -2912,7 +2927,7 @@ const run = async (deps, opts, req, rep) => {
   out(`== ${repo}, at Kanon ${release}${dry ? ' (dry run: nothing will change)' : ''} ==`);
   out(`- ${s.kind === 'User' ? 'A personal account' : 'An organisation'}'s ${s.isPrivate ? 'private' : 'public'} repository; default branch ${s.defaultBranch}${s.hasCommits ? '' : ', with no commit yet'}.`);
   out(`- Rulesets: ${s.rulesets}. Merge queue: ${s.mergeQueue}. Environments: ${s.environments === null ? "not readable with this token" : s.environments.length ? s.environments.join(', ') : 'none'} (only the deploy lane uses them).`);
-  out(`- Your token ${s.admin ? 'can' : "can't"} administer the repository.`);
+  out(s.tokenCovers === false ? `- Your token doesn't cover ${repo}: its repository access leaves it out, so it can read only what is public there, and every write would fail.` : `- Your token ${s.admin ? 'can' : "can't"} administer the repository.`);
   out(`- ${s.labels.size} label(s); ${s.covering.length} ruleset(s) on the default branch; secrets ${s.secrets ? `readable (${s.secrets.size})` : 'not readable with this token'}.`);
 
   // 2. Ask.
@@ -3093,6 +3108,16 @@ const run = async (deps, opts, req, rep) => {
   };
   let failures = 0;
   const verb = dry ? 'Would create' : 'Created';
+  // A token whose repository access leaves the repository out (#1551) fails every write below
+  // for that reason, whatever permissions it holds, so each write's step names the coverage, not
+  // a permission the person may well have granted already.
+  /** Why the token couldn't. @param {string} permission */
+  const needs = (permission) => (s.tokenCovers === false ? `the token's repository access doesn't cover ${repo}` : `it needs ${permission}`);
+  /** The token that can. @param {string} permission */
+  const tokenWith = (permission) => (s.tokenCovers === false ? `a token whose repository access covers ${repo}, with ${permission}` : `a token that has ${permission}`);
+  if (s.tokenCovers === false) {
+    note(`The token gh uses doesn't cover ${repo}: GitHub refused it the repository's collaborators, which any token that covers the repository can read, so ${dry ? 'every write to it would fail' : 'every write to it fails'}. Add ${repo} to the fine-grained token's Repository access (https://github.com/settings/personal-access-tokens), or use a token that covers it, then run kanon init again.`);
+  }
 
   // 3. Write the files.
   out('');
@@ -3271,9 +3296,9 @@ const run = async (deps, opts, req, rep) => {
       id: 'label.create',
       category: 'label',
       subject: repo,
-      prose: 'Create the labels the token could not (it needs Issues: write):',
-      message: `${labelSteps.length} of the taxonomy's labels are missing, and the token could not create them (it needs Issues: write).`,
-      text: 'Create them with a token that has Issues: write.',
+      prose: `Create the labels the token could not (${needs('Issues: write')}):`,
+      message: `${labelSteps.length} of the taxonomy's labels are missing, and the token could not create them (${needs('Issues: write')}).`,
+      text: `Create them with ${tokenWith('Issues: write')}.`,
       commands: labelSteps,
     });
   }
@@ -3285,7 +3310,7 @@ const run = async (deps, opts, req, rep) => {
         if (r.status === 0) change('label-deleted', n, `Deleted GitHub's default label ${n}`);
         else {
           const cmd = `gh label delete ${JSON.stringify(n)} --yes -R ${repo}`;
-          step({ id: 'label.delete-default', category: 'label', subject: n, prose: `Delete GitHub's default label "${n}" (K-WORK-12): ${cmd}`, message: `GitHub's default label "${n}" is outside Kanon's taxonomy, and the token could not delete it.`, text: 'Delete it with a token that has Issues: write (K-WORK-12).', commands: [cmd], lines: [] });
+          step({ id: 'label.delete-default', category: 'label', subject: n, prose: `Delete GitHub's default label "${n}" (K-WORK-12): ${cmd}`, message: `GitHub's default label "${n}" is outside Kanon's taxonomy, and the token could not delete it.`, text: `Delete it with ${tokenWith('Issues: write')} (K-WORK-12).`, commands: [cmd], lines: [] });
         }
       }
     } else if (a.deleteDefaults) for (const n of extra) change('label-deleted', n, `Would delete GitHub's default label ${n}`);
@@ -3299,7 +3324,7 @@ const run = async (deps, opts, req, rep) => {
     if (code === 0) for (const b of missingBuckets) change('milestone', b, `Created the milestone ${b}`);
     else {
       const cmd = `kanon milestones --repo ${repo}`;
-      step({ id: 'milestone.buckets', category: 'milestone', subject: repo, prose: `Create the bucket milestones (K-WORK-4): ${cmd}`, message: `The bucket milestones ${missingBuckets.join(' and ')} are missing (K-WORK-4), and kanon milestones did not create them.`, text: 'Run kanon milestones with a token that has Issues: write.', commands: [cmd], lines: [] });
+      step({ id: 'milestone.buckets', category: 'milestone', subject: repo, prose: `Create the bucket milestones (K-WORK-4): ${cmd}`, message: `The bucket milestones ${missingBuckets.join(' and ')} are missing (K-WORK-4), and kanon milestones did not create them.`, text: `Run kanon milestones with ${tokenWith('Issues: write')}.`, commands: [cmd], lines: [] });
     }
   }
 
@@ -3320,9 +3345,9 @@ const run = async (deps, opts, req, rep) => {
         id: 'merge.settings',
         category: 'merge',
         subject: repo,
-        prose: `Make squash the only merge method, with the PR's title and body as the commit's (K-SHIP-3); it needs Administration: write:`,
+        prose: `Make squash the only merge method, with the PR's title and body as the commit's (K-SHIP-3); ${needs('Administration: write')}:`,
         message: `The repository's merge settings differ from K-SHIP-3's (${settingList}), and the token could not change them.`,
-        text: 'Make squash the only merge method, with the PR\'s title and body as the commit\'s, with a token that has Administration: write.',
+        text: `Make squash the only merge method, with the PR's title and body as the commit's, with ${tokenWith('Administration: write')}.`,
         commands: [`gh ${patch.join(' ')}`],
         url: `https://github.com/${repo}/settings`,
       });
@@ -3472,9 +3497,9 @@ const run = async (deps, opts, req, rep) => {
           id: 'ruleset.create',
           category: 'ruleset',
           subject: s.defaultBranch,
-          prose: `Create the default branch's ruleset (K-ADOPT-1 step 8); it needs Administration: write:`,
+          prose: `Create the default branch's ruleset (K-ADOPT-1 step 8); ${needs('Administration: write')}:`,
           message: `${s.defaultBranch} has no ruleset, and the token could not create one (K-ADOPT-1 step 8).`,
-          text: 'Create it with a token that has Administration: write; the command reads the ruleset from the lines after it.',
+          text: `Create it with ${tokenWith('Administration: write')}; the command reads the ruleset from the lines after it.`,
           commands: rulesetCmd,
         });
       }
