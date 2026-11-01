@@ -4,8 +4,9 @@
 #
 # A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S DEPLOY CALLER, `.github/workflows/deploy.yml` in
 # the adopter's repository, which `kanon init` writes from the adoption record's `## Deploy`
-# list (plan 0010 §4, step D6): one `release` job calling this file with the declared list, then
-# one `deploy-<position>` job per environment calling `deploy.yml`, chained by `needs:`. The
+# list (plan 0010 §4, step D6): one `release` job calling this file with the declared list and
+# `targets: ${{ vars.KANON_DEPLOY_TARGETS }}`, then one `deploy-<position>` job per environment
+# calling `deploy.yml` with the `release` job's `build` and `targets` outputs, chained by `needs:`. The
 # caller holds the triggers and maps no secret into this workflow (`K-AGENT-47`). Each
 # `deploy-<position>` job maps `deploy.yml`'s two optional secrets by name: `KANON_CHAT_DEPLOY`,
 # and `KANON_DEPLOY_SECRET`, which GitHub evaluates in `deploy.yml`'s job that sets
@@ -35,13 +36,26 @@
 # THE TRUST PROBE (plan 0010 §5, decision 6). A job outside every environment, with
 # `id-token: write`, runs the adopter's deploy hook with `probe: 'true'` and the declared list.
 # The hook tries to obtain each environment's cloud credential exactly as it would deploy, from
-# role identifiers it can read outside the environments (the hook decides where; the docs
-# suggest repository variables), and writes one word per environment, `refused`, `obtained` or
+# role identifiers it can read outside the environments, and writes one word per environment, `refused`, `obtained` or
 # `unconfigured`, as JSON to `$RUNNER_TEMP/kanon-deploy-probe.json`. The judge prints the line
 # doctor reads, `kanon-deploy-probe/v1 {...}`, and passes only when every environment refused:
 # `obtained` fails `trust-unbound`, anything else `probe-unconfigured`. Under the adoption
 # record's `no-environments` marker the probe is SKIPPED (the probe decision): every role then
 # trusts the release tags' subject, which the probe's own job carries.
+#
+# THE TARGETS (kanon#1555, the Owner's decision of 2026-11-01). A composite action can't read
+# `vars`, and the probe's job has no environment and no secret, so the hook can't find a role held
+# outside the tree on its own. The caller can: `kanon init` writes it mapping the repository
+# variable `KANON_DEPLOY_TARGETS`, a JSON object naming each environment's role identifier, into
+# the `targets` input. The gate job's first step (`scripts/deploy-gate.mjs targets`) reads it
+# against the caller's list: unset, its output is empty and the hook is handed nothing, as before;
+# set, it must name every listed environment, or the job fails by the variable's name. The probe's
+# hook step gets the output as `KANON_DEPLOY_TARGETS`, and this workflow publishes it as its
+# `targets` output, which the caller hands each `deploy.yml` call, whose deploy hook step gets its
+# environment's own as `KANON_DEPLOY_TARGET`. So every environment deploys with the role the probe
+# tried. Environment variables, not inputs, so a hook written before them stays valid. Not a
+# secret: a role's identifier names it, its trust condition guards it (plan 0010 §5), and the
+# run's log prints it.
 #
 # THE BUILD (plan 0010 §4, decision 8, step D5). One build, one artifact: the `build` job runs
 # after the gate and the probe, when the gate succeeded and the probe either succeeded or was
@@ -74,10 +88,18 @@ on:
         description: The declared environments, in deploy order, separated by spaces, exactly as the adoption record's `## Deploy` list names them. The gate refuses any other list.
         required: true
         type: string
+      targets:
+        description: "Each declared environment's deploy target, the repository variable `KANON_DEPLOY_TARGETS`, which only the caller can read and passes as it is: a JSON object naming each environment's role identifier. The lane hands it to the deploy hook, in the probe and in each environment's job. Not a secret. Optional: empty, the hook is handed none."
+        required: false
+        default: ""
+        type: string
     outputs:
       build:
         description: "The build every environment deploys: a JSON object naming its artifact, `kanon-deploy-build-<run id>-<attempt>`, with the SHA-256 of its contents and the build's duration. The caller hands it to each `deploy.yml` call as its `build` input."
         value: ${{ jobs.build.outputs.build }}
+      targets:
+        description: "The declared environments' deploy targets, as the gate read them from the `targets` input: one JSON object, or empty when the variable is unset. The caller hands it to each `deploy.yml` call as its `targets` input."
+        value: ${{ jobs.gate.outputs.targets }}
 
 # Each job declares its own, and none is granted more than it uses.
 permissions: {}
@@ -98,8 +120,16 @@ jobs:
       published-at: ${{ steps.gate.outputs.published-at }}
       fallback: ${{ steps.gate.outputs.fallback }}
       environments: ${{ steps.gate.outputs.environments }}
+      targets: ${{ steps.targets.outputs.targets }}
     steps:
       - uses: $/actions/kanon-path
+      # First, so a malformed variable fails by name before the gate waits for CI.
+      - name: Read each environment's deploy target
+        id: targets
+        env:
+          TARGETS: ${{ inputs.targets }}
+          ENVIRONMENTS: ${{ inputs.environments }}
+        run: node "$KANON/scripts/deploy-gate.mjs" targets
       - name: Check the release, its branch, the declaration and CI
         id: gate
         env:
@@ -133,6 +163,8 @@ jobs:
         run: rm -f "$RUNNER_TEMP/kanon-deploy-probe.json"
       - name: Try each environment's credential from outside it
         uses: ./.github/actions/deploy
+        env:
+          KANON_DEPLOY_TARGETS: ${{ needs.gate.outputs.targets }}
         with:
           environment: ""
           role: ""

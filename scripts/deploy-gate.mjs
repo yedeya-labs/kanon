@@ -21,6 +21,15 @@
 // the branch is not behind it (`behind_by` 0), which is `git merge-base --is-ancestor`'s answer
 // without a checkout or a credential on disk.
 //
+// THE TARGETS (`targets`), the gate job's first step, before the gate's checks (kanon#1555): the
+// caller's `targets` input, its `${{ vars.KANON_DEPLOY_TARGETS }}`, read against the caller's
+// list (`scripts/lib/deploy-targets.mjs`). Unset, the output is empty and the hook gets nothing,
+// as before; set, it must name every listed environment, or the job fails by the variable's name
+// before the gate waits for CI. A failure, not a refusal: the row records `failed` at `gate`, and
+// `DEPLOY_REFUSALS`, which the deployed telemetry store validates, is unchanged. Its output, the
+// listed environments' targets as one JSON object, is what the probe and each environment hand
+// the deploy hook. The gate's own check 3 then holds that list to the declaration.
+//
 // THE PROBE'S JUDGE (`probe`), in the `probe` job, after the adopter's deploy hook ran with
 // `probe: 'true'`. The hook writes its answer, one word per declared environment (`refused`,
 // `obtained` or `unconfigured`), as a JSON object to `$RUNNER_TEMP/kanon-deploy-probe.json`
@@ -51,7 +60,8 @@
 //      RELEASE_DRAFT    the `release` event's `draft` flag
 //      DISPATCH_RELEASE a dispatch's `release` input (`github.event.inputs.release`)
 //      DEFAULT_BRANCH   `github.event.repository.default_branch`; read from the API when empty
-//      ENVIRONMENTS     the caller's list, space-separated (`gate`, `probe`)
+//      ENVIRONMENTS     the caller's list, space-separated (`gate`, `probe`, `targets`)
+//      TARGETS          the caller's `targets` input, `KANON_DEPLOY_TARGETS` (`targets`)
 //      ENVIRONMENT      the environment job's own (`declare`, `supersede`)
 //      POSITION         its position in the caller's chain (`declare`)
 //      GITHUB_TRIGGERING_ACTOR, else GITHUB_ACTOR  who started this attempt, for the Maintainer
@@ -69,6 +79,7 @@ import { join } from 'node:path';
 import { DEPLOY_REFUSALS } from '../actions/agent-telemetry/schema.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { ADOPTION_RECORD, DeclarationError, parseDeployDeclaration, ROLES } from './lib/deploy-declaration.mjs';
+import { parseTargets, TARGETS_VARIABLE, TargetsError } from './lib/deploy-targets.mjs';
 
 /** The file the deploy hook writes its probe answer to, under `$RUNNER_TEMP` (plan 0010 §5). */
 export const PROBE_FILE = 'kanon-deploy-probe.json';
@@ -336,6 +347,26 @@ export function gate(env, { api = ghApi, now, sleep, log } = {}) {
 }
 
 /**
+ * The targets (kanon#1555): the caller's `targets` input against its list. `ok` with the output
+ * `targets`, the listed environments' targets as one JSON object, or empty when the variable is
+ * unset; otherwise the message, naming the variable. The value is no secret, and the line names
+ * the environments alone, so the summary repeats no identifier.
+ * @param {Record<string, string | undefined>} env
+ * @returns {{ ok: boolean, outputs: Record<string, string>, message: string }}
+ */
+export function readTargets(env) {
+  const listed = splitEnvironments(env.ENVIRONMENTS);
+  try {
+    const targets = parseTargets(env.TARGETS, listed);
+    if (!targets) return { ok: true, outputs: { targets: '' }, message: `${TARGETS_VARIABLE} is not set, so the deploy hook is handed no target and finds each role itself (docs/lanes.md, "The deploy lane").` };
+    return { ok: true, outputs: { targets: JSON.stringify(targets) }, message: `${TARGETS_VARIABLE} names a target for ${listed.map((e) => `\`${e}\``).join(', ')}: the probe and each environment hand it to the deploy hook.` };
+  } catch (e) {
+    if (e instanceof TargetsError) return { ok: false, outputs: {}, message: `${e.message}. Set it with \`gh variable set ${TARGETS_VARIABLE} --body '<json>'\` (docs/lanes.md, "The deploy lane").` };
+    throw e;
+  }
+}
+
+/**
  * The probe's judge: the hook's answer, against the declared list.
  * @param {string[]} environments the declared list
  * @param {string | null} text the answer file's contents, `null` when the hook wrote none
@@ -369,7 +400,7 @@ export function judgeProbe(environments, text) {
     return { ok: false, refusal: 'trust-unbound', answers, line, message: `a job outside every environment obtained the credential of ${names(obtained)}: its role must trust only \`…:environment:<name>\` (plan 0010 §5)` };
   }
   if (unconfigured.length) {
-    return { ok: false, refusal: 'probe-unconfigured', answers, line, message: `${why ? `${why}; ` : ''}the probe found no role to try for ${names(unconfigured)}: the deploy hook must read each environment's role from where a job outside the environment can, such as a repository variable (plan 0010 §5)` };
+    return { ok: false, refusal: 'probe-unconfigured', answers, line, message: `${why ? `${why}; ` : ''}the probe found no role to try for ${names(unconfigured)}: name each environment's role in the repository variable KANON_DEPLOY_TARGETS, which the lane hands the deploy hook as KANON_DEPLOY_TARGETS, and have the hook try each (plan 0010 §5, docs/lanes.md, "Where each role lives")` };
   }
   return { ok: true, refusal: null, answers, line, message: `Every declared environment refused a job outside it: ${names(environments)}.` };
 }
@@ -552,6 +583,15 @@ if (isCliEntry(import.meta.url)) {
     writeOutputs(r.outputs);
     if (r.ok) summary(r.line);
     else refuse('Deploy gate', r.refusal, r.message);
+  } else if (command === 'targets') {
+    const r = readTargets(env);
+    writeOutputs(r.outputs);
+    if (r.ok) summary(r.message);
+    else {
+      console.log(`::error title=Deploy targets::${r.message}`);
+      summary(`**Failed:** ${r.message}`);
+      process.exitCode = 1;
+    }
   } else if (command === 'probe') {
     let text = null;
     try {
@@ -576,7 +616,7 @@ if (isCliEntry(import.meta.url)) {
     if (r.ok) summary(r.message);
     else refuse(r.title, r.code, r.message);
   } else {
-    console.error('usage: deploy-gate.mjs gate | probe | declare | supersede');
+    console.error('usage: deploy-gate.mjs targets | gate | probe | declare | supersede');
     process.exitCode = 2;
   }
 }

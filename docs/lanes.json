@@ -245,7 +245,7 @@
     "needs": [
       "a `## Deploy` section in `docs/qa/adoption.md` listing your environments",
       "a GitHub environment per declared environment, production with required reviewers, or the record's fallback marker",
-      "a cloud role per environment that trusts only that environment's OIDC subject, readable from outside the environment (a repository variable)",
+      "a cloud role per environment that trusts only that environment's OIDC subject, its identifier named in the repository variable `KANON_DEPLOY_TARGETS`",
       "the Releaser, so a release starts the lane",
       "to announce each deploy, a notify hook and `KANON_CHAT_DEPLOY`, which the caller `kanon init` writes maps into each environment's job"
     ],

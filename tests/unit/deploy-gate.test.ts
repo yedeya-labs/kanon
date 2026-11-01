@@ -3,7 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { ApiError, CI_WAIT_CEILING, deployCheck, environmentCheck, gate, judgeProbe, maintainersOf, PROBE_FILE, PROBE_LINE, supersede } from '../../scripts/deploy-gate.mjs';
+import { ApiError, CI_WAIT_CEILING, deployCheck, environmentCheck, gate, judgeProbe, maintainersOf, PROBE_FILE, PROBE_LINE, readTargets, supersede } from '../../scripts/deploy-gate.mjs';
+import { parseTargets, TargetsError } from '../../scripts/lib/deploy-targets.mjs';
 
 /**
  * Plan 0010 §3, §5, step D4: the deploy lane's checks, on fixtures of GitHub's answers. The gate
@@ -227,6 +228,71 @@ describe("the trust probe's judge (plan 0010 §5)", () => {
       expect(r.status).toBe(1);
       expect(r.outputs).toBe('refusal=trust-unbound\n');
       expect(cli(null).outputs).toBe('refusal=probe-unconfigured\n');
+    });
+  });
+});
+
+describe('the deploy targets, the gate job\'s first step (kanon#1555)', () => {
+  const LIST = 'staging production';
+  const VALID = JSON.stringify({ staging: '<staging role>', production: '<production role>' });
+
+  it('reads an unset or empty variable as no targets, so the hook is handed nothing, as before', () => {
+    for (const unset of [undefined, '', '  \n']) {
+      const r = readTargets({ ENVIRONMENTS: LIST, TARGETS: unset });
+      expect(r.ok, String(unset)).toBe(true);
+      expect(r.outputs).toEqual({ targets: '' });
+      expect(r.message).toContain('KANON_DEPLOY_TARGETS is not set');
+    }
+  });
+
+  it("outputs the listed environments' targets, in the list's order, as one line of JSON, and leaves out any other", () => {
+    const r = readTargets({ ENVIRONMENTS: LIST, TARGETS: JSON.stringify({ old: 'x', production: ' <production role> ', staging: '<staging role>' }) });
+    expect(r.ok).toBe(true);
+    expect(r.outputs.targets).toBe(VALID);
+    // The summary names the environments, never a value.
+    expect(r.message).not.toContain('role>');
+    expect(r.message).toContain('`staging`, `production`');
+  });
+
+  it('fails by the variable\'s name on text that is not a JSON object, never quoting it', () => {
+    for (const bad of ['arn-like-0001', '["<role>"]', 'null', '"<role>"', '{"staging":']) {
+      const r = readTargets({ ENVIRONMENTS: LIST, TARGETS: bad });
+      expect(r.ok, bad).toBe(false);
+      expect(r.outputs, bad).toEqual({});
+      expect(r.message, bad).toMatch(/^KANON_DEPLOY_TARGETS is (not JSON|JSON but not an object)/);
+      expect(r.message, bad).not.toContain('0001');
+    }
+  });
+
+  it('fails naming each listed environment it leaves out, or gives no non-empty string', () => {
+    const r = readTargets({ ENVIRONMENTS: LIST, TARGETS: JSON.stringify({ staging: '' }) });
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain("KANON_DEPLOY_TARGETS doesn't name `production`, and gives `staging` no role identifier");
+    expect(readTargets({ ENVIRONMENTS: LIST, TARGETS: JSON.stringify({ staging: 7, production: '<p>' }) }).message).toContain('gives `staging` no role identifier');
+    expect(parseTargets(VALID, ['staging', 'production'])).toEqual({ staging: '<staging role>', production: '<production role>' });
+    expect(() => parseTargets(VALID, ['staging', 'production', 'dev'])).toThrow(TargetsError);
+  });
+
+  describe('the CLI', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'deploy-targets-'));
+    afterAll(() => rmSync(dir, { recursive: true, force: true }));
+    const cli = (targets: string) => {
+      const out = join(dir, 'out');
+      writeFileSync(out, '');
+      const r = spawnSync('node', ['scripts/deploy-gate.mjs', 'targets'], { encoding: 'utf8', env: { ...process.env, GITHUB_REPOSITORY: REPO, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: '', ENVIRONMENTS: LIST, TARGETS: targets } });
+      return { status: r.status, stdout: r.stdout, outputs: readFileSync(out, 'utf8') };
+    };
+    it('exits 0 with the targets as an output, or an empty one when unset', () => {
+      const r = cli(VALID);
+      expect(r.status).toBe(0);
+      expect(r.outputs).toBe(`targets=${VALID}\n`);
+      expect(cli('').outputs).toBe('targets=\n');
+    });
+    it('exits 1, naming the variable in an error annotation, with no refusal and no targets output', () => {
+      const r = cli('{"staging":"<s>"}');
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain("::error title=Deploy targets::KANON_DEPLOY_TARGETS doesn't name `production`");
+      expect(r.outputs).toBe('');
     });
   });
 });
