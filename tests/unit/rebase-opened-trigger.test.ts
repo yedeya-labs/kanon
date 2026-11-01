@@ -15,8 +15,8 @@ import { evaluate } from './helpers/expression.js';
  * gate change: the gate judges a `workflow_run` by its triggering actor, the member or registered
  * App that started the implement run. This file holds the trigger to the lanes that open such
  * pull requests, the lane's filter to admitting only a run that did something, and the docs to
- * both. Kanon's own caller gains the trigger only once its pin carries that filter (Owner,
- * 2026-10-27, on #1427), so nothing here asserts it.
+ * both. Kanon's own caller gained the trigger once its pin carried that filter (Owner,
+ * 2026-10-27, on #1427; #1458), and the last test holds it there.
  */
 
 const WF = join(ROOT, '.github/workflows');
@@ -56,6 +56,19 @@ describe("the rebase lane starts after a run that opens an Implementer pull requ
     const ctx = (conclusion: string) => ({ github: { event_name: 'workflow_run', event: { workflow_run: { conclusion } } } });
     for (const c of ['success', 'failure', 'timed_out']) expect(evaluate(cond, ctx(c)), c).toBe(true);
     for (const c of ['skipped', 'cancelled']) expect(evaluate(cond, ctx(c)), c).toBe(false);
+  });
+
+  // The Owner held Kanon's own caller at `[CI]` until its pin carried the filter above: at an older
+  // release, each of about 165 no-op implement and triage runs a day would start a rebase run (#1458).
+  // `candidate-v0.43.0` is the first release whose filter turns away a skipped run.
+  it("Kanon's own caller starts on its implement and triage callers, at a pin that carries the filter (#1458)", () => {
+    const caller = readFileSync(join(WF, 'rebase.yml'), 'utf8');
+    const pin = caller.match(/agent-rebase\.yml@(?:candidate-)?v(\d+)\.(\d+)\.(\d+)/);
+    expect(pin, 'rebase.yml calls the lane at a release').not.toBeNull();
+    const [major, minor] = [Number(pin![1]), Number(pin![2])];
+    expect(major > 0 || minor >= 43, `rebase.yml pins ${pin![0]}, older than the filter`).toBe(true);
+    // By the names Kanon's callers have, as `kanon init` names an existing caller.
+    expect(read('rebase.yml').on!.workflow_run!.workflows).toEqual(['CI', read('implement.yml').name, read('triage.yml').name]);
   });
 
   it('docs/lanes.md says so where it lists and explains the triggers', () => {
