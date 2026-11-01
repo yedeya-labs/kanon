@@ -28,7 +28,8 @@ import { FINDINGS } from '../../scripts/lib/waivers.mjs';
  *   - each JSON path a skill reads (`.findings[].fix.commands`) is a field the page documents;
  *   - each skill's status table is its command's, code for code;
  *   - each skill names the contract (`kanon-<command>/v1`) its command's `SCHEMA` prints, and runs
- *     `kanon` through `npx` at a release (whose number `version-references.test.ts` holds).
+ *     `kanon` through `npx` at its release's candidate tag (whose number `version-references.test.ts`
+ *     holds, #1557).
  *
  * It reads the skills as text; it can't tell whether an instruction is wise, only whether every
  * name in it exists.
@@ -595,7 +596,7 @@ describe('each skill is held to the kanon command it drives', () => {
     for (const s of SKILLS) {
       const lines = code(s.body).filter((c) => c.startsWith('npx '));
       expect(lines, s.dir).toHaveLength(1);
-      expect(lines[0], s.dir).toMatch(new RegExp(`^npx --yes --package github:yedeya-labs/kanon#v\\d+\\.\\d+\\.\\d+ kanon ${contractOf(s)} `));
+      expect(lines[0], s.dir).toMatch(new RegExp(`^npx --yes --package github:yedeya-labs/kanon#candidate-v\\d+\\.\\d+\\.\\d+ kanon ${contractOf(s)} `));
     }
   });
 
@@ -748,7 +749,7 @@ describe('each skill is held to the kanon command it drives', () => {
       expect(invocations(run!).some((c) => c.command === 'apps' && c.flags.includes('--preflight')), dir).toBe(true);
       expect(run, dir).toContain('**Secrets: read and write**');
       const line = code(run!).find((c) => c.startsWith('! cd '));
-      expect(line, dir).toMatch(/^! cd <the checkout's root> && npx --yes --package github:yedeya-labs\/kanon#v\d+\.\d+\.\d+ kanon apps --owner <owner> --repo <repo> --apps <apps>$/);
+      expect(line, dir).toMatch(/^! cd <the checkout's root> && npx --yes --package github:yedeya-labs\/kanon#candidate-v\d+\.\d+\.\d+ kanon apps --owner <owner> --repo <repo> --apps <apps>$/);
       expect(run, dir).toMatch(/\*\*Do it now\*\* \(Recommended\).*\*\*Skip it for now\*\*/);
       // #382: for the Releaser, kanon apps also edits the default branch's rulesets (setReleaserBypass),
       // so the person is told before they run it, not only by docs/apps.md.
@@ -1163,7 +1164,7 @@ describe('the inbox skill', () => {
   it('runs kanon inbox --json through npx from one release, and only commands and flags the CLI has', () => {
     const lines = code(s.body).filter((c) => c.startsWith('npx '));
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/^npx --yes --package github:yedeya-labs\/kanon#v\d+\.\d+\.\d+ kanon inbox --json$/);
+    expect(lines[0]).toMatch(/^npx --yes --package github:yedeya-labs\/kanon#candidate-v\d+\.\d+\.\d+ kanon inbox --json$/);
     const calls = invocations(s.body);
     expect(calls.length).toBeGreaterThan(0);
     expect(new Set(calls.map((c) => c.command))).toEqual(new Set(['inbox']));

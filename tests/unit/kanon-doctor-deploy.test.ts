@@ -540,7 +540,7 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
       // With a notify hook, notify.kind-unset asks for the organisation's secrets too, since the
       // repository lacks KANON_CHAT_DEPLOY: the two checks share the one listing.
       const f = files();
-      f[NOTIFY_HOOK] = readFileSync(join(ROOT, 'actions/notify/hooks/slack.yml'), 'utf8').replace(/@v\d+\.\d+\.\d+/, `@${PINNED}`);
+      f[NOTIFY_HOOK] = readFileSync(join(ROOT, 'actions/notify/hooks/slack.yml'), 'utf8').replace(/@(?:candidate-)?v\d+\.\d+\.\d+/, `@${PINNED}`);
       const g = github({ owner: 'Organization', org: new Set(['KANON_DEPLOY_SECRET']) });
       const r = await check(f, g);
       expect(ids(r)).toEqual(expect.arrayContaining([`notify.kind-unset ${DEPLOY_CALLER_PATH}`, 'deploy.secret-organization KANON_DEPLOY_SECRET']));

@@ -6,9 +6,10 @@
 # incoming-webhook URL in each, the same URL in all of them if one channel takes everything. A kind whose secret is unset is not
 # posted. See docs/notifications.md in Kanon.
 #
-# Its one step is Kanon's Slack action at the release `init` ran from (the candidate's tag on a
-# candidate pin). The upgrade skill moves this pin with your callers' (decision 18). Edit the step
-# and it is your own hook: Kanon then counts it as `custom`.
+# Its one step is Kanon's Slack action at the release `init` ran from: the stable `vX.Y.Z` once Kanon
+# has promoted it, else the candidate's tag. Kanon's own copy names the candidate's tag, which exists
+# from the candidate's cut (kanon#1557). The upgrade skill moves this pin with your callers'
+# (decision 18). Edit the step and it is your own hook: Kanon then counts it as `custom`.
 name: notify
 description: Posts Kanon's notifications to Slack, through Kanon's Slack hook.
 
@@ -29,7 +30,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: yedeya-labs/kanon/actions/notify/slack@v0.43.0 # x-release-please-version
+    - uses: yedeya-labs/kanon/actions/notify/slack@candidate-v0.43.0 # x-release-please-version
       with:
         message-v1: ${{ inputs.message-v1 }}
         text: ${{ inputs.text }}

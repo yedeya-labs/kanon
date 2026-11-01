@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 You move the repository's Kanon references to one new release, after finding out what that release needs, so the first red run of a lane never has to tell the person. You drive `kanon doctor` through its JSON output only (`docs/doctor.md` in Kanon's repository, read at the release in the `npx` line below, `https://github.com/yedeya-labs/kanon/blob/<release>/docs/doctor.md`, never at `main`, whose contract may be newer), and you never read its prose to decide anything.
 
-**The release you upgrade to is the one this skill ships in,** the version in the `npx` line below. To move to another release, the person first moves this plugin to it ("Moving the plugin", below), so the skill, the command and the release always agree.
+**The release you upgrade to is the one this skill ships in,** the version in the `npx` line below, as a stable release. To move to another release, the person first moves this plugin to it ("Moving the plugin", below), so the skill, the command and the release always agree.
 
 ## How to run `kanon`
 
@@ -17,12 +17,12 @@ Run every `kanon` command in this skill, and every one a finding's fix names, fr
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.43.0 kanon doctor --json
+npx --yes --package github:yedeya-labs/kanon#candidate-v0.43.0 kanon doctor --json
 ```
 
 <!-- x-release-please-end -->
 
-Below, `kanon …` means that `npx` line with the rest of the command in place of `doctor --json`, and **the target** means the release it names after `#`, such as `v1.4.0`. Read only standard output, which is one JSON document; never decide anything from standard error.
+Below, `kanon …` means that `npx` line with the rest of the command in place of `doctor --json`, and **the target** means the stable release of the version it names after `#`: `v1.4.0` for `candidate-v1.4.0`, the release the `claude plugin marketplace add` line under "Moving the plugin" names. The `npx` line names the candidate's tag because that tag exists from the candidate's cut, and the promotion puts `v1.4.0` on the same commit, so the command runs the same code either way. Read only standard output, which is one JSON document; never decide anything from standard error.
 
 ## Ground rules
 
@@ -113,7 +113,7 @@ Walk the person through it when they come back after the merge, or whenever they
 
 ## Moving the plugin
 
-`claude plugin marketplace update` and `claude plugin update` don't move the plugin to a new release: its marketplace is pinned to a release tag, and an update fetches that same tag again. The move is one of these two, with the release it moves to: **a stable release, `vX.Y.Z`, by default**, the latest being `.releases.stable`. A candidate's plugin is for running ahead on purpose: its `npx` lines name the `vX.Y.Z` the candidate will be promoted to, a tag that exists only once it is.
+`claude plugin marketplace update` and `claude plugin update` don't move the plugin to a new release: its marketplace is pinned to a release tag, and an update fetches that same tag again. The move is one of these two, with the release it moves to: **a stable release, `vX.Y.Z`, by default**, the latest being `.releases.stable`. A candidate's plugin is for running ahead on purpose. Every release's `npx` lines name its candidate's tag, `candidate-vX.Y.Z`, which exists from the candidate's cut, so the skills run the CLI on a candidate and on its stable release alike; the target is still the stable `vX.Y.Z`, a tag that exists only once the candidate is promoted.
 
 - **Declared in the repository,** in `.claude/settings.json`: set the kanon marketplace's `ref` to the release, and run `/reload-plugins`. Claude Code fetches a declared marketplace again when its source changes. To upgrade, make that edit on the branch `kanon/upgrade-<the release>`, made from the default branch, so the upgrade's pull request carries it, or, when you finish a pull request that only moves the pins (step 1), on that pull request's branch; where the person also added the `kanon` marketplace themselves, the repository's entry, under the same name, is the one Claude Code uses (`docs/skills.md` in Kanon's repository, "Declare it in the repository", cites the rule).
 - **Installed by the person,** in their own Claude Code configuration: they run the lines below in their own terminal, then start a new session or run `/reload-plugins`. The lines name the target; for another release, its tag takes the target's place in the second line. Removing the marketplace uninstalls its plugin, which is why the install follows.
