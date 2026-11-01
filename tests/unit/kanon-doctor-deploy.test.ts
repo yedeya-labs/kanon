@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { appSecrets, ciFile } from '../../cli/callers.mjs';
 import { deployCallerProblems, EXIT, FINDINGS, NOTIFY_HOOK, probeAnswer, readWaivers, restrictsTags, runsOnPush, UNWAIVABLE, UNWAIVABLE_UNDER, WAIVER_LABEL } from '../../cli/doctor.mjs';
-import { DEPLOY_CALLER_PATH, deployCallerFile, deployEnvironmentSecrets, deployHookStub, deploySection } from '../../cli/init.mjs';
+import { DEPLOY_CALLER_PATH, deployCallerFile, deployEnvironmentSecrets, deployHookStub, deploySection, deployTakesTargets } from '../../cli/init.mjs';
 import { parseYaml } from '../../cli/workflow-yaml.mjs';
 import { PROBE_LINE } from '../../scripts/deploy-gate.mjs';
+import { TARGETS_VARIABLE } from '../../scripts/lib/deploy-targets.mjs';
 import { checkout, fakeGitHub, HEALTHY_DEPLOY, healthyFiles, ids, LANES, no, ok, PINNED, releaseBy, releaserFiles, releaserOn, REPO, REQ, ROOT, run, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -61,9 +62,14 @@ const healthyEnv = (name: string, envs: string[]): Env => ({ reviewers: name ===
 const github = (o: {
   envs?: Record<string, Env> | null; chain?: string[]; sub?: unknown | null; retention?: number | null;
   tagRules?: string[][]; runs?: DeployRun[] | null; tags?: string[]; owner?: 'User' | 'Organization'; org?: Set<string> | null;
+  targets?: string | null; variables?: null;
 } = {}) => {
   const chain = o.chain ?? TWO;
-  const g = releaserOn(fakeGitHub({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...appSecrets('releaser')]) }));
+  // KANON_DEPLOY_TARGETS (kanon#1555): by default, one placeholder role per declared environment;
+  // `targets: null` leaves it unset, `variables: null` makes the variables unlistable.
+  const targets = o.targets === undefined ? JSON.stringify(Object.fromEntries(chain.map((e) => [e, `role-${e}`]))) : o.targets;
+  const variables = o.variables === null ? null : new Map(targets === null ? [] : [[TARGETS_VARIABLE, targets]]);
+  const g = releaserOn(fakeGitHub({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...appSecrets('releaser')]), variables }));
   g.st.ownerType = o.owner ?? 'User';
   (o.tagRules ?? [['creation', 'update', 'deletion']]).forEach((rules, i) => {
     (g.st.rulesets as unknown[]).push({ id: 80 + i, name: `Release tags ${i}`, target: 'tag', enforcement: 'active', conditions: { ref_name: { include: ['refs/tags/v*'], exclude: [] } }, rules: rules.map((type) => ({ type })), bypass_actors: [] });
@@ -260,6 +266,32 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
       expect(deployCallerProblems(old, TWO, LANE.workflows, ['KANON_DEPLOY_SECRET'])).toHaveLength(2);
     });
 
+    it("is reported for a caller that doesn't hand on KANON_DEPLOY_TARGETS, the old caller's shape, at a release that takes it (kanon#1555)", async () => {
+      expect(deployTakesTargets(REQ)).toBe(true);
+      const RELEASE_LINE = '      targets: ${{ vars.KANON_DEPLOY_TARGETS }}\n';
+      const ENV_LINE = '      targets: ${{ needs.release.outputs.targets }}\n';
+      expect(caller().split(RELEASE_LINE)).toHaveLength(2);
+      expect(caller().split(ENV_LINE)).toHaveLength(3);
+      const old = caller().replaceAll(RELEASE_LINE, '').replaceAll(ENV_LINE, '');
+      const { r, f } = await mismatch(old);
+      expect(deployIds(r)).toEqual([`deploy.caller-mismatch ${DEPLOY_CALLER_PATH}`]);
+      expect(f.blocking).toBe(true);
+      expect(f.message).toContain("its `release` job doesn't pass `targets: ${{ vars.KANON_DEPLOY_TARGETS }}`, so the deploy hook is handed no role");
+      expect(f.message).toContain("`deploy-1` doesn't pass `targets: ${{ needs.release.outputs.targets }}`, so its deploy hook is handed no role for `staging`");
+      expect(f.message).toContain('`deploy-2` doesn\'t pass `targets:');
+      expect(f.fix.commands).toEqual(['kanon init']);
+      // From anything else: another variable, or the variable itself in an environment's job.
+      const { f: other } = await mismatch(caller().replace('vars.KANON_DEPLOY_TARGETS', 'vars.OTHER'));
+      expect(other.message).toContain("its `release` job doesn't pass `targets:");
+      const { f: direct } = await mismatch(caller().replace('needs.release.outputs.targets', 'vars.KANON_DEPLOY_TARGETS'));
+      expect(direct.message).toContain("`deploy-1` doesn't pass `targets:");
+      expect(direct.message).not.toContain('`deploy-2`');
+      // Pure: nothing asked of a caller at a release whose lane doesn't take it.
+      const parsed = parseYaml(old) as Record<string, unknown>;
+      expect(deployCallerProblems(parsed, TWO, LANE.workflows, deployEnvironmentSecrets(REQ))).toEqual([]);
+      expect(deployCallerProblems(parsed, TWO, LANE.workflows, deployEnvironmentSecrets(REQ), true)).toHaveLength(3);
+    });
+
     it('is reported for a different pinned release between jobs', async () => {
       const text = caller().split('\n');
       const at = text.findLastIndex((l) => l.includes('/deploy.yml@'));
@@ -276,6 +308,55 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
       const none = await mismatch(null);
       expect(none.f.message).toContain('is missing');
       expect(none.f.blocking).toBe(true);
+    });
+  });
+
+  describe('deploy.targets-missing (kanon#1555)', () => {
+    it('notes an unset KANON_DEPLOY_TARGETS without blocking, with the command that sets it, naming every environment', async () => {
+      const r = await check(files(), github({ targets: null }));
+      expect(deployIds(r)).toEqual([`deploy.targets-missing ${TARGETS_VARIABLE}`]);
+      const f = finding(r, 'deploy.targets-missing');
+      expect(f.blocking).toBe(false);
+      expect(f.message).toContain('hands the deploy hook no role, in the trust probe or in any environment\'s job');
+      expect(f.fix.commands).toEqual([`gh variable set ${TARGETS_VARIABLE} -R ${REPO} --body '{"staging":"<staging's role identifier>","production":"<production's role identifier>"}'`]);
+      expect(r.status).toBe(EXIT.healthy);
+      // An empty value is unset too, as the gate reads it.
+      expect(finding(await check(files(), github({ targets: '  ' })), 'deploy.targets-missing').blocking).toBe(false);
+    });
+
+    it('blocks on a value that leaves out a declared environment, or that is not a JSON object, and prints no value', async () => {
+      const r = await check(files(), github({ targets: JSON.stringify({ staging: 'role-staging-0001' }) }));
+      expect(deployIds(r)).toEqual([`deploy.targets-missing ${TARGETS_VARIABLE}`]);
+      const f = finding(r, 'deploy.targets-missing');
+      expect(f.blocking).toBe(true);
+      expect(f.message).toContain("doesn't name `production`");
+      expect(f.message).toContain("The deploy lane's gate fails on it");
+      expect(r.out).not.toContain('role-staging-0001');
+      expect(r.status).toBe(EXIT.findings);
+      for (const bad of ['not json role-0002', '["role-0003"]', JSON.stringify({ staging: 'role-0004', production: '' })]) {
+        const b = await check(files(), github({ targets: bad }));
+        expect(finding(b, 'deploy.targets-missing')?.blocking, bad).toBe(true);
+        expect(b.out, bad).not.toMatch(/role-000/);
+      }
+    });
+
+    it('passes a value with an extra environment, which the lane leaves out', async () => {
+      const r = await check(files(), github({ targets: JSON.stringify({ old: 'x', staging: 'a', production: 'b' }) }));
+      expect(deployIds(r)).toEqual([]);
+    });
+
+    it("leaves the check unchecked when the token can't list the variables", async () => {
+      const r = await check(files(), github({ variables: null }));
+      expect(deployIds(r)).toEqual([]);
+      expect(deployUnchecked(r).map((u: { check: string; subject: string }) => `${u.check} ${u.subject}`)).toEqual([`deploy-targets ${TARGETS_VARIABLE}`]);
+    });
+
+    it("reads the release's lane as not taking it, and init's caller passes none, before kanon#1555", async () => {
+      const before = structuredClone(REQ) as unknown as { deploy: { inputs: Record<string, Record<string, unknown>> } };
+      delete before.deploy.inputs['deploy-release']!.targets;
+      delete before.deploy.inputs.deploy!.targets;
+      expect(deployTakesTargets(before as unknown as typeof REQ)).toBe(false);
+      expect(deployCallerFile(TWO, before as unknown as typeof REQ, PINNED)).not.toMatch(/targets/);
     });
   });
 
@@ -601,7 +682,7 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
       ['deploy.admin-bypass', false], ['deploy.artifact-retention', false], ['deploy.branch-policy', true], ['deploy.caller-mismatch', true],
       ['deploy.ci-push-missing', true], ['deploy.declaration', true], ['deploy.declaration-moved', true], ['deploy.environment-missing', true],
       ['deploy.hook-missing', true], ['deploy.reference-undeclared', false], ['deploy.releaser-missing', true], ['deploy.reviewers-missing', true],
-      ['deploy.secret-organization', false], ['deploy.secret-repository', false], ['deploy.self-review', false], ['deploy.subject-custom', true], ['deploy.tag-ruleset', false], ['deploy.trust-unproven', true],
+      ['deploy.secret-organization', false], ['deploy.secret-repository', false], ['deploy.self-review', false], ['deploy.subject-custom', true], ['deploy.tag-ruleset', false], ['deploy.targets-missing', true], ['deploy.trust-unproven', true],
     ]);
     expect(Object.keys(UNWAIVABLE).filter((id) => id.startsWith('deploy.')).sort()).toEqual([
       'deploy.caller-mismatch', 'deploy.declaration', 'deploy.declaration-moved', 'deploy.environment-missing', 'deploy.reviewers-missing', 'deploy.subject-custom',

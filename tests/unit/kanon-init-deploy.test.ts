@@ -23,6 +23,8 @@ describe('kanon init and the deploy lane (plan 0010 D6)', () => {
   const DEPLOY = (REQ as unknown as { deploy: { workflows: { release: string; environment: string }; grants: Record<string, Record<string, string>>; hooks: Array<{ path: string; inputs: string[] }> } }).deploy;
   const HOOKS = DEPLOY.hooks.map((h) => h.path);
   const BUILD = '${{ needs.release.outputs.build }}';
+  const TARGETS_IN = '${{ vars.KANON_DEPLOY_TARGETS }}';
+  const TARGETS_OUT = '${{ needs.release.outputs.targets }}';
   type Job = { name?: string; needs?: string | string[]; uses?: string; with?: Record<string, unknown>; permissions?: Record<string, string>; secrets?: unknown };
   const callerOf = (dir: string) => parseYaml(read(dir, CALLER)) as { on: Record<string, unknown>; jobs: Record<string, Job> };
   const declare = async (envs: string, extra: string[] = []) => {
@@ -38,7 +40,8 @@ describe('kanon init and the deploy lane (plan 0010 D6)', () => {
     expect(wf.on).toEqual({ release: { types: ['published'] }, workflow_dispatch: { inputs: { release: expect.objectContaining({ required: true, type: 'string' }) } } });
     const release = wf.jobs.release!;
     expect(release.uses).toBe(`yedeya-labs/kanon/.github/workflows/${DEPLOY.workflows.release}.yml@${PINNED}`);
-    expect(release.with).toEqual({ environments: envs.join(' ') });
+    // kanon#1555: the repository variable, which only the caller can read, into the lane.
+    expect(release.with).toEqual({ environments: envs.join(' '), targets: TARGETS_IN });
     expect(release.permissions).toEqual(DEPLOY.grants[DEPLOY.workflows.release]);
     expect(release.needs).toBeUndefined();
     envs.forEach((env, i) => {
@@ -47,7 +50,8 @@ describe('kanon init and the deploy lane (plan 0010 D6)', () => {
       expect(job.needs, env).toEqual(i === 0 ? 'release' : ['release', `deploy-${i}`]);
       expect(job.uses).toBe(`yedeya-labs/kanon/.github/workflows/${DEPLOY.workflows.environment}.yml@${PINNED}`);
       // D5: deploy.yml's build input is required, so a caller without it fails before any job runs.
-      expect(job.with, env).toEqual({ environment: env, position: i + 1, build: BUILD });
+      // kanon#1555: the release job's targets, so the deploy hook gets this environment's role.
+      expect(job.with, env).toEqual({ environment: env, position: i + 1, build: BUILD, targets: TARGETS_OUT });
       expect(job.permissions).toEqual(DEPLOY.grants[DEPLOY.workflows.environment]);
     });
     // Each environment's job maps the announcement's chat secret, whatever the chat answer (plan
@@ -133,6 +137,35 @@ describe('kanon init and the deploy lane (plan 0010 D6)', () => {
     expect(f.status).toBe('rewritten');
     expect(f.diff).toContain('+       KANON_DEPLOY_SECRET: ${{ secrets.KANON_DEPLOY_SECRET }}');
     expectChain(dir, ['staging', 'production']);
+  });
+
+  it("rewrites a caller that doesn't hand on KANON_DEPLOY_TARGETS, the old caller's shape, so the hook gets each environment's role (kanon#1555)", async () => {
+    const { dir } = await declare('staging,production');
+    const IN = `      targets: ${TARGETS_IN}\n`;
+    const OUT = `      targets: ${TARGETS_OUT}\n`;
+    const written = read(dir, CALLER);
+    expect(written.split(IN)).toHaveLength(2);
+    expect(written.split(OUT)).toHaveLength(3);
+    writeFileSync(join(dir, CALLER), written.replaceAll(IN, '').replaceAll(OUT, ''));
+    const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    const f = d.files.find((x) => x.path === CALLER)!;
+    expect(f.status).toBe('rewritten');
+    expect(f.diff).toContain(`+       targets: ${TARGETS_IN}`);
+    expect(f.diff).toContain(`+       targets: ${TARGETS_OUT}`);
+    expectChain(dir, ['staging', 'production']);
+  });
+
+  it("passes no targets for a release whose deploy lane doesn't take them, as before kanon#1555", async () => {
+    const before = structuredClone(REQ) as unknown as { deploy: { inputs: Record<string, Record<string, unknown>> } };
+    delete before.deploy.inputs['deploy-release']!.targets;
+    delete before.deploy.inputs.deploy!.targets;
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--deploy-environments', 'staging,production'], undefined, before as unknown as typeof REQ);
+    expect(r.status, r.err).toBe(0);
+    const jobs = callerOf(dir).jobs;
+    expect(jobs.release!.with).toEqual({ environments: 'staging production' });
+    expect(jobs['deploy-1']!.with).toEqual({ environment: 'staging', position: 1, build: BUILD });
+    expect(read(dir, CALLER)).not.toMatch(/targets/);
   });
 
   it("maps no KANON_DEPLOY_SECRET for a release whose deploy.yml doesn't declare it, as before kanon#1049", async () => {

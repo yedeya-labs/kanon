@@ -517,6 +517,12 @@ export const ID_TOKEN_HOLDERS: IdTokenHolder[] = [
 export const DEPLOY_FILES = ['deploy-release.yml', 'deploy.yml'];
 /** The one secret the deploy lane reads, in the deploy hook step's `env:` of `deploy.yml`'s `deploy` job alone. */
 const DEPLOY_SECRET = { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' };
+/**
+ * The deploy targets (kanon#1555), no secret: the probe's hook gets the gate's output whole, and
+ * the environment job's deploy hook its own environment's entry, beside the secret.
+ */
+const PROBE_TARGETS = { KANON_DEPLOY_TARGETS: '${{ needs.gate.outputs.targets }}' };
+const DEPLOY_HOOK_ENV = { ...DEPLOY_SECRET, KANON_DEPLOY_TARGET: "${{ inputs.targets != '' && fromJSON(inputs.targets)[inputs.environment] || '' }}" };
 /** What the reset and smoke hooks' steps get beside their inputs (plan 0013 §6): the trigger, never a secret. */
 const SMOKE_TRIGGER = { KANON_SMOKE_TRIGGER: 'deploy' };
 const DEPLOY_JOB_KEYS = ['name', 'needs', 'if', 'runs-on', 'timeout-minutes', 'environment', 'concurrency', 'permissions', 'outputs', 'steps'];
@@ -532,6 +538,7 @@ const noSecret = (x: unknown) => !/secrets\s*[.[]/.test(JSON.stringify(x));
  * environment, with `contents: read` and `id-token: write` alone, no secret, a checkout of the
  * gate's commit that persists no credential, the adopter's deploy hook in probe mode, and Kanon's
  * judge. It runs the release's commit, on the default branch and green (the gate's checks 2 and 4).
+ * The hook's one environment variable is the gate's deploy targets, no secret (kanon#1555).
  */
 export function isDeployProbeJob(file: string | undefined, name: string, j: Job): boolean {
   if (file !== 'deploy-release.yml' || name !== 'probe' || !only(j, DEPLOY_JOB_KEYS) || j.environment !== undefined) return false;
@@ -542,7 +549,7 @@ export function isDeployProbeJob(file: string | undefined, name: string, j: Job)
     && runs(steps[0]) === '$/actions/kanon-path' && steps[0]!.with === undefined
     && checkoutOf(steps[1], '${{ needs.gate.outputs.sha }}')
     && runs(steps[2]) === 'rm -f "$RUNNER_TEMP/kanon-deploy-probe.json"' && steps[2]!.env === undefined
-    && hook?.uses === './.github/actions/deploy' && hook.with?.probe === 'true' && hook.env === undefined
+    && hook?.uses === './.github/actions/deploy' && hook.with?.probe === 'true' && JSON.stringify(hook.env) === JSON.stringify(PROBE_TARGETS)
     && runs(steps[4]) === 'node "$KANON_PATH/scripts/deploy-gate.mjs" probe'
     && only(steps[4]!.env, ['KANON_PATH', 'ENVIRONMENTS']);
 }
@@ -554,7 +561,8 @@ export function isDeployProbeJob(file: string | undefined, name: string, j: Job)
  * persists no credential, the build's download and Kanon's check of its digest (plan 0010 D5),
  * the adopter's deploy hook, its optional reset hook (with the summary step that says when it is
  * absent) and its smoke hook, and the marks that time them (plan 0013 §6, §7.1); and one secret,
- * `KANON_DEPLOY_SECRET`, in the deploy hook step's `env:` alone. The reset and smoke hooks get
+ * `KANON_DEPLOY_SECRET`, in the deploy hook step's `env:` alone, beside its environment's deploy
+ * target, `KANON_DEPLOY_TARGET` (kanon#1555). The reset and smoke hooks get
  * `KANON_SMOKE_TRIGGER` and nothing else. It never runs the build hook.
  */
 export function isDeployEnvJob(file: string | undefined, name: string, j: Job): boolean {
@@ -572,7 +580,7 @@ export function isDeployEnvJob(file: string | undefined, name: string, j: Job): 
     && /^actions\/download-artifact@v\d+$/.test(String(steps[5]!.uses)) && only(steps[5]!.with, ['name', 'path']) && steps[5]!.env === undefined
     && runs(steps[6]) === 'node "$KANON/scripts/deploy-build.mjs" check' && only(steps[6]!.env, ['ARTIFACT', 'DIGEST'])
     && runs(steps[7]) === MARK
-    && hook?.uses === './.github/actions/deploy' && hook.with?.probe === 'false' && JSON.stringify(hook.env) === JSON.stringify(DEPLOY_SECRET)
+    && hook?.uses === './.github/actions/deploy' && hook.with?.probe === 'false' && JSON.stringify(hook.env) === JSON.stringify(DEPLOY_HOOK_ENV)
     && runs(steps[9]) === MARK
     && runs(steps[10]).startsWith('echo "No reset hook') && steps[10]!.env === undefined && steps[10]!.uses === undefined
     && steps[11]!.uses === './.github/actions/smoke-reset' && JSON.stringify(steps[11]!.env) === JSON.stringify(SMOKE_TRIGGER)

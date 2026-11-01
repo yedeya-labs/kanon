@@ -51,10 +51,12 @@ describe('requirements.json', () => {
     // `kanon init` writes the deploy caller (D6) and `kanon doctor` checks it (D7) from this entry.
     const deploy = built.deploy as Record<string, unknown>;
     expect(deploy.workflows).toEqual({ release: 'deploy-release', environment: 'deploy' });
-    expect(Object.keys((deploy.inputs as Record<string, object>)['deploy-release']!)).toEqual(['environments']);
+    // The deploy targets (kanon#1555): the caller maps `KANON_DEPLOY_TARGETS` into the release's
+    // workflow and hands its `targets` output to each environment's, so both take `targets`.
+    expect(Object.keys((deploy.inputs as Record<string, object>)['deploy-release']!)).toEqual(['environments', 'targets']);
     // The role is never an input: the lane reads it from the declaration. The build is: the
     // caller hands each environment `deploy-release.yml`'s `build` output (plan 0010 D5).
-    expect(Object.keys((deploy.inputs as Record<string, object>).deploy!)).toEqual(['environment', 'position', 'build']);
+    expect(Object.keys((deploy.inputs as Record<string, object>).deploy!)).toEqual(['environment', 'position', 'build', 'targets']);
     const g = { actions: 'read', contents: 'read', deployments: 'read', 'id-token': 'write', issues: 'write' };
     expect(deploy.grants).toEqual({ 'deploy-release': g, deploy: g });
     // Three hooks (plan 0010 §7): the build, which runs in the build job alone, the deploy and the smoke check.

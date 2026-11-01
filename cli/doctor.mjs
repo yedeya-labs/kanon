@@ -57,7 +57,7 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, callerFile, kanonRelease, loadRequirements, TRIGGERS, yamlScalar } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, GITHUB_DEFAULT_LABELS, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, workflowName } from './init.mjs';
+import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, deployTakesTargets, GITHUB_DEFAULT_LABELS, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, workflowName } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -66,6 +66,7 @@ import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '.
 import { LEDGER as CAPABILITY_LEDGER, parseCapabilityWatch } from '../scripts/lib/capability-watch.mjs';
 import { EXAMPLE as NOT_APPLICABLE_EXAMPLE, readMechanisms } from '../scripts/lib/mechanisms.mjs';
 import { DeclarationError, DEPLOY_HEADING, movedReferenceBullets, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
+import { parseTargets, TARGETS_VARIABLE, TargetsError } from '../scripts/lib/deploy-targets.mjs';
 import { PROBE_LINE } from '../scripts/deploy-gate.mjs';
 import { EXTRA_LABEL, readAppExtras, withExtras } from '../scripts/lib/app-extras.mjs';
 import { REFUSED_TITLE, UNPUBLISHED_JOB } from '../scripts/lib/telemetry-token.mjs';
@@ -828,6 +829,10 @@ export const DEPLOY_RUNS = 20;
 
 /** The `build` input every `deploy-<position>` job passes (plan 0010 §4, D5). */
 const BUILD_INPUT = /^\$\{\{\s*needs\.release\.outputs\.build\s*\}\}$/;
+/** The `targets` input the `release` job passes (kanon#1555): the repository variable, which only the caller can read. */
+const TARGETS_INPUT = new RegExp(`^\\$\\{\\{\\s*vars\\.${TARGETS_VARIABLE}\\s*\\}\\}$`);
+/** The `targets` input every `deploy-<position>` job passes (kanon#1555): the `release` job's output. */
+const TARGETS_OUTPUT = /^\$\{\{\s*needs\.release\.outputs\.targets\s*\}\}$/;
 
 /**
  * What a deploy caller lacks against the declared chain (`deploy.caller-mismatch`, plan 0010 §4,
@@ -838,14 +843,18 @@ const BUILD_INPUT = /^\$\{\{\s*needs\.release\.outputs\.build\s*\}\}$/;
  * Each `deploy-<position>` maps each of `secrets`, the deploy hook's environment secrets, as
  * `NAME: ${{ secrets.NAME }}` (kanon#1049): GitHub evaluates that expression in the called job's
  * scope, the environment's secret first, so an unmapped one, or one mapped from anything else,
- * reaches the hook empty or wrong. With no environment declared, any caller is the problem. One
- * sentence per problem; none when it matches, as `kanon init` writes it.
+ * reaches the hook empty or wrong. Where the release takes the deploy targets (`targets`,
+ * kanon#1555), the `release` job passes `targets: ${{ vars.KANON_DEPLOY_TARGETS }}` and each
+ * `deploy-<position>` `targets: ${{ needs.release.outputs.targets }}`: without them the deploy
+ * hook is handed no role, whatever the variable holds. With no environment declared, any caller
+ * is the problem. One sentence per problem; none when it matches, as `kanon init` writes it.
  * @param {Record<string, any>} wf the caller @param {string[]} environments the declared list
  * @param {{ release: string, environment: string }} workflows the lane's two, by file name without `.yml`
  * @param {string[]} [secrets] the environment secrets the release's `deploy.yml` declares (`deployEnvironmentSecrets`)
+ * @param {boolean} [targets] whether the release's lane takes the deploy targets (`deployTakesTargets`)
  * @returns {string[]}
  */
-export const deployCallerProblems = (wf, environments, workflows, secrets = []) => {
+export const deployCallerProblems = (wf, environments, workflows, secrets = [], targets = false) => {
   if (!environments.length) return [`it calls the deploy lane, but ${ADOPTION_RECORD} declares no environment under ## Deploy, so the gate refuses every run`];
   /** @type {string[]} */
   const problems = [];
@@ -868,6 +877,7 @@ export const deployCallerProblems = (wf, environments, workflows, secrets = []) 
     else refs.add(call.ref);
     const passed = String(isMap(release.with) ? release.with.environments ?? '' : '').trim().split(/\s+/).filter(Boolean);
     if (passed.join(' ') !== environments.join(' ')) problems.push(`its \`release\` job passes the environments ${passed.length ? `\`${passed.join(' ')}\`` : 'none'}, not the declared \`${environments.join(' ')}\`, in that order`);
+    if (targets && !TARGETS_INPUT.test(String(isMap(release.with) ? release.with.targets ?? '' : '').trim())) problems.push(`its \`release\` job doesn't pass \`targets: \${{ vars.${TARGETS_VARIABLE} }}\`, so the deploy hook is handed no role, whatever the variable holds (kanon#1555)`);
   }
   environments.forEach((environment, i) => {
     const n = i + 1;
@@ -881,6 +891,7 @@ export const deployCallerProblems = (wf, environments, workflows, secrets = []) 
     if (String(w.environment ?? '') !== environment) problems.push(`\`${key}\` deploys ${w.environment === undefined ? 'no environment' : `\`${String(w.environment)}\``}, not \`${environment}\`, the declared environment at position ${n}`);
     if (String(w.position ?? '') !== String(n)) problems.push(`\`${key}\` passes ${w.position === undefined ? 'no position' : `position ${String(w.position)}`}, not ${n}`);
     if (!BUILD_INPUT.test(String(w.build ?? '').trim())) problems.push(`\`${key}\` doesn't pass \`build: \${{ needs.release.outputs.build }}\`, which ${workflows.environment}.yml requires, so the run fails before any job starts`);
+    if (targets && !TARGETS_OUTPUT.test(String(w.targets ?? '').trim())) problems.push(`\`${key}\` doesn't pass \`targets: \${{ needs.release.outputs.targets }}\`, so its deploy hook is handed no role for \`${environment}\` (kanon#1555)`);
     const needs = [...new Set(list(job.needs))].sort();
     const ought = (n === 1 ? ['release'] : ['release', `deploy-${n - 1}`]).sort();
     if (needs.join('\n') !== ought.join('\n')) problems.push(`\`${key}\` needs ${spans(needs)}, not ${spans(ought)}${n > 1 && !needs.includes('release') ? `: without \`release\` it can't read the build it deploys` : ''}`);
@@ -2851,7 +2862,7 @@ export const diagnose = async (deps, opts) => {
     }
     for (const file of deployCallers) {
       const problems = file === own
-        ? deployCallerProblems(/** @type {Record<string, any>} */ (workflows.get(file)), chain, lane, deployEnvironmentSecrets(req))
+        ? deployCallerProblems(/** @type {Record<string, any>} */ (workflows.get(file)), chain, lane, deployEnvironmentSecrets(req), deployTakesTargets(req))
         : [`it calls the deploy lane beside ${own}, the repository's deploy caller: a release would deploy twice`];
       if (problems.length) {
         find('deploy.caller-mismatch', file, `doesn't match ${ADOPTION_RECORD}'s ${DEPLOY_HEADING} (${chain.length ? chain.join(', ') : 'no environment'}): ${problems.join('; ')}. The gate refuses a caller whose list isn't the declaration's (plan 0010 §4, §12).`, file === own
@@ -2984,9 +2995,43 @@ export const diagnose = async (deps, opts) => {
           commands: [`gh api -X PUT repos/${repo}/actions/oidc/customization/sub -F use_default=true`],
         });
       }
+      // ── `deploy.targets-missing` (kanon#1555): the repository variable the caller maps into the
+      // lane, a JSON object naming each declared environment's role identifier. Unset, a note: the
+      // lane hands the hook nothing, as before it existed, and a hook may find its roles in the
+      // tree. Set, it blocks unless it names every declared environment, since the gate fails on
+      // it. Only at a release whose lane takes it. Its value is no secret, and doctor prints none.
+      if (deployTakesTargets(req)) {
+        const listed = await deps.gh(['variable', 'list', '-R', repo, '--json', 'name,value']);
+        /** @type {string | null | undefined} */
+        let value;
+        try {
+          if (listed.status === 0) value = (/** @type {any[]} */ (JSON.parse(listed.stdout)).find((v) => String(v?.name) === TARGETS_VARIABLE)?.value ?? null);
+        } catch {
+          value = undefined;
+        }
+        const example = JSON.stringify(Object.fromEntries(chain.map((e) => [e, `<${e}'s role identifier>`])));
+        const setIt = [`gh variable set ${TARGETS_VARIABLE} -R ${repo} --body '${example}'`];
+        if (value === undefined) unchecked.push({ check: 'deploy-targets', subject: TARGETS_VARIABLE, reason: `the token can't list ${repo}'s variables (${listed.stderr.trim() || `exit ${listed.status}`}), so doctor can't tell whether ${TARGETS_VARIABLE} names each declared environment; it needs Variables: read` });
+        else if (value === null || !String(value).trim()) {
+          find('deploy.targets-missing', TARGETS_VARIABLE, `is not a variable of ${repo}, so the deploy lane hands the deploy hook no role, in the trust probe or in any environment's job. A composite action can't read \`vars\`, and the probe has no environment and no secret, so unless your hook finds each role in the tree, the probe answers \`unconfigured\` and no release deploys (docs/lanes.md, "The deploy lane").`, {
+            text: `Set it to a JSON object naming each declared environment's role identifier, such as its cloud role's ARN. It is no secret, and the run's log prints it:`,
+            commands: setIt,
+          }, true);
+        } else {
+          try {
+            parseTargets(String(value), chain);
+          } catch (e) {
+            if (!(e instanceof TargetsError)) throw e;
+            find('deploy.targets-missing', TARGETS_VARIABLE, `${e.message.slice(TARGETS_VARIABLE.length + 1)}. The deploy lane's gate fails on it, by name, before anything is built or deployed (docs/lanes.md, "The deploy lane").`, {
+              text: `Set it to a JSON object naming each declared environment's role identifier:`,
+              commands: setIt,
+            });
+          }
+        }
+      }
       // ── `deploy.trust-unproven`: the probe's line, from the latest run of the caller that counts.
       const unproven = (/** @type {string} */ message, /** @type {boolean} */ note, /** @type {string[]} */ commands = []) => find('deploy.trust-unproven', own ?? DEPLOY_CALLER_PATH, message, {
-        text: note && deployFallback === 'no-environments' ? `Nothing to do on a plan without environments: nothing outside an environment can be proved where no job is inside one.` : `Make each environment's role trust only its own subject, \`…:environment:<name>\`, and let the deploy hook find each role from outside its environment (docs/lanes.md, "The trust probe"); the next release's run proves it, or dispatch the caller at a release's tag:`,
+        text: note && deployFallback === 'no-environments' ? `Nothing to do on a plan without environments: nothing outside an environment can be proved where no job is inside one.` : `Make each environment's role trust only its own subject, \`…:environment:<name>\`, and name each role in the repository variable ${TARGETS_VARIABLE}, which the lane hands the deploy hook (docs/lanes.md, "The trust probe", "Where each role lives"); the next release's run proves it, or dispatch the caller at a release's tag:`,
         commands,
       }, note);
       const dispatch = `gh workflow run ${basename(own ?? DEPLOY_CALLER_PATH)} -R ${repo} --ref <tag> -f release=<tag>`;

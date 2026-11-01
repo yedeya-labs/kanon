@@ -1584,6 +1584,10 @@
         "environments": {
           "type": "string",
           "description": "The declared environments, in deploy order, separated by spaces, exactly as the adoption record's `## Deploy` list names them. The gate refuses any other list."
+        },
+        "targets": {
+          "type": "string",
+          "description": "Each declared environment's deploy target, the repository variable `KANON_DEPLOY_TARGETS`, which only the caller can read and passes as it is: a JSON object naming each environment's role identifier. The lane hands it to the deploy hook, in the probe and in each environment's job. Not a secret. Optional: empty, the hook is handed none."
         }
       },
       "deploy": {
@@ -1598,6 +1602,10 @@
         "build": {
           "type": "string",
           "description": "The build to deploy: `deploy-release.yml`'s `build` output, as the caller's `needs.release.outputs.build`. The lane downloads the artifact it names, which must be this run's, and checks it against its digest."
+        },
+        "targets": {
+          "type": "string",
+          "description": "The declared environments' deploy targets: `deploy-release.yml`'s `targets` output, as the caller's `needs.release.outputs.targets`. The deploy hook gets this environment's as `KANON_DEPLOY_TARGET`. Optional: empty, the hook gets none."
         }
       }
     },
@@ -1674,7 +1682,7 @@
       "needs": [
         "a `## Deploy` section in `docs/qa/adoption.md` listing your environments",
         "a GitHub environment per declared environment, production with required reviewers, or the record's fallback marker",
-        "a cloud role per environment that trusts only that environment's OIDC subject, readable from outside the environment (a repository variable)",
+        "a cloud role per environment that trusts only that environment's OIDC subject, its identifier named in the repository variable `KANON_DEPLOY_TARGETS`",
         "the Releaser, so a release starts the lane",
         "to announce each deploy, a notify hook and `KANON_CHAT_DEPLOY`, which the caller `kanon init` writes maps into each environment's job"
       ],

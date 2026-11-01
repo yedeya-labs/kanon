@@ -41,7 +41,10 @@
 # (plan 0010 §7, `K-AGENT-47`). It is an optional secret of this workflow, and the caller maps it
 # from `secrets.KANON_DEPLOY_SECRET`: GitHub evaluates that expression in this job's scope, where
 # the environment's secret comes first (kanon#1049 measured that an undeclared or unmapped secret
-# is empty here). No environment's job runs the build hook.
+# is empty here). No environment's job runs the build hook. The deploy hook's step also gets
+# `KANON_DEPLOY_TARGET`, this environment's entry of the `targets` input, which the caller passes
+# from `deploy-release.yml`'s `targets` output, read there from the repository variable
+# `KANON_DEPLOY_TARGETS` (kanon#1555): the role the probe tried, not a secret; empty when unset.
 #
 # AFTER (plan 0010 §8): `record` writes this environment's `deploy` row (`scripts/deploy-row.mjs`),
 # reading the run's approvals to tell a rejection from a failure (kanon#890), and `report` files,
@@ -83,6 +86,11 @@ on:
       build:
         description: "The build to deploy: `deploy-release.yml`'s `build` output, as the caller's `needs.release.outputs.build`. The lane downloads the artifact it names, which must be this run's, and checks it against its digest."
         required: true
+        type: string
+      targets:
+        description: "The declared environments' deploy targets: `deploy-release.yml`'s `targets` output, as the caller's `needs.release.outputs.targets`. The deploy hook gets this environment's as `KANON_DEPLOY_TARGET`. Optional: empty, the hook gets none."
+        required: false
+        default: ""
         type: string
     secrets:
       # The `deploy` kind's secret (plan 0011 §3.2), read by the `notify` job alone. Optional: a
@@ -212,6 +220,7 @@ jobs:
         uses: ./.github/actions/deploy
         env:
           KANON_DEPLOY_SECRET: ${{ secrets.KANON_DEPLOY_SECRET }}
+          KANON_DEPLOY_TARGET: ${{ inputs.targets != '' && fromJSON(inputs.targets)[inputs.environment] || '' }}
         with:
           environment: ${{ inputs.environment }}
           role: ${{ needs.declare.outputs.role }}

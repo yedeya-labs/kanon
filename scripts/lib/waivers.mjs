@@ -171,6 +171,7 @@ export const FINDINGS = {
   'deploy.admin-bypass': { category: 'deploy', blocking: false },
   'deploy.subject-custom': { category: 'deploy', blocking: true },
   'deploy.trust-unproven': { category: 'deploy', blocking: true },
+  'deploy.targets-missing': { category: 'deploy', blocking: true },
   'deploy.artifact-retention': { category: 'deploy', blocking: false },
   'deploy.secret-repository': { category: 'deploy', blocking: false },
   'deploy.secret-organization': { category: 'deploy', blocking: false },

@@ -85,6 +85,7 @@ import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL, sends } fro
 import { HOSTED_INGEST_URL } from '../scripts/lib/telemetry-token.mjs';
 import { OTHER_APP } from '../scripts/app-register.mjs';
 import { hookKind, HOOK_PATH as NOTIFY_HOOK_PATH } from '../actions/notify/notify.mjs';
+import { TARGETS_VARIABLE } from '../scripts/lib/deploy-targets.mjs';
 import { ADOPTION_RECORD as DEPLOY_RECORD, CHAIN_LABELS, CHOICES_HEADING, DeclarationError, DEPLOY_HEADING, LABELS as REFERENCE_LABELS, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
 import { LABEL as OVERSEER_LABEL, OVERSEER_CALLER, parseOverseerInstall } from '../scripts/lib/overseer-install.mjs';
 import { fencedLines } from '../scripts/spec-lib.mjs';
@@ -2119,6 +2120,18 @@ export const deployEnvironmentSecrets = (req) => {
   return (d?.environmentSecrets ?? []).filter((n) => declared.includes(n));
 };
 
+/**
+ * Whether the release's deploy lane takes the deploy targets (kanon#1555): its `deploy-release.yml`
+ * declares the `targets` input, so its caller maps `KANON_DEPLOY_TARGETS` into it and hands the
+ * `release` job's `targets` output to each `deploy.yml` call. False before it.
+ * @param {Requirements} req
+ */
+export const deployTakesTargets = (req) => {
+  const d = /** @type {{ deploy?: { workflows?: { release?: string, environment?: string }, inputs?: Record<string, Record<string, unknown>> } }} */ (/** @type {unknown} */ (req)).deploy;
+  const w = d?.workflows;
+  return Boolean(w?.release && w.environment && d?.inputs?.[w.release]?.targets && d.inputs[w.environment]?.targets);
+};
+
 /** Where `init` writes the deploy lane's caller, the file name a reference deploy names. */
 export const DEPLOY_CALLER_PATH = '.github/workflows/deploy.yml';
 
@@ -2157,12 +2170,18 @@ const envScalar = (n) => (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(n) && !/^(true|false|
  * the release's requirements list them. Each `deploy-<n>` maps the announcement's chat secret,
  * where the release's `deploy.yml` posts one, and the deploy hook's environment secret by its own
  * name, where the release's `deploy.yml` declares it (`deployEnvironmentSecrets`, kanon#1049).
- * Nothing else: no `secrets: inherit`, so no App key reaches the deploy path.
+ * Nothing else: no `secrets: inherit`, so no App key reaches the deploy path. Where the release
+ * takes them (`deployTakesTargets`, kanon#1555), the `release` job passes
+ * `targets: ${{ vars.KANON_DEPLOY_TARGETS }}` and each `deploy-<n>` the `release` job's `targets`.
  * @param {string[]} environments @param {Requirements} req @param {string} release
  */
 export const deployCallerFile = (environments, req, release) => {
   const d = deployOf(req);
   if (!d) throw new Error("this release's requirements have no deploy entry, so it ships no deploy lane");
+  // THE TARGETS (kanon#1555): where the release's `deploy-release.yml` takes `targets`, the
+  // repository variable `KANON_DEPLOY_TARGETS` into it, which only a caller can read, and its
+  // `targets` output into each `deploy.yml` call, so the deploy hook gets each environment's role.
+  const targets = deployTakesTargets(req);
   const grants = (/** @type {string} */ wf) => ['    permissions:', ...Object.entries(d.grants[wf] ?? {}).map(([k, v]) => `      ${k}: ${v}`)];
   const out = [
     "# The caller of Kanon's deploy lane, written by `kanon init` from the `## Deploy` section of",
@@ -2188,6 +2207,7 @@ export const deployCallerFile = (environments, req, release) => {
     ...grants(d.workflows.release),
     '    with:',
     `      environments: '${environments.join(' ')}'`,
+    ...(targets ? [`      targets: \${{ vars.${TARGETS_VARIABLE} }}`] : []),
   ];
   // THE ANNOUNCEMENT'S SECRET (plan 0011 N9, §10.2): each environment's job maps the deploy kind's
   // secret, which `deploy.yml` declares optional, whatever the chat answer, as the project digest's
@@ -2207,6 +2227,7 @@ export const deployCallerFile = (environments, req, release) => {
       `      environment: ${envScalar(e)}`,
       `      position: ${n}`,
       '      build: ${{ needs.release.outputs.build }}',
+      ...(targets ? ['      targets: ${{ needs.release.outputs.targets }}'] : []),
       ...(secrets.length ? ['    secrets:', ...secrets.map((x) => `      ${x}: \${{ secrets.${x} }}`)] : []),
     );
   });
