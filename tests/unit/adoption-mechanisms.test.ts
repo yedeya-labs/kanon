@@ -36,7 +36,9 @@ type Workflow = { on?: unknown; jobs?: Record<string, { uses?: string; steps?: A
 type Repo = { root: string; workflows: Map<string, Workflow> };
 type Result = { runs: boolean; evidence: string };
 type Detector =
-  | { kind: 'detect'; what: string; detect: (repo: Repo) => Result }
+  // `lags`: a row may say `not yet installed` while it runs (the CLI rows, #1557), so a bot PR
+  // that starts it stays green and a person flips it after; marked installed, it must still run.
+  | { kind: 'detect'; what: string; detect: (repo: Repo) => Result; lags?: boolean }
   | { kind: 'outside'; where: string }
   | { kind: 'unbuilt'; why: string };
 
@@ -176,6 +178,9 @@ const atOrBelow = (a: string, b: string): boolean => {
   return i === -1 || (x[i] ?? 0) < (y[i] ?? 0);
 };
 
+/** The pull request that made the skills' npx lines name their candidate's tag (#1557). */
+const CANDIDATE_NPX = 1561;
+
 /**
  * `kanon <command>`, as a person runs it here through Kanon's plugin and its `skill` (#1542). No
  * lane delivers it, so the lane callers' pin says nothing about it: the plugin arrives at the
@@ -190,6 +195,12 @@ const atOrBelow = (a: string, b: string): boolean => {
  * `vX.Y.Z`, which exists only from the promotion, left the skill unresolvable through every soak
  * before #1557. A release PR's own checkout names the tag its merge cuts, which the checkout can't
  * tell from `main` after the merge; a row that ships in that release reads as running on the PR.
+ * So the check is one-sided (`lags`): a row marked installed must run, and a row marked
+ * `not yet installed` may run, which keeps that release PR green until a person flips the row.
+ *
+ * The plugin runs the skill as its `ref`'s tag holds it, not as this checkout does, so the `ref`
+ * must also ship #`CANDIDATE_NPX`: a plugin tagged before it names the stable `vX.Y.Z`
+ * (`candidate-v0.43.0`'s copy names `v0.43.0`), whatever the checkout's skill says.
  *
  * Otherwise nothing here moves the skill, and the checkout can't list tags, so a plain `vX.Y.Z`
  * is read against the latest stable release in the README's install command, which the promotion
@@ -198,7 +209,8 @@ const atOrBelow = (a: string, b: string): boolean => {
  */
 const cli = (skill: string, command: string, pr: number): Detector => ({
   kind: 'detect',
-  what: `the plugin's ref and skills/${skill}'s npx line at releases that ship #${pr}, the npx one a tag that is cut`,
+  lags: true,
+  what: `the plugin's ref and skills/${skill}'s npx line at releases that ship #${pr}, the ref one shipping #${CANDIDATE_NPX} too, the npx one a tag that is cut`,
   detect: (repo) => {
     const read = (path: string) => (existsSync(join(repo.root, path)) ? readFileSync(join(repo.root, path), 'utf8') : '');
     const settings = read('.claude/settings.json');
@@ -210,6 +222,7 @@ const cli = (skill: string, command: string, pr: number): Detector => ({
     if (!npx) return { runs: false, evidence: `skills/${skill}/SKILL.md has no npx line that runs kanon ${command} at a release` };
     const tag = `${prefix}v${npx}`;
     if (!listed(repo, pr, plugin)) return { runs: false, evidence: `the CHANGELOG lists #${pr} at no release up to ${plugin}, the plugin's ref` };
+    if (!listed(repo, CANDIDATE_NPX, plugin)) return { runs: false, evidence: `the CHANGELOG lists #${CANDIDATE_NPX} at no release up to ${plugin}, the plugin's ref: the plugin there ships skills whose npx line names the stable vX.Y.Z, before its candidate's tag (#1557)` };
     if (!listed(repo, pr, npx)) return { runs: false, evidence: `the CHANGELOG lists #${pr} at no release up to ${npx}, the one skills/${skill}'s npx line runs` };
     const config = read('release-please-config.json');
     type Package = { component?: string; 'include-component-in-tag'?: boolean; 'tag-separator'?: string; 'extra-files'?: Array<string | { path?: string }> };
@@ -230,6 +243,7 @@ const cli = (skill: string, command: string, pr: number): Detector => ({
 
 const all = (...ds: Detector[]): Detector => ({
   kind: 'detect',
+  lags: ds.some((d) => d.kind === 'detect' && d.lags === true),
   what: ds.map((d) => (d.kind === 'detect' ? d.what : '?')).join(', and '),
   detect: (repo) => {
     const rs = ds.map((d) => (d.kind === 'detect' ? d.detect(repo) : { runs: false, evidence: 'not a detector' }));
@@ -375,7 +389,7 @@ export const problems = (root: string, recordText: string, detectors: Array<[str
     }
     const { runs: ran, evidence } = detector.detect(repo);
     if (installed && !ran) out.push(`${where} is marked "${row.status}", but nothing here runs it (looked for ${detector.what}: ${evidence}): flip its status to \`not yet installed\`, or, if it moved, update its entry in DETECTORS in ${THIS}`);
-    if (!installed && ran) {
+    if (!installed && ran && !(detector.lags === true && row.status === 'not yet installed')) {
       out.push(row.status === 'not applicable'
         ? `${where} is marked "not applicable", but ${evidence}: flip its status to \`installed YYYY-MM-DD\`, the date the change that runs it merged, and remove its \`Mechanism not applicable\` bullet from ## Choices`
         : `${where} is marked "${row.status}", but ${evidence}: flip its status to \`installed YYYY-MM-DD\`, the date the change that runs it merged, and say in the row what runs it`);
@@ -469,13 +483,16 @@ describe('the check fails each way a row can be wrong', () => {
 
   describe("a CLI mechanism is dated by the plugin's ref and the skill's npx line, not the lane pin (#1542)", () => {
     const LOG = '# Changelog\n\n## [0.43.0](https://x) (2026-10-28)\n\n* **status:** add kanon inbox ([#1497](https://github.com/yedeya-labs/kanon/issues/1497))\n\n## [0.42.0](https://x) (2026-10-19)\n\n* older\n';
+    // 0.44.0 ships #1561, whose skills name their candidate's tag (#1557).
+    const LOG44 = LOG.replace('# Changelog\n\n', '# Changelog\n\n## [0.44.0](https://x) (2026-11-04)\n\n* **release:** candidate tag in skills ([#1561](https://github.com/yedeya-labs/kanon/issues/1561))\n\n');
+    const LOG45 = LOG44.replace('# Changelog\n\n', '# Changelog\n\n## [0.45.0](https://x) (2026-11-11)\n\n* newer\n\n');
     const settings = (ref: string) => JSON.stringify({ extraKnownMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref } } } });
     const readme = (v: string) => `# Kanon\n\n<!-- x-release-please-start-version -->\n\n\`\`\`sh\nclaude plugin marketplace add yedeya-labs/kanon#${v}\n\`\`\`\n\n<!-- x-release-please-end -->\n`;
     const skill = (v: string) => `# Inbox\n\n\`\`\`sh\nnpx --yes --package github:yedeya-labs/kanon#${v} kanon inbox --json\n\`\`\`\n`;
     const config = (extra: string[]) => JSON.stringify({ packages: { '.': { component: 'candidate', 'include-component-in-tag': true, 'tag-separator': '-', 'extra-files': [...extra, { type: 'json', path: '.claude/settings.json', jsonpath: '$.extraKnownMarketplaces.kanon.source.ref' }] } } });
-    // `main` during candidate-v0.43.0's soak: the release commit moved the npx line, to the
-    // candidate's own tag (#1557), and the ref.
-    const soak = {
+    // `main` once #1561 merges, in candidate-v0.43.0's soak: the checkout's skill names the
+    // candidate's tag, but the plugin at the ref, tagged before #1561, still names v0.43.0.
+    const soak43 = {
       ...files,
       // The lane callers pin the candidate, which ships #1497: the old detector read only this.
       '.github/workflows/digest.yml': CALLER.replace('@v0.42.0', '@candidate-v0.43.0'),
@@ -485,51 +502,65 @@ describe('the check fails each way a row can be wrong', () => {
       'README.md': readme('v0.42.0'),
       'release-please-config.json': config(['skills/inbox/SKILL.md']),
     };
-    // The promotion's docs PR moves only the README; `main` after it merges looks the same.
-    const docsPR = { ...soak, 'README.md': readme('v0.43.0') };
+    // The release PR of 0.44.0, and `main` after it merges: the ref ships #1561 now.
+    const soak = { ...soak43, 'CHANGELOG.md': LOG44, '.claude/settings.json': settings('candidate-v0.44.0'), 'skills/inbox/SKILL.md': skill('candidate-v0.44.0') };
+    // The promotion's docs PR moves only the README.
+    const docsPR = { ...soak, 'README.md': readme('v0.44.0') };
     // The next release PR moves the npx line, the ref and the CHANGELOG, but not the README.
-    const releasePR = {
-      ...docsPR,
-      'CHANGELOG.md': LOG.replace('# Changelog\n\n', '# Changelog\n\n## [0.44.0](https://x) (2026-11-04)\n\n* newer\n\n'),
-      '.claude/settings.json': settings('candidate-v0.44.0'),
-      'skills/inbox/SKILL.md': skill('candidate-v0.44.0'),
-    };
+    const releasePR = { ...docsPR, 'CHANGELOG.md': LOG45, '.claude/settings.json': settings('candidate-v0.45.0'), 'skills/inbox/SKILL.md': skill('candidate-v0.45.0') };
     // Before #1557 the release commit wrote the stable `vX.Y.Z`, which exists only from the promotion.
     const stableNpx = (state: Record<string, string>) => ({ ...state, 'skills/inbox/SKILL.md': state['skills/inbox/SKILL.md']!.replace('#candidate-v', '#v') });
     // Release mechanics that stop moving the skill.
     const unmoved = { ...stableNpx(soak), 'release-please-config.json': config([]) };
     const inbox: Array<[string, Detector]> = [...table, ['`kanon inbox`', cli('inbox', 'inbox', 1497)]];
     const rows = (status: string) => good.replace('| The sweep |', `| \`kanon inbox\` and the inbox skill | \`K-A-5\` | ${status} |\n| The sweep |`);
+    const ran = (state: Record<string, string>) => { const d = cli('inbox', 'inbox', 1497); return d.kind === 'detect' && d.detect(readRepo(repo(state))).runs; };
 
-    it("runs from the candidate's cut, when the skill's npx names the candidate's tag the release commit cut (#1557)", () => {
-      expect(problems(repo(soak), rows('installed 2026-10-28'), inbox)).toEqual([]);
-      expect(problems(repo(soak), rows('not yet installed'), inbox).join('\n')).toMatch(/"`kanon inbox` and the inbox skill" is marked "not yet installed", but the plugin's ref \(candidate-v0\.43\.0\) ships #1497, and skills\/inbox runs kanon inbox at candidate-v0\.43\.0, the tag release-please cuts on the release commit that wrote it: flip its status to `installed YYYY-MM-DD`/);
+    it("doesn't run while the plugin's ref was tagged before #1561, whatever the checkout's skill names (#1557)", () => {
+      expect(ran(soak43)).toBe(false);
+      expect(problems(repo(soak43), rows('installed 2026-10-28'), inbox).join('\n')).toMatch(/is marked "installed 2026-10-28", but nothing here runs it .*the CHANGELOG lists #1561 at no release up to 0\.43\.0, the plugin's ref/);
+      expect(problems(repo(soak43), rows('not yet installed'), inbox)).toEqual([]);
     });
 
-    it("keeps the row installed through a release cycle: neither the promotion's docs PR nor the next release PR turns it red", () => {
+    it("runs from the cut of the first candidate whose ref ships #1561, and passes an installed row there", () => {
+      expect(ran(soak)).toBe(true);
+      expect(problems(repo(soak), rows('installed 2026-11-04'), inbox)).toEqual([]);
+    });
+
+    it("is one-sided: a row still marked not yet installed passes while it runs, so the release PR that starts it stays green", () => {
       for (const [name, state] of Object.entries({ soak, docsPR, releasePR })) {
-        expect([name, problems(repo(state), rows('installed 2026-10-28'), inbox)]).toEqual([name, []]);
-        expect([name, problems(repo(state), rows('not yet installed'), inbox).length]).toEqual([name, 1]);
+        expect([name, ran(state)]).toEqual([name, true]);
+        expect([name, problems(repo(state), rows('installed 2026-11-04'), inbox)]).toEqual([name, []]);
+        expect([name, problems(repo(state), rows('not yet installed'), inbox)]).toEqual([name, []]);
       }
+      // The real inbox row joins the CLI with its library test (`all`), and lags as the CLI does.
+      const joined: Array<[string, Detector]> = [...table, ['`kanon inbox`', all(runs('label-guard.mjs'), cli('inbox', 'inbox', 1497))]];
+      expect(problems(repo(soak), rows('not yet installed'), joined)).toEqual([]);
+      expect(problems(repo(soak43), rows('installed 2026-10-28'), joined).join('\n')).toMatch(/#1561 at no release up to 0\.43\.0/);
+      // Only `not yet installed` lags: a row marked not applicable that runs still fails.
+      expect(problems(repo(soak), rows('not applicable'), inbox).join('\n')).toMatch(/is marked "not applicable", but the plugin's ref \(candidate-v0\.44\.0\) ships #1497/);
+      // And only the CLI rows lag: another detector that runs still names the row to flip.
+      const lagless: Array<[string, Detector]> = [...table, ['`kanon inbox`', { ...cli('inbox', 'inbox', 1497), lags: false } as Detector]];
+      expect(problems(repo(soak), rows('not yet installed'), lagless).join('\n')).toMatch(/is marked "not yet installed", but the plugin's ref .*: flip its status to `installed YYYY-MM-DD`/);
     });
 
     it("fails an installed row while the release commit writes a stable tag it doesn't cut, as before #1557", () => {
       const lanePin = shipped(1497);
       expect(lanePin.kind === 'detect' && lanePin.detect(readRepo(repo(stableNpx(soak)))).runs).toBe(true);
       for (const [name, state] of Object.entries({ soak, docsPR, releasePR })) {
-        expect([name, problems(repo(stableNpx(state)), rows('installed 2026-10-31'), inbox).join('\n')]).toEqual([name, expect.stringMatching(/is marked "installed 2026-10-31", but nothing here runs it .*release-please-config\.json's extra-files moves skills\/inbox's npx line, and each release commit is tagged candidate-vX\.Y\.Z, but the line names v0\.4[34]\.0, a tag release-please doesn't cut/)]);
+        expect([name, problems(repo(stableNpx(state)), rows('installed 2026-10-31'), inbox).join('\n')]).toEqual([name, expect.stringMatching(/is marked "installed 2026-10-31", but nothing here runs it .*release-please-config\.json's extra-files moves skills\/inbox's npx line, and each release commit is tagged candidate-vX\.Y\.Z, but the line names v0\.4[45]\.0, a tag release-please doesn't cut/)]);
         expect([name, problems(repo(stableNpx(state)), rows('not yet installed'), inbox)]).toEqual([name, []]);
       }
     });
 
     it("once release-please stops moving the skill, dates a stable npx by the README's stable tag, and a candidate one not at all", () => {
-      expect(problems(repo(unmoved), rows('installed 2026-10-31'), inbox).join('\n')).toMatch(/skills\/inbox's npx line runs v0\.43\.0, not tagged yet: the README's install command names v0\.42\.0/);
+      expect(problems(repo(unmoved), rows('installed 2026-10-31'), inbox).join('\n')).toMatch(/skills\/inbox's npx line runs v0\.44\.0, not tagged yet: the README's install command names v0\.42\.0/);
       expect(problems(repo(unmoved), rows('not yet installed'), inbox)).toEqual([]);
-      const promoted = { ...unmoved, 'README.md': readme('v0.43.0') };
-      expect(problems(repo(promoted), rows('not yet installed'), inbox).join('\n')).toMatch(/is marked "not yet installed", but the plugin's ref \(candidate-v0\.43\.0\) ships #1497, and skills\/inbox runs kanon inbox at v0\.43\.0, tagged at or below the README's v0\.43\.0/);
-      expect(problems(repo(promoted), rows('installed 2026-11-04'), inbox)).toEqual([]);
-      const candidate = { ...promoted, 'skills/inbox/SKILL.md': skill('candidate-v0.43.0') };
-      expect(problems(repo(candidate), rows('installed 2026-11-04'), inbox).join('\n')).toMatch(/skills\/inbox's npx line runs candidate-v0\.43\.0, and nothing here says that tag is cut/);
+      const promoted = { ...unmoved, 'README.md': readme('v0.44.0') };
+      expect(ran(promoted)).toBe(true);
+      expect(problems(repo(promoted), rows('installed 2026-11-11'), inbox)).toEqual([]);
+      const candidate = { ...promoted, 'skills/inbox/SKILL.md': skill('candidate-v0.44.0') };
+      expect(problems(repo(candidate), rows('installed 2026-11-11'), inbox).join('\n')).toMatch(/skills\/inbox's npx line runs candidate-v0\.44\.0, and nothing here says that tag is cut/);
     });
 
     it("fails an installed row when the plugin's ref, or the npx line's release, doesn't ship the change", () => {
