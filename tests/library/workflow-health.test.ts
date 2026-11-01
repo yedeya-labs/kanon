@@ -8,7 +8,6 @@ import {
   MIN_DECISIVE,
   WINDOW,
   HEALTH_MARKER,
-  OVERSEER_WORKFLOW,
   auditIssueIn,
   auditMarker,
   classifyAudit,
@@ -27,6 +26,7 @@ import {
   renderClose,
   renderFinding,
   watchedWorkflows,
+  workflowTexts,
 } from '../../scripts/workflow-health.mjs';
 import { ROOT } from './helpers/adopter.js';
 
@@ -145,10 +145,36 @@ describe('what it watches', () => {
   });
 });
 
+/** An adopter's `.github/workflows/`, holding these files with these texts. */
+const workflowsWith = (files: Record<string, string>): string => {
+  const dir = mkdtempSync(join(tmpdir(), 'workflow-health-'));
+  for (const [f, text] of Object.entries(files)) writeFileSync(join(dir, f), text);
+  return dir;
+};
+
+/** A caller whose one job calls Kanon's `lane` at a release. */
+const callerOf = (lane: string): string =>
+  `on:\n  schedule:\n    - cron: "0 7 * * 1"\njobs:\n  run:\n    uses: yedeya-labs/kanon/.github/workflows/${lane}.yml@v1.0.0\n`;
+
 describe('the heartbeat runs only where an Overseer is installed (plan 0004, decision 12)', () => {
-  it('reads that from the Overseer caller among the watched files', () => {
-    expect(OVERSEER_WORKFLOW).toBe('agent-overseer.yml');
-    expect(overseerInstalled(watchedWorkflows(workflowsDir(['agent-overseer.yml', 'agent-review.yml'])))).toBe(true);
+  // BY WHAT A WORKFLOW CALLS, NOT ITS FILE NAME (kanon#1549): `lane-check` holds the adoption
+  // record's `**Overseer:**` declaration to whether a workflow calls the Overseer's lane, at any
+  // file name, so a caller under a `caller.misplaced` waiver is `installed` there and must get
+  // its heartbeat here.
+  it('reads that from a workflow that calls the Overseer\'s lane', () => {
+    expect(overseerInstalled(workflowTexts(workflowsWith({ 'agent-overseer.yml': callerOf('agent-overseer'), 'agent-review.yml': callerOf('agent-review') })))).toBe(true);
+  });
+
+  it('finds a caller at another file name, as a `caller.misplaced` waiver allows', () => {
+    expect(overseerInstalled(workflowTexts(workflowsWith({ 'overseer.yml': callerOf('agent-overseer'), 'agent-review.yml': callerOf('agent-review') })))).toBe(true);
+  });
+
+  it('counts a caller only another workflow calls, as `lane-check` does', () => {
+    const inner = `on:\n  workflow_call:\njobs:\n  run:\n    uses: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@v1.0.0\n`;
+    const outer = `on:\n  schedule:\n    - cron: "0 7 * * 1"\njobs:\n  run:\n    uses: ./.github/workflows/overseer-inner.yml\n`;
+    expect(overseerInstalled(workflowTexts(workflowsWith({ 'overseer-inner.yml': inner, 'weekly.yml': outer })))).toBe(true);
+    // `lane-check` counts the inner file whether or not a workflow above calls it.
+    expect(overseerInstalled(workflowTexts(workflowsWith({ 'overseer-inner.yml': inner })))).toBe(true);
   });
 
   it('the heartbeat asks it before it reads anything (wiring, which the CLI half does not test)', () => {
@@ -156,13 +182,18 @@ describe('the heartbeat runs only where an Overseer is installed (plan 0004, dec
     const body = src.slice(src.indexOf('function auditHeartbeat() {'));
     if (body.length === src.length) throw new Error('auditHeartbeat moved: re-anchor this check');
     const first = body.split('\n').slice(1).find((l) => l.trim())!;
-    expect(first.trim()).toBe('if (!overseerInstalled(watchedWorkflows())) {');
+    expect(first.trim()).toBe('if (!overseerInstalled(workflowTexts())) {');
     expect(body.indexOf('return 0;')).toBeLessThan(body.indexOf('auditIssues()'));
   });
 
-  it('expects no audit from a repository without one', () => {
-    expect(overseerInstalled(watchedWorkflows(workflowsDir(['agent-review.yml', 'agent-project-digest.yml'])))).toBe(false);
-    expect(overseerInstalled([])).toBe(false);
+  it('expects no audit from a repository where no workflow calls the Overseer\'s lane', () => {
+    expect(overseerInstalled(workflowTexts(workflowsWith({ 'agent-review.yml': callerOf('agent-review'), 'agent-project-digest.yml': callerOf('agent-project-digest') })))).toBe(false);
+    expect(overseerInstalled(new Map())).toBe(false);
+  });
+
+  it('is not fooled by the file name alone: an `agent-overseer.yml` that calls no lane is no caller', () => {
+    // Kanon's own `agent-overseer.yml` is the lane's definition, not a caller of it.
+    expect(overseerInstalled(workflowTexts(workflowsWith({ 'agent-overseer.yml': 'on:\n  workflow_call:\njobs:\n  run:\n    runs-on: ubuntu-latest\n    steps: []\n' })))).toBe(false);
   });
 });
 
