@@ -168,6 +168,18 @@ export function laneCallersIn(files) {
 }
 
 /**
+ * Whether any workflow among `files` has a job that calls `lane` at a Kanon ref, which is how
+ * `lane-check` reads a lane as called: a file only another workflow calls counts, so a nested
+ * layout's inner file does, and a file at the lane's name that calls nothing doesn't. Pure.
+ * @param {string} lane the lane, as `agent-overseer` or `agent-overseer.yml`
+ * @param {Map<string, string>} files each workflow's text by its file name
+ */
+export function laneCalledIn(lane, files) {
+  const name = laneName(lane);
+  return [...callGraph(files).values()].some((node) => node.lanes.has(name));
+}
+
+/**
  * The default branch's workflows and adoption record, in one GraphQL read. Throws when it can't
  * be read; `laneCaller` turns that into the fallback.
  * @param {{ repo: string, json: (args: string[]) => any }} io

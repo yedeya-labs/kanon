@@ -58,7 +58,7 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isCliEntry } from './lib/cli-entry.mjs';
-import { laneCallersIn } from './lib/lane-caller.mjs';
+import { laneCalledIn, laneCallersIn } from './lib/lane-caller.mjs';
 import { beforeApply } from './lib/labels.mjs';
 import { plan } from './issue-triage-defaults.mjs';
 import {
@@ -402,16 +402,17 @@ export function renderFinding(rows, window = WINDOW, { carried = [] } = {}) {
  *
  * ── ONLY WHERE AN OVERSEER IS INSTALLED ──────────────────────────────────────
  * The Overseer is an optional lane (plan 0004, decision 12), and a repository without one
- * has no weekly audit to miss. Until its lane moves into Kanon (plan 0004 step 13, where the
- * adoption record says whether it is installed), the heartbeat reads that from the lane
- * callers on disk: an `agent-overseer.yml` among them (`OVERSEER_WORKFLOW`). Without one it
- * says so and asks nothing.
+ * has no weekly audit to miss. The heartbeat reads whether it is installed by the rule
+ * `lane-check` holds the adoption record's `**Overseer:**` declaration to: a workflow on disk
+ * calls the Overseer's lane (`OVERSEER_LANE`), at any file name (kanon#1549). Reading it by
+ * the file name `agent-overseer.yml` instead skipped a caller under a `caller.misplaced`
+ * waiver, whose record says `installed`. Without a caller it says so and asks nothing.
  */
 
-/** The Overseer's caller, by the file name every lane caller takes (K-LAYOUT-18). */
-export const OVERSEER_WORKFLOW = 'agent-overseer.yml';
-/** Is there a weekly audit to expect? Pure, over `watchedWorkflows()`'s list. */
-export const overseerInstalled = (files) => files.includes(OVERSEER_WORKFLOW);
+/** The Overseer's lane, which its caller calls at any file name. */
+export const OVERSEER_LANE = 'agent-overseer';
+/** Is there a weekly audit to expect? Pure, over `workflowTexts()`'s map. */
+export const overseerInstalled = (files) => laneCalledIn(OVERSEER_LANE, files);
 
 /** Days since the last audit before the silence is news. See the arithmetic above. */
 export const AUDIT_MAX_AGE_DAYS = positiveNumber(process.env.QA_AUDIT_MAX_AGE_DAYS, 9);
@@ -512,16 +513,22 @@ export function renderAuditFinding(verdict, { maxAgeDays = AUDIT_MAX_AGE_DAYS } 
  *  (In the reference adopter the host was `project-digest.yml`, and this named it too.) */
 export function watchedWorkflows(dir = '.github/workflows') {
   const names = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f));
+  return [...new Set([...names.filter((f) => f.startsWith('agent-') && f.endsWith('.yml')), ...laneCallersIn(workflowTexts(dir))])].sort();
+}
+
+/** Each readable workflow's text by its file name. An unreadable one is left out, so it is
+ *  watched only if its name says it is a caller, and calls nothing. */
+export function workflowTexts(dir = '.github/workflows') {
   /** @type {Map<string, string>} */
   const files = new Map();
-  for (const f of names) {
+  for (const f of readdirSync(dir).filter((n) => /\.ya?ml$/.test(n))) {
     try {
       files.set(f, readFileSync(join(dir, f), 'utf8'));
     } catch {
-      // Unreadable: watched only if its name says it is a caller.
+      // Unreadable: left out.
     }
   }
-  return [...new Set([...names.filter((f) => f.startsWith('agent-') && f.endsWith('.yml')), ...laneCallersIn(files)])].sort();
+  return files;
 }
 
 /**
@@ -618,8 +625,8 @@ function openAuditFinding() {
  * asked, which is the whole point of a check whose evidence does not expire.
  */
 function auditHeartbeat() {
-  if (!overseerInstalled(watchedWorkflows())) {
-    console.log(`audit heartbeat: skipped — no \`${OVERSEER_WORKFLOW}\` in .github/workflows, so there is no weekly audit to expect.`);
+  if (!overseerInstalled(workflowTexts())) {
+    console.log(`audit heartbeat: skipped — no workflow in .github/workflows calls the Overseer's lane (\`${OVERSEER_LANE}\`), so there is no weekly audit to expect.`);
     return 0;
   }
   const verdict = classifyAudit(auditIssues(), new Date());
