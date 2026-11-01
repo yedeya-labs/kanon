@@ -82,6 +82,8 @@ export type State = {
   kind: 'User' | 'Organization';
   private: boolean;
   admin: boolean;
+  /** False for a fine-grained token whose repository access leaves the repository out (#1551): GitHub refuses it the collaborators, and every write. */
+  tokenCovers?: boolean;
   hasCommits: boolean;
   rulesetsOnPlan: boolean;
   orgPlan?: string;
@@ -147,7 +149,7 @@ export const fakeGitHub = (over: Partial<State> = {}) => {
     }
     if (a0 === 'secret' && a1 === 'list') return st.secrets ? ok([...st.secrets].map((name) => ({ name }))) : no('gh: Resource not accessible by integration (HTTP 403)');
     if (a0 === 'label' && a1 === 'create') {
-      if (st.labelCreateFails) return no('gh: Resource not accessible by personal access token (HTTP 403)');
+      if (st.labelCreateFails || st.tokenCovers === false) return no('gh: Resource not accessible by personal access token (HTTP 403)');
       st.labels.add(args[2]!);
       return ok('');
     }
@@ -164,7 +166,7 @@ export const fakeGitHub = (over: Partial<State> = {}) => {
     const method = args.includes('-X') ? args[args.indexOf('-X') + 1] : 'GET';
     const path = args.find((x, i) => i > 0 && /^(repos|orgs)\//.test(x)) ?? '';
     if (method === 'PATCH' && path === `repos/${REPO}`) {
-      if (!st.admin) return no('gh: Must have admin rights to Repository. (HTTP 403)');
+      if (!st.admin || st.tokenCovers === false) return no('gh: Resource not accessible by personal access token (HTTP 403)');
       for (const f of args.filter((x, i) => args[i - 1] === '-f' || args[i - 1] === '-F')) {
         const [k, v] = [f.slice(0, f.indexOf('=')), f.slice(f.indexOf('=') + 1)];
         st.settings[k] = v === 'true' ? true : v === 'false' ? false : v;
@@ -172,7 +174,7 @@ export const fakeGitHub = (over: Partial<State> = {}) => {
       return ok('{}');
     }
     if (method === 'POST' && path === `repos/${REPO}/rulesets`) {
-      if (!st.admin) return no('gh: Must have admin rights to Repository. (HTTP 403)');
+      if (!st.admin || st.tokenCovers === false) return no('gh: Resource not accessible by personal access token (HTTP 403)');
       st.rulesets.push({ id: st.rulesets.length + 100, ...JSON.parse(input ?? '{}') });
       return ok('{}');
     }
@@ -193,6 +195,7 @@ export const fakeGitHub = (over: Partial<State> = {}) => {
       if (st.kanonTagsFail) return no(st.kanonTagsFail);
       return st.kanonTags.has(name) ? ok(`refs/tags/${name}\n`) : no('gh: Not Found (HTTP 404)');
     }
+    if (path.startsWith(`repos/${REPO}/collaborators?`)) return st.tokenCovers === false ? no('gh: Resource not accessible by personal access token (HTTP 403)') : ok('1');
     if (path === `repos/${REPO}/branches/main`) return st.hasCommits ? ok('main') : no('gh: Branch not found (HTTP 404)');
     if (path.startsWith(`repos/${REPO}/rulesets?`)) {
       if (!st.rulesetsOnPlan) return no('gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)');

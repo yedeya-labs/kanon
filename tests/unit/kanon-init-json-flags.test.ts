@@ -117,6 +117,29 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(readable.notes.some(known)).toBe(false);
   });
 
+  // A fine-grained token whose repository access leaves the repository out still reads a public
+  // one, and GitHub's `permissions` are the account's role, so the dry run said `admin: true`
+  // while every write then failed, each step asking for a permission the token already had (#1551).
+  it("says the token doesn't cover the repository, from its grants, not the account's role", async () => {
+    const dry = parse(await run(checkout(), fakeGitHub({ admin: true, tokenCovers: false }), ['--json', '--dry-run']));
+    expect(dry.inspection.admin).toBe(false);
+    expect(dry.inspection.tokenCoversRepository).toBe(false);
+    expect(dry.notes.some((n) => n.startsWith("The token gh uses doesn't cover acme/widgets"))).toBe(true);
+    const github = fakeGitHub({ admin: true, tokenCovers: false });
+    const real = await run(checkout(), github, ['--json', '--no-apps']);
+    expect(real.err).toContain("Your token doesn't cover acme/widgets");
+    const d = parse(real);
+    const label = d.findings.find((f) => f.id === 'label.create');
+    expect(label?.message).toMatch(/repository access doesn't cover acme\/widgets/);
+    expect(label?.message).not.toMatch(/needs Issues: write/);
+    expect(d.findings.find((f) => f.id === 'ruleset.create')?.fix.text).toMatch(/^Create it with a token whose repository access covers acme\/widgets/);
+    // A token that covers it is read as before, and the account's role decides.
+    const covered = parse(await run(checkout(), fakeGitHub({ admin: true }), ['--json', '--dry-run']));
+    expect(covered.inspection.admin).toBe(true);
+    expect(covered.inspection.tokenCoversRepository).toBe(true);
+    expect(covered.notes.some((n) => n.includes("doesn't cover"))).toBe(false);
+  });
+
   it('says what a dry run would do, and does nothing', async () => {
     const dir = checkout();
     const github = fakeGitHub();
