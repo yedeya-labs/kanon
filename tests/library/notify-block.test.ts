@@ -308,7 +308,7 @@ describe("the hook's kind, for telemetry (§5.1, step 4)", SPAWNS, () => {
   it.each([['slack', SLACK_HOOK], ['webhook', WEBHOOK_HOOK]])("Kanon's %s hook, at the path, is handed the four inputs, which it passes to Kanon's action", (name, hook) => {
     const r = posting({ hook });
     expect(r.prebuilt).toHaveLength(1);
-    expect(r.prebuilt[0]!.uses).toMatch(new RegExp(`^yedeya-labs/kanon/actions/notify/${name}@v\\d+\\.\\d+\\.\\d+$`));
+    expect(r.prebuilt[0]!.uses).toMatch(new RegExp(`^yedeya-labs/kanon/actions/notify/${name}@candidate-v\\d+\\.\\d+\\.\\d+$`));
     expect(r.prebuilt[0]!.with).toEqual(r.hookCalls[0]);
     expect(r.doctor).toEqual([{ hook: name, kind: 'project-digest', outcome: 'posted' }]);
     expect(r.rows[0]).toMatchObject({ hook: name, outcome: 'posted', contract_version: 1 });
