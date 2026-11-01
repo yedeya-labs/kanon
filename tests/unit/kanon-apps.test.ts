@@ -47,6 +47,8 @@ type Run = {
   writes: string[];
   opened: string[];
   removed: string[];
+  /** The installation's selection each time it was listed, and each secret set, in order. */
+  events: string[];
   dir: string;
 };
 
@@ -72,7 +74,10 @@ type Scenario = {
   noDir?: boolean;
   extraArgs?: string[];
   callbackState?: (sent: string) => string;
-  selection?: 'all' | 'selected';
+  /** The installation's repository selection; a list answers one per listing, its last one after that (#1551). */
+  selection?: 'all' | 'selected' | Array<'all' | 'selected'>;
+  /** How long the command waits for the installation (default 5000 ms). */
+  timeoutMs?: number;
   repos?: string[];
   register?: string;
   /** Overrides fields of GitHub's conversion reply. */
@@ -149,7 +154,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
   if (s.register !== undefined) realDeps.writeFile(join(dir, 'docs/qa/agent-identities.md'), s.register);
   if (s.adoption !== undefined) realDeps.writeFile(join(dir, 'docs/qa/adoption.md'), s.adoption);
   let installed = false as boolean;
-  const r: Run = { status: -1, output: '', manifest: null, action: '', callbackStatus: 0, gh: [], git: [], api: [], issuers: [], writes: [], opened: [], removed: [], dir };
+  const r: Run = { status: -1, output: '', manifest: null, action: '', callbackStatus: 0, gh: [], git: [], api: [], issuers: [], writes: [], opened: [], removed: [], events: [], dir };
   const keyFile = join(dir, 'judge.pem');
   if (s.reuse) {
     realDeps.writeFile(keyFile, s.reuse.keyText ?? PEM);
@@ -168,7 +173,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
     },
     state: () => `state-${++n}`,
     pollMs: 0,
-    timeoutMs: 5000,
+    timeoutMs: s.timeoutMs ?? 5000,
     sleep: () => new Promise((res) => setTimeout(res, 1)),
     writeFile: (path, text) => {
       if (s.registerWriteFails && path.endsWith('agent-identities.md')) throw new Error(`EROFS: read-only file system, open '${path}'`);
@@ -202,6 +207,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
         const status = s.rulesets?.putStatus ?? 0;
         return { status, stdout: status ? '' : '{}', stderr: status ? 'gh: Resource not accessible by integration (HTTP 403)' : '' };
       }
+      if (args[1] === 'set') r.events.push(`set ${args[2]}`);
       const by = args[1] === 'set' ? s.setStatus : args[1] === 'delete' ? s.deleteStatus : undefined;
       const status = by?.[args[2] ?? ''] ?? 0;
       return { status, stdout: '', stderr: status ? 'HTTP 403: Resource not accessible' : '' };
@@ -254,7 +260,11 @@ const run = async (s: Scenario = {}): Promise<Run> => {
       }
       if (u.pathname === '/app/installations') {
         verifyJwt(auth, '4242');
-        return json(200, installed ? [{ id: 77, account: { login: ORG }, repository_selection: s.selection ?? 'selected' }] : []);
+        if (!installed) return json(200, []);
+        const listed = r.events.filter((e) => e.startsWith('installation ')).length;
+        const selection = Array.isArray(s.selection) ? s.selection[Math.min(listed, s.selection.length - 1)]! : (s.selection ?? 'selected');
+        r.events.push(`installation ${selection}`);
+        return json(200, [{ id: 77, account: { login: ORG }, repository_selection: selection }]);
       }
       if (method === 'POST' && u.pathname === '/app/installations/77/access_tokens') {
         verifyJwt(auth, '4242');
@@ -479,10 +489,41 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     rmSync(r.dir, { recursive: true, force: true });
   });
 
-  it('warns when the installation covers every repository', async () => {
-    const r = await run({ selection: 'all' });
+  // GitHub's install page offers "All repositories" first. The command warned only after it had
+  // stored the key, which then minted tokens for every repository of the owner (#1551): it now
+  // stops right after Install, before storing anything, until the installation is narrowed.
+  it('stops on an installation that covers every repository, and stores nothing until it is narrowed', async () => {
+    const r = await run({ selection: ['all', 'all', 'selected'] });
     expect(r.status, r.output).toBe(0);
-    expect(r.output).toMatch(/warning: The App is installed on ALL repositories of acme/);
+    expect(r.output).toContain('kanon apps: stopped: the App acme-judge is installed on ALL repositories of acme, not only those that adopt Kanon (K-ADOPT-8)');
+    expect(r.output).toContain(`choose "Only select repositories" at https://github.com/organizations/${ORG}/settings/installations/77, pick ${REPO}, and save`);
+    expect(r.output.match(/stopped: /g)).toHaveLength(1);
+    // Each secret is stored only once the installation covers selected repositories alone.
+    const keys = r.events.filter((e) => e.startsWith('set ') && e !== 'set KANON_APPS_PREFLIGHT');
+    expect(keys).toEqual(['set JUDGE_APP_ID', 'set JUDGE_APP_PRIVATE_KEY']);
+    expect(r.events.indexOf('set JUDGE_APP_ID')).toBeGreaterThan(r.events.lastIndexOf('installation selected'));
+    expect(r.events.filter((e) => e.startsWith('installation '))).toEqual(['installation all', 'installation all', 'installation selected']);
+    expect(r.output).not.toMatch(/warning/);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('never stores the key while the installation still covers every repository, and says how to start again', async () => {
+    const r = await run({ selection: 'all', timeoutMs: 30 });
+    expect(r.status).toBe(1);
+    expect(r.events.filter((e) => e.startsWith('set ') && e !== 'set KANON_APPS_PREFLIGHT')).toEqual([]);
+    expect(r.output).toMatch(/installed on ALL repositories of acme.*so its key was not stored/);
+    expect(r.output).toContain(`--reuse judge:${ORG}-judge@4242=<file>.pem`);
+    expect(r.writes).toEqual([]);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('--reuse refuses an installation that covers every repository, storing nothing and keeping the file', async () => {
+    const r = await run({ reuse: { slug: `${ORG}-judge` }, selection: 'all' });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/installed on ALL repositories of acme.*Nothing was stored; the file is kept/);
+    expect(r.events.filter((e) => e.startsWith('set ') && e !== 'set KANON_APPS_PREFLIGHT')).toEqual([]);
+    expect(r.removed).toEqual([]);
+    expect(statSync(join(r.dir, 'judge.pem')).isFile()).toBe(true);
     rmSync(r.dir, { recursive: true, force: true });
   });
 
@@ -808,8 +849,8 @@ const githubUrls = (r: Run) =>
 describe('kanon apps for a personal account or an organisation (plan 0005 §5.1, decision 1)', () => {
   // Every page that names an owner: the create page, the App's settings (the permissions
   // drift warning and the rotation steps) and the installation's (the all-repositories
-  // warning). The install page, github.com/apps/<slug>/installations/new, names no owner.
-  const everyPage: Scenario = { selection: 'all', conversion: { permissions: { contents: 'read' } } };
+  // stop). The install page, github.com/apps/<slug>/installations/new, names no owner.
+  const everyPage: Scenario = { selection: ['all', 'selected'], conversion: { permissions: { contents: 'read' } } };
   const owned = (urls: string[]) => urls.filter((u) => !u.startsWith('https://github.com/apps/'));
 
   it('asks GitHub what the owner is', async () => {

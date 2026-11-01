@@ -9,9 +9,10 @@
 // adoption record declares for it (K-LAYOUT-10), opens the owner's "create App"
 // page with it filled in (a personal account's or an organisation's, detected from the owner's
 // account type: plan 0005, decision 1), exchanges the one-time code for the App's id and
-// private key, stores both as Actions secrets on EVERY repository named in --repo with the
-// Owner's own `gh` (`AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY`, ...: §3.5), waits for the Owner
-// to install the App, checks the installation covers each of those repositories, and writes
+// private key, waits for the Owner to install the App, checks the installation covers each
+// repository named in --repo and not ALL of the owner's (K-ADOPT-8: it stops there until the
+// Owner narrows it, #1551), stores the id and key as Actions secrets on EVERY one of them with
+// the Owner's own `gh` (`AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY`, ...: §3.5), and writes
 // one App register row per role of the App, its roles sharing its slug (K-LAYOUT-6, §3.4). The
 // Owner clicks Create and Install; the command never creates an App or a key itself (K-AGENT-6).
 //
@@ -492,23 +493,35 @@ export const rotationSteps = (pages, owner, repos, apps) => [
 /**
  * Waits until the App is installed on the owner's account, then checks what it covers: every
  * repository named. One App per owner covers several (plan 0005 §3.2), so only an installation
- * on ALL of the owner's repositories warns (K-ADOPT-8, amended).
+ * on ALL of the owner's repositories is refused (K-ADOPT-8): its key would mint tokens for every
+ * repository of the owner, so nothing goes on until the person narrows it (#1551). GitHub's
+ * install page offers "All repositories" first, so it is checked here, right after Install, and
+ * before any key is stored, not warned about afterwards. Waiting, it says so once and polls until
+ * the installation covers selected repositories only; with `wait` false it throws at once. An
+ * error thrown while the installation still covers all of them carries `allRepositories`.
  * @param {{ owner: string, pages: OwnerPages, repos: string[], appId: number, slug: string, pem: string, deps: Deps, wait?: boolean }} a
- * @returns {Promise<{ id: number, warnings: string[] }>}
+ * @returns {Promise<{ id: number }>}
  */
 const awaitInstallation = async ({ owner, pages, repos, appId, slug, pem, deps, wait = true }) => {
   const deadline = deps.now() + deps.timeoutMs;
+  let told = false;
   for (;;) {
     const r = await api(deps, '/app/installations?per_page=100', { jwt: appJwt(appId, pem, deps.now()) });
     if (r.status !== 200) throw new Error(`GitHub answered ${r.status} when listing the App's installations`);
     const inst = (r.json ?? []).find((/** @type {any} */ i) => String(i.account?.login).toLowerCase() === owner.toLowerCase());
     if (inst) {
-      /** @type {string[]} */
-      const warnings = [];
       const settings = pages.installation(inst.id);
       if (inst.repository_selection === 'all') {
-        warnings.push(`The App is installed on ALL repositories of ${owner}, not only those that adopt Kanon (K-ADOPT-8). Choose "Only select repositories" at ${settings}.`);
-        return { id: inst.id, warnings };
+        const all = `the App ${slug} is installed on ALL repositories of ${owner}, not only those that adopt Kanon (K-ADOPT-8), so its key would mint tokens for every one of them`;
+        const narrow = `choose "Only select repositories" at ${settings}, pick ${repos.join(', ')}, and save`;
+        if (!wait) throw Object.assign(new Error(`${all}: ${narrow}, then run the command again. Nothing was stored; the file is kept.`), { allRepositories: true });
+        if (deps.now() >= deadline) throw Object.assign(new Error(`${all}, and it still was after ${Math.round(deps.timeoutMs / 60000)} minutes, so its key was not stored.`), { allRepositories: true });
+        if (!told) {
+          deps.err(`kanon apps: stopped: ${all}. Nothing is stored while it is: ${narrow}. The command goes on once it covers only the repositories you chose.`);
+          told = true;
+        }
+        await deps.sleep(deps.pollMs);
+        continue;
       }
       // The installation's repository list needs an installation token. This one can read
       // metadata only, is never printed, and is revoked as soon as the list is read.
@@ -536,7 +549,7 @@ const awaitInstallation = async ({ owner, pages, repos, appId, slug, pem, deps, 
       if (missing.length) {
         throw new Error(`the App is installed on ${owner}, but not on ${missing.join(', ')} (it covers: ${names.join(', ') || 'nothing'}). Add ${missing.length > 1 ? 'them' : 'it'} at ${settings}, then run the command again.`);
       }
-      return { id: inst.id, warnings };
+      return { id: inst.id };
     }
     if (!wait) throw new Error(`the App is not installed on ${owner}. Install it at ${installPage(slug)}, choosing ${repos.join(', ')}, then run the command again.`);
     if (deps.now() >= deadline) throw new Error(`the App was not installed within ${Math.round(deps.timeoutMs / 60000)} minutes`);
@@ -693,21 +706,40 @@ const createApp = async ({ owner, pages, repos, key, name, spec, register, deps 
     deps.err(`warning: the App's permissions differ from the ${spec.app}'s on ${drift.join(', ')}. Set them to the ${spec.app}'s at ${pages.app(slug)}/permissions before installing it.`);
   }
 
-  const names = await storeSecrets({ owner, repos, app: key, appId, slug, pem, pages, deps });
-  out(`3. Stored ${names.id} and ${names.key} as Actions secrets on ${repos.map((r) => `${owner}/${r}`).join(', ')}.`);
-
+  // The installation is checked before the key is stored (#1551): one on ALL of the owner's
+  // repositories stops the run there, with nothing stored (K-ADOPT-8).
   const install = installPage(slug);
-  out(`4. Your browser is opening ${install}.`);
-  out(`   Choose ${owner}, then "Only select repositories", pick ${repos.join(', ')}, and click "Install".`);
+  const where = repos.map((r) => `${owner}/${r}`).join(', ');
+  out(`3. Your browser is opening ${install}.`);
+  out(`   Choose ${owner}, then "Only select repositories", pick ${repos.join(', ')}, and click "Install". Nothing is stored until the installation covers only the repositories you chose (K-ADOPT-8).`);
   deps.open(install);
-  const inst = await awaitInstallation({ owner, pages, repos, appId, slug, pem, deps });
-  for (const w of inst.warnings) deps.err(`warning: ${w}`);
-  out(`5. Installed (installation ${inst.id}).`);
+  /** @type {{ id: number }} */
+  let inst;
+  try {
+    inst = await awaitInstallation({ owner, pages, repos, appId, slug, pem, deps });
+  } catch (e) {
+    const err = /** @type {Error & { allRepositories?: boolean }} */ (e);
+    if (err.allRepositories) {
+      throw new Error(
+        `${err.message} The key was never saved anywhere, so it is lost: once the installation covers only ${repos.join(', ')}, generate a new one at ${pages.app(slug)} (Credentials → Key pairs → New key), and run ` +
+          `"kanon apps --owner ${owner} --repo ${repos.join(',')} --reuse ${key}:${slug}@${appId}=<file>.pem".`,
+        { cause: e },
+      );
+    }
+    // Any other failure keeps the key, as storing it before the installation did: an App whose
+    // installation is missing a repository, or late, is still usable once it is fixed.
+    const kept = await storeSecrets({ owner, repos, app: key, appId, slug, pem, pages, deps });
+    throw new Error(`${err.message} The App's id and key are stored as ${kept.id} and ${kept.key} on ${where}.`, { cause: e });
+  }
+  out(`4. Installed (installation ${inst.id}), on selected repositories.`);
+
+  const names = await storeSecrets({ owner, repos, app: key, appId, slug, pem, pages, deps });
+  out(`5. Stored ${names.id} and ${names.key} as Actions secrets on ${where}.`);
 
   const diff = writeAppRows({ spec, slug, register, deps });
   out(`6. Wrote the ${spec.app}'s rows (${appRoles(spec).join(', ')}) in ${register}. Commit them:`);
   for (const l of diff) out(`   ${l}`);
-  return { slug, appId, warnings: inst.warnings };
+  return { slug, appId };
 };
 
 /** Where an App's App ID and Client ID are, for an error that asks for one. @param {OwnerPages} pages @param {string} slug */
@@ -759,7 +791,6 @@ const reuseApp = async ({ owner, pages, repos, key, slug, id, file, spec, specs,
   }
   out(`1. ${file} is a key of ${slug} (id ${appId}), which holds the ${spec.app}'s permissions.`);
   const inst = await awaitInstallation({ owner, pages, repos, appId, slug, pem, deps, wait: false });
-  for (const w of inst.warnings) deps.err(`warning: ${w}`);
   out(`2. Its installation (${inst.id}) covers ${repos.join(', ')}.`);
   const names = await storeSecrets({ owner, repos, app: key, appId, slug, pem, pages, deps, keyFile: file });
   out(`3. Stored ${names.id} and ${names.key} as Actions secrets on ${repos.map((r) => `${owner}/${r}`).join(', ')}.`);
@@ -776,7 +807,7 @@ const reuseApp = async ({ owner, pages, repos, key, slug, id, file, spec, specs,
   for (const l of diff) out(`   ${l}`);
   deps.remove(file);
   out(`5. Deleted ${file}.`);
-  return { slug, appId, warnings: inst.warnings };
+  return { slug, appId };
 };
 
 /**
@@ -1007,13 +1038,11 @@ export const apps = async (argv, overrides = {}) => {
     for (const key of opts.apps) {
       const spec = specOf(key);
       const r = await createApp({ owner, pages, repos, key, spec, name: opts.names[key] ?? `${owner}-${key}`.toLowerCase(), register, deps });
-      warnings += r.warnings.length;
       done.push({ spec, slug: r.slug, appId: r.appId });
     }
     for (const { app: key, slug, id, file } of opts.reuse) {
       const spec = specOf(key);
       const r = await reuseApp({ owner, pages, repos, key, slug, id, file: resolve(file), spec, specs, register, deps });
-      warnings += r.warnings.length;
       done.push({ spec, slug: r.slug, appId: r.appId });
     }
   } catch (e) {
