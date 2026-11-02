@@ -137,7 +137,7 @@ Three lanes post to a chat channel, the daily project digest, the weekly digest 
 
 | Answer | Writes | The weekly digest | Steps left to you | The adoption record's `## Choices` |
 |---|---|---|---|---|
-| `slack` | Kanon's Slack hook, `actions/notify/hooks/slack.yml` copied byte for byte, its one step pinned at this release, at `.github/actions/notify/action.yml` | in, with the Full pipeline | `secret.chat-project-digest` with the project digest, `secret.chat-weekly-digest` with the weekly digest, `secret.chat-release` with the release announcement, and `secret.chat-deploy` with a declared deploy environment: create a Slack incoming webhook for the channel ([Slack's page](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks) is the fix's `url`), then store its URL in your own terminal, never on a command line; one URL may go in each | `- **Chat channel:** Slack, through Kanon's Slack hook (one secret per kind)` |
+| `slack` | Kanon's Slack hook, `actions/notify/hooks/slack.yml` copied byte for byte but for its one step's pin, which names [the release it pins](#the-release-it-pins), at `.github/actions/notify/action.yml` | in, with the Full pipeline | `secret.chat-project-digest` with the project digest, `secret.chat-weekly-digest` with the weekly digest, `secret.chat-release` with the release announcement, and `secret.chat-deploy` with a declared deploy environment: create a Slack incoming webhook for the channel ([Slack's page](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks) is the fix's `url`), then store its URL in your own terminal, never on a command line; one URL may go in each | `- **Chat channel:** Slack, through Kanon's Slack hook (one secret per kind)` |
 | `webhook` | Kanon's generic webhook hook, `actions/notify/hooks/webhook.yml`, the same way | in, with the Full pipeline | the same ids, for an https URL of your receiver's, linking `docs/notifications.md`'s generic webhook section | `- **Chat channel:** a JSON webhook, through Kanon's generic webhook hook` |
 | `hook` | a stub hook declaring the four inputs, whose one step fails, naming its file, until you replace it with your own | in, with the Full pipeline | the same ids, for whatever your hook needs | `- **Chat channel:** our own hook, .github/actions/notify` |
 | `none` | no hook | left out: it posts only through a hook | none | `- **Chat channel:** none yet` |
@@ -154,7 +154,7 @@ Every Kanon reference `init` writes, each caller's `uses:`, `lane-check`'s actio
 - else **`candidate-vX.Y.Z`** when that tag exists: running ahead of stable, which [`kanon doctor`](doctor.md) allows and reports as `pin.candidate`;
 - else it **refuses**, naming both tags it looked for, and changes nothing (exit 1, the error document). A checkout of a commit that is neither a release nor a candidate is such a case. If GitHub can't answer whether a tag exists, other than that it doesn't, `init` refuses too rather than guess.
 
-The pin is `pin` in the JSON document, and the summary's *Pin* line; `kanon` stays the version of the `init` that ran.
+The pin is `pin` in the JSON document, and the summary's *Pin* line; `kanon` stays the version of the `init` that ran. The [adopt skill](../skills/adopt/SKILL.md) runs `init` at its release's candidate tag, `candidate-vX.Y.Z`, which exists from the candidate's cut ([#1557](https://github.com/yedeya-labs/kanon/issues/1557)), and the promotion tags `vX.Y.Z` on the same commit, so the skill of a promoted release still pins the stable `vX.Y.Z`.
 
 ## The token it needs
 

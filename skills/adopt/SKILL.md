@@ -10,12 +10,12 @@ You install Kanon in the repository whose checkout you are in, with the person d
 
 ## How to run `kanon`
 
-Run every `kanon` command in this skill, and every one a finding's fix names, from the repository's checkout, through the release this skill ships in. That release is the one every reference `init` writes is pinned to:
+Run every `kanon` command in this skill, and every one a finding's fix names, from the repository's checkout, through the release this skill ships in. The `npx` line names that release's candidate tag, `candidate-vX.Y.Z`, which exists from the candidate's cut; `init` pins every reference it writes to the stable `vX.Y.Z` on the same commit once Kanon has promoted it, and to the candidate's tag until then (`docs/init.md`, "The release it pins"):
 
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.43.0 kanon init --dry-run --json
+npx --yes --package github:yedeya-labs/kanon#candidate-v0.43.0 kanon init --dry-run --json
 ```
 
 <!-- x-release-please-end -->
@@ -69,7 +69,7 @@ Some steps are the person's alone (**Only a person can**, above): creating and i
 <!-- x-release-please-start-version -->
 
 ```sh
-! cd <the checkout's root> && npx --yes --package github:yedeya-labs/kanon#v0.43.0 kanon apps --owner <owner> --repo <repo> --apps <apps>
+! cd <the checkout's root> && npx --yes --package github:yedeya-labs/kanon#candidate-v0.43.0 kanon apps --owner <owner> --repo <repo> --apps <apps>
 ```
 
 <!-- x-release-please-end -->

@@ -2527,10 +2527,13 @@ export const diagnose = async (deps, opts) => {
     if (hookText === null) {
       // ── `notify.none`: no hook, nothing posts, and no model runs for a post (decision 2, §8).
       find('notify.none', hookPath, `is missing, so nothing posts: ${posting}, whose chat messages, and the model runs that write their narratives, are skipped. The rest of each lane still runs: the project digest's health job files its issues. That is a choice; to post, add a hook (plan 0011 §8).`, {
-        text: `Write one of Kanon's prebuilt hooks there, from the release you check (${checked}): the first command, then the line of ${prebuiltNames.map((n) => `Kanon's ${n} hook`).join(' or ')}. Or write your own composite action at ${hookPath}, taking the inputs ${notify.hook.inputs.join(', ')} (docs/notifications.md). Then store each kind's secret.`,
+        text: `Write one of Kanon's prebuilt hooks there, from the release you check (${checked}), its step pinned at it: the first command, then the line of ${prebuiltNames.map((n) => `Kanon's ${n} hook`).join(' or ')}. Or write your own composite action at ${hookPath}, taking the inputs ${notify.hook.inputs.join(', ')} (docs/notifications.md). Then store each kind's secret.`,
+        // Kanon's copy pins its step at the candidate's tag, which exists from the candidate's cut
+        // (kanon#1557), so the line sets the pin to the checked release, as `kanon init` writes it:
+        // a stable release's hook would otherwise pin the candidate beside callers on `vX.Y.Z`.
         commands: [
           `mkdir -p ${dirname(hookPath)}`,
-          ...prebuiltNames.map((n) => `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/${KANON_REPO}/contents/${notify.prebuilt[n]?.hook}?ref=${checked}' > ${hookPath}`),
+          ...prebuiltNames.map((n) => `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/${KANON_REPO}/contents/${notify.prebuilt[n]?.hook}?ref=${checked}' | sed -E 's#(uses: ${KANON_REPO}/${notify.prebuilt[n]?.action}@)[^ ]+#\\1${checked}#' > ${hookPath}`),
         ],
         url: `https://github.com/${KANON_REPO}/blob/${checked}/docs/notifications.md`,
       });
