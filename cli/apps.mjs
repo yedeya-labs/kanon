@@ -588,16 +588,28 @@ const storeSecrets = async ({ owner, repos, app, appId, slug, pem, pages, deps, 
  * @param {{ spec: AppSpec, slug: string, register: string, deps: Deps }} a
  */
 const writeAppRows = ({ spec, slug, register, deps }) => {
-  let text = deps.readFile(register);
-  /** @type {string[]} */
-  const diff = [];
-  for (const role of appRoles(spec)) {
-    const w = writeRegisterRow(text, { role, slug, permissions: spec.permissions });
-    text = w.text;
-    diff.push(...w.diff);
-  }
+  const before = deps.readFile(register);
+  let text = before;
+  for (const role of appRoles(spec)) text = writeRegisterRow(text, { role, slug, permissions: spec.permissions }).text;
   deps.writeFile(register, /** @type {string} */ (text));
-  return diff;
+  // One diff of the register, in its order (#1551): the roles' diffs end to end put the second
+  // role's row after the paragraph under a new table, which read as a broken table. A row
+  // written changes or adds whole lines, so the lines gone, then the lines added, each in the
+  // file's order, say it all.
+  const was = before === null ? [] : before.replace(/\n$/, '').split('\n');
+  const now = /** @type {string} */ (text).replace(/\n$/, '').split('\n');
+  /** The lines of `a` that `b` lacks, as many times as it lacks them. @param {string[]} a @param {string[]} b */
+  const lacking = (a, b) => {
+    /** @type {Map<string, number>} */
+    const left = new Map();
+    for (const l of b) left.set(l, (left.get(l) ?? 0) + 1);
+    return a.filter((l) => {
+      const n = left.get(l) ?? 0;
+      left.set(l, n - 1);
+      return n <= 0;
+    });
+  };
+  return [...lacking(was, now).map((l) => `-${l}`), ...lacking(now, was).map((l) => `+${l}`)];
 };
 
 /**

@@ -484,8 +484,26 @@ describe('kanon apps, end to end with GitHub mocked', () => {
       expect(parsed.stdout.trim()).toBe(`${ORG}-judge`);
       expect(r.output).toContain(`+| ${role} | \`${ORG}-judge\``);
     }
+    // The diff printed is the register's, in its order: each row inside the table, none after the
+    // paragraph under it, which read as a broken table though the file was right (#1551).
+    const printed = r.output.split('\n').filter((l) => l.startsWith('   +')).map((l) => l.slice(4));
+    expect(printed).toEqual(register.replace(/\n$/, '').split('\n'));
     const { parseAppRegister, appShape } = await import('../../scripts/app-register.mjs');
     expect(appShape(parseAppRegister(register))).toEqual([]);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('prints, for a register that has the table, the row it replaces and the rows it adds, nothing else', async () => {
+    const head = '| Role | App slug | Contents | Issues | Pull requests | Workflows | Actions | Other |\n| --- | --- | --- | --- | --- | --- | --- | --- |';
+    const old = '| Reviewer | `old-judge` | Read | Read | Read | No access | Read | None |';
+    const r = await run({ register: `# Agent identities\n\n${head}\n${old}\n\nEvery App also holds Metadata: Read (\`K-ADOPT-8\`).\n` });
+    expect(r.status, r.output).toBe(0);
+    const printed = r.output.split('\n').filter((l) => /^ {3}[-+]\|/.test(l)).map((l) => l.slice(3));
+    expect(printed).toEqual([
+      `-${old}`,
+      `+| Reviewer | \`${ORG}-judge\` | Read & write | Read & write | Read & write | No access | Read & write | Checks: Read, Commit statuses: Read |`,
+      `+| Merger | \`${ORG}-judge\` | Read & write | Read & write | Read & write | No access | Read & write | Checks: Read, Commit statuses: Read |`,
+    ]);
     rmSync(r.dir, { recursive: true, force: true });
   });
 
