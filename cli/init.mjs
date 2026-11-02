@@ -130,6 +130,10 @@ Options:
   --dir <path>           the checkout (default: here)
   --yes                  take the default of every question no flag below answers
   --dry-run              read everything, change nothing, print what it would do
+  --replace-uncommitted  replace each file that differs from what init writes and was never
+                         committed (git shows it untracked), printing its diff: for files an
+                         earlier kanon init wrote that nobody edited since. Passing it says
+                         nobody did, which init can't tell
   --json                 print one JSON document (docs/init.md) on standard output and the
                          prose on standard error; asks nothing, as --yes
   -h, --help             this text
@@ -422,8 +426,8 @@ export const CONFLICTS = [
  *   declares the deploy lane already posts its announcements (plan 0011 N9)
  */
 export const parseArgs = (argv, req, declaredOf = () => []) => {
-  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, json: boolean, apps: boolean, help: boolean, given: Given, releaserFlag?: string }} */
-  const opts = { repo: '', dir: process.cwd(), lanes: null, yes: false, dryRun: false, json: false, apps: true, help: false, given: {} };
+  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, json: boolean, apps: boolean, help: boolean, replaceUncommitted: boolean, given: Given, releaserFlag?: string }} */
+  const opts = { repo: '', dir: process.cwd(), lanes: null, yes: false, dryRun: false, json: false, apps: true, help: false, replaceUncommitted: false, given: {} };
   const g = opts.given;
   /** @type {Set<string>} */
   const seen = new Set();
@@ -447,6 +451,7 @@ export const parseArgs = (argv, req, declaredOf = () => []) => {
     else if (flag === '--yes') opts.yes = true;
     else if (flag === '--dry-run') opts.dryRun = true;
     else if (flag === '--json') opts.json = true;
+    else if (flag === '--replace-uncommitted') opts.replaceUncommitted = true;
     else if (flag === '--no-apps') opts.apps = false;
     else if (flag === '--create-apps') g.createApps = true;
     else if (flag === '--project-owner') g.projectOwner = value();
@@ -2673,7 +2678,7 @@ export const SCHEMA = 'kanon-init/v1';
  *   catalogue: ReturnType<typeof laneCatalogue>,
  *   features: ReturnType<typeof featureCatalogue>,
  *   summary: SummaryLine[],
- *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'rewritten' | 'differs', content: string | null, diff: string[] }>,
+ *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'rewritten' | 'replaced' | 'differs', content: string | null, diff: string[] }>,
  *   changes: Array<{ kind: string, subject: string, message: string }>,
  *   apps: { identities: string[], missing: string[], reuse: Array<{ app: string, slug: string }>, command: string | null, outcome: string, exitCode: number | null } | null,
  *   findings: Finding[],
@@ -3126,6 +3131,24 @@ const run = async (deps, opts, req, rep) => {
   out('== Files ==');
   const files = plan();
   let wrote = false;
+  // A file that differs and was never committed (#1551): an earlier release's init wrote it in
+  // this checkout, as a re-run at a newer release over an installation in progress finds them,
+  // or the person wrote it. init can't tell which, so it replaces one only with
+  // --replace-uncommitted, the person's word that nobody edited it, and otherwise names them.
+  // One git process for every file, read the first time a file differs. Git failing to list them
+  // counts each as committed, so nothing is offered or replaced on a guess.
+  /** @type {Set<string> | null | undefined} null when git couldn't list them */
+  let tracked;
+  /** @param {string} rel */
+  const untracked = (rel) => {
+    if (tracked === undefined) {
+      const ls = deps.git(['-C', root, 'ls-files', '-z']);
+      tracked = ls.status === 0 ? new Set(ls.stdout.split('\0').filter(Boolean)) : null;
+    }
+    return tracked !== null && !tracked.has(rel);
+  };
+  /** @type {string[]} the files that differ, never committed, which the flag would replace */
+  const replaceable = [];
   for (const [rel, text] of files) {
     const have = read(rel);
     if (have === text) {
@@ -3158,7 +3181,18 @@ const run = async (deps, opts, req, rep) => {
       for (const l of diff) out(`    ${l}`);
       continue;
     }
+    if (have !== null && opts.replaceUncommitted && untracked(rel)) {
+      const diff = lineDiff(have, text).filter((l) => !l.startsWith('  '));
+      if (!dry) deps.writeFile(join(root, rel), text);
+      wrote = true;
+      change('file', rel, `${dry ? 'Would replace' : 'Replaced'} ${rel}, never committed, with what init writes at ${release} (--replace-uncommitted)`);
+      rep.files.push({ path: rel, status: 'replaced', content: text, diff });
+      out(`${rel}: never committed, and differs: ${dry ? 'would replace it' : 'replaced it'} (--replace-uncommitted). The difference:`);
+      for (const l of diff) out(`    ${l}`);
+      continue;
+    }
     if (have !== null) {
+      if (untracked(rel)) replaceable.push(rel);
       out(`${rel}: exists and differs from what init would write; left unchanged. The difference:`);
       const diff = lineDiff(have, text).filter((l) => !l.startsWith('  '));
       for (const l of diff) out(`    ${l}`);
@@ -3173,6 +3207,9 @@ const run = async (deps, opts, req, rep) => {
     rep.files.push({ path: rel, status: 'new', content: text, diff: [] });
     out(`${dry ? 'would write' : 'wrote'} ${rel}:`);
     for (const l of text.replace(/\n$/, '').split('\n')) out(`    + ${l}`);
+  }
+  if (replaceable.length) {
+    note(`Never committed, and differ from what init writes: ${replaceable.join(', ')}. If an earlier kanon init wrote them and nobody has edited them since, run kanon init again with --replace-uncommitted, which replaces them; init can't tell whether they were edited, so the flag is your word that they weren't.`);
   }
   // Each holder nothing accepts (#631): doctor's own finding, which doctor blocks on. One the person
   // accepted is accepted once the record holds init's text; a record the project already has is

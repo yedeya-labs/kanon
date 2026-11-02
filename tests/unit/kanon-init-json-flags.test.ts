@@ -140,6 +140,48 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(covered.notes.some((n) => n.includes("doesn't cover"))).toBe(false);
   });
 
+  // Re-running init at a newer release over the files an older one wrote in an installation in
+  // progress, never committed and never edited, found every one `differs` and left it, so the
+  // only way on was to delete them by hand (#1551). init names the ones never committed, and
+  // --replace-uncommitted, the person's word that nobody edited them, replaces them.
+  it('offers to replace the files that differ and were never committed, and replaces them with --replace-uncommitted', async () => {
+    const dir = checkout();
+    const first = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    const [older, committed] = first.files.filter((f) => f.status === 'new' && String(f.path).startsWith('.github/workflows/')).map((f) => String(f.path));
+    expect(older && committed).toBeTruthy();
+    // What an older release wrote: the same caller at an older pin.
+    const aged = (rel: string) => writeFileSync(join(dir, rel), readFileSync(join(dir, rel), 'utf8').replaceAll(`@${PINNED}`, '@v0.38.0'));
+    aged(older!);
+    aged(committed!);
+    execFileSync('git', ['-C', dir, 'add', '--', committed!]);
+    execFileSync('git', ['-C', dir, 'commit', '-q', '-m', 'an older installation']);
+    const want = (rel: string) => String(first.files.find((f) => f.path === rel)!.content);
+
+    const offered = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    expect(offered.files.find((f) => f.path === older)?.status).toBe('differs');
+    const note = offered.notes.find((n) => n.startsWith('Never committed, and differ from what init writes:'));
+    expect(note).toContain(older);
+    expect(note).toContain('--replace-uncommitted');
+    // A committed file is the project's history, so it is never offered.
+    expect(note).not.toContain(committed);
+    expect(readFileSync(join(dir, older!), 'utf8')).not.toBe(want(older!));
+
+    const dry = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--dry-run', '--replace-uncommitted']));
+    expect(dry.files.find((f) => f.path === older)?.status).toBe('replaced');
+    expect(readFileSync(join(dir, older!), 'utf8')).not.toBe(want(older!));
+
+    const replaced = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--replace-uncommitted']));
+    const entry = replaced.files.find((f) => f.path === older);
+    expect(entry?.status).toBe('replaced');
+    expect((entry?.diff as string[]).some((l) => l.startsWith('- ') && l.includes('@v0.38.0'))).toBe(true);
+    expect(readFileSync(join(dir, older!), 'utf8')).toBe(want(older!));
+    expect(replaced.changes.some((c) => c.subject === older && String(c.message).startsWith('Replaced'))).toBe(true);
+    // The committed one is left, as any file that differs, flag or not.
+    expect(replaced.files.find((f) => f.path === committed)?.status).toBe('differs');
+    expect(readFileSync(join(dir, committed!), 'utf8')).toContain('@v0.38.0');
+    expect(replaced.notes.some((n) => n.startsWith('Never committed'))).toBe(false);
+  });
+
   it('says what a dry run would do, and does nothing', async () => {
     const dir = checkout();
     const github = fakeGitHub();
@@ -511,7 +553,7 @@ describe('kanon init, a flag for each question (#367)', () => {
     const usage = new Set([...USAGE.matchAll(/^ {2}(?:-h, )?(--[a-z-]+)/gm)].map((m) => m[1]!));
     expect([...usage].sort()).toEqual([...parsed].sort());
     const documented = new Set(tableColumn('## Answering without a terminal', 1).flatMap((c) => [...c.matchAll(/`(--[a-z-]+)/g)].map((m) => m[1]!)));
-    const answers = [...parsed].filter((f) => !['--repo', '--dir', '--yes', '--dry-run', '--json', '--help'].includes(f));
+    const answers = [...parsed].filter((f) => !['--repo', '--dir', '--yes', '--dry-run', '--replace-uncommitted', '--json', '--help'].includes(f));
     expect([...documented].sort()).toEqual(answers.sort());
   });
 });
