@@ -2537,12 +2537,14 @@ export const chatKinds = (a, req, deploying = (a.deployEnvironments ?? []).lengt
  * anything is written. Every answer is on a line, so nothing is silent.
  * @param {{ s: Inspection, a: Answers, req: Requirements, repo: string, release: string, read: (rel: string) => string | null,
  *   files: Map<string, string>, rows: Map<string, string>, ownerApps: Array<{ app: string, slug: string, from: string }> | null,
- *   met: (lane: string) => boolean, holders?: Array<{ workflow: string, job: string, status: string }>, legacyCallers?: string[] }} c
+ *   met: (lane: string) => boolean, holders?: Array<{ workflow: string, job: string, status: string }>, legacyCallers?: string[],
+ *   replaces?: (rel: string) => boolean }} c
  *   `holders`: the jobs of the checkout's workflows that hold `id-token: write`, as doctor counts them;
- *   `legacyCallers`: the callers of a notifying lane that still map `DIGEST_WEBHOOK`
+ *   `legacyCallers`: the callers of a notifying lane that still map `DIGEST_WEBHOOK`;
+ *   `replaces`: whether the run replaces a file that differs, never committed (#1551)
  * @returns {SummaryLine[]}
  */
-export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerApps, met, holders = [], legacyCallers = [] }) => {
+export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerApps, met, holders = [], legacyCallers = [], replaces = () => false }) => {
   /** @type {SummaryLine[]} */
   const lines = [];
   const why = (/** @type {string} */ f) => a.why[f] ?? { source: /** @type {Source} */ ('default'), reason: '' };
@@ -2627,9 +2629,13 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
   const dep = read('.github/dependabot.yml');
   line('Dependabot', [], dep === null ? 'write .github/dependabot.yml with the Kanon entry' : /yedeya-labs\/kanon\*/.test(dep) ? 'has the Kanon entry' : 'add the Kanon entry', byDefault());
   /** @type {Record<string, number>} */
-  const count = { new: 0, kept: 0, same: 0, differs: 0, rewritten: 0 };
-  for (const [rel, text] of files) count[fileStatus(rel, text, read(rel), req)] = (count[fileStatus(rel, text, read(rel), req)] ?? 0) + 1;
-  line('Files', [], `${count.new} new, ${count.kept} kept, ${count.same} already as written, ${count.differs} differ${count.rewritten ? `, ${count.rewritten} rewritten` : ''}`, inferred('from the checkout'));
+  const count = { new: 0, kept: 0, same: 0, differs: 0, rewritten: 0, replaced: 0 };
+  for (const [rel, text] of files) {
+    const st = fileStatus(rel, text, read(rel), req);
+    const status = st === 'differs' && replaces(rel) ? 'replaced' : st;
+    count[status] = (count[status] ?? 0) + 1;
+  }
+  line('Files', [], `${count.new} new, ${count.kept} kept, ${count.same} already as written, ${count.differs} differ${count.rewritten ? `, ${count.rewritten} rewritten` : ''}${count.replaced ? `, ${count.replaced} replaced (never committed)` : ''}`, inferred('from the checkout'));
   const steps = [
     ...apps.filter((x) => / create$/.test(x)).map((x) => `create the ${x.split(':')[0]} App`),
     ...apps.filter((x) => /: reuse /.test(x)).map((x) => `1 key for the ${x.split(':')[0]}`),
@@ -3030,8 +3036,27 @@ const run = async (deps, opts, req, rep) => {
   // THE SUMMARY (plan 0007 §4): every value, and where it came from, before anything is written.
   // Without --yes it is confirmed in one question, or changed, a group at a time, and shown again.
   const plan = () => plannedFiles({ s, a, req, release, repo, today: deps.today(), read, workflows, callers });
+  // A file that differs and was never committed (#1551): an earlier release's init wrote it in
+  // this checkout, as a re-run at a newer release over an installation in progress finds them,
+  // or the person wrote it. init can't tell which, so it replaces one only with
+  // --replace-uncommitted, the person's word that nobody edited it, and otherwise names them.
+  // One git process for every file, read the first time a file differs, by the summary or the
+  // loop, which so decide alike. Git failing to list them counts each as committed, so nothing
+  // is offered or replaced on a guess.
+  /** @type {Set<string> | null | undefined} null when git couldn't list them */
+  let tracked;
+  /** @param {string} rel */
+  const untracked = (rel) => {
+    if (tracked === undefined) {
+      const ls = deps.git(['-C', root, 'ls-files', '-z']);
+      tracked = ls.status === 0 ? new Set(ls.stdout.split('\0').filter(Boolean)) : null;
+    }
+    return tracked !== null && !tracked.has(rel);
+  };
+  /** Whether this run replaces a file that differs. @param {string} rel */
+  const replaces = (rel) => opts.replaceUncommitted && untracked(rel);
   for (;;) {
-    rep.summary = summaryOf({ s, a, req, repo, release, read, files: plan(), rows, ownerApps, met, holders, legacyCallers });
+    rep.summary = summaryOf({ s, a, req, repo, release, read, files: plan(), rows, ownerApps, met, holders, legacyCallers, replaces });
     out('');
     for (const l of summaryText(rep.summary, { s, repo, release })) out(l);
     if (a.lanes.includes(REVIEW_LANE)) {
@@ -3131,22 +3156,6 @@ const run = async (deps, opts, req, rep) => {
   out('== Files ==');
   const files = plan();
   let wrote = false;
-  // A file that differs and was never committed (#1551): an earlier release's init wrote it in
-  // this checkout, as a re-run at a newer release over an installation in progress finds them,
-  // or the person wrote it. init can't tell which, so it replaces one only with
-  // --replace-uncommitted, the person's word that nobody edited it, and otherwise names them.
-  // One git process for every file, read the first time a file differs. Git failing to list them
-  // counts each as committed, so nothing is offered or replaced on a guess.
-  /** @type {Set<string> | null | undefined} null when git couldn't list them */
-  let tracked;
-  /** @param {string} rel */
-  const untracked = (rel) => {
-    if (tracked === undefined) {
-      const ls = deps.git(['-C', root, 'ls-files', '-z']);
-      tracked = ls.status === 0 ? new Set(ls.stdout.split('\0').filter(Boolean)) : null;
-    }
-    return tracked !== null && !tracked.has(rel);
-  };
   /** @type {string[]} the files that differ, never committed, which the flag would replace */
   const replaceable = [];
   for (const [rel, text] of files) {
@@ -3181,7 +3190,7 @@ const run = async (deps, opts, req, rep) => {
       for (const l of diff) out(`    ${l}`);
       continue;
     }
-    if (have !== null && opts.replaceUncommitted && untracked(rel)) {
+    if (have !== null && replaces(rel)) {
       const diff = lineDiff(have, text).filter((l) => !l.startsWith('  '));
       if (!dry) deps.writeFile(join(root, rel), text);
       wrote = true;

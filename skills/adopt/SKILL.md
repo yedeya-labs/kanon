@@ -274,7 +274,7 @@ Asked right after the sharing answers, at the telemetry step, for each job `.ins
    - the account (`.inspection.owner`, `.inspection.ownerKind`), and what its plan allows: `.inspection.rulesets` of `no` means nothing on the platform enforces review, so the Owner's discipline does (say this one clearly); `.inspection.mergeQueue`, and whether the default branch merges through a merge queue (`.inspection.defaultBranchMergeQueue`); and every line of `.notes`;
    - what is already there: the lanes it already calls (`.inspection.installedLanes`), its rulesets (`.inspection.defaultBranchRulesets`, `.inspection.inactiveRulesets`), whether it has a commit yet (`.inspection.hasCommits`).
 
-   If `.inspection.admin` is false, the token can't create the ruleset or set the merge settings: say so now, and ask, as a step only a person can do, whether they want to run with a token that can (then they set `GH_TOKEN` in their own terminal and start again) or go on and take those steps later.
+   If `.inspection.admin` is false, the token can't create the ruleset or set the merge settings: say so now, and ask, as a step only a person can do, whether they want to run with a token that can (then they set `GH_TOKEN` in their own terminal and start again) or go on and take those steps later. When `.inspection.tokenCoversRepository` is false as well, the cause is not a permission: the token's Repository access leaves the repository out, so every write would fail whatever it holds, and the token they need is one whose Repository access includes it (#1551).
 
 3. **Ask the questions** ("The questions", above), in their order, as **How to ask** says. Every answer of `.answers` gets a question; none is taken from its default unasked, except those "The questions" says are not asked, such as the Claude credential, which you show with its source for the person to confirm.
 
@@ -308,14 +308,14 @@ Asked right after the sharing answers, at the telemetry step, for each job `.ins
 | Id | Who | What you do |
 |---|---|---|
 | `dependabot.kanon-entry` | agent | Add the fix's lines under `updates:` in `.github/dependabot.yml`. |
-| `label.create` | person | The token couldn't create them: the person runs the fix's commands with a token that has Issues: write. |
+| `label.create` | person | The token couldn't create them: the person runs the fix's commands with a token that has Issues: write. When `.inspection.tokenCoversRepository` is false, permissions are not what is missing: the token's Repository access leaves the repository out, so the person needs a token whose Repository access includes it (#1551). |
 | `label.delete-default` | person | As `label.create`, for the deletions. |
 | `milestone.buckets` | person | As `label.create`: the person runs the fix's `kanon milestones` command with such a token, or you run it once they have one. |
-| `merge.settings` | person | The person runs the fix's command with a token that has Administration: write, or sets squash-only merging in the repository's settings. |
+| `merge.settings` | person | The person runs the fix's command with a token that has Administration: write, or sets squash-only merging in the repository's settings. As `label.create` when the token doesn't cover the repository. |
 | `ruleset.gaps` | person | The person adds the rules the fix names on the ruleset's page. `init` adds the required status check itself, once a job on the default branch reports it and its token can administer the repository, so the check is in this list only when it couldn't. |
 | `ruleset.unreadable` | person | A ruleset that applies to the default branch couldn't be read, so `init` created none beside it. The person checks it on its page (the fix's `url`), or runs `kanon init` again with a token that can read it. Never create a second ruleset by hand beside it. |
 | `ruleset.first-commit` | agent | Run `kanon init --json --no-apps` with the same flags again after the first commit is pushed; it creates the ruleset then. |
-| `ruleset.create` | person | The person creates the ruleset as the fix says, or runs `kanon init` again in their own terminal with a token that can administer the repository. |
+| `ruleset.create` | person | The person creates the ruleset as the fix says, or runs `kanon init` again in their own terminal with a token that can administer the repository. As `label.create` when the token doesn't cover the repository. |
 | `ruleset.require-check` | person | No job on the default branch reports `Lane check` yet (where the default branch merges through a merge queue, on its `merge_group` run too: when the fix names a workflow to add `merge_group` to, add it on this branch and show the diff), so the rule waits for this pull request's merge: never before, since every other pull request would wait on it. Put it under `## After merging` in the pull request's body (step 9), and walk the person through it after the merge (step 11). |
 | `app.create` | person | Step 7: you check the token, then the person runs the command ("Running `kanon apps`") and clicks **Create** and **Install**. |
 | `app.failed` | person | Show what `kanon apps` said; once the person has fixed it, they run the fix's command again ("Running `kanon apps`"). |

@@ -168,6 +168,11 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
 
     const dry = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--dry-run', '--replace-uncommitted']));
     expect(dry.files.find((f) => f.path === older)?.status).toBe('replaced');
+    // The summary counts the files as the run then reports them: the replaced one apart from the
+    // committed one that differs.
+    const filesLine = (d: Doc) => String(d.summary.find((l) => l.answer === 'Files')?.value);
+    expect(filesLine(dry)).toMatch(/, 1 differ, 1 replaced \(never committed\)$/);
+    expect(filesLine(offered)).toMatch(/, 2 differ$/);
     expect(readFileSync(join(dir, older!), 'utf8')).not.toBe(want(older!));
 
     const replaced = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--replace-uncommitted']));
