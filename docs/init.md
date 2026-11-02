@@ -22,7 +22,7 @@ Each question has a flag, and so does each value the summary shows. A flag answe
 | Who is the Stakeholder? | `--stakeholder <who>` | the Owner |
 | Which Claude credential do the lanes run on? (inferred, never asked: [below](#the-claude-credential)) | `--claude-auth subscription\|api-key` | The one the installed model lanes' callers map, when they all map the same one; else `api-key` when the repository holds `ANTHROPIC_API_KEY` and not `CLAUDE_CODE_OAUTH_TOKEN`; else `subscription` |
 | The stack's gates | `--gates <list>`, or `--gates none` | suggested from `package.json`, a `Makefile`, Cargo or Go |
-| Does a lane need a test database? | `--test-database none\|hook` | `hook` when a compose file has a database service, an example environment file (`.env.example` and the like) sets `DATABASE_URL`, or a migrations directory exists; else `none` |
+| Does a lane need a test database? | `--test-database none\|hook` | `hook` when a compose file has a database service, an example environment file (`.env.example` and the like) sets `DATABASE_URL`, a migrations directory exists, or else `AGENTS.md`, `CLAUDE.md` or `.claude/CLAUDE.md` names a database or a library that talks to one, such as "Prisma + Aurora" ([#1570](https://github.com/yedeya-labs/kanon/issues/1570)); else `none`. The summary's `Test database` line says which, for example `AGENTS.md names Prisma and Aurora` |
 | Record a sign-off delegation? | `--delegation`, `--no-delegation` | yes when a chosen lane runs as the Author and a workflow runs Kanon's DCO check (`yedeya-labs/kanon/actions/dco`), and `git config` names the delegate; else no |
 | The delegate's name | `--delegate-name <name>` (implies `--delegation`) | `git config user.name` |
 | The delegate's email | `--delegate-email <email>` (implies `--delegation`) | `git config user.email` |
@@ -315,7 +315,9 @@ What `--lanes` chooses from, so a person, or the adopt skill asking them, can ch
 | `secrets` | array | The secrets its caller maps; of the Claude pair, the one `answers.claudeAuth` names. |
 | `qaStore` | boolean | Whether it reaches the QA store, through a hook you write, and runs without memory when there is none. |
 | `hooks` | array | The hooks it calls besides the project-setup hook, by path. |
-| `reads` | array | The project documents it reads (`K-LAYOUT-17`). |
+| `reads` | array | Every project document it reads (`K-LAYOUT-17`), by path, whoever supplies it: `readsRequired` and `readsBaseline` split it, so read those to say what the repository lacks. |
+| `readsRequired` | array | Of `reads`, the documents the repository must hold on its default branch, such as `docs/qa/stack.md`: `lane-check` fails while one is missing ([#1570](https://github.com/yedeya-labs/kanon/issues/1570)). |
+| `readsBaseline` | array | Of `reads`, the playbooks Kanon supplies its baseline of when the repository has none at that path, such as `docs/qa/lead-playbook.md`: no requirement. The lane reads the repository's own where it has one, so writing one there overrides the baseline ([`docs/lanes.md`](lanes.md#the-stack-document-and-the-playbooks)). Empty against a requirements file without `declarations`, whose documents are all in `readsRequired`. |
 | `schedule` | string or null | The cron its caller is written with, or null when it runs on events alone. |
 | `needs` | array | Strings: what else it needs, such as project briefs. |
 | `cost` | string | What it costs to run, in one sentence: whether it runs a model, and how often. |

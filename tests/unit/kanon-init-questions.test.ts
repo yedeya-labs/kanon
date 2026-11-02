@@ -329,6 +329,21 @@ describe('kanon init, a feature, three questions and one summary (plan 0007 G5)'
     expect(testDatabaseSignal((p) => (p === 'compose.yml' ? 'services:\n  cache:\n    image: nginx\n' : null), () => [])).toBeNull();
   });
 
+  // #1570: an AGENTS.md or CLAUDE.md that names the stack is a strong signal, and the summary says it came from there.
+  it('infers a test database from a stack AGENTS.md or CLAUDE.md names, and says so', async () => {
+    const agents = '# Agents\n\nThe stack: Next.js, Drizzle + Aurora (PostgreSQL).\n';
+    expect(testDatabaseSignal((p) => (p === 'AGENTS.md' ? agents : null), () => [])).toBe('AGENTS.md names Aurora and PostgreSQL');
+    expect(testDatabaseSignal((p) => (p === 'CLAUDE.md' ? 'We use prisma against MySQL.\n' : null), () => [])).toBe('CLAUDE.md names prisma and MySQL');
+    expect(testDatabaseSignal((p) => (p === 'CLAUDE.md' ? 'Tests run with `npm test`. No database.\n' : null), () => [])).toBeNull();
+    // The checkout's own evidence comes first.
+    expect(testDatabaseSignal((p) => (p === 'AGENTS.md' ? agents : p === '.env.example' ? 'DATABASE_URL=x\n' : null), () => [])).toBe('DATABASE_URL in .env.example');
+    const d = parse(await run(checkout({ 'AGENTS.md': agents }), fakeGitHub(), ['--json', '--no-apps', '--dry-run']));
+    expect(d.answers).toMatchObject({ testDatabase: 'hook' });
+    expect(d.summary.find((l) => l.answer === 'Test database')).toMatchObject({ value: 'hook: your project-setup hook starts it', source: 'inferred', reason: 'AGENTS.md names Aurora and PostgreSQL' });
+    const none = parse(await run(checkout(), fakeGitHub(), ['--json', '--no-apps', '--dry-run']));
+    expect(none.summary.find((l) => l.answer === 'Test database')).toMatchObject({ value: 'none', reason: 'no database service, DATABASE_URL, migrations directory, or database named in AGENTS.md or CLAUDE.md' });
+  });
+
   it('gives the features from the requirements file, with their secrets', async () => {
     const d = parse(await run(checkout(), fakeGitHub(), ['--json', '--no-apps', '--dry-run']));
     for (const f of d.features) {

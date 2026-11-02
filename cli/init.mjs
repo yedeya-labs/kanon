@@ -236,9 +236,10 @@ which one it uses and whose it is.`;
  * time, each lane with what it does, what it needs and costs, when it is recommended, and
  * whether it is recommended for this repository. What the release's requirements derive from
  * the lane itself (its App, its secrets, the QA store, its hooks, the documents it reads) comes
- * from them, never from the catalogue. A lane is recommended when the repository already calls
- * it, when the catalogue recommends it always (the review lane), or when it recommends it with a
- * lane that is itself recommended. A lane's secrets are those its caller maps, the Claude
+ * from them, never from the catalogue; of the documents, those Kanon has a baseline of are kept
+ * apart from those the repository must hold (#1570). A lane is recommended when the repository
+ * already calls it, when the catalogue recommends it always (the review lane), or when it
+ * recommends it with a lane that is itself recommended. A lane's secrets are those its caller maps, the Claude
  * credential `claudeAuth` names among them (plan 0009 §9).
  * @param {Requirements} req @param {string[]} installed @param {ClaudeAuth} [claudeAuth]
  */
@@ -275,6 +276,9 @@ export const laneCatalogue = (req, installed, claudeAuth = 'subscription') => {
           qaStore: spec.qaStore ?? spec.grant['id-token'] === 'write',
           hooks: spec.hooks,
           reads: spec.reads,
+          // Of those, a playbook the repository lacks is Kanon's baseline at run time (#1570).
+          readsRequired: spec.reads.filter((r) => !req.declarations?.[r]?.baseline),
+          readsBaseline: spec.reads.filter((r) => req.declarations?.[r]?.baseline === true),
           schedule: TRIGGERS[lane]?.schedule ?? null,
           needs: e.needs,
           cost: e.cost,
@@ -1649,7 +1653,7 @@ export const askAll = async (deps, opts, ctx) => {
   why.gates = g.gates !== undefined ? flag : ctx.gates.length ? { source: 'inferred', reason: 'suggested from what the repository holds' } : { source: 'default', reason: 'none suggested' };
   /** @type {'none' | 'hook'} */
   const database = g.testDatabase ?? (ctx.database ? 'hook' : 'none');
-  why.testDatabase = g.testDatabase !== undefined ? flag : { source: 'inferred', reason: ctx.database ?? 'no database service, DATABASE_URL or migrations directory' };
+  why.testDatabase = g.testDatabase !== undefined ? flag : { source: 'inferred', reason: ctx.database ?? 'no database service, DATABASE_URL, migrations directory, or database named in AGENTS.md or CLAUDE.md' };
   /** @type {{ name: string, email: string } | null} */
   let delegation = null;
   if (g.delegation !== undefined) {
@@ -2436,10 +2440,22 @@ const COMPOSE_FILES = ['compose.yaml', 'compose.yml', 'docker-compose.yml', 'doc
 const ENV_EXAMPLES = ['.env.example', '.env.sample', '.env.template', '.env.dist'];
 const MIGRATIONS = ['migrations', 'db/migrate', 'db/migrations', 'prisma/migrations', 'supabase/migrations'];
 const DATABASE_IMAGE = /^\s*image:\s*["']?(?:[\w.-]+\/)*(postgres|postgis|mysql|mariadb|mongo|mssql|cockroach)/im;
+/** The agents' instruction files, which often name the stack (#1570). */
+const AGENT_INSTRUCTIONS = ['AGENTS.md', 'CLAUDE.md', '.claude/CLAUDE.md'];
+/**
+ * A database, or a library that talks to one, by name, as an agents' instruction file names the
+ * stack. The reference adopter's migration tool is left out (kanon#54, adopter-literals.test.ts):
+ * the database named beside it names the stack all the same.
+ */
+const DATABASE_NAME = /\b(?:postgres(?:ql)?|mysql|mariadb|mongo(?:db|ose)?|sql server|mssql|cockroach(?:db)?|aurora|supabase|planetscale|prisma|typeorm|sequelize|knex|kysely|mikro-?orm|sqlalchemy|active ?record|ecto|hibernate|entity framework|gorm|flyway|liquibase)\b/gi;
+
+/** Names, in the order given, as one phrase: `A`, `A and B`, `A, B and C`. @param {string[]} names */
+const listed = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`);
 
 /**
  * Why the repository's tests need a database, or null (plan 0007 §4): a database service in a
- * compose file, `DATABASE_URL` in an example environment file, or a migrations directory.
+ * compose file, `DATABASE_URL` in an example environment file, a migrations directory, or else a
+ * database an agents' instruction file names (#1570), such as "Prisma + Aurora" in AGENTS.md.
  * @param {(rel: string) => string | null} read @param {(rel: string) => string[]} list
  * @returns {string | null}
  */
@@ -2447,6 +2463,12 @@ export const testDatabaseSignal = (read, list) => {
   for (const f of COMPOSE_FILES) if (DATABASE_IMAGE.test(read(f) ?? '')) return `a database service in ${f}`;
   for (const f of ENV_EXAMPLES) if (/^\s*(?:export\s+)?DATABASE_URL\s*=/m.test(read(f) ?? '')) return `DATABASE_URL in ${f}`;
   for (const d of MIGRATIONS) if (list(d).length) return `a migrations directory, ${d}/`;
+  for (const f of AGENT_INSTRUCTIONS) {
+    /** @type {Map<string, string>} */
+    const names = new Map();
+    for (const [name] of (read(f) ?? '').matchAll(DATABASE_NAME)) if (!names.has(name.toLowerCase())) names.set(name.toLowerCase(), name);
+    if (names.size) return `${f} names ${listed([...names.values()])}`;
+  }
   return null;
 };
 
