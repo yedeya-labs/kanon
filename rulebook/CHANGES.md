@@ -267,6 +267,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-21.** The Owner decided that a mechanism the repository has nothing for, such as a deploy lane where nothing deploys, is marked **not applicable** rather than not yet installed, with the repository's reason under `## Choices`, so the list keeps the work still to do apart from what never applies; `kanon doctor` fails a not-applicable row without its reason. [#1236](https://github.com/yedeya-labs/kanon/issues/1236)
 - **2026-10-21.** On Kanon's own record, whether each status is true is no longer prose only: a test holds each row to what Kanon's workflows run, and names the row to flip when they disagree. [#1236](https://github.com/yedeya-labs/kanon/issues/1236)
+- **2026-11-02.** The check is one-sided for a mechanism a person runs through the plugin: such a row may stay not yet installed while it runs, because the release pull request that starts it can't carry the flip, and a person flips it. The record never overstates enforcement. [#1561](https://github.com/yedeya-labs/kanon/pull/1561)
 
 ## `K-ADOPT-11`
 
