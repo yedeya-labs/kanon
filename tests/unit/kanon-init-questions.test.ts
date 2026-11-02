@@ -341,7 +341,7 @@ describe('kanon init, a feature, three questions and one summary (plan 0007 G5)'
     expect(d.answers).toMatchObject({ testDatabase: 'hook' });
     expect(d.summary.find((l) => l.answer === 'Test database')).toMatchObject({ value: 'hook: your project-setup hook starts it', source: 'inferred', reason: 'AGENTS.md names Aurora and PostgreSQL' });
     const none = parse(await run(checkout(), fakeGitHub(), ['--json', '--no-apps', '--dry-run']));
-    expect(none.summary.find((l) => l.answer === 'Test database')).toMatchObject({ value: 'none', reason: 'no database service, DATABASE_URL, migrations directory, or database named in AGENTS.md or CLAUDE.md' });
+    expect(none.summary.find((l) => l.answer === 'Test database')).toMatchObject({ value: 'none', reason: 'no database service, DATABASE_URL, migrations directory, or database named in an agents\' instruction file (AGENTS.md, CLAUDE.md or .claude/CLAUDE.md)' });
   });
 
   it('gives the features from the requirements file, with their secrets', async () => {

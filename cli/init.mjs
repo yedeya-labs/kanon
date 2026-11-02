@@ -243,8 +243,8 @@ which one it uses and whose it is.`;
  * from them, never from the catalogue; of the documents, those Kanon has a baseline of are kept
  * apart from those the repository must hold (#1570). A lane is recommended when the repository
  * already calls it, when the catalogue recommends it always (the review lane), or when it
- * recommends it with a lane that is itself recommended. A lane's secrets are those its caller maps, the Claude
- * credential `claudeAuth` names among them (plan 0009 §9).
+ * recommends it with a lane that is itself recommended. A lane's secrets are those its caller
+ * maps, the Claude credential `claudeAuth` names among them (plan 0009 §9).
  * @param {Requirements} req @param {string[]} installed @param {ClaudeAuth} [claudeAuth]
  */
 export const laneCatalogue = (req, installed, claudeAuth = 'subscription') => {
@@ -1674,7 +1674,7 @@ export const askAll = async (deps, opts, ctx) => {
   why.gates = g.gates !== undefined ? flag : ctx.gates.length ? { source: 'inferred', reason: 'suggested from what the repository holds' } : { source: 'default', reason: 'none suggested' };
   /** @type {'none' | 'hook'} */
   const database = g.testDatabase ?? (ctx.database ? 'hook' : 'none');
-  why.testDatabase = g.testDatabase !== undefined ? flag : { source: 'inferred', reason: ctx.database ?? 'no database service, DATABASE_URL, migrations directory, or database named in AGENTS.md or CLAUDE.md' };
+  why.testDatabase = g.testDatabase !== undefined ? flag : { source: 'inferred', reason: ctx.database ?? "no database service, DATABASE_URL, migrations directory, or database named in an agents' instruction file (AGENTS.md, CLAUDE.md or .claude/CLAUDE.md)" };
   /** @type {{ name: string, email: string } | null} */
   let delegation = null;
   if (g.delegation !== undefined) {
