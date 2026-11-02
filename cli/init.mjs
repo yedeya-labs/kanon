@@ -77,7 +77,7 @@ import {
 } from './callers.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { whoami } from './gh-token.mjs';
-import { pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
+import { KANON_MARKETPLACE_REPO, pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { coveringRulesets, rulesetUrl } from './ruleset-bypass.mjs';
 import { BUCKETS, milestones as runMilestones } from './milestones.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -2691,6 +2691,7 @@ export const SCHEMA = 'kanon-init/v1';
  *   notes: string[],
  *   failures: string[],
  *   error: string | null,
+ *   latest: { release: string | null, newer: boolean | null },
  * }} Report
  */
 
@@ -2749,7 +2750,7 @@ export const init = async (argv, overrides = {}) => {
   const deps = wantsJson ? { ...base, out: base.err } : base;
   const { out, err } = deps;
   /** @type {Report} */
-  const rep = { repository: null, pin: null, token: null, dryRun: false, inspection: null, answers: null, catalogue: [], features: [], summary: [], files: [], changes: [], apps: null, findings: [], notes: [], failures: [], error: null };
+  const rep = { repository: null, pin: null, token: null, dryRun: false, inspection: null, answers: null, catalogue: [], features: [], summary: [], files: [], changes: [], apps: null, findings: [], notes: [], failures: [], error: null, latest: { release: null, newer: null } };
   const emit = (/** @type {number} */ code) => {
     if (wantsJson) base.out(JSON.stringify(document(rep, code, deps.release()), null, 2));
     return code;
@@ -2776,7 +2777,17 @@ export const init = async (argv, overrides = {}) => {
     return emit(2);
   }
   try {
-    return emit(await run(deps, opts, req, rep));
+    const code = await run(deps, opts, req, rep);
+    // Once it has inspected the repository, so a refusal still calls nothing on GitHub.
+    if (rep.inspection !== null) {
+      rep.latest = await latestRelease(deps.gh, deps.release());
+      if (rep.latest.newer) {
+        const line = `Kanon ${rep.latest.release} is out, and this is ${deps.release()}: the skills and this command follow ${deps.release()}'s rules. To install the latest, move the kanon plugin to ${rep.latest.release} first, then run this again (docs/skills.md, "Moving the plugin").`;
+        out(line);
+        rep.notes.push(line);
+      }
+    }
+    return emit(code);
   } catch (e) {
     // An error `run` did not expect, such as a file it could not write (#375). The document
     // still prints: before the inspection nothing had changed, so it is the error document;
@@ -2821,7 +2832,33 @@ export const document = (rep, exitCode, release) => {
     findings: rep.findings,
     notes: rep.notes,
     failures: rep.failures,
+    latest: rep.latest,
   };
+};
+
+/**
+ * Kanon's latest stable release, as GitHub's latest release names it (a candidate is a
+ * pre-release, never the latest), and whether it is newer than the release running, so the adopt
+ * skill stops and offers the newer one before it installs an old one (#1551 point 1). Null for
+ * both when GitHub didn't say, which blocks nothing.
+ * @param {Deps['gh']} gh @param {string} running `vX.Y.Z`
+ * @returns {Promise<{ release: string | null, newer: boolean | null }>}
+ */
+export const latestRelease = async (gh, running) => {
+  /** @type {string | null} */
+  let tag;
+  try {
+    const r = await gh(['api', `repos/${KANON_MARKETPLACE_REPO}/releases/latest`]);
+    const name = r.status === 0 ? JSON.parse(r.stdout)?.tag_name : null;
+    tag = typeof name === 'string' && /^v\d+\.\d+\.\d+$/.test(name) ? name : null;
+  } catch {
+    tag = null;
+  }
+  const parts = (/** @type {string} */ v) => (/^(?:candidate-)?v(\d+)\.(\d+)\.(\d+)$/.exec(v) ?? []).slice(1).map(Number);
+  if (tag === null || parts(running).length !== 3) return { release: tag, newer: null };
+  const [a, b] = [parts(tag), parts(running)];
+  const i = a.findIndex((x, k) => x !== b[k]);
+  return { release: tag, newer: i >= 0 && /** @type {number} */ (a[i]) > /** @type {number} */ (b[i]) };
 };
 
 /**

@@ -287,13 +287,15 @@ export const appsCheckRun = (
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the JSON document, read field by field
 export type Result = { status: number; out: string; err: string; json: any };
 
-export const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: string[] = [], now?: number): Promise<Result> => {
+// `env` is empty unless a case gives one: with no HOME in it, doctor never finds the plugins root of
+// the machine the suite runs on, so no case reads a real ~/.claude (#1552).
+export const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: string[] = [], now?: number, env: Record<string, string> = {}): Promise<Result> => {
   const out: string[] = [];
   const err: string[] = [];
   const status = await doctor(['--dir', dir, ...argv], {
     gh: github.gh,
     download: github.download,
-    env: {},
+    env,
     out: (l: string) => out.push(l),
     err: (l: string) => err.push(l),
     requirements: () => REQ,

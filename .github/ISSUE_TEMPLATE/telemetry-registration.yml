@@ -1,0 +1,19 @@
+name: Telemetry registration (no longer needed)
+description: Registration is automatic from Kanon v0.41.0. Upgrade Kanon instead of filing this.
+title: "Telemetry registration"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **You don't need to file this.** Kanon releases before v0.40.0 asked you to register your repository with the hosted telemetry store through this form. That step is gone: from v0.41.0, the telemetry collector's caller that `kanon init --telemetry` writes registers the repository on its first run, with GitHub's OIDC token, and no issue, variable or secret is needed ([docs/telemetry.md](https://github.com/yedeya-labs/kanon/blob/main/docs/telemetry.md)).
+
+        If an older release's `kanon doctor` or adopt skill sent you here, your repository, or the Claude Code plugin you run, is pinned to an old release. Upgrade first: move the kanon plugin to the latest release and run `/kanon:upgrade` ([docs/skills.md](https://github.com/yedeya-labs/kanon/blob/main/docs/skills.md), "Moving the plugin"). The collector then registers the repository by itself.
+
+        This form stays only so that the link those releases print doesn't lead nowhere ([#1551](https://github.com/yedeya-labs/kanon/issues/1551)). If the collector still doesn't register after the upgrade, file a bug instead.
+  - type: textarea
+    id: anything
+    attributes:
+      label: Anything else
+      description: Leave this empty and close the page; there is nothing to register by hand.
+    validations:
+      required: false

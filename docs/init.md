@@ -205,6 +205,7 @@ The pin is `pin` in the JSON document, and the summary's *Pin* line; `kanon` sta
 | `findings` | array | What is left to a person, in the order the summary numbers it: the finding shape of [`docs/cli-json.md`](cli-json.md). |
 | `notes` | array | Strings: facts that block nothing, such as a merge queue the plan lacks or that the platform does not enforce review. |
 | `failures` | array | Strings: what failed, when `status` is `failed`. |
+| `latest` | object | Kanon's latest release and whether it is newer than this one ([#1551](https://github.com/yedeya-labs/kanon/issues/1551)): `release` (the latest stable release, `vX.Y.Z`, as GitHub's latest release names it, or null when `init` couldn't read it; a candidate is never the latest) and `newer` (true when it is later than `kanon`, false when it isn't, null when either is unknown). A `true` adds a note saying so. It blocks nothing: the adopt skill stops on it, before it asks anything, and offers to move the plugin to the latest release first, since the plugin's release is the one `init` installs ([`docs/skills.md`](skills.md#moving-the-plugin)). |
 
 | Status | Exit code | Meaning |
 |---|---|---|

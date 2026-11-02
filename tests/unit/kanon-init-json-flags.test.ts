@@ -564,6 +564,38 @@ describe('kanon init, a flag for each question (#367)', () => {
 });
 // #376: init offers to declare the kanon plugin in .claude/settings.json, pinned to its release
 // (docs/skills.md), and never rewrites a settings file the project already has.
+// #1551 point 1: the adopt skill installs the release it ships in, so the dry run says whether a
+// later one is out, for the skill to stop and offer it first.
+describe("kanon init and Kanon's latest release (#1551)", () => {
+  const withLatest = (github: ReturnType<typeof fakeGitHub>, tag: string | null) => ({
+    ...github,
+    gh: async (args: string[], input?: string) => args[0] === 'api' && args[1] === 'repos/yedeya-labs/kanon/releases/latest'
+      ? (tag ? { status: 0, stdout: JSON.stringify({ tag_name: tag, prerelease: false }), stderr: '' } : { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' })
+      : github.gh(args, input),
+  });
+  const later = (() => {
+    const [x, y] = PINNED.slice(1).split('.').map(Number);
+    return `v${x}.${(y ?? 0) + 1}.0`;
+  })();
+
+  it('reports a later latest release as newer, with a note, in a dry run', async () => {
+    const r = await run(checkout(), withLatest(fakeGitHub(), later), ['--yes', '--dry-run', '--json']);
+    expect(r.status, r.err).toBe(0);
+    const d = parse(r);
+    expect(d.latest).toEqual({ release: later, newer: true });
+    expect(d.notes).toContain(`Kanon ${later} is out, and this is ${PINNED}: the skills and this command follow ${PINNED}'s rules. To install the latest, move the kanon plugin to ${later} first, then run this again (docs/skills.md, "Moving the plugin").`);
+  });
+
+  it('reports the running release, or an unknown latest, as not newer, without a note', async () => {
+    for (const [tag, newer] of [[PINNED, false], ['v0.0.1', false], [null, null], ['candidate-v99.0.0', null]] as const) {
+      const r = await run(checkout(), withLatest(fakeGitHub(), tag), ['--yes', '--dry-run', '--json']);
+      const d = parse(r);
+      expect(d.latest, String(tag)).toEqual({ release: tag === null || tag.startsWith('candidate-') ? null : tag, newer });
+      expect(d.notes.join('\n')).not.toContain('is out, and this is');
+    }
+  });
+});
+
 describe('kanon init and the kanon plugin (#376)', () => {
   const RELEASE = `v${JSON.parse(read(ROOT, 'package.json')).version}`;
   const SETTINGS = '.claude/settings.json';

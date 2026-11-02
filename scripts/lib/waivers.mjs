@@ -90,6 +90,8 @@ export const FINDINGS = {
   'pin.dependabot-unreached': { category: 'pin', blocking: true },
   'pin.dependabot-ungrouped': { category: 'pin', blocking: true },
   'plugin.version-mismatch': { category: 'pin', blocking: false },
+  'plugin.below-latest': { category: 'pin', blocking: false },
+  'plugin.behind': { category: 'pin', blocking: false },
   'notify.hook-pin-behind': { category: 'pin', blocking: false },
   'notify.hook-pin-ahead': { category: 'pin', blocking: true },
   'register.missing-row': { category: 'app', blocking: true },
