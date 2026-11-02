@@ -110,8 +110,8 @@ export const sweepLogin = () => appLogin('Lead');
 // `main()`, so they still fail before they read or change anything.
 //
 // EXCEPT AN OPTIONAL APP'S ROW (kanon#1558). The Releaser's App is optional
-// (`OPTIONAL_ROLES`): no lane takes it, and `kanon init` offers it only to a repository that
-// calls Kanon's release workflow, so an install without one has no Releaser row, and requiring
+// (`OPTIONAL_ROLES`): no lane takes it, and an install may decline it (`kanon init
+// --no-releaser`), so its register may have no Releaser row, and requiring
 // it stopped the sweep and the reconciler there. Its login joins the set when the register
 // lists it. With no row there is no Releaser App, so no comment is its: leaving the login out
 // reads no person's comment as an App's, since the set only loses a login, and no App's as a
