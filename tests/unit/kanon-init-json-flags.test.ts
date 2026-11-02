@@ -682,6 +682,23 @@ describe('kanon init and the lane catalogue (#428)', () => {
     expect(d.catalogue.flatMap((g) => g.lanes).find((l) => l.lane === 'agent-explore-telemetry')).toMatchObject({ app: 'author', qaStore: false, schedule: '30 6 * * 2' });
   });
 
+  // #1570: a playbook the repository lacks is Kanon's baseline at run time, so `reads` alone made
+  // the Lead's playbook look like a file the repository must hold.
+  it('splits what a lane reads into what the repository must hold and what Kanon supplies a baseline of', () => {
+    const lanes = laneCatalogue(REQ, []).flatMap((g) => g.lanes);
+    const lane = (name: string) => lanes.find((l) => l.lane === name)!;
+    expect(lane('agent-lead')).toMatchObject({ reads: ['docs/qa/lead-playbook.md'], readsRequired: [], readsBaseline: ['docs/qa/lead-playbook.md'] });
+    expect(lane('agent-review')).toMatchObject({ readsRequired: ['docs/qa/stack.md'], readsBaseline: ['docs/qa/explorer-playbook.md', 'docs/qa/reviewer-playbook.md'] });
+    expect(lane('agent-overseer')).toMatchObject({ readsRequired: ['docs/qa/capability-ledger.md'], readsBaseline: ['docs/qa/overseer-playbook.md'] });
+    for (const l of lanes) {
+      expect([...l.readsRequired, ...l.readsBaseline].sort(), l.lane).toEqual([...l.reads].sort());
+      for (const p of l.readsBaseline) expect(p, l.lane).toMatch(/^docs\/qa\/[a-z-]+-playbook\.md$/);
+    }
+    // A requirements file from before the declarations says nothing has a baseline.
+    const older = laneCatalogue({ ...REQ, declarations: undefined }, []).flatMap((g) => g.lanes).find((l) => l.lane === 'agent-lead')!;
+    expect(older).toMatchObject({ readsRequired: ['docs/qa/lead-playbook.md'], readsBaseline: [] });
+  });
+
   it('recommends only the review lane on a repository that calls none', () => {
     const rec = laneCatalogue(REQ, []).flatMap((g) => g.lanes).filter((l) => l.recommended).map((l) => l.lane);
     expect(rec).toEqual(['agent-review']);

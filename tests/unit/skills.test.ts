@@ -435,6 +435,26 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(lanes).toMatch(/multi-select/);
   });
 
+  // #1570: `gh auth status` prints a prefix of the token, even with --hostname.
+  it("has the adopt skill check gh's login without printing any part of the token, and no skill run gh auth status", () => {
+    const first = section(skill('adopt').body, /^## Steps$/)!.split('\n').find((l) => l.startsWith('1. '))!;
+    expect(first).toContain('`gh api user --jq .login`');
+    for (const s of ALL_SKILLS) {
+      // Named only to say whose token gh uses, or never to be run.
+      const runs = s.body.replace(/whoever `gh auth status` says/g, '').replace(/never `gh auth status`/g, '');
+      expect(runs, s.dir).not.toContain('gh auth status');
+    }
+  });
+
+  // #1570: an AGENTS.md or CLAUDE.md that names the stack is a strong signal for the test database.
+  it("has the adopt skill recommend the test database from init's answer, which reads AGENTS.md and CLAUDE.md, and say where it came from", () => {
+    const db = section(skill('adopt').body, /^### `\.answers\.testDatabase`/)!;
+    expect(db).toContain('`.answers.testDatabase`');
+    expect(db).toMatch(/AGENTS\.md/);
+    expect(db).toMatch(/CLAUDE\.md/);
+    expect(db).toMatch(/`reason`/);
+  });
+
   it('asks in Claude Code with its question tool, recommended option first and marked, and never for a list', () => {
     const how = section(skill('adopt').body, /^## How to ask$/)!;
     expect(how).toMatch(/In Claude Code, ask with its question tool\*\* \(`AskUserQuestion`\)/);
