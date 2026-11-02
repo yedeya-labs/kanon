@@ -2958,9 +2958,13 @@ export const diagnose = async (deps, opts) => {
       // ── `deploy.releaser-missing`: a release made with the workflow's token starts no run.
       if (!releaseCallers.some((c) => isMap(c.job.secrets) && releaserSecrets.every((n) => n in c.job.secrets))) {
         const file = releaseCallers[0]?.file ?? '.github/workflows/release.yml';
-        find('deploy.releaser-missing', file, `${releaseCallers.length ? `calls Kanon's release workflow without mapping the Releaser's ${releaserSecrets.join(' and ')}` : 'is not there: no workflow calls Kanon\'s release workflow'}, so a release is made with the workflow's token, which starts no run: the deploy lane never starts on a release (plan 0010 §3).`, {
+        find('deploy.releaser-missing', file, `${releaseCallers.length ? `calls Kanon's release workflow without mapping the Releaser's ${releaserSecrets.join(' and ')}` : 'is not there: no workflow calls Kanon\'s release workflow'}, so a release is made with the workflow's token, which starts no run: the deploy lane never starts on a release (plan 0010 §3).`, releaseCallers.length ? {
           text: `Install the Releaser App (kanon apps), and map its two secrets in the release caller's job, as kanon init writes it (docs/release.md):`,
           commands: releaserSecrets.map((n) => `      ${n}: \${{ secrets.${n} }}`),
+        } : {
+          // kanon#1553: init writes the release caller, the Releaser's secrets mapped, where there is none.
+          text: `Run kanon init with the Releaser: it writes the release caller, mapping the Releaser's two secrets, and release-please's starting configuration where the repository has none, and creates the Releaser App (docs/init.md, "The release workflow"):`,
+          commands: ['kanon init --releaser'],
         });
       }
       // ── `deploy.ci-push-missing`: the gate waits for the release commit's `ci.yml` push run.

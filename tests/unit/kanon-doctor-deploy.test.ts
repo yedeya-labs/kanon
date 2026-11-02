@@ -9,6 +9,7 @@ import { PROBE_LINE } from '../../scripts/deploy-gate.mjs';
 import { TARGETS_VARIABLE } from '../../scripts/lib/deploy-targets.mjs';
 import { checkout, fakeGitHub, HEALTHY_DEPLOY, healthyFiles, ids, LANES, no, ok, PINNED, releaseBy, releaserFiles, releaserOn, REPO, REQ, ROOT, run, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
+import { releaseCallerFile } from '../../cli/release-files.mjs';
 
 /**
  * `kanon doctor`'s deploy checks (plan 0010 §12, step D7): the `## Deploy` declaration, the caller
@@ -376,6 +377,18 @@ describe("kanon doctor's deploy checks (plan 0010 §12, D7)", () => {
       const r = await check(f);
       expect(deployIds(r)).toEqual([`deploy.releaser-missing ${RELEASE_CALLER}`]);
       expect(finding(r, 'deploy.releaser-missing').blocking).toBe(true);
+      expect(finding(r, 'deploy.releaser-missing').fix.commands).toEqual(['      RELEASER_APP_ID: ${{ secrets.RELEASER_APP_ID }}', '      RELEASER_APP_PRIVATE_KEY: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}']);
+    });
+
+    // kanon#1553: with no release caller at all, init writes one, the Releaser's secrets mapped.
+    it('deploy.releaser-missing names kanon init --releaser where no workflow calls the release workflow, and the caller init writes passes', async () => {
+      const f = files();
+      delete f[RELEASE_CALLER];
+      const r = await check(f);
+      expect(deployIds(r)).toEqual(['deploy.releaser-missing .github/workflows/release.yml']);
+      expect(finding(r, 'deploy.releaser-missing').fix.commands).toEqual(['kanon init --releaser']);
+      f['.github/workflows/release.yml'] = releaseCallerFile(PINNED, 'main', true);
+      expect(deployIds(await check(f))).toEqual([]);
     });
 
     it('deploy.ci-push-missing blocks where ci.yml on the default branch runs on no push to it, and is unchecked where it can\'t be read', async () => {
