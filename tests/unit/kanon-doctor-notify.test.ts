@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -47,7 +48,7 @@ const beforeN7 = () => {
 
 /** Kanon's prebuilt hook, as `kanon init` writes it, at `ref`. */
 const prebuilt = (name: 'slack' | 'webhook', ref = PINNED) =>
-  readFileSync(join(ROOT, `actions/notify/hooks/${name}.yml`), 'utf8').replace(/@v\d+\.\d+\.\d+/, `@${ref}`);
+  readFileSync(join(ROOT, `actions/notify/hooks/${name}.yml`), 'utf8').replace(/@(?:candidate-)?v\d+\.\d+\.\d+/, `@${ref}`);
 
 /** An adopter's own hook, with these steps. */
 const ownHook = (steps: string[], o: { using?: string; inputs?: string[] } = {}) => [
@@ -156,9 +157,17 @@ describe('kanon doctor on chat notifications (plan 0011 §9)', () => {
       expect(f.message).toContain('health job');
       expect(f.fix.commands).toEqual([
         'mkdir -p .github/actions/notify',
-        `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/yedeya-labs/kanon/contents/actions/notify/hooks/slack.yml?ref=${NEXT}' > ${NOTIFY_HOOK}`,
-        `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/yedeya-labs/kanon/contents/actions/notify/hooks/webhook.yml?ref=${NEXT}' > ${NOTIFY_HOOK}`,
+        `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/yedeya-labs/kanon/contents/actions/notify/hooks/slack.yml?ref=${NEXT}' | sed -E 's#(uses: yedeya-labs/kanon/actions/notify/slack@)[^ ]+#\\1${NEXT}#' > ${NOTIFY_HOOK}`,
+        `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/yedeya-labs/kanon/contents/actions/notify/hooks/webhook.yml?ref=${NEXT}' | sed -E 's#(uses: yedeya-labs/kanon/actions/notify/webhook@)[^ ]+#\\1${NEXT}#' > ${NOTIFY_HOOK}`,
       ]);
+      // Kanon's copy pins the candidate's tag (#1557): the line's sed sets the pin to the checked
+      // release, so a stable release's hook is pinned beside its callers, as `kanon init` writes it.
+      for (const [i, name] of (['slack', 'webhook'] as const).entries()) {
+        const sed = /\| (sed -E '[^']+')/.exec(f.fix.commands[i + 1]!)![1]!;
+        const out = execFileSync('sh', ['-c', sed], { timeout: 10_000, input: readFileSync(join(ROOT, `actions/notify/hooks/${name}.yml`), 'utf8'), encoding: 'utf8' });
+        expect(out, name).toBe(prebuilt(name, NEXT));
+        expect(out, name).toMatch(new RegExp(`^ {4}- uses: yedeya-labs/kanon/actions/notify/${name}@${NEXT.replace(/\./g, '\\.')} `, 'm'));
+      }
       expect(f.fix.text).toMatch(/your own composite action/);
     });
 

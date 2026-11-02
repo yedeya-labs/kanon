@@ -8,9 +8,14 @@ import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs'
 // `<!-- x-release-please-start-version -->` and `<!-- x-release-please-end -->` (or on a line
 // carrying `x-release-please-version`), and two things rewrite it, by which release it must name:
 //   - What ships inside a release, the skills (read at the plugin's release) and the notify
-//     hooks' YAML (which `kanon init` copies as it is), names that release: release-please
+//     hooks' YAML (which `kanon init` copies with its pin set), names that release: release-please
 //     rewrites it in the release PR, each file listed under `extra-files`. Its generic updater
-//     replaces the FIRST X.Y.Z on each line it covers, and nothing else.
+//     replaces the FIRST X.Y.Z on each line it covers, and nothing else. A command it runs, a
+//     skill's `npx` line or a hook's `uses:`, names the candidate's tag, `candidate-vX.Y.Z`, which
+//     exists from the moment the release PR merges, where the stable `vX.Y.Z` exists only once
+//     the candidate is promoted (#1557); the `candidate-` is literal text the updater keeps. The
+//     upgrade skill's `claude plugin marketplace add` line, the plugin release an adopter
+//     installs, names the stable `vX.Y.Z`.
 //   - The rest of the documentation, which a reader copies from the default branch, names the
 //     latest stable release, which exists: the promotion rewrites it with
 //     `scripts/doc-pins.mjs move` once it tags one, and CI's `doc-pins.mjs check` fails a
@@ -86,9 +91,21 @@ describe('K-ADOPT-11 the version references an adopter copies stay current', () 
     expect(stableDocs.map((d) => d.file)).toContain('README.md');
   });
 
-  it("every reference in what ships inside a release names package.json's version", () => {
-    const stale = shipped.flatMap((d) => d.lines.flatMap((l) => l.refs.filter((r) => r !== `v${version}`).map((r) => `${l.at}: @${r}`)));
+  // A command the skills and hooks run names the candidate's tag, which resolves through the
+  // candidate's soak and, the promotion tagging the same commit, after it; the plugin install
+  // line names the stable release (#1557).
+  const STABLE_LINE = /claude plugin marketplace add /;
+  const shippedRef = (text: string): string => (STABLE_LINE.test(text) ? `v${version}` : `candidate-v${version}`);
+  it("every reference in what ships inside a release names package.json's version: a command at its candidate's tag, the plugin install at its stable release", () => {
+    const stale = shipped.flatMap((d) => d.lines.flatMap((l) => l.refs.filter((r) => r !== shippedRef(l.text)).map((r) => `${l.at}: @${r}`)));
     expect(stale).toEqual([]);
+    const all = shipped.flatMap((d) => d.lines.flatMap((l) => l.refs.map((r) => [d.file, r])));
+    // Not vacuous: each of the six extra files runs a command at the candidate's tag, and the
+    // upgrade skill installs the stable release.
+    for (const f of ['skills/adopt/SKILL.md', 'skills/doctor/SKILL.md', 'skills/inbox/SKILL.md', 'skills/upgrade/SKILL.md', 'actions/notify/hooks/slack.yml', 'actions/notify/hooks/webhook.yml']) {
+      expect(all, f).toContainEqual([f, `candidate-v${version}`]);
+    }
+    expect(all).toContainEqual(['skills/upgrade/SKILL.md', `v${version}`]);
   });
 
   // That the release is published is CI's `doc-pins.mjs check`, which reads the remote's tags;
@@ -148,7 +165,7 @@ describe('K-ADOPT-11 the version references an adopter copies stay current', () 
       const own = SHIPPED.test(file) ? version : (refsOf(stableDocs)[0] ?? '').slice(1);
       for (const l of lines.filter((x) => x.covered)) {
         const after = l.text.replace(/\d+\.\d+\.\d+/, next);
-        const expected = l.refs.length > 0 ? l.text.replace(new RegExp(`([@#]|"ref": ")v${own.replaceAll('.', '\\.')}`, 'g'), `$1v${next}`) : l.text;
+        const expected = l.refs.length > 0 ? l.text.replace(new RegExp(`([@#]|"ref": ")((?:candidate-)?)v${own.replaceAll('.', '\\.')}`, 'g'), `$1$2v${next}`) : l.text;
         expect(after, l.at).toBe(expected);
         expect((l.text.match(SEMVER) ?? []).length, l.at).toBeLessThanOrEqual(1);
       }

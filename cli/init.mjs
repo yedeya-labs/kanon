@@ -130,6 +130,10 @@ Options:
   --dir <path>           the checkout (default: here)
   --yes                  take the default of every question no flag below answers
   --dry-run              read everything, change nothing, print what it would do
+  --replace-uncommitted  replace each file that differs from what init writes and was never
+                         committed (git shows it untracked), printing its diff: for files an
+                         earlier kanon init wrote that nobody edited since. Passing it says
+                         nobody did, which init can't tell
   --json                 print one JSON document (docs/init.md) on standard output and the
                          prose on standard error; asks nothing, as --yes
   -h, --help             this text
@@ -345,7 +349,8 @@ export const realDeps = {
       child.stdin.end(input ?? '');
     }),
   git: (args) => {
-    const r = spawnSync('git', args, { encoding: 'utf8' });
+    // Never a prompt: the anonymous read of Kanon's tags (`anonymousTag`) must fail, not wait.
+    const r = spawnSync('git', args, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
     return { status: r.status, stdout: r.stdout ?? '', stderr: r.error ? String(r.error.message) : (r.stderr ?? '') };
   },
   env: process.env,
@@ -425,8 +430,8 @@ export const CONFLICTS = [
  *   declares the deploy lane already posts its announcements (plan 0011 N9)
  */
 export const parseArgs = (argv, req, declaredOf = () => []) => {
-  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, json: boolean, apps: boolean, help: boolean, given: Given, releaserFlag?: string }} */
-  const opts = { repo: '', dir: process.cwd(), lanes: null, yes: false, dryRun: false, json: false, apps: true, help: false, given: {} };
+  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, json: boolean, apps: boolean, help: boolean, replaceUncommitted: boolean, given: Given, releaserFlag?: string }} */
+  const opts = { repo: '', dir: process.cwd(), lanes: null, yes: false, dryRun: false, json: false, apps: true, help: false, replaceUncommitted: false, given: {} };
   const g = opts.given;
   /** @type {Set<string>} */
   const seen = new Set();
@@ -450,6 +455,7 @@ export const parseArgs = (argv, req, declaredOf = () => []) => {
     else if (flag === '--yes') opts.yes = true;
     else if (flag === '--dry-run') opts.dryRun = true;
     else if (flag === '--json') opts.json = true;
+    else if (flag === '--replace-uncommitted') opts.replaceUncommitted = true;
     else if (flag === '--no-apps') opts.apps = false;
     else if (flag === '--create-apps') g.createApps = true;
     else if (flag === '--project-owner') g.projectOwner = value();
@@ -819,7 +825,17 @@ export const inspect = async (deps, repo) => {
   const kind = r.owner?.type === 'Organization' ? 'Organization' : 'User';
   const isPrivate = Boolean(r.private);
   const defaultBranch = String(r.default_branch ?? 'main');
-  const admin = Boolean(r.permissions?.admin);
+  // Whether the token's grants reach the repository at all (#1551): a fine-grained token whose
+  // repository access leaves it out can still read a public repository, and GitHub's
+  // `permissions` are the account's role there, not the token's, so `admin` alone would say yes
+  // while every write fails. Listing the collaborators needs only Metadata: read, which every
+  // fine-grained token holds on each repository it covers, and GitHub refuses it to one that
+  // doesn't cover the repository. Null when the answer says neither, as a classic token without
+  // push access gets.
+  const probe = await deps.gh(['api', `repos/${repo}/collaborators?per_page=1`, '--jq', 'length']);
+  /** @type {boolean | null} */
+  const tokenCovers = probe.status === 0 ? true : NOT_COVERED.test(probe.stderr) ? false : null;
+  const admin = Boolean(r.permissions?.admin) && tokenCovers !== false;
   const branch = await deps.gh(['api', `repos/${repo}/branches/${encodeURIComponent(defaultBranch)}`, '--jq', '.name']);
   const hasCommits = branch.status === 0;
 
@@ -868,6 +884,7 @@ export const inspect = async (deps, repo) => {
     isPrivate,
     defaultBranch,
     admin,
+    tokenCovers,
     hasCommits,
     rulesets,
     mergeQueue,
@@ -896,6 +913,9 @@ export const inspect = async (deps, repo) => {
 };
 
 /** @typedef {Awaited<ReturnType<typeof inspect>>} Inspection */
+
+/** GitHub's refusal to a fine-grained token on a repository its repository access leaves out. */
+export const NOT_COVERED = /Resource not accessible by personal access token/i;
 
 /** The merge settings of `K-SHIP-3`: squash only, the PR's title and body as the commit's. */
 export const MERGE_SETTINGS = { allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false, squash_merge_commit_title: 'PR_TITLE', squash_merge_commit_message: 'PR_BODY' };
@@ -1225,9 +1245,10 @@ export const chatHookStub = (inputs) => {
 /**
  * The hook file a chat answer writes at `.github/actions/notify/action.yml` (plan 0011 §7.1):
  * Kanon's prebuilt hook for `slack` and `webhook`, its one step's Kanon reference pinned at
- * `release`, the pin `init` writes everywhere (plan 0012 decision 5): byte for byte Kanon's copy on
- * a stable pin, and the candidate's tag on a candidate's, since `vX.Y.Z` doesn't exist until the
- * candidate is promoted. The stub for `hook`; nothing for `none`.
+ * `release`, the pin `init` writes everywhere (plan 0012 decision 5): byte for byte Kanon's copy
+ * but for that pin. Kanon's copy names the candidate's tag, which exists from the candidate's cut
+ * (kanon#1557), and a stable pin writes `vX.Y.Z` in its place. The stub for `hook`; nothing for
+ * `none`.
  * @param {Chat | null} chat @param {Requirements} req @param {string} release
  * @returns {string | null}
  */
@@ -2538,12 +2559,14 @@ export const chatKinds = (a, req, deploying = (a.deployEnvironments ?? []).lengt
  * anything is written. Every answer is on a line, so nothing is silent.
  * @param {{ s: Inspection, a: Answers, req: Requirements, repo: string, release: string, read: (rel: string) => string | null,
  *   files: Map<string, string>, rows: Map<string, string>, ownerApps: Array<{ app: string, slug: string, from: string }> | null,
- *   met: (lane: string) => boolean, holders?: Array<{ workflow: string, job: string, status: string }>, legacyCallers?: string[] }} c
+ *   met: (lane: string) => boolean, holders?: Array<{ workflow: string, job: string, status: string }>, legacyCallers?: string[],
+ *   replaces?: (rel: string) => boolean }} c
  *   `holders`: the jobs of the checkout's workflows that hold `id-token: write`, as doctor counts them;
- *   `legacyCallers`: the callers of a notifying lane that still map `DIGEST_WEBHOOK`
+ *   `legacyCallers`: the callers of a notifying lane that still map `DIGEST_WEBHOOK`;
+ *   `replaces`: whether the run replaces a file that differs, never committed (#1551)
  * @returns {SummaryLine[]}
  */
-export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerApps, met, holders = [], legacyCallers = [] }) => {
+export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerApps, met, holders = [], legacyCallers = [], replaces = () => false }) => {
   /** @type {SummaryLine[]} */
   const lines = [];
   const why = (/** @type {string} */ f) => a.why[f] ?? { source: /** @type {Source} */ ('default'), reason: '' };
@@ -2628,9 +2651,13 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
   const dep = read('.github/dependabot.yml');
   line('Dependabot', [], dep === null ? 'write .github/dependabot.yml with the Kanon entry' : /yedeya-labs\/kanon\*/.test(dep) ? 'has the Kanon entry' : 'add the Kanon entry', byDefault());
   /** @type {Record<string, number>} */
-  const count = { new: 0, kept: 0, same: 0, differs: 0, rewritten: 0 };
-  for (const [rel, text] of files) count[fileStatus(rel, text, read(rel), req)] = (count[fileStatus(rel, text, read(rel), req)] ?? 0) + 1;
-  line('Files', [], `${count.new} new, ${count.kept} kept, ${count.same} already as written, ${count.differs} differ${count.rewritten ? `, ${count.rewritten} rewritten` : ''}`, inferred('from the checkout'));
+  const count = { new: 0, kept: 0, same: 0, differs: 0, rewritten: 0, replaced: 0 };
+  for (const [rel, text] of files) {
+    const st = fileStatus(rel, text, read(rel), req);
+    const status = st === 'differs' && replaces(rel) ? 'replaced' : st;
+    count[status] = (count[status] ?? 0) + 1;
+  }
+  line('Files', [], `${count.new} new, ${count.kept} kept, ${count.same} already as written, ${count.differs} differ${count.rewritten ? `, ${count.rewritten} rewritten` : ''}${count.replaced ? `, ${count.replaced} replaced (never committed)` : ''}`, inferred('from the checkout'));
   const steps = [
     ...apps.filter((x) => / create$/.test(x)).map((x) => `create the ${x.split(':')[0]} App`),
     ...apps.filter((x) => /: reuse /.test(x)).map((x) => `1 key for the ${x.split(':')[0]}`),
@@ -2679,7 +2706,7 @@ export const SCHEMA = 'kanon-init/v1';
  *   catalogue: ReturnType<typeof laneCatalogue>,
  *   features: ReturnType<typeof featureCatalogue>,
  *   summary: SummaryLine[],
- *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'rewritten' | 'differs', content: string | null, diff: string[] }>,
+ *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'rewritten' | 'replaced' | 'differs', content: string | null, diff: string[] }>,
  *   changes: Array<{ kind: string, subject: string, message: string }>,
  *   apps: { identities: string[], missing: string[], reuse: Array<{ app: string, slug: string }>, command: string | null, outcome: string, exitCode: number | null } | null,
  *   findings: Finding[],
@@ -2880,7 +2907,7 @@ const run = async (deps, opts, req, rep) => {
 
   // THE PIN (plan 0012 decision 5, CLI-1): the release this tree is when Kanon has its tag, else
   // its candidate's tag, else nothing to pin, and it stops before reading anything else.
-  const pinned = await releasePin(deps.gh, deps.release());
+  const pinned = await releasePin(deps.gh, deps.release(), deps.git);
   if (pinned.refusal !== null) return stop(1, [pinned.refusal]);
   const release = pinned.pin;
   rep.pin = release;
@@ -2908,6 +2935,7 @@ const run = async (deps, opts, req, rep) => {
     defaultBranch: s.defaultBranch,
     hasCommits: s.hasCommits,
     admin: s.admin,
+    tokenCoversRepository: s.tokenCovers,
     rulesets: s.rulesets,
     mergeQueue: s.mergeQueue,
     defaultBranchMergeQueue: mergesThroughQueue(s),
@@ -2934,7 +2962,7 @@ const run = async (deps, opts, req, rep) => {
   out(`== ${repo}, at Kanon ${release}${dry ? ' (dry run: nothing will change)' : ''} ==`);
   out(`- ${s.kind === 'User' ? 'A personal account' : 'An organisation'}'s ${s.isPrivate ? 'private' : 'public'} repository; default branch ${s.defaultBranch}${s.hasCommits ? '' : ', with no commit yet'}.`);
   out(`- Rulesets: ${s.rulesets}. Merge queue: ${s.mergeQueue}. Environments: ${s.environments === null ? "not readable with this token" : s.environments.length ? s.environments.join(', ') : 'none'} (only the deploy lane uses them).`);
-  out(`- Your token ${s.admin ? 'can' : "can't"} administer the repository.`);
+  out(s.tokenCovers === false ? `- Your token doesn't cover ${repo}: its repository access leaves it out, so it can read only what is public there, and every write would fail.` : `- Your token ${s.admin ? 'can' : "can't"} administer the repository.`);
   out(`- ${s.labels.size} label(s); ${s.covering.length} ruleset(s) on the default branch; secrets ${s.secrets ? `readable (${s.secrets.size})` : 'not readable with this token'}.`);
 
   // 2. Ask.
@@ -3030,8 +3058,27 @@ const run = async (deps, opts, req, rep) => {
   // THE SUMMARY (plan 0007 §4): every value, and where it came from, before anything is written.
   // Without --yes it is confirmed in one question, or changed, a group at a time, and shown again.
   const plan = () => plannedFiles({ s, a, req, release, repo, today: deps.today(), read, workflows, callers });
+  // A file that differs and was never committed (#1551): an earlier release's init wrote it in
+  // this checkout, as a re-run at a newer release over an installation in progress finds them,
+  // or the person wrote it. init can't tell which, so it replaces one only with
+  // --replace-uncommitted, the person's word that nobody edited it, and otherwise names them.
+  // One git process for every file, read the first time a file differs, by the summary or the
+  // loop, which so decide alike. Git failing to list them counts each as committed, so nothing
+  // is offered or replaced on a guess.
+  /** @type {Set<string> | null | undefined} null when git couldn't list them */
+  let tracked;
+  /** @param {string} rel */
+  const untracked = (rel) => {
+    if (tracked === undefined) {
+      const ls = deps.git(['-C', root, 'ls-files', '-z']);
+      tracked = ls.status === 0 ? new Set(ls.stdout.split('\0').filter(Boolean)) : null;
+    }
+    return tracked !== null && !tracked.has(rel);
+  };
+  /** Whether this run replaces a file that differs. @param {string} rel */
+  const replaces = (rel) => opts.replaceUncommitted && untracked(rel);
   for (;;) {
-    rep.summary = summaryOf({ s, a, req, repo, release, read, files: plan(), rows, ownerApps, met, holders, legacyCallers });
+    rep.summary = summaryOf({ s, a, req, repo, release, read, files: plan(), rows, ownerApps, met, holders, legacyCallers, replaces });
     out('');
     for (const l of summaryText(rep.summary, { s, repo, release })) out(l);
     if (a.lanes.includes(REVIEW_LANE)) {
@@ -3115,12 +3162,24 @@ const run = async (deps, opts, req, rep) => {
   };
   let failures = 0;
   const verb = dry ? 'Would create' : 'Created';
+  // A token whose repository access leaves the repository out (#1551) fails every write below
+  // for that reason, whatever permissions it holds, so each write's step names the coverage, not
+  // a permission the person may well have granted already.
+  /** Why the token couldn't. @param {string} permission */
+  const needs = (permission) => (s.tokenCovers === false ? `the token's repository access doesn't cover ${repo}` : `it needs ${permission}`);
+  /** The token that can. @param {string} permission */
+  const tokenWith = (permission) => (s.tokenCovers === false ? `a token whose repository access covers ${repo}, with ${permission}` : `a token that has ${permission}`);
+  if (s.tokenCovers === false) {
+    note(`The token gh uses doesn't cover ${repo}: GitHub refused it the repository's collaborators, which any token that covers the repository can read, so ${dry ? 'every write to it would fail' : 'every write to it fails'}. Add ${repo} to the fine-grained token's Repository access (https://github.com/settings/personal-access-tokens), or use a token that covers it, then run kanon init again.`);
+  }
 
   // 3. Write the files.
   out('');
   out('== Files ==');
   const files = plan();
   let wrote = false;
+  /** @type {string[]} the files that differ, never committed, which the flag would replace */
+  const replaceable = [];
   for (const [rel, text] of files) {
     const have = read(rel);
     if (have === text) {
@@ -3153,7 +3212,18 @@ const run = async (deps, opts, req, rep) => {
       for (const l of diff) out(`    ${l}`);
       continue;
     }
+    if (have !== null && replaces(rel)) {
+      const diff = lineDiff(have, text).filter((l) => !l.startsWith('  '));
+      if (!dry) deps.writeFile(join(root, rel), text);
+      wrote = true;
+      change('file', rel, `${dry ? 'Would replace' : 'Replaced'} ${rel}, never committed, with what init writes at ${release} (--replace-uncommitted)`);
+      rep.files.push({ path: rel, status: 'replaced', content: text, diff });
+      out(`${rel}: never committed, and differs: ${dry ? 'would replace it' : 'replaced it'} (--replace-uncommitted). The difference:`);
+      for (const l of diff) out(`    ${l}`);
+      continue;
+    }
     if (have !== null) {
+      if (untracked(rel)) replaceable.push(rel);
       out(`${rel}: exists and differs from what init would write; left unchanged. The difference:`);
       const diff = lineDiff(have, text).filter((l) => !l.startsWith('  '));
       for (const l of diff) out(`    ${l}`);
@@ -3168,6 +3238,9 @@ const run = async (deps, opts, req, rep) => {
     rep.files.push({ path: rel, status: 'new', content: text, diff: [] });
     out(`${dry ? 'would write' : 'wrote'} ${rel}:`);
     for (const l of text.replace(/\n$/, '').split('\n')) out(`    + ${l}`);
+  }
+  if (replaceable.length) {
+    note(`Never committed, and differ from what init writes: ${replaceable.join(', ')}. If an earlier kanon init wrote them and nobody has edited them since, run kanon init again with --replace-uncommitted, which replaces them; init can't tell whether they were edited, so the flag is your word that they weren't.`);
   }
   // Each holder nothing accepts (#631): doctor's own finding, which doctor blocks on. One the person
   // accepted is accepted once the record holds init's text; a record the project already has is
@@ -3293,9 +3366,9 @@ const run = async (deps, opts, req, rep) => {
       id: 'label.create',
       category: 'label',
       subject: repo,
-      prose: 'Create the labels the token could not (it needs Issues: write):',
-      message: `${labelSteps.length} of the taxonomy's labels are missing, and the token could not create them (it needs Issues: write).`,
-      text: 'Create them with a token that has Issues: write.',
+      prose: `Create the labels the token could not (${needs('Issues: write')}):`,
+      message: `${labelSteps.length} of the taxonomy's labels are missing, and the token could not create them (${needs('Issues: write')}).`,
+      text: `Create them with ${tokenWith('Issues: write')}.`,
       commands: labelSteps,
     });
   }
@@ -3307,7 +3380,7 @@ const run = async (deps, opts, req, rep) => {
         if (r.status === 0) change('label-deleted', n, `Deleted GitHub's default label ${n}`);
         else {
           const cmd = `gh label delete ${JSON.stringify(n)} --yes -R ${repo}`;
-          step({ id: 'label.delete-default', category: 'label', subject: n, prose: `Delete GitHub's default label "${n}" (K-WORK-12): ${cmd}`, message: `GitHub's default label "${n}" is outside Kanon's taxonomy, and the token could not delete it.`, text: 'Delete it with a token that has Issues: write (K-WORK-12).', commands: [cmd], lines: [] });
+          step({ id: 'label.delete-default', category: 'label', subject: n, prose: `Delete GitHub's default label "${n}" (K-WORK-12): ${cmd}`, message: `GitHub's default label "${n}" is outside Kanon's taxonomy, and the token could not delete it.`, text: `Delete it with ${tokenWith('Issues: write')} (K-WORK-12).`, commands: [cmd], lines: [] });
         }
       }
     } else if (a.deleteDefaults) for (const n of extra) change('label-deleted', n, `Would delete GitHub's default label ${n}`);
@@ -3321,7 +3394,7 @@ const run = async (deps, opts, req, rep) => {
     if (code === 0) for (const b of missingBuckets) change('milestone', b, `Created the milestone ${b}`);
     else {
       const cmd = `kanon milestones --repo ${repo}`;
-      step({ id: 'milestone.buckets', category: 'milestone', subject: repo, prose: `Create the bucket milestones (K-WORK-4): ${cmd}`, message: `The bucket milestones ${missingBuckets.join(' and ')} are missing (K-WORK-4), and kanon milestones did not create them.`, text: 'Run kanon milestones with a token that has Issues: write.', commands: [cmd], lines: [] });
+      step({ id: 'milestone.buckets', category: 'milestone', subject: repo, prose: `Create the bucket milestones (K-WORK-4): ${cmd}`, message: `The bucket milestones ${missingBuckets.join(' and ')} are missing (K-WORK-4), and kanon milestones did not create them.`, text: `Run kanon milestones with ${tokenWith('Issues: write')}.`, commands: [cmd], lines: [] });
     }
   }
 
@@ -3342,9 +3415,9 @@ const run = async (deps, opts, req, rep) => {
         id: 'merge.settings',
         category: 'merge',
         subject: repo,
-        prose: `Make squash the only merge method, with the PR's title and body as the commit's (K-SHIP-3); it needs Administration: write:`,
+        prose: `Make squash the only merge method, with the PR's title and body as the commit's (K-SHIP-3); ${needs('Administration: write')}:`,
         message: `The repository's merge settings differ from K-SHIP-3's (${settingList}), and the token could not change them.`,
-        text: 'Make squash the only merge method, with the PR\'s title and body as the commit\'s, with a token that has Administration: write.',
+        text: `Make squash the only merge method, with the PR's title and body as the commit's, with ${tokenWith('Administration: write')}.`,
         commands: [`gh ${patch.join(' ')}`],
         url: `https://github.com/${repo}/settings`,
       });
@@ -3494,9 +3567,9 @@ const run = async (deps, opts, req, rep) => {
           id: 'ruleset.create',
           category: 'ruleset',
           subject: s.defaultBranch,
-          prose: `Create the default branch's ruleset (K-ADOPT-1 step 8); it needs Administration: write:`,
+          prose: `Create the default branch's ruleset (K-ADOPT-1 step 8); ${needs('Administration: write')}:`,
           message: `${s.defaultBranch} has no ruleset, and the token could not create one (K-ADOPT-1 step 8).`,
-          text: 'Create it with a token that has Administration: write; the command reads the ruleset from the lines after it.',
+          text: `Create it with ${tokenWith('Administration: write')}; the command reads the ruleset from the lines after it.`,
           commands: rulesetCmd,
         });
       }

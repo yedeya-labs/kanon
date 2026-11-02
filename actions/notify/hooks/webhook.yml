@@ -7,9 +7,11 @@
 # gets the message itself, as JSON, and may validate it against docs/notify/message-v1.schema.json
 # in Kanon. See docs/notifications.md in Kanon.
 #
-# Its one step is Kanon's generic webhook action at the release `init` ran from (the candidate's
-# tag on a candidate pin). The upgrade skill moves this pin with your callers' (decision 18). Edit
-# the step and it is your own hook: Kanon then counts it as `custom`.
+# Its one step is Kanon's generic webhook action at the release `init` ran from: the stable
+# `vX.Y.Z` once Kanon has promoted it, else the candidate's tag. Kanon's own copy names the
+# candidate's tag, which exists from the candidate's cut (kanon#1557). The upgrade skill moves this
+# pin with your callers' (decision 18). Edit the step and it is your own hook: Kanon then counts it
+# as `custom`.
 name: notify
 description: Posts Kanon's notifications as JSON to a URL, through Kanon's generic webhook hook.
 
@@ -30,7 +32,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: yedeya-labs/kanon/actions/notify/webhook@v0.43.0 # x-release-please-version
+    - uses: yedeya-labs/kanon/actions/notify/webhook@candidate-v0.43.0 # x-release-please-version
       with:
         message-v1: ${{ inputs.message-v1 }}
         text: ${{ inputs.text }}

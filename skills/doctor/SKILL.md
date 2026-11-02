@@ -14,7 +14,7 @@ Run every `kanon` command in this skill, and every one a finding's fix names, fr
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.43.0 kanon doctor --json
+npx --yes --package github:yedeya-labs/kanon#candidate-v0.43.0 kanon doctor --json
 ```
 
 <!-- x-release-please-end -->
@@ -75,7 +75,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 <!-- x-release-please-start-version -->
 
 ```sh
-! cd <the checkout's root> && npx --yes --package github:yedeya-labs/kanon#v0.43.0 kanon apps --owner <owner> --repo <repo> --apps <apps>
+! cd <the checkout's root> && npx --yes --package github:yedeya-labs/kanon#candidate-v0.43.0 kanon apps --owner <owner> --repo <repo> --apps <apps>
 ```
 
 <!-- x-release-please-end -->
@@ -220,7 +220,7 @@ Propose the bullet and ask for the reason; never invent one. Write it only once 
 | `deploy.self-review` | decision | Doesn't block. Say why it may stay off: with prevention on, the person can't approve a run they started, a release they published by hand or a dispatch. Turn it on only where a second person reviews. |
 | `deploy.admin-bypass` | decision | Doesn't block. Ask whether an administrator should deploy production with no reviewer; if not, the person turns the bypass off on the environment's page. |
 | `deploy.subject-custom` | person | Blocks, and can't be waived. The person restores the default OIDC subject template with the fix's command, or adds `context` to the custom one; it needs Administration: write. |
-| `deploy.trust-unproven` | person | A note until the lane's first run, and always under `no-environments`; then it blocks. Show what the probe said. Each environment's cloud role must trust only `…:environment:<name>`, and the deploy hook must find each role outside its environment (`docs/lanes.md`, "The trust probe"): the person fixes the trust policy in their cloud, then the next release, or a dispatch at a release's tag with the fix's line, proves it. Never dispatch at the default branch: it doesn't count. |
+| `deploy.trust-unproven` | person | A note until the lane's first run, and always under `no-environments`; then it blocks. Show what the probe said. Each environment's cloud role must trust only that environment's OIDC subject, read from the repository as `docs/lanes.md`, "The subject each role trusts", says, and the deploy hook must find each role outside its environment ("The trust probe"): the person fixes the trust policy in their cloud, then the next release, or a dispatch at a release's tag with the fix's line, proves it. Never dispatch at the default branch: it doesn't count. |
 | `deploy.artifact-retention` | person | Doesn't block. The person raises the artifact retention to at least 30 days with the fix's command, or under Settings, Actions, General. |
 | `deploy.secret-repository` | person | Doesn't block. The person moves the value into each environment whose deploy needs it, with the fix's commands in their own terminal, then deletes the repository secret: an environment that holds none would hand the deploy hook the repository's. Never read or print the value. |
 | `deploy.secret-organization` | person | Doesn't block. The person moves the value into each environment whose deploy needs it, with the fix's commands in their own terminal, then, as an owner of the organisation, narrows the organisation secret's repository access on the fix's page, or deletes it if no repository needs it: an environment that holds none would hand the deploy hook the organisation's. Never read or print the value. |

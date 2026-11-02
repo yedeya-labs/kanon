@@ -45,6 +45,8 @@ The way to pin it is in the repository, in its `.claude/settings.json`, which Cl
 
 Kanon's own repository declares it the same way. Its `ref` is in the candidate form, and the release pull request moves it to the new candidate, `candidate-vX.Y.Z`, a tag that exists once that pull request merges: release-please rewrites only the version inside the value. Kanon's pin job then moves the callers to the same candidate, in `ci(deps): run Kanon on candidate vX.Y.Z`, and leaves the `ref`, which already names it ([`docs/release.md`](release.md#channels-candidates-and-stable)). Between the two merges the `ref` leads the callers' pin, and doctor reports the difference there, as it would in any repository the plugin leads.
 
+Each skill runs `kanon` through an `npx` line that names its release's candidate tag, `npx --yes --package github:…#candidate-vX.Y.Z kanon …`, whichever release you installed the plugin at ([#1557](https://github.com/yedeya-labs/kanon/issues/1557)). The release pull request writes that tag, which exists once the pull request merges, and the promotion tags `vX.Y.Z` on the same commit, so the command runs the same code on a candidate and on its stable release. What the skills pin in your repository is still the stable release once Kanon has promoted it: `kanon init` pins `vX.Y.Z` when that tag exists ([`docs/init.md`](init.md#the-release-it-pins)), and the upgrade skill's target, and its `claude plugin marketplace add` line, name `vX.Y.Z`.
+
 ## Or install it yourself
 
 Without the declaration, each person installs the plugin in their own Claude Code configuration:

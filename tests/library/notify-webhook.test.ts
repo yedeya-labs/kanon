@@ -267,11 +267,11 @@ describe('plan 0011 N4: the action and the hook file `kanon init` writes (§7.1)
     for (const name of INPUTS) expect(hook.inputs[name].required).toBe(true);
   });
 
-  it('its one step names `actions/notify/webhook` at a version tag, the release\'s own, and passes the four inputs through', () => {
+  it('its one step names `actions/notify/webhook` at a version tag, the release\'s own candidate tag (#1557), and passes the four inputs through', () => {
     expect(hook.runs.steps).toHaveLength(1);
     const step = hook.runs.steps[0];
-    expect(step.uses).toMatch(/^yedeya-labs\/kanon\/actions\/notify\/webhook@v\d+\.\d+\.\d+$/);
-    expect(step.uses).toBe(`yedeya-labs/kanon/actions/notify/webhook@v${version}`);
+    expect(step.uses).toMatch(/^yedeya-labs\/kanon\/actions\/notify\/webhook@candidate-v\d+\.\d+\.\d+$/);
+    expect(step.uses).toBe(`yedeya-labs/kanon/actions/notify/webhook@candidate-v${version}`);
     expect(step.with).toEqual(Object.fromEntries(INPUTS.map((n) => [n, `\${{ inputs.${n} }}`])));
   });
 

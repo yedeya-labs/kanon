@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { CONFLICTS, laneCatalogue, parseArgs, SCHEMA, usage, USAGE } from '../../cli/init.mjs';
+import { CONFLICTS, laneCatalogue, parseArgs, realDeps, SCHEMA, usage, USAGE } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { consentQuestion } from '../../cli/init.mjs';
 import { SPAWNS } from './helpers/spawns.js';
@@ -115,6 +115,76 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     const readable = parse(await run(checkout(), fakeGitHub(), ['--json', '--dry-run']));
     expect(readable.changes.filter((c) => c.kind === 'merge-settings')).toHaveLength(1);
     expect(readable.notes.some(known)).toBe(false);
+  });
+
+  // A fine-grained token whose repository access leaves the repository out still reads a public
+  // one, and GitHub's `permissions` are the account's role, so the dry run said `admin: true`
+  // while every write then failed, each step asking for a permission the token already had (#1551).
+  it("says the token doesn't cover the repository, from its grants, not the account's role", async () => {
+    const dry = parse(await run(checkout(), fakeGitHub({ admin: true, tokenCovers: false }), ['--json', '--dry-run']));
+    expect(dry.inspection.admin).toBe(false);
+    expect(dry.inspection.tokenCoversRepository).toBe(false);
+    expect(dry.notes.some((n) => n.startsWith("The token gh uses doesn't cover acme/widgets"))).toBe(true);
+    const github = fakeGitHub({ admin: true, tokenCovers: false });
+    const real = await run(checkout(), github, ['--json', '--no-apps']);
+    expect(real.err).toContain("Your token doesn't cover acme/widgets");
+    const d = parse(real);
+    const label = d.findings.find((f) => f.id === 'label.create');
+    expect(label?.message).toMatch(/repository access doesn't cover acme\/widgets/);
+    expect(label?.message).not.toMatch(/needs Issues: write/);
+    expect(d.findings.find((f) => f.id === 'ruleset.create')?.fix.text).toMatch(/^Create it with a token whose repository access covers acme\/widgets/);
+    // A token that covers it is read as before, and the account's role decides.
+    const covered = parse(await run(checkout(), fakeGitHub({ admin: true }), ['--json', '--dry-run']));
+    expect(covered.inspection.admin).toBe(true);
+    expect(covered.inspection.tokenCoversRepository).toBe(true);
+    expect(covered.notes.some((n) => n.includes("doesn't cover"))).toBe(false);
+  });
+
+  // Re-running init at a newer release over the files an older one wrote in an installation in
+  // progress, never committed and never edited, found every one `differs` and left it, so the
+  // only way on was to delete them by hand (#1551). init names the ones never committed, and
+  // --replace-uncommitted, the person's word that nobody edited them, replaces them.
+  it('offers to replace the files that differ and were never committed, and replaces them with --replace-uncommitted', async () => {
+    const dir = checkout();
+    const first = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    const [older, committed] = first.files.filter((f) => f.status === 'new' && String(f.path).startsWith('.github/workflows/')).map((f) => String(f.path));
+    expect(older && committed).toBeTruthy();
+    // What an older release wrote: the same caller at an older pin.
+    const aged = (rel: string) => writeFileSync(join(dir, rel), readFileSync(join(dir, rel), 'utf8').replaceAll(`@${PINNED}`, '@v0.38.0'));
+    aged(older!);
+    aged(committed!);
+    execFileSync('git', ['-C', dir, 'add', '--', committed!]);
+    execFileSync('git', ['-C', dir, 'commit', '-q', '-m', 'an older installation']);
+    const want = (rel: string) => String(first.files.find((f) => f.path === rel)!.content);
+
+    const offered = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    expect(offered.files.find((f) => f.path === older)?.status).toBe('differs');
+    const note = offered.notes.find((n) => n.startsWith('Never committed, and differ from what init writes:'));
+    expect(note).toContain(older);
+    expect(note).toContain('--replace-uncommitted');
+    // A committed file is the project's history, so it is never offered.
+    expect(note).not.toContain(committed);
+    expect(readFileSync(join(dir, older!), 'utf8')).not.toBe(want(older!));
+
+    const dry = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--dry-run', '--replace-uncommitted']));
+    expect(dry.files.find((f) => f.path === older)?.status).toBe('replaced');
+    // The summary counts the files as the run then reports them: the replaced one apart from the
+    // committed one that differs.
+    const filesLine = (d: Doc) => String(d.summary.find((l) => l.answer === 'Files')?.value);
+    expect(filesLine(dry)).toMatch(/, 1 differ, 1 replaced \(never committed\)$/);
+    expect(filesLine(offered)).toMatch(/, 2 differ$/);
+    expect(readFileSync(join(dir, older!), 'utf8')).not.toBe(want(older!));
+
+    const replaced = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--replace-uncommitted']));
+    const entry = replaced.files.find((f) => f.path === older);
+    expect(entry?.status).toBe('replaced');
+    expect((entry?.diff as string[]).some((l) => l.startsWith('- ') && l.includes('@v0.38.0'))).toBe(true);
+    expect(readFileSync(join(dir, older!), 'utf8')).toBe(want(older!));
+    expect(replaced.changes.some((c) => c.subject === older && String(c.message).startsWith('Replaced'))).toBe(true);
+    // The committed one is left, as any file that differs, flag or not.
+    expect(replaced.files.find((f) => f.path === committed)?.status).toBe('differs');
+    expect(readFileSync(join(dir, committed!), 'utf8')).toContain('@v0.38.0');
+    expect(replaced.notes.some((n) => n.startsWith('Never committed'))).toBe(false);
   });
 
   it('says what a dry run would do, and does nothing', async () => {
@@ -322,6 +392,33 @@ describe('kanon init pins the release it runs from (plan 0012 decision 5, CLI-1)
     expect(r.appsCalls).toEqual([]);
   });
 
+  // An organisation's policy can refuse the person's fine-grained token on Kanon's repository
+  // (one whose lifetime is over 366 days) while it works on their own (#1551). Kanon's
+  // repository is public, so the tag is read anonymously instead, with no credential.
+  it('reads the tag anonymously when GitHub refuses the token on Kanon\'s repository', async () => {
+    const POLICY = "gh: The 'yedeya-labs' organization forbids access via a fine-grained personal access tokens if the token's lifetime is greater than 366 days. (HTTP 403)";
+    const remote: string[][] = [];
+    const tags = new Set([CANDIDATE]);
+    const git = (args: string[]) => {
+      if (!args.includes('ls-remote')) return realDeps.git(args);
+      remote.push(args);
+      const ref = args[args.length - 1]!;
+      return tags.has(ref.replace('refs/tags/', '')) ? { status: 0, stdout: `0123abcd\t${ref}\n`, stderr: '' } : { status: 2, stdout: '', stderr: '' };
+    };
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub({ kanonTagsFail: POLICY }), ['--yes', '--json'], undefined, REQ, { git });
+    expect(r.status, r.err).toBe(0);
+    expect(parse(r).pin).toBe(CANDIDATE);
+    expect(remote.map((a) => a[a.length - 1])).toEqual([`refs/tags/${PINNED}`, `refs/tags/${CANDIDATE}`]);
+    // With no credential helper, so neither the token nor gh's login is sent.
+    for (const a of remote) expect(a.slice(0, 2)).toEqual(['-c', 'credential.helper=']);
+    // An anonymous read that fails too leaves the tag unknown, and init refuses as before.
+    const down = (args: string[]) => (args.includes('ls-remote') ? { status: 128, stdout: '', stderr: 'fatal: unable to access' } : realDeps.git(args));
+    const refused = await run(checkout(), fakeGitHub({ kanonTagsFail: POLICY }), ['--yes', '--json'], undefined, REQ, { git: down });
+    expect(refused.status).toBe(1);
+    expect(parse(refused).error).toContain('reading it anonymously failed too (fatal: unable to access)');
+  });
+
   it("refuses when it can't tell whether a tag exists, rather than guess", async () => {
     const dir = checkout();
     const r = await run(dir, fakeGitHub({ kanonTagsFail: 'error connecting to api.github.com' }), ['--yes', '--json']);
@@ -461,7 +558,7 @@ describe('kanon init, a flag for each question (#367)', () => {
     const usage = new Set([...USAGE.matchAll(/^ {2}(?:-h, )?(--[a-z-]+)/gm)].map((m) => m[1]!));
     expect([...usage].sort()).toEqual([...parsed].sort());
     const documented = new Set(tableColumn('## Answering without a terminal', 1).flatMap((c) => [...c.matchAll(/`(--[a-z-]+)/g)].map((m) => m[1]!)));
-    const answers = [...parsed].filter((f) => !['--repo', '--dir', '--yes', '--dry-run', '--json', '--help'].includes(f));
+    const answers = [...parsed].filter((f) => !['--repo', '--dir', '--yes', '--dry-run', '--replace-uncommitted', '--json', '--help'].includes(f));
     expect([...documented].sort()).toEqual(answers.sort());
   });
 });
