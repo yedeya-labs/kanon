@@ -205,7 +205,6 @@ describe('kanon init, a feature, three questions and one summary (plan 0007 G5)'
       [['--sensitive-data', '--no-sensitive-data'], '--sensitive-data and --no-sensitive-data contradict each other'],
       [['--feature', 'custom'], '--feature takes review, build or full, not "custom"'],
       [['--consent', 'maybe'], '--consent takes yes, codes or no, not "maybe"'],
-      [['--releases'], "--releases is for a repository that calls Kanon's release workflow"],
     ] as const) {
       const github = fakeGitHub();
       const r = await run(checkout(), github, ['--json', '--no-apps', ...argv]);

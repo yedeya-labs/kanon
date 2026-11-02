@@ -195,12 +195,12 @@ Kanon's label taxonomy replaces GitHub's default labels it doesn't use, such as 
 - **Options:** **Delete** (`--delete-default-labels`): `init` deletes those in `.inspection.labels` that the taxonomy doesn't hold, and the issues that carry one lose it. **Keep** (`--keep-default-labels`): they stay beside the taxonomy.
 - **When `.inspection.labels` holds none of them,** there is nothing to choose: say so, and pass `--keep-default-labels`.
 
-### `.answers.releaser`: the optional Releaser App
+### `.answers.releaser`: releases, and the optional Releaser App
 
-Asked only when `.inspection.callsRelease` is true. Otherwise there is nothing to choose: say so, and pass neither flag.
+Asked of every installation, after the deploy environments below, since its recommendation follows that answer ([#1553](https://github.com/yedeya-labs/kanon/issues/1553)). When `.inspection.callsRelease` is true, ask whether to create the Releaser. Otherwise ask whether to release with Kanon's release workflow, which `init` writes, with the Releaser: `.github/workflows/release.yml`, `release-please-config.json` (the `simple` type, named after the repository), `.release-please-manifest.json` and `version.txt` (`docs/init.md` in Kanon's repository, "The release workflow"). With a deploy environment `init` writes that workflow whatever the answer, since a release is what starts the deploy lane: say so.
 
-- **Recommended:** **Yes** when `.inspection.rulesets` is `yes`, because a release pull request opened without an App runs no CI, so a ruleset that requires checks blocks it unless an admin bypasses it; otherwise **No**.
-- **Options:** **Yes** (`--releaser`, or `--releases`): `kanon apps` creates a third App, the Releaser, which opens the release pull requests so their CI runs, and becomes the ruleset's only bypass actor (`K-MERGE-8`). **No** (`--no-releaser`, or `--no-releases`): release pull requests keep being opened with the workflow's token.
+- **Recommended:** **Yes** when the person chose a deploy environment, because a release the workflow's token makes starts no deploy run; or when `.inspection.rulesets` is `yes` and the repository calls the release workflow, because a release pull request opened without an App runs no CI, so a ruleset that requires checks blocks it unless an admin bypasses it; otherwise **No**.
+- **Options:** **Yes** (`--releaser`, or `--releases`): `kanon apps` creates a third App, the Releaser, which opens the release pull requests so their CI runs, publishes releases that start the deploy lane, and becomes the ruleset's only bypass actor (`K-MERGE-8`); where the repository calls no release workflow, `init` writes it, mapping the Releaser's secrets. **No** (`--no-releaser`, or `--no-releases`): release pull requests are opened with the workflow's token; with no deploy environment and no release workflow, none is written; with a deploy environment, the release workflow is written without the Releaser, and `kanon doctor` reports `deploy.releaser-missing` until it has one.
 
 ### `.answers.deployEnvironments`: the deploy environments
 

@@ -25,6 +25,8 @@ It takes one optional pair of secrets, `RELEASER_APP_ID` and `RELEASER_APP_PRIVA
 
 ## Use it
 
+**`kanon init` writes these four files for you** ([`docs/init.md`](init.md#the-release-workflow), [#1553](https://github.com/yedeya-labs/kanon/issues/1553)) when you choose releases (`--releaser`, or `--releases`) or a deploy environment, since the deploy lane runs only on a published release: the caller below, with the Releaser's secrets mapped when you choose the Releaser, and the configuration, manifest and `version.txt` of step 2, the `package-name` your repository's name. It writes each only where the repository has none, and never overwrites one. To write them by hand instead, or to see what `init` writes:
+
 ### 1. A thin caller
 
 Add `.github/workflows/release.yml` to your repository, pinned to an **exact version**:

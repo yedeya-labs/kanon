@@ -8,8 +8,8 @@ import { ADOPTER, ROOT } from './helpers/adopter.js';
 import { SPAWNS } from '../unit/helpers/spawns.js';
 
 /**
- * kanon#1558 (point 13 of #1551): an install with no Releaser by choice. `kanon init` offers the
- * Releaser only to a repository that calls Kanon's release workflow, so its register has no
+ * kanon#1558 (point 13 of #1551): an install with no Releaser by choice. An install may decline
+ * the Releaser (`kanon init --no-releaser`), so its register may have no
  * Releaser row, and the sweep's `botLogins()` needed all six rows: the sweep and the reconciler
  * stopped on `lists no Releaser App` first thing in `main()`.
  *

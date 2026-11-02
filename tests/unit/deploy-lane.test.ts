@@ -58,6 +58,13 @@ const SECRET = /secrets\s*(?:\.\s*([A-Za-z0-9_-]+)|\[)/g;
 const isCheckout = (s: Step) => String(s.uses ?? '').startsWith('actions/checkout@');
 const grants = (j: Job) => (typeof j.permissions === 'object' ? j.permissions : {});
 const ALLOWED_SECRET = '${{ secrets.KANON_DEPLOY_SECRET }}';
+/**
+ * The deploy targets (kanon#1555): the gate's output, the probe's hook gets whole and each
+ * environment's deploy hook its own entry of, from the caller's `targets` input. Environment
+ * variables, so a hook written before them stays valid; never an input of the smoke hooks.
+ */
+const PROBE_TARGETS = '${{ needs.gate.outputs.targets }}';
+const DEPLOY_TARGET = "${{ inputs.targets != '' && fromJSON(inputs.targets)[inputs.environment] || '' }}";
 /** The announcement's secret (plan 0011 N9): an optional `workflow_call` secret of deploy.yml, read by its `notify` step alone. */
 const CHAT_SECRET = '${{ secrets.KANON_CHAT_DEPLOY }}';
 /**
@@ -169,7 +176,8 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
   const declare = w[ENV]?.jobs.declare;
   if (declare && JSON.stringify(declare.permissions) !== '{"contents":"read"}') out.push(`${ENV}:declare: holds more than contents: read`);
   const inputs = Object.keys(w[ENV]?.on?.workflow_call?.inputs ?? {}).sort();
-  if (JSON.stringify(inputs) !== '["build","environment","position"]') out.push(`${ENV}: takes ${inputs.join(', ')}, not the environment, its position and the build alone`);
+  if (JSON.stringify(inputs) !== '["build","environment","position","targets"]') out.push(`${ENV}: takes ${inputs.join(', ')}, not the environment, its position, the build and the targets alone`);
+  out.push(...targetsProblems(w));
   out.push(...buildProblems(w));
   if (/inputs\.role\b/.test(JSON.stringify(w[ENV] ?? {}))) out.push(`${ENV}: reads a role from its caller`);
   // The gate's CI wait ends inside its job (#912): the longest wait and the margin for the setup,
@@ -197,6 +205,38 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
       if (j.environment !== undefined) out.push(`${file}:${name}: sets an environment, which Kanon's own repository declares none of`);
     }
   }
+  return out;
+}
+
+// ── The deploy targets (kanon#1555) ───────────────────────────────────────────────────────
+
+/** Everything wrong with how the lane reads `KANON_DEPLOY_TARGETS` and hands it to the deploy hook. */
+function targetsProblems(w: Record<string, Workflow>): string[] {
+  const out: string[] = [];
+  const optional = (file: string) => {
+    const i = (w[file]?.on?.workflow_call?.inputs ?? {}).targets as { required?: boolean; type?: string; default?: string } | undefined;
+    if (!i || i.required !== false || i.type !== 'string' || i.default !== '') out.push(`${file}: doesn't take \`targets\` as an optional string, empty by default, so a caller from before it stops working`);
+  };
+  optional(RELEASE);
+  optional(ENV);
+  const gate = w[RELEASE]?.jobs.gate;
+  if (gate) {
+    const gs = gate.steps ?? [];
+    const read = gs.find((s) => s.id === 'targets');
+    if (!read || !/deploy-gate\.mjs" targets$/.test(String(read.run ?? '').trim()) || read.env?.TARGETS !== '${{ inputs.targets }}' || read.env?.ENVIRONMENTS !== '${{ inputs.environments }}') {
+      out.push(`${RELEASE}:gate: doesn't read the caller's targets against its list with \`deploy-gate.mjs targets\``);
+    } else {
+      if (gs.indexOf(read) > gs.findIndex((s) => s.id === 'gate')) out.push(`${RELEASE}:gate: reads the targets after the gate's checks, so a malformed variable waits for CI before it fails`);
+      if (read.if !== undefined || (read['continue-on-error'] !== undefined && read['continue-on-error'] !== false)) out.push(`${RELEASE}:gate: the targets step carries an \`if:\` or \`continue-on-error\`, so a malformed variable may not stop the run`);
+    }
+    if (gate.outputs?.targets !== '${{ steps.targets.outputs.targets }}') out.push(`${RELEASE}:gate: doesn't output the targets it read`);
+  }
+  const callOut = (w[RELEASE]?.on?.workflow_call as { outputs?: Record<string, { value?: string }> } | undefined)?.outputs?.targets?.value;
+  if (callOut !== '${{ jobs.gate.outputs.targets }}') out.push(`${RELEASE}: doesn't publish the gate's targets for the caller to hand each environment`);
+  const probeHook = (w[RELEASE]?.jobs.probe?.steps ?? []).find((s) => s.uses === './.github/actions/deploy');
+  if (JSON.stringify(probeHook?.env) !== JSON.stringify({ KANON_DEPLOY_TARGETS: PROBE_TARGETS })) out.push(`${RELEASE}:probe: the deploy hook isn't handed the gate's targets as KANON_DEPLOY_TARGETS, and nothing else`);
+  const deployHook = (w[ENV]?.jobs.deploy?.steps ?? []).find((s) => s.uses === './.github/actions/deploy');
+  if (deployHook?.env?.KANON_DEPLOY_TARGET !== DEPLOY_TARGET) out.push(`${ENV}:deploy: the deploy hook isn't handed its own environment's target as KANON_DEPLOY_TARGET`);
   return out;
 }
 
@@ -391,7 +431,7 @@ describe('the deploy lane holds its shape', () => {
     expect(Object.keys(PARSED[ENV]!.jobs)).toEqual(['declare', 'deploy', 'verdict', 'record', 'report', 'announce', 'notify']);
     // The run lists the environment's job as `<caller job> / deploy` (kanon#890), which the reference deploy names.
     expect(PARSED[ENV]!.jobs.deploy!.name).toBe('deploy');
-    expect(step(PARSED[ENV]!.jobs.deploy!, 'deploy').env).toEqual({ KANON_DEPLOY_SECRET: ALLOWED_SECRET });
+    expect(step(PARSED[ENV]!.jobs.deploy!, 'deploy').env).toEqual({ KANON_DEPLOY_SECRET: ALLOWED_SECRET, KANON_DEPLOY_TARGET: DEPLOY_TARGET });
   });
 
   it('every checkout of the two workflows persists no credential, and checks out the release commit the gate or the declaration resolved', () => {
@@ -520,7 +560,7 @@ describe('the deploy lane holds its shape', () => {
       red((w) => { delete job(w, RELEASE, 'probe').needs; }, /can run after a refused gate/);
     });
     it('the deploy job run whatever `declare` holds', () => red((w) => { delete job(w, ENV, 'deploy').if; }, /runs when declare holds production/));
-    it("the hold moved into the caller: a fallback input on deploy.yml", () => red((w) => { w[ENV]!.on!.workflow_call!.inputs!.fallback = { type: 'string' }; }, /not the environment, its position and the build alone/));
+    it("the hold moved into the caller: a fallback input on deploy.yml", () => red((w) => { w[ENV]!.on!.workflow_call!.inputs!.fallback = { type: 'string' }; }, /not the environment, its position, the build and the targets alone/));
     it("a workflow calling `deploy.yml` added to Kanon's `.github/workflows/`", () => {
       red((w) => { w['ship.yml'] = { jobs: { prod: { uses: '$/.github/workflows/deploy.yml', with: { environment: 'production', position: 1 } } } }; }, /ship\.yml:prod: calls the deploy lane/);
       red((w) => { w['ship.yml'] = { jobs: { prod: { environment: 'production', steps: [] } } }; }, /ship\.yml:prod: sets an environment/);
@@ -532,6 +572,40 @@ describe('the deploy lane holds its shape', () => {
       red((w) => { step(job(w, ENV, 'deploy'), 'deploy').with!.role = '${{ vars.DEPLOY_ROLE }}'; }, /reads a repository variable/);
       red((w) => { job(w, ENV, 'declare').environment = 'production'; }, /declare: sets an environment/);
     });
+  });
+
+  describe('the deploy targets (kanon#1555): each mutation turns the shape red', () => {
+    const red = (change: (w: Record<string, Workflow>) => void, problem: RegExp) => {
+      const found = mutate(change);
+      expect(found.some((p) => problem.test(p)), `expected a problem matching ${problem}, got ${JSON.stringify(found)}`).toBe(true);
+    };
+    const gateSteps = (w: Record<string, Workflow>) => job(w, RELEASE, 'gate').steps!;
+    it('the gate job\'s targets step dropped, or not handed the input', () => {
+      red((w) => { job(w, RELEASE, 'gate').steps = gateSteps(w).filter((s) => s.id !== 'targets'); }, /gate: doesn't read the caller's targets/);
+      red((w) => { step(job(w, RELEASE, 'gate'), 'targets').env!.TARGETS = ''; }, /gate: doesn't read the caller's targets/);
+    });
+    it('the targets read after the gate\'s checks, or allowed to fail', () => {
+      red((w) => { const g = job(w, RELEASE, 'gate'); const t = step(g, 'targets'); g.steps = [...g.steps!.filter((s) => s !== t), t]; }, /reads the targets after the gate's checks/);
+      red((w) => { step(job(w, RELEASE, 'gate'), 'targets')['continue-on-error'] = true; }, /targets step carries an `if:` or `continue-on-error`/);
+    });
+    it('the targets made a required input, which breaks a caller from before them', () => {
+      red((w) => { (w[RELEASE]!.on!.workflow_call!.inputs!.targets as { required: boolean }).required = true; }, /deploy-release\.yml: doesn't take `targets` as an optional string/);
+      red((w) => { delete w[ENV]!.on!.workflow_call!.inputs!.targets; }, /deploy\.yml: doesn't take `targets`/);
+    });
+    it('the targets not output or not published for the caller', () => {
+      red((w) => { delete job(w, RELEASE, 'gate').outputs!.targets; }, /gate: doesn't output the targets/);
+      red((w) => { delete (w[RELEASE]!.on!.workflow_call as { outputs: Record<string, unknown> }).outputs.targets; }, /doesn't publish the gate's targets/);
+    });
+    it('the probe\'s hook not handed the targets, or handed a secret beside them', () => {
+      const probeHook = (w: Record<string, Workflow>) => job(w, RELEASE, 'probe').steps!.find((s) => s.uses === './.github/actions/deploy')!;
+      red((w) => { delete probeHook(w).env; }, /probe: the deploy hook isn't handed the gate's targets/);
+      red((w) => { probeHook(w).env!.KANON_DEPLOY_TARGETS = '${{ inputs.targets }}'; }, /probe: the deploy hook isn't handed the gate's targets/);
+    });
+    it('the deploy hook handed every environment\'s targets, or none', () => {
+      red((w) => { step(job(w, ENV, 'deploy'), 'deploy').env!.KANON_DEPLOY_TARGET = '${{ inputs.targets }}'; }, /deploy: the deploy hook isn't handed its own environment's target/);
+      red((w) => { delete step(job(w, ENV, 'deploy'), 'deploy').env!.KANON_DEPLOY_TARGET; }, /deploy: the deploy hook isn't handed its own environment's target/);
+    });
+    it('the smoke hook handed the target', () => red((w) => { step(job(w, ENV, 'deploy'), 'smoke').env!.KANON_DEPLOY_TARGET = DEPLOY_TARGET; }, /smoke: isn't handed KANON_SMOKE_TRIGGER=deploy, and nothing else/));
   });
 
   describe('the mutations plan 0013 S4 names each turn the shape red', () => {

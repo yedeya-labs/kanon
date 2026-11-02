@@ -98,7 +98,7 @@ export const APP_OF = (() => {
 
 /**
  * The roles of an App the same `apps` block marks `optional`: the Releaser's, which no lane takes
- * and `kanon init` offers only to a repository that calls Kanon's release workflow (kanon#1558).
+ * and an install may decline (`kanon init --no-releaser`, kanon#1558).
  * A register without such a role's row has no such App installed.
  * @type {ReadonlySet<string>}
  */

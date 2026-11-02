@@ -93,7 +93,7 @@ Adds the Lead and its project lanes, the Merger, the Explorer's code audit, the 
 
 ### 2.4 Releases, an add-on
 
-The Releaser App and its bypass (`K-MERGE-8`, plan 0005 §3.1), with `RELEASER_APP_ID` and `RELEASER_APP_PRIVATE_KEY` mapped by the release workflow's caller. It goes with any feature, and is not one of the four options: it is inferred, **on when the repository calls Kanon's release workflow** (`.inspection.callsRelease`), off otherwise, and shown in the summary either way. A repository that doesn't release yet keeps it off; `init` writes no release-please configuration (Owner decision 11).
+The Releaser App and its bypass (`K-MERGE-8`, plan 0005 §3.1), with `RELEASER_APP_ID` and `RELEASER_APP_PRIVATE_KEY` mapped by the release workflow's caller. It goes with any feature, and is not one of the four options: it is inferred, **on when the repository calls Kanon's release workflow** (`.inspection.callsRelease`), or with a deploy environment, off otherwise, and shown in the summary either way. A repository that doesn't release yet keeps it off; `init` writes no release-please configuration (Owner decision 11). **Changed 2026-11-01** ([#1553](https://github.com/yedeya-labs/kanon/issues/1553), the Owner's decision): when the person chooses releases (`--releaser`, `--releases`) or a deploy environment, `init` writes the release workflow where the repository has none, as `docs/release.md`'s "Use it" gives it: the caller `.github/workflows/release.yml`, `release-please-config.json` (type `simple`, Kanon's eleven changelog sections), a `0.0.0` manifest and `version.txt`, each only where missing and never overwritten. The Releaser is inferred on with a deploy environment, since a release made without it starts no deploy run, and **Change something** asks the question of every repository ([`docs/init.md`](../init.md#the-release-workflow)).
 
 ### 2.5 Customise
 
@@ -347,7 +347,7 @@ Each is in the first run's log, and is filed or tracked on its own:
 - **The person's token reading check runs** (`gh pr checks`). A docs fix to the token's permissions, [#630](https://github.com/yedeya-labs/kanon/issues/630).
 - **A stable release channel** to pin to (#575). The pin stays the plugin's release, shown beside the latest.
 - **The webapp** of ADR 0014's audience 2, and **fleets** of repositories, which need more than one summary.
-- **Writing release-please's configuration** for a repository that doesn't release yet (§2.4).
+- **Writing release-please's configuration** for a repository that doesn't release yet (§2.4). **Changed 2026-11-01** ([#1553](https://github.com/yedeya-labs/kanon/issues/1553)): in scope now, when the person chooses releases or a deploy environment (§2.4).
 
 ## Owner decisions (2026-10-10)
 
@@ -368,7 +368,7 @@ Nine decisions taken by the Owner on the plan's pull request: its eight open poi
 8. **`kanon init --yes` defaults sharing to *No*.** Accepted: consent is never implied, and only an explicit answer sends anything (`K-OBS-18`).
 9. **`agent-merge-reconcile` is in Review + build, not Review** (§2.2). Accepted as proposed.
 10. **Full's conditional lanes** (§2.3): the sweep only with its hook, the digests only with a webhook, the telemetry Explorer left to doctor once the operator issues its role. Accepted as proposed.
-11. **Releases is inferred, never asked,** and `init` writes no release-please configuration (§2.4). Accepted as proposed.
+11. **Releases is inferred, never asked,** and `init` writes no release-please configuration (§2.4). Accepted as proposed. **Changed 2026-11-01** ([#1553](https://github.com/yedeya-labs/kanon/issues/1553), the Owner's decision): `init` writes the release workflow and release-please's starting configuration when the person chooses releases or a deploy environment, the same question recommends the Releaser, which is inferred on with a deploy environment, and **Change something** asks it of every repository (§2.4).
 12. **The Data question's recommended answer** follows the repository's visibility, and a *Yes* changes no default (§3). Accepted as proposed.
 13. **The style budget:** 160 characters per question, four words per label, 100 characters per consequence (§9). Accepted as proposed; G6 measures every current question against them first.
 14. **The consent page is `docs/sharing.md`.** Accepted as proposed.

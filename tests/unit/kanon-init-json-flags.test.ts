@@ -542,13 +542,14 @@ describe('kanon init, a flag for each question (#367)', () => {
     expect(github.calls).toEqual([]);
   });
 
-  it("refuses --releaser for a repository that doesn't call Kanon's release workflow, before any call to GitHub", async () => {
-    const github = fakeGitHub();
-    const r = await run(checkout(), github, ['--yes', '--releaser']);
-    expect(r.status).toBe(2);
-    expect(r.err).toContain("kanon init: --releaser is for a repository that calls Kanon's release workflow");
-    expect(github.calls).toEqual([]);
-    expect(writes(github.calls)).toEqual([]);
+  // kanon#1553 (the Owner, 2026-11-01): no longer refused; init writes the release workflow.
+  it.each(['--releaser', '--releases'])("takes %s for a repository that doesn't call Kanon's release workflow, and writes it", async (flag) => {
+    const dir = checkout();
+    const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', flag]));
+    expect(d.exitCode).toBe(0);
+    expect(d.answers.releaser).toBe(true);
+    expect(d.files.find((f) => f.path === '.github/workflows/release.yml')?.status).toBe('new');
+    expect(existsSync(join(dir, '.github/workflows/release.yml'))).toBe(true);
   });
 
   it('lists every flag it takes in its usage text and in docs/init.md, and only those', () => {

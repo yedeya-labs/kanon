@@ -14,9 +14,11 @@
 //    omitted section means its default, plan 0005 §5.2), the lane callers, the `apps-check`
 //    caller, `lane-check` in CI, the Dependabot entry, a starting project-setup hook, the Lead's
 //    brief template beside the Lead's caller (#749), the notify hook the chat answer names (plan
-//    0011 §10.2) and, when the person says yes, the kanon
-//    plugin's declaration in `.claude/settings.json` (#376), every Kanon reference pinned to the
-//    release it runs from, and prints the diff. It commits nothing.
+//    0011 §10.2), the deploy lane's caller and hook stubs for declared environments (plan 0010
+//    D6), the release workflow and release-please's starting configuration where the person
+//    chooses releases or a deploy environment and the repository has none (kanon#1553) and, when
+//    the person says yes, the kanon plugin's declaration in `.claude/settings.json` (#376), every
+//    Kanon reference pinned to the release it runs from, and prints the diff. It commits nothing.
 // 4. CREATES the taxonomy's labels (rulebook/labels.json), the bucket milestones (`kanon
 //    milestones`), the squash-only merge setting and, where the plan has rulesets and the token
 //    can administer the repository, the default branch's ruleset. The ruleset requires the
@@ -24,7 +26,7 @@
 //    that, every other pull request would wait on it, so the rule is a step for after the merge.
 //    To an existing ruleset, init adds that rule alone, and nothing else.
 // 5. DRIVES `kanon apps` for the Apps the chosen lanes run as (the Author and the Judge), and the
-//    optional Releaser when the repository calls Kanon's release workflow.
+//    optional Releaser when the person asks for releases (kanon#1553).
 // 6. SAYS PLAINLY what the plan can't enforce: on a private repository without rulesets, nothing
 //    on the platform refuses a merge without the Reviewer's approval (decision 3, K-ADOPT-3).
 //
@@ -44,8 +46,10 @@
 // Author (`AUTHOR_APP_ID`: the Implementer's, Lead's, Explorer's and Overseer's lanes) and the
 // Judge (`JUDGE_APP_ID`: the Reviewer's and Merger's), and `kanon apps --apps` creates them,
 // each with its roles' register rows and the Author's broadened Commit statuses write. The
-// optional Releaser, which no lane takes, is offered when the repository calls Kanon's release
-// workflow (`.github/workflows/release.yml`, docs/release.md). An App another repository of the
+// optional Releaser, which no lane takes, is offered to every repository: Kanon's release
+// workflow (`.github/workflows/release.yml`, docs/release.md) maps it, and `init` writes that
+// workflow, with release-please's starting configuration, where the repository has none and the
+// person chooses releases or a deploy environment (kanon#1553). An App another repository of the
 // owner already has is added with `kanon apps --reuse`, from a key generated on its page.
 //
 // Node built-ins only: this runs from a Kanon checkout or through `npx`, with no install.
@@ -85,6 +89,8 @@ import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL, sends } fro
 import { HOSTED_INGEST_URL } from '../scripts/lib/telemetry-token.mjs';
 import { OTHER_APP } from '../scripts/app-register.mjs';
 import { hookKind, HOOK_PATH as NOTIFY_HOOK_PATH } from '../actions/notify/notify.mjs';
+import { TARGETS_VARIABLE } from '../scripts/lib/deploy-targets.mjs';
+import { RELEASE_CALLER_PATH, releaseFiles } from './release-files.mjs';
 import { ADOPTION_RECORD as DEPLOY_RECORD, CHAIN_LABELS, CHOICES_HEADING, DeclarationError, DEPLOY_HEADING, LABELS as REFERENCE_LABELS, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
 import { LABEL as OVERSEER_LABEL, OVERSEER_CALLER, parseOverseerInstall } from '../scripts/lib/overseer-install.mjs';
 import { fencedLines } from '../scripts/spec-lib.mjs';
@@ -119,10 +125,12 @@ Installs Kanon in the repository whose checkout you run it from: inspects the re
 asks what it can't infer (each question has a default), writes the declarations and the lane
 callers pinned to this release, creates the labels, the bucket milestones and, where the plan
 has rulesets, the default branch's ruleset, and runs \`kanon apps --apps\` for the Apps the
-lanes run as: the Author and the Judge, and the optional Releaser if the repository calls
-Kanon's release workflow and you ask for it. It commits nothing, and prints as exact steps
-whatever its token can't do. The ruleset requires the "Lane check" status check only once a
-job on the default branch reports it; until then, that rule is a step for after the merge.
+lanes run as: the Author and the Judge, and the optional Releaser if you ask for releases,
+for which it writes Kanon's release workflow where the repository has none (with a deploy
+environment too, since the deploy lane runs on a release). It commits nothing, and prints
+as exact steps whatever its token can't do. The ruleset requires the "Lane check" status
+check only once a job on the default branch reports it; until then, that rule is a step for
+after the merge.
 Safe to run again.
 
 Options:
@@ -192,9 +200,12 @@ The other values, each inferred or defaulted, as the summary shows:
   --delete-default-labels  delete GitHub's default labels outside Kanon's taxonomy (the
                          default on a repository with no commit yet)
   --keep-default-labels  keep them (the default otherwise)
-  --releaser             create the optional Releaser App; only for a repository that
-                         calls Kanon's release workflow (the default there)
-  --no-releaser          don't (the default otherwise)
+  --releaser             release with Kanon's release workflow and the optional Releaser
+                         App: writes the workflow and release-please's configuration where
+                         the repository has none (the default where it calls the workflow,
+                         or with a deploy environment)
+  --no-releaser          no Releaser (the default otherwise); with a deploy environment the
+                         release workflow is still written, without it
   --releases             the same as --releaser
   --no-releases          the same as --no-releaser
   --plugin               declare the kanon plugin in .claude/settings.json, pinned to this
@@ -430,7 +441,7 @@ export const CONFLICTS = [
  *   declares the deploy lane already posts its announcements (plan 0011 N9)
  */
 export const parseArgs = (argv, req, declaredOf = () => []) => {
-  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, json: boolean, apps: boolean, help: boolean, replaceUncommitted: boolean, given: Given, releaserFlag?: string }} */
+  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, json: boolean, apps: boolean, help: boolean, replaceUncommitted: boolean, given: Given }} */
   const opts = { repo: '', dir: process.cwd(), lanes: null, yes: false, dryRun: false, json: false, apps: true, help: false, replaceUncommitted: false, given: {} };
   const g = opts.given;
   /** @type {Set<string>} */
@@ -472,10 +483,8 @@ export const parseArgs = (argv, req, declaredOf = () => []) => {
     else if (flag === '--delegate-email') g.delegateEmail = value();
     else if (flag === '--delete-default-labels') g.deleteDefaults = true;
     else if (flag === '--keep-default-labels') g.deleteDefaults = false;
-    else if (flag === '--releaser' || flag === '--releases') {
-      g.releaser = true;
-      opts.releaserFlag = flag;
-    } else if (flag === '--no-releaser' || flag === '--no-releases') g.releaser = false;
+    else if (flag === '--releaser' || flag === '--releases') g.releaser = true;
+    else if (flag === '--no-releaser' || flag === '--no-releases') g.releaser = false;
     else if (flag === '--feature') {
       const v = value();
       if (v !== 'review' && v !== 'build' && v !== 'full') throw new Error(`--feature takes review, build or full, not "${v}"; to choose lane by lane, give --lanes instead`);
@@ -640,6 +649,15 @@ export const appIdentities = (a, req) => [...identitiesOf(a.lanes, req), ...(a.r
  * @param {string | null} text the caller's text, or null
  */
 export const callsRelease = (text) => /^\s*uses:\s*yedeya-labs\/kanon\/\.github\/workflows\/release\.yml@/m.test(text ?? '');
+
+/**
+ * Whether `init` writes the release workflow (kanon#1553, the Owner's decision of 2026-11-01):
+ * when the person chose releases (the Releaser), or a deploy environment whose lane `init` writes,
+ * since the deploy lane runs only on a published release. `releaseFiles` leaves out what the
+ * repository has.
+ * @param {{ releaser: boolean, deployEnvironments: string[] }} a @param {(rel: string) => string | null} read @param {Requirements} req
+ */
+export const writesRelease = (a, read, req) => a.releaser || (a.deployEnvironments.length > 0 && Boolean(deployOf(req)) && !deployPathTaken(read, req));
 
 /**
  * Every row of the App register, role and slug, in order, read as `lane-check`'s reader reads it:
@@ -1378,8 +1396,14 @@ const parseGates = (answer) => (/^none( yet)?$/i.test(answer.trim()) ? [] : answ
 const askLanes = async (deps, req, fallback) =>
   parseLanes(await deps.ask(`Which lanes to install? (${Object.keys(req.lanes).map((l) => l.slice(6)).join(', ')})`, fallback.map((l) => l.slice(6)).join(',')), req);
 
-/** The Releaser's question, in today's shape. */
-const RELEASER_QUESTION = 'Create the optional Releaser App, so the release PR runs CI (docs/release.md, "With the Releaser")?';
+/** The Releaser's question, in today's shape, for a repository that calls Kanon's release workflow. */
+export const RELEASER_QUESTION = 'Create the optional Releaser App, so the release PR runs CI (docs/release.md, "With the Releaser")?';
+/**
+ * The same question for a repository that calls none (kanon#1553): a yes writes the release
+ * workflow too. With a deploy environment init writes the workflow whatever the answer, and the
+ * Releaser is what makes a release start the deploy lane.
+ */
+export const RELEASES_QUESTION = 'Release with Kanon\'s release workflow, which init writes, and create the optional Releaser App, so the release PR runs CI (docs/release.md)?';
 
 /**
  * What `askAll` infers from: the token's login, the suggested gates, git's name and email, the
@@ -1506,6 +1530,19 @@ export const derive = (a, ctx, g = {}) => {
     why.delegation = {
       source: 'inferred',
       reason: !author ? 'no Author lane' : !ctx.runsDco ? 'no Kanon DCO check' : !named ? "git's user.name or user.email is unset" : "an Author lane and Kanon's DCO check",
+    };
+  }
+  // THE RELEASER (plan 0005 §3.1; kanon#1553): on where the repository calls Kanon's release
+  // workflow, and with a deploy environment whose lane init writes, since a release the
+  // workflow's token makes starts no deploy run (plan 0010 §3); off otherwise, unless a flag or the
+  // person says. Either way, init writes the release workflow where the answer or the deploy lane
+  // needs it (`writesRelease`).
+  if (!fixed('releaser')) {
+    const deploying = a.deployEnvironments.length > 0 && !ctx.deployCallerTaken;
+    a.releaser = Boolean(ctx.releases) || deploying;
+    why.releaser = {
+      source: 'inferred',
+      reason: ctx.releases ? "the repository calls Kanon's release workflow" : deploying ? 'a deploy environment: a release made without the Releaser starts no deploy run' : 'no release workflow',
     };
   }
   // AN APP THE OWNER ALREADY HAS (#363): reused unless a flag or the person says otherwise, since
@@ -1684,8 +1721,8 @@ export const askAll = async (deps, opts, ctx) => {
   const deleteDefaults = g.deleteDefaults ?? !ctx.hasCommits;
   why.deleteDefaultLabels = g.deleteDefaults !== undefined ? flag : { source: 'default', reason: ctx.hasCommits ? 'issues may carry them' : 'the repository has no commit yet' };
   // THE OPTIONAL RELEASER (plan 0005 §3.1, plan 0007 §2.4): on when the repository calls Kanon's
-  // release workflow, off otherwise. `init` refuses `--releaser` for a repository that doesn't
-  // call it, before asking anything.
+  // release workflow, off otherwise; `derive` turns it on with a deploy environment too
+  // (kanon#1553). For a repository that calls none, a yes writes the release workflow.
   const releaser = g.releaser ?? Boolean(ctx.releases);
   why.releaser = g.releaser !== undefined ? flag : { source: 'inferred', reason: ctx.releases ? "the repository calls Kanon's release workflow" : 'no release workflow' };
   // THE KANON PLUGIN (#376), yes by default: the declaration does nothing until each person
@@ -1742,10 +1779,9 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
       a.chat = await choose(deps, chatQuestion(a.lanes, announcing(a.deployEnvironments, ctx), ctx.req), CHAT_OPTIONS, 'slack', 'slack', 'none');
       asked('chat');
     }
-    if (ctx.releases) {
-      a.releaser = await yesNo(RELEASER_QUESTION, a.releaser);
-      asked('releaser');
-    }
+    // Asked of every repository (kanon#1553): where it calls no release workflow, a yes writes one.
+    a.releaser = await yesNo(ctx.releases ? RELEASER_QUESTION : RELEASES_QUESTION, a.releaser);
+    asked('releaser');
     const found = ctx.reusable?.(appIdentities(a, ctx.req)) ?? [];
     if (found.length) {
       a.reuseApps = await yesNo(reuseQuestion(found, ctx.req), a.reuseApps ?? true);
@@ -2144,6 +2180,18 @@ export const deployEnvironmentSecrets = (req) => {
   return (d?.environmentSecrets ?? []).filter((n) => declared.includes(n));
 };
 
+/**
+ * Whether the release's deploy lane takes the deploy targets (kanon#1555): its `deploy-release.yml`
+ * declares the `targets` input, so its caller maps `KANON_DEPLOY_TARGETS` into it and hands the
+ * `release` job's `targets` output to each `deploy.yml` call. False before it.
+ * @param {Requirements} req
+ */
+export const deployTakesTargets = (req) => {
+  const d = /** @type {{ deploy?: { workflows?: { release?: string, environment?: string }, inputs?: Record<string, Record<string, unknown>> } }} */ (/** @type {unknown} */ (req)).deploy;
+  const w = d?.workflows;
+  return Boolean(w?.release && w.environment && d?.inputs?.[w.release]?.targets && d.inputs[w.environment]?.targets);
+};
+
 /** Where `init` writes the deploy lane's caller, the file name a reference deploy names. */
 export const DEPLOY_CALLER_PATH = '.github/workflows/deploy.yml';
 
@@ -2182,12 +2230,18 @@ const envScalar = (n) => (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(n) && !/^(true|false|
  * the release's requirements list them. Each `deploy-<n>` maps the announcement's chat secret,
  * where the release's `deploy.yml` posts one, and the deploy hook's environment secret by its own
  * name, where the release's `deploy.yml` declares it (`deployEnvironmentSecrets`, kanon#1049).
- * Nothing else: no `secrets: inherit`, so no App key reaches the deploy path.
+ * Nothing else: no `secrets: inherit`, so no App key reaches the deploy path. Where the release
+ * takes them (`deployTakesTargets`, kanon#1555), the `release` job passes
+ * `targets: ${{ vars.KANON_DEPLOY_TARGETS }}` and each `deploy-<n>` the `release` job's `targets`.
  * @param {string[]} environments @param {Requirements} req @param {string} release
  */
 export const deployCallerFile = (environments, req, release) => {
   const d = deployOf(req);
   if (!d) throw new Error("this release's requirements have no deploy entry, so it ships no deploy lane");
+  // THE TARGETS (kanon#1555): where the release's `deploy-release.yml` takes `targets`, the
+  // repository variable `KANON_DEPLOY_TARGETS` into it, which only a caller can read, and its
+  // `targets` output into each `deploy.yml` call, so the deploy hook gets each environment's role.
+  const targets = deployTakesTargets(req);
   const grants = (/** @type {string} */ wf) => ['    permissions:', ...Object.entries(d.grants[wf] ?? {}).map(([k, v]) => `      ${k}: ${v}`)];
   const out = [
     "# The caller of Kanon's deploy lane, written by `kanon init` from the `## Deploy` section of",
@@ -2213,6 +2267,7 @@ export const deployCallerFile = (environments, req, release) => {
     ...grants(d.workflows.release),
     '    with:',
     `      environments: '${environments.join(' ')}'`,
+    ...(targets ? [`      targets: \${{ vars.${TARGETS_VARIABLE} }}`] : []),
   ];
   // THE ANNOUNCEMENT'S SECRET (plan 0011 N9, §10.2): each environment's job maps the deploy kind's
   // secret, which `deploy.yml` declares optional, whatever the chat answer, as the project digest's
@@ -2232,6 +2287,7 @@ export const deployCallerFile = (environments, req, release) => {
       `      environment: ${envScalar(e)}`,
       `      position: ${n}`,
       '      build: ${{ needs.release.outputs.build }}',
+      ...(targets ? ['      targets: ${{ needs.release.outputs.targets }}'] : []),
       ...(secrets.length ? ['    secrets:', ...secrets.map((x) => `      ${x}: \${{ secrets.${x} }}`)] : []),
     );
   });
@@ -2431,6 +2487,13 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
     files.set(DEPLOY_CALLER_PATH, deployCallerFile(a.deployEnvironments, req, release));
     for (const h of deploy.hooks) files.set(h.path, deployHookStub(h));
   }
+  // THE RELEASE WORKFLOW (kanon#1553): with releases chosen, or with the deploy lane, which runs
+  // only on a published release, its caller and release-please's starting configuration, as
+  // docs/release.md gives them, each only where the repository lacks it (`releaseFiles`).
+  if (writesRelease(a, read, req)) {
+    const calls = callsRelease(read(RELEASE_CALLER_PATH));
+    for (const [p, t] of releaseFiles({ release, defaultBranch: s.defaultBranch, releaser: a.releaser, packageName: repo.split('/')[1] || 'your-project', read, calls })) files.set(p, t);
+  }
   return files;
 };
 
@@ -2608,7 +2671,11 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
     return `${appName(i)}: create`;
   });
   line('Apps', ['reuseApps'], apps.length ? apps.join('; ') : 'none: the lanes run as no App', why('reuseApps'));
-  line('Releases', ['releaser'], a.releaser ? 'on: the Releaser App opens the release PRs' : 'off', why('releaser'));
+  // The release workflow init writes where the repository has none (kanon#1553).
+  const writing = files.has(RELEASE_CALLER_PATH) && read(RELEASE_CALLER_PATH) === null;
+  line('Releases', ['releaser'], a.releaser
+    ? `on: ${writing ? `${RELEASE_CALLER_PATH} and release-please's configuration, written by init; ` : ''}the Releaser App opens the release PRs`
+    : writing ? `the release workflow, written by init for the deploy lane, without the Releaser App: a release it makes starts no deploy run` : 'off', why('releaser'));
   // The deploy lane (plan 0010 D6): not a feature, and nothing at all without a declared list.
   line('Deploy', ['deployEnvironments'], !a.deployEnvironments.length
     ? 'none: no deploy lane'
@@ -2932,9 +2999,6 @@ const run = async (deps, opts, req, rep) => {
   }
   if (opts.given.deployEnvironments?.length && !deployOf(req)) {
     return stop(2, ["--deploy-environments needs a release of Kanon that ships the deploy lane, and this one's requirements have no deploy entry. Nothing was changed."]);
-  }
-  if (opts.given.releaser && !releases) {
-    return stop(2, [`${opts.releaserFlag ?? '--releaser'} is for a repository that calls Kanon's release workflow from .github/workflows/release.yml (docs/release.md), and this one doesn't. Nothing was changed.`]);
   }
 
   const who = await whoami(deps.gh, deps.env);

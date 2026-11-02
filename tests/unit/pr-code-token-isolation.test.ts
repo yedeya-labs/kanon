@@ -228,7 +228,8 @@ describe("the deploy lane's two exceptions hold only what plan 0010 §7 lets the
     expect(credentials(wf, j)).toEqual(['references a secret', 'is granted a `write` permission', 'hands `Deploy` a token']);
     expect(j.permissions).toEqual({ contents: 'read', deployments: 'read', 'id-token': 'write' });
     const handed = (j.steps ?? []).filter((s) => /secrets\s*[.[]/.test(JSON.stringify(s)));
-    expect(handed.map((s) => [s.uses, s.env])).toEqual([['./.github/actions/deploy', { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' }]]);
+    // Beside it, the environment's deploy target, no secret (kanon#1555).
+    expect(handed.map((s) => [s.uses, s.env])).toEqual([['./.github/actions/deploy', { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}', KANON_DEPLOY_TARGET: "${{ inputs.targets != '' && fromJSON(inputs.targets)[inputs.environment] || '' }}" }]]);
   });
 
   it('no other job of the deploy lane runs the code under test but the build, which holds nothing (step D5)', () => {

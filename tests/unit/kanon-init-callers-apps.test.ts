@@ -5,10 +5,10 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { callerFile, TRIGGERS } from '../../cli/callers.mjs';
-import { appIdentities, appsArgs, callsRelease, LANE_CHECK, lineDiff, registerRolesOf, RULESET_NAME, rulesetGaps, withOverseerBullet, workflowName } from '../../cli/init.mjs';
+import { appIdentities, appsArgs, callsRelease, LANE_CHECK, lineDiff, registerRolesOf, RELEASES_QUESTION, RULESET_NAME, rulesetGaps, withOverseerBullet, workflowName } from '../../cli/init.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { KEYS_HELP } from '../../cli/apps.mjs';
-import { ROOT, hasYq, REQ, REPO, dirs, checkout, no, fakeGitHub, writes, run, changing, laneCheck, read, type Doc, parse } from './helpers/kanon-init.js';
+import { ROOT, hasYq, REQ, REPO, PINNED, dirs, checkout, no, fakeGitHub, writes, run, changing, laneCheck, read, type Doc, parse } from './helpers/kanon-init.js';
 
 // Its cases run `kanon init` against a real git checkout, and several run lane-check, so every
 // case takes the spawn budget (#436).
@@ -455,7 +455,10 @@ describe('the callers kanon init writes', () => {
     // With environments declared, so the deploy diagnose lane's caller is written too (plan 0010 D8).
     const r = await run(dir, github, ['--yes', '--lanes', all, '--deploy-environments', 'staging,production']);
     expect(r.status, r.err).toBe(0);
-    expect(r.appsCalls[0]).toContain('author,judge');
+    // A deploy environment recommends the Releaser, and writes the release caller (kanon#1553),
+    // which lane-check holds to the one pin.
+    expect(r.appsCalls[0]).toContain('author,judge,releaser');
+    expect(read(dir, '.github/workflows/release.yml')).toContain(`uses: yedeya-labs/kanon/.github/workflows/release.yml@${PINNED}`);
     const lc = laneCheck(dir);
     expect(lc.status, lc.out).toBe(0);
     expect(lc.out).toContain(`${Object.keys(REQ.lanes).length} lane caller(s) pass`);
@@ -720,10 +723,16 @@ describe('the Apps (plan 0005 step L4)', () => {
     // Changed through the summary, in today's question.
     const changed = await run(checkout({ '.github/workflows/release.yml': caller }), fakeGitHub(), [], undefined, REQ, { ask: changing('2', { 'optional Releaser': 'n' }) });
     expect(changed.appsCalls[0]).toEqual(['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge', '--dir', expect.any(String)]);
-    const none = await run(checkout(), fakeGitHub(), ['--lanes', 'review'], undefined, REQ, { ask: changing('2', { 'optional Releaser': 'y' }) });
-    expect(none.out).toMatch(/^Releases {7}off +inferred: no release workflow$/m);
-    expect(none.appsCalls[0]).toContain('judge');
-    expect(none.out).not.toContain('Releaser');
+    // A repository that calls none: off by default, and the same question, asked of it too since
+    // kanon#1553, writes the release workflow on a yes.
+    const off = await run(checkout(), fakeGitHub(), ['--yes', '--lanes', 'review']);
+    expect(off.out).toMatch(/^Releases {7}off +inferred: no release workflow$/m);
+    expect(off.appsCalls[0]).toEqual(['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge', '--dir', expect.any(String)]);
+    const asked: string[] = [];
+    const none = await run(checkout(), fakeGitHub(), ['--lanes', 'review'], undefined, REQ, { ask: changing('2', { 'optional Releaser': 'y' }, asked) });
+    expect(asked).toContain(`${RELEASES_QUESTION} (y/n)`);
+    expect(none.appsCalls[0]).toEqual(['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge,releaser', '--dir', expect.any(String)]);
+    expect(none.out).toMatch(/^Releases {7}on: \.github\/workflows\/release\.yml and release-please's configuration, written by init; the Releaser App opens the release PRs +asked$/m);
   }, 60_000);
 
   it('maps the Releaser\'s secrets in the apps-check caller it writes, when it creates the Releaser', async () => {
@@ -743,7 +752,7 @@ describe('the Apps (plan 0005 step L4)', () => {
     expect(REQ.identities.apps.judge!.permissions.statuses).toBe('read');
   });
 
-  it('adds the Releaser only when asked, and only for a repository that calls Kanon\'s release workflow', () => {
+  it('adds the Releaser only when asked', () => {
     expect(appIdentities({ lanes: ['agent-review'] }, REQ)).toEqual(['judge']);
     expect(appIdentities({ lanes: ['agent-review'], releaser: true }, REQ)).toEqual(['judge', 'releaser']);
     expect(callsRelease('jobs:\n  release:\n    uses: yedeya-labs/kanon/.github/workflows/release.yml@v1.2.3\n')).toBe(true);
