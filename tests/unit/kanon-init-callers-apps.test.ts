@@ -752,7 +752,7 @@ describe('the Apps (plan 0005 step L4)', () => {
     expect(REQ.identities.apps.judge!.permissions.statuses).toBe('read');
   });
 
-  it('adds the Releaser only when asked, and only for a repository that calls Kanon\'s release workflow', () => {
+  it('adds the Releaser only when asked', () => {
     expect(appIdentities({ lanes: ['agent-review'] }, REQ)).toEqual(['judge']);
     expect(appIdentities({ lanes: ['agent-review'], releaser: true }, REQ)).toEqual(['judge', 'releaser']);
     expect(callsRelease('jobs:\n  release:\n    uses: yedeya-labs/kanon/.github/workflows/release.yml@v1.2.3\n')).toBe(true);
