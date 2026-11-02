@@ -59,7 +59,7 @@ import { appSecrets, callerFile, kanonRelease, loadRequirements, TRIGGERS, yamlS
 import { whoami } from './gh-token.mjs';
 import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, GITHUB_DEFAULT_LABELS, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, workflowName } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
-import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
+import { INSTALLED_PLUGINS, installedBehind, KNOWN_MARKETPLACES, pluginsRoot, readMachinePlugin, readPluginDeclaration, samePath, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '../scripts/lib/upstream-findings.mjs';
@@ -1002,6 +1002,16 @@ export const latestStable = async (deps) => {
   }
 };
 
+/** The kanon plugin's id under a marketplace's name. @param {string} name */
+const PLUGIN_ID = (name) => `kanon@${name}`;
+
+/**
+ * Whether Claude Code holds a declared marketplace at another ref than the repository declares.
+ * @param {import('./plugin.mjs').MachinePlugin} machine @param {string | null} name
+ * @param {import('./plugin.mjs').PluginDeclaration} plugin
+ */
+const marketplaceStale = (machine, name, plugin) => machine.status === 'read' && name !== null && machine.marketplace !== null && plugin.status === 'declared' && machine.marketplace.ref !== plugin.ref;
+
 // ── The run ───────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -1243,13 +1253,63 @@ export const diagnose = async (deps, opts) => {
   else if (plugin.status === 'declared') {
     if (plugin.ref !== checked) {
       find('plugin.version-mismatch', SETTINGS_PATH, `declares the kanon plugin's marketplace "${plugin.name}" ${plugin.ref ? `at ${plugin.ref}` : "with no ref, so it follows Kanon's default branch"}, not at ${checking}; the skills run kanon from the release they ship in, and install it (K-ADOPT-11).`, {
-        text: `Set the "${plugin.name}" marketplace's ref in ${SETTINGS_PATH} to ${checked}. Claude Code fetches the marketplace again from the changed source; run /reload-plugins in a session that is open.`,
+        text: `Set the "${plugin.name}" marketplace's ref in ${SETTINGS_PATH} to ${checked}. Claude Code fetches the marketplace again from the changed source when a session starts, and the installed plugin then moves with claude plugin update kanon@${plugin.name} (docs/skills.md, "Moving the plugin").`,
         commands: [`"ref": "${checked}"`],
       });
     }
     if (!plugin.enabled) notes.push(`${SETTINGS_PATH} declares the kanon plugin's marketplace "${plugin.name}" but doesn't enable kanon@${plugin.name} under enabledPlugins, so nobody gets its skills from it (docs/skills.md).`);
   } else {
     notes.push(`${SETTINGS_PATH} doesn't declare the kanon plugin${plugin.status === 'undeclared' && plugin.enabled.length ? ` (it enables ${plugin.enabled.join(', ')}, from a marketplace each person added themselves)` : ''}, so its release lives in each person's Claude Code configuration, where doctor can't compare it with the callers' (docs/skills.md).`);
+  }
+
+  // ── The kanon plugin below Kanon's latest release (#1551 point 2) ──────────────────────
+  // A declared `ref` is a tag, so `/plugin marketplace update` fetches that tag again and never a
+  // later release: the plugin stays below the latest release until the pin moves. Not blocking;
+  // under `--to` a release at or past the latest says nothing, since that is the move.
+  if (plugin.status === 'declared' && plugin.ref && EXACT_RELEASE.test(plugin.ref) && stable && newer(stable, plugin.ref) > 0 && newer(stable, checked) > 0) {
+    find('plugin.below-latest', SETTINGS_PATH, `pins the kanon plugin's marketplace "${plugin.name}" at ${plugin.ref}, below Kanon's latest release, ${stable}. /plugin marketplace update and /plugin update fetch ${plugin.ref} again, never a later release: the plugin, and the skills it ships, move only when this ref does.`, {
+      text: `To move to ${stable}, upgrade Kanon: set the ref to ${stable} on the branch kanon/upgrade-${stable}, start a new Claude Code session in this repository and run the second command there, then run /kanon:upgrade, which moves the callers' pins with it (docs/skills.md, "Moving the plugin").`,
+      commands: [`"ref": "${stable}"`, `claude plugin update ${PLUGIN_ID(plugin.name)}`],
+    });
+  }
+
+  // ── The kanon plugin on this machine (#1552) ───────────────────────────────────────────
+  // What Claude Code installed here, from its own records (cli/plugin.mjs): read only, never the
+  // person's settings, and no fault where the records aren't there, as on a CI runner. An
+  // installed plugin older than the release checked runs older skills against this installation.
+  // Not blocking: no lane reads it, and it is one person's machine, not the repository.
+  const machineRoot = pluginsRoot(deps.env);
+  const machine = machineRoot === null
+    ? /** @type {import('./plugin.mjs').MachinePlugin} */ ({ status: 'unchecked', reason: 'the environment names no home directory, so doctor could not find Claude Code\'s plugin records' })
+    : readMachinePlugin({ known: deps.readFile(join(machineRoot, KNOWN_MARKETPLACES)), installed: deps.readFile(join(machineRoot, INSTALLED_PLUGINS)), name: plugin.status === 'declared' ? plugin.name : null, root, same: samePath });
+  const declaredName = plugin.status === 'declared' ? plugin.name : null;
+  if (machine.status === 'unchecked') {
+    if (declaredName) notes.push(`doctor didn't compare the kanon plugin installed on this machine with ${checking}: ${machine.reason}.`);
+  } else if (machine.installed) {
+    const { version, scope } = machine.installed;
+    const name = machine.marketplace?.name ?? declaredName ?? 'kanon';
+    const behind = installedBehind(version, checked);
+    if (behind === null) notes.push(`Claude Code on this machine records the kanon plugin at "${version}" (${scope} scope), which isn't a release doctor can compare with ${checked}.`);
+    if (behind) {
+      const marketRef = machine.marketplace?.ref ?? null;
+      const declaredRef = plugin.status === 'declared' ? plugin.ref : null;
+      const stale = declaredName !== null && machine.marketplace !== null && marketRef !== declaredRef;
+      const fixText = declaredName === null
+        ? `${SETTINGS_PATH} doesn't declare the plugin, so it is in your own Claude Code configuration, pinned to a tag that an update fetches again. Run these in your own terminal: removing the marketplace uninstalls its plugin, which is why the install follows. Then start a new Claude Code session, or run /reload-plugins.`
+        : stale
+          ? `${declaredRef !== checked ? `First set the ref to ${checked} (plugin.version-mismatch). ` : ''}Claude Code on this machine holds the "${name}" marketplace at ${marketRef ?? "Kanon's default branch"}, not at the ${declaredRef ?? 'default branch'} ${SETTINGS_PATH} declares, so /plugin marketplace update fetches ${marketRef ?? 'it'} again. A marketplace you added yourself (claude plugin marketplace add) keeps its own entry, under the same name, in your user settings, and the repository's ref doesn't move it. Run the first command in this repository, which removes only your own entry and keeps the plugin; then start a new Claude Code session here, which fetches the marketplace at the repository's ref ("Plugins changed"); then run the second command here, and start a new session or run /reload-plugins.`
+          : `${declaredRef !== checked ? `First set the ref to ${checked} (plugin.version-mismatch), and start a new Claude Code session here so Claude Code fetches the marketplace at it. ` : ''}Claude Code fetched the "${name}" marketplace at ${marketRef ?? 'its ref'}, but moves an installed plugin only when asked. Run the command in this repository, then start a new Claude Code session or run /reload-plugins.`;
+      const commands = declaredName === null
+        ? [`claude plugin marketplace remove ${name}`, `claude plugin marketplace add ${KANON_REPO}#${checked}`, `claude plugin install ${PLUGIN_ID(name)}`]
+        : stale
+          ? [`claude plugin marketplace remove ${name} --scope user`, `claude plugin update ${PLUGIN_ID(name)}`]
+          : [`claude plugin update ${PLUGIN_ID(name)}`];
+      find('plugin.behind', PLUGIN_ID(name), `Claude Code on this machine runs the kanon plugin at ${version} (${scope} scope), older than ${checking}: its skills follow ${version}'s rules against this installation (K-ADOPT-11).`, { text: fixText, commands });
+    } else if (marketplaceStale(machine, declaredName, plugin)) {
+      notes.push(`Claude Code on this machine holds the "${declaredName}" marketplace at ${machine.marketplace?.ref ?? "Kanon's default branch"}, not at the ref ${SETTINGS_PATH} declares; the installed plugin is not behind ${checked}, so nothing needs to move yet.`);
+    }
+  } else if (plugin.status === 'declared' && plugin.enabled) {
+    notes.push(`Claude Code on this machine has no kanon plugin installed for this checkout. ${SETTINGS_PATH} enables it, but Claude Code installs a project's plugin only when asked: run \`claude plugin install ${PLUGIN_ID(plugin.name)} --scope project\` here, then start a new session.`);
   }
 
   // ── The callers ─────────────────────────────────────────────────────────────────────────
@@ -3247,6 +3307,14 @@ export const diagnose = async (deps, opts) => {
       checkout: { branch: branchName, defaultBranch: s.defaultBranch, head: head.status === 0 ? head.stdout.trim() : null },
       token: { source: who.source, login: who.login },
       releases: { pins: [...pins.keys()].sort(newer), pinned, to: opts.to, checked, stable },
+      plugin: {
+        declared: plugin.status === 'declared' ? plugin.ref : null,
+        machine: machine.status,
+        reason: machine.status === 'unchecked' ? machine.reason : null,
+        marketplace: machine.status === 'read' ? (machine.marketplace?.ref ?? null) : null,
+        installed: machine.status === 'read' ? (machine.installed?.version ?? null) : null,
+        scope: machine.status === 'read' ? (machine.installed?.scope ?? null) : null,
+      },
       checking,
       status,
       exitCode: EXIT[status],

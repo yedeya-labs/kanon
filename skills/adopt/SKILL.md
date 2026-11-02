@@ -22,6 +22,15 @@ npx --yes --package github:yedeya-labs/kanon#candidate-v0.43.0 kanon init --dry-
 
 Below, `kanon …` means that `npx` line with the rest of the command in place of `init --dry-run --json`. Read only standard output, which is one JSON document. Standard error is the prose a person reads, and `kanon apps` prints there too: show it to them if it helps, but never decide anything from it.
 
+## Is this the latest release?
+
+**This skill installs the release it ships in,** the one in the `npx` line above, which is the release of the plugin the person installed, not Kanon's latest ([#1551](https://github.com/yedeya-labs/kanon/issues/1551)). So **as soon as the first dry run's document is in (step 2), before anything else, the token's question included,** read `.latest`:
+
+- **`.latest.newer` is true:** Kanon `.latest.release` is out, and this skill is older. Stop, write nothing, and say so plainly: an install from here would pin every reference to this older release, and follow its rules. Ask: **Move the plugin first** (Recommended): give the person the steps under "Moving the plugin" in `docs/skills.md` in Kanon's repository, at `.latest.release` (`https://github.com/yedeya-labs/kanon/blob/<release>/docs/skills.md#moving-the-plugin`), for how they installed it, and say to run `/kanon:adopt` again once a new session has the new skills; or **Install this release anyway**, which goes on, and the upgrade to `.latest.release` is then `/kanon:upgrade`'s.
+- **False or null:** go on. On null, say once that the latest release couldn't be read, and name `https://github.com/yedeya-labs/kanon/releases`.
+
+**Say up front how the plugin moves, once, before the plugin's question** (`.answers.plugin`): declaring it in `.claude/settings.json` pins it to this release's tag, so `/plugin marketplace update` and `/plugin update` fetch that same tag again, say they updated, and change nothing. The plugin moves only when the `ref` does, with the upgrade's pull request, and then each person starts a new Claude Code session in the repository and runs `claude plugin update kanon@kanon` (a marketplace the person added themselves, with `claude plugin marketplace add`, holds the plugin at its own `ref` until they remove it with `claude plugin marketplace remove kanon --scope user`). `kanon doctor` reports a `ref` below Kanon's latest release (`plugin.below-latest`) and an installed plugin behind the pin (`plugin.behind`).
+
 ## Ground rules
 
 - **Never merge.** Never approve a pull request, never push to the default branch (except the first commit of an empty repository, below), and never bypass a ruleset. You open the pull request; a person merges it.

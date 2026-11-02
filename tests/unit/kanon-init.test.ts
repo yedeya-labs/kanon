@@ -567,8 +567,13 @@ describe('kanon init and telemetry (#428)', () => {
     expect(d.files.find((f) => f.path === TELEMETRY_CALLER_PATH)).toMatchObject({ status: 'new', content: telemetryCallerFile(RELEASE) });
     expect(d.findings.filter((x) => x.category === 'telemetry')).toEqual([]);
     expect(github.calls.some((c) => c.args[0] === 'variable')).toBe(false);
-    // The registration issue template is gone with the step that linked it.
-    expect(existsSync(join(ROOT, '.github/ISSUE_TEMPLATE/telemetry-registration.yml'))).toBe(false);
+    // The registration issue form went with the step that linked it. Old releases still link it,
+    // so a stub stays at its path (#1551 point 3): it asks for nothing and says to upgrade.
+    const stub = read(ROOT, '.github/ISSUE_TEMPLATE/telemetry-registration.yml');
+    expect(stub).toContain("**You don't need to file this.**");
+    expect(stub).toContain('/kanon:upgrade');
+    expect(stub).not.toMatch(/required: true/);
+    expect(stub).not.toMatch(/^\s+id: (repository|default-branch)$/m);
     expect(d.summary.find((l) => l.answer === 'Sharing')!.value).toContain(telemetryRegisters(HOSTED_INGEST_URL !== ''));
     if (HOSTED_INGEST_URL === '') expect(d.summary.find((l) => l.answer === 'Sharing')!.value).not.toContain("registers on the collector's first run");
     else expect(d.summary.find((l) => l.answer === 'Sharing')!.value).not.toContain('sends nothing yet');
