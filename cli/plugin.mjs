@@ -28,6 +28,7 @@
 
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { isKanonSource } from '../actions/lane-check/plugin-ref.mjs';
 
 /** Where a project declares its Claude Code settings for everyone in the repository. */
 export const SETTINGS_PATH = '.claude/settings.json';
@@ -54,17 +55,8 @@ export const pluginSettings = (release) => ({
 /** `.claude/settings.json` holding the declaration alone. @param {string} release */
 export const pluginSettingsFile = (release) => `${JSON.stringify(pluginSettings(release), null, 2)}\n`;
 
-/**
- * Whether a marketplace source is Kanon's repository: a `github` source naming it, or a `git`
- * source cloning it from github.com.
- * @param {unknown} source
- */
-export const isKanonSource = (source) => {
-  if (!isMap(source)) return false;
-  if (source.source === 'github') return typeof source.repo === 'string' && source.repo.trim().toLowerCase() === KANON_MARKETPLACE_REPO;
-  if (source.source === 'git') return typeof source.url === 'string' && /^(?:https?:\/\/|ssh:\/\/git@|git@)github\.com[/:]yedeya-labs\/kanon(?:\.git)?\/?$/i.test(source.url.trim());
-  return false;
-};
+/** Whether a marketplace source is Kanon's repository; lane-check reads the declaration with it too. */
+export { isKanonSource };
 
 /**
  * @typedef {{ status: 'absent' }

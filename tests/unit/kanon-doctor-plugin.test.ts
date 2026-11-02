@@ -226,6 +226,15 @@ describe('kanon doctor and the kanon plugin installed on this machine (#1552)', 
     expect(r.json.plugin).toMatchObject({ machine: 'unchecked', reason: expect.stringContaining('installed_plugins.json is not a JSON object') });
   });
 
+  it("can't be waived: the machine's state isn't the repository's, so the bullet is malformed and the finding stays", async () => {
+    const dir = checkout({ ...healthyFiles(), [SETTINGS]: pluginSettingsFile(PINNED), 'docs/qa/adoption.md': `${healthyFiles()['docs/qa/adoption.md']}- **${WAIVER_LABEL}:** \`plugin.behind\` on \`kanon@kanon\` (my plugin is old on purpose)\n` });
+    const r = await run(dir, fakeGitHub(), ['--json'], undefined, machine(known(PINNED), [{ scope: 'project', projectPath: dir, version: OLD }]));
+    expect(UNWAIVABLE['plugin.behind']).toBeDefined();
+    expect(behind(r)).toHaveLength(1);
+    expect(r.json.waived).toEqual([]);
+    expect(r.json.findings.find((f: { id: string }) => f.id === 'declaration.malformed')?.message).toContain("waives `plugin.behind`, which can't be waived");
+  });
+
   it('notes a plugin the repository enables that Claude Code never installed for this checkout', async () => {
     const dir = checkout({ ...healthyFiles(), [SETTINGS]: pluginSettingsFile(PINNED) });
     const r = await run(dir, fakeGitHub(), ['--json'], undefined, machine(known(PINNED), [{ scope: 'project', projectPath: '/somewhere/else', version: OLD }]));
@@ -246,6 +255,14 @@ describe('kanon doctor and a plugin pinned below the latest release (#1551 point
       message: `pins the kanon plugin's marketplace "kanon" at ${PINNED}, below Kanon's latest release, ${NEXT}. /plugin marketplace update and /plugin update fetch ${PINNED} again, never a later release: the plugin, and the skills it ships, move only when this ref does.`,
       fix: { text: expect.stringContaining(`on the branch kanon/upgrade-${NEXT}`), commands: [`"ref": "${NEXT}"`, 'claude plugin update kanon@kanon'], url: null },
     }]);
+  });
+
+  it('can be waived, being about the repository\'s ref', async () => {
+    const record = `${healthyFiles()['docs/qa/adoption.md']}- **${WAIVER_LABEL}:** \`plugin.below-latest\` on \`${SETTINGS}\` (we hold the plugin back on purpose)\n`;
+    const r = await run(checkout({ ...healthyFiles(), [SETTINGS]: pluginSettingsFile(PINNED), 'docs/qa/adoption.md': record }), fakeGitHub({ latest: NEXT }), ['--json']);
+    expect(below(r)).toEqual([]);
+    expect(r.json.waived.map((w: { id: string }) => w.id)).toEqual(['plugin.below-latest']);
+    expect(UNWAIVABLE['plugin.below-latest']).toBeUndefined();
   });
 
   it('says nothing at the latest release, when the latest is unknown, under --to the latest, or with no declaration', async () => {

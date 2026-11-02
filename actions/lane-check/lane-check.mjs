@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { FIXED_CALLERS, callerNameFindings, kanonVersion } from './caller-names.mjs';
 import { declarationFindings } from './declarations.mjs';
 import { KANON_GROUP, directoriesLine, entryName, groupsKanon, kanonEntries, kanonGroupFix, unreached, updatedFrom } from './dependabot-reach.mjs';
+import { declaredPluginRef } from './plugin-ref.mjs';
 import { pullRequestMovesOnlyKanonRefs } from './refs-only.mjs';
 import { LEDGER, readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
 
@@ -245,6 +246,26 @@ for (const { name, tag } of HOOK_PINS) {
     continue;
   }
   out(`::notice file=${file},title=lane-check::${at}, behind the callers' ${PINNED}. It works while it declares a contract version their release still writes (${v(declared.filter((n) => versions.includes(n)))}); move it to the callers' pin when you can (plan 0011 decision 18)`);
+}
+
+// The kanon plugin's `ref` in `.claude/settings.json`, against the callers' one version
+// (K-ADOPT-11, kanon#1552). Dependabot moves the callers and never this file, so a bump leaves the
+// plugin, and the skills it ships, at the old release. A warning, never a failure: no lane reads
+// it, and the two can lead each other between two merges on purpose. Any repository that declares
+// the plugin gets it.
+{
+  const SETTINGS = '.claude/settings.json';
+  /** @type {string | null} */
+  let text = null;
+  try {
+    if (lstatSync(SETTINGS).isFile()) text = readFileSync(SETTINGS, 'utf8');
+  } catch {
+    text = null;
+  }
+  const plugin = declaredPluginRef(text);
+  if (plugin && PINNED !== null && plugin.ref !== PINNED) {
+    warn(SETTINGS, `declares the kanon plugin's marketplace "${plugin.name}" ${plugin.ref ? `at ${plugin.ref}` : "with no ref, so it follows Kanon's default branch"}, but the callers pin ${PINNED}: the skills run the release the plugin ships in. Set its ref to ${PINNED} on this pull request (a Dependabot bump moves the callers alone; /kanon:upgrade on its branch moves both), then each person moves their plugin (docs/skills.md, "Moving the plugin") (K-ADOPT-11)`);
+  }
 }
 
 // ── The callers ─────────────────────────────────────────────────────────────────────────
