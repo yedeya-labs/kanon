@@ -28,6 +28,7 @@
 
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { isKanonSource, kanonMarketplace } from '../actions/lane-check/plugin-ref.mjs';
 
 /** Where a project declares its Claude Code settings for everyone in the repository. */
 export const SETTINGS_PATH = '.claude/settings.json';
@@ -54,17 +55,8 @@ export const pluginSettings = (release) => ({
 /** `.claude/settings.json` holding the declaration alone. @param {string} release */
 export const pluginSettingsFile = (release) => `${JSON.stringify(pluginSettings(release), null, 2)}\n`;
 
-/**
- * Whether a marketplace source is Kanon's repository: a `github` source naming it, or a `git`
- * source cloning it from github.com.
- * @param {unknown} source
- */
-export const isKanonSource = (source) => {
-  if (!isMap(source)) return false;
-  if (source.source === 'github') return typeof source.repo === 'string' && source.repo.trim().toLowerCase() === KANON_MARKETPLACE_REPO;
-  if (source.source === 'git') return typeof source.url === 'string' && /^(?:https?:\/\/|ssh:\/\/git@|git@)github\.com[/:]yedeya-labs\/kanon(?:\.git)?\/?$/i.test(source.url.trim());
-  return false;
-};
+/** Whether a marketplace source is Kanon's repository; lane-check reads the declaration with it too. */
+export { isKanonSource };
 
 /**
  * @typedef {{ status: 'absent' }
@@ -93,13 +85,10 @@ export const readPluginDeclaration = (text) => {
     return { status: 'unreadable', reason: `it is not JSON (${/** @type {Error} */ (e).message})` };
   }
   if (!isMap(doc)) return { status: 'unreadable', reason: 'it is not a JSON object' };
-  const markets = doc.extraKnownMarketplaces !== undefined ? doc.extraKnownMarketplaces : doc.additionalMarketplaces;
   const enabled = isMap(doc.enabledPlugins) ? doc.enabledPlugins : {};
-  const found = Object.entries(isMap(markets) ? markets : {}).find(([, m]) => isMap(m) && isKanonSource(m.source));
+  const found = kanonMarketplace(doc);
   if (!found) return { status: 'undeclared', enabled: Object.keys(enabled).filter((k) => k.startsWith(`${PLUGIN}@`) && enabled[k] === true) };
-  const [name, entry] = found;
-  const ref = typeof entry.source.ref === 'string' && entry.source.ref.trim() ? entry.source.ref.trim() : null;
-  return { status: 'declared', name, ref, enabled: enabled[`${PLUGIN}@${name}`] === true };
+  return { status: 'declared', name: found.name, ref: found.ref, enabled: enabled[`${PLUGIN}@${found.name}`] === true };
 };
 
 // ── The plugin on the person's machine (#1552) ───────────────────────────────────────────────

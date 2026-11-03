@@ -20,8 +20,9 @@ export const WAIVER_LABEL = 'Waived doctor finding';
  * waiver of one is malformed. Each is here for one or more of these reasons, which the rule
  * (`K-LAYOUT-10`) names too: it is about the record itself, where a waiver could hide a broken or
  * stale waiver; an id-token holder has its own form of waiver, the acceptance above; it protects
- * independent review, the repository's secrets or production; or `lane-check` fails it whatever
- * a waiver says, so a waiver would make doctor disagree with the gate.
+ * independent review, the repository's secrets or production; `lane-check` fails it whatever
+ * a waiver says, so a waiver would make doctor disagree with the gate; or it is about
+ * one person's machine, which the repository's record can't speak for.
  * `tests/unit/kanon-doctor.test.ts` fails a reason that matches none of these.
  * @type {Record<string, string>}
  */
@@ -44,6 +45,7 @@ export const UNWAIVABLE = {
   'deploy.caller-mismatch': 'it protects production: the gate refuses a caller that differs from the declaration, so no environment deploys until `kanon init` writes it again (plan 0010 §12)',
   'deploy.environment-missing': 'it protects production: a declared environment that doesn\'t exist has no protection rule and no deployment policy, and a job naming it creates it with none (plan 0010 §12)',
   'deploy.reviewers-missing': 'it protects production: with no required reviewer, nothing stands between a release and production but the lane\'s own code (plan 0010 §12)',
+  'plugin.behind': "it is about one person's machine, the kanon plugin Claude Code installed there, not about the repository, so the repository's record can't speak for it: the person moves their plugin instead (docs/skills.md, \"Moving the plugin\")",
   'deploy.subject-custom': 'it protects production: a subject without the environment lets a job outside it assume its role (plan 0010 §5, §12)',
 };
 
