@@ -114,8 +114,9 @@ export const readPluginDeclaration = (text) => {
 // what it fetched, under one plugins root per person (https://code.claude.com/docs/en/plugins/loading,
 // "Find plugins on disk"): `known_marketplaces.json`, each marketplace it fetched with its
 // `source`, and `installed_plugins.json`, each install with its `scope`, `projectPath` and
-// `version`. A marketplace the person added themselves keeps its own `ref` there, and an installed
-// plugin moves only when Claude Code is asked to update it, so the plugin can stay releases behind
+// `version`. A marketplace the person added themselves keeps its own `ref` there, and, without
+// `autoUpdate` on the marketplace, an installed plugin moves only when Claude Code is asked to
+// update it, so the plugin can stay releases behind
 // the repository's `ref` without a word. `kanon doctor` reads those two files, and nothing else
 // under the root: never the person's settings, whose `env` can hold a credential, and never a file
 // it names. It writes nothing there.
