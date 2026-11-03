@@ -20,7 +20,9 @@
 //                   moves Kanon's references and point it to /kanon:upgrade (refs-only.mjs)
 //
 // Prints one `::error` per violation and exits 1 if there is any; exits 2 when it cannot run. A
-// rule in its release of warning (caller-names.mjs) prints a `::warning` and does not fail.
+// rule in its release of warning (caller-names.mjs) prints a `::warning` and does not fail, and
+// neither does an advisory warning that never fails, such as the kanon plugin's `ref` that differs
+// from the callers' pin (kanon#1552); the closing line counts the two apart.
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -55,6 +57,7 @@ const die = (msg) => {
 let ERRORS = 0;
 let DEFAULTS = 0;
 let WARNINGS = 0;
+let ADVISORIES = 0;
 /** Each failure, for the upgrade pointer below (kanon#1106). @type {Array<{ file: string, msg: string }>} */
 const FAILURES = [];
 /**
@@ -69,10 +72,15 @@ const fail = (file, msg) => {
   ERRORS += 1;
   FAILURES.push({ file, msg });
 };
-/** A rule in its release of warning before it fails (kanon#728). @param {string} file @param {string} msg */
+/** A rule in its release of warning, which fails from a later release (kanon#728). @param {string} file @param {string} msg */
 const warn = (file, msg) => {
   out(`::warning file=${file},title=lane-check::${msg}`);
   WARNINGS += 1;
+};
+/** A warning that never fails, in any release (kanon#1552). @param {string} file @param {string} msg */
+const advise = (file, msg) => {
+  out(`::warning file=${file},title=lane-check::${msg}`);
+  ADVISORIES += 1;
 };
 /** A default taken (plan 0005 §5.2). @param {string} file @param {string} msg */
 const note = (file, msg) => {
@@ -264,7 +272,7 @@ for (const { name, tag } of HOOK_PINS) {
   }
   const plugin = declaredPluginRef(text);
   if (plugin && PINNED !== null && plugin.ref !== PINNED) {
-    warn(SETTINGS, `declares the kanon plugin's marketplace "${plugin.name}" ${plugin.ref ? `at ${plugin.ref}` : "with no ref, so it follows Kanon's default branch"}, but the callers pin ${PINNED}: the skills run the release the plugin ships in. Set its ref to ${PINNED} on this pull request (a Dependabot bump moves the callers alone; /kanon:upgrade on its branch moves both), then each person moves their plugin (docs/skills.md, "Moving the plugin") (K-ADOPT-11)`);
+    advise(SETTINGS, `declares the kanon plugin's marketplace "${plugin.name}" ${plugin.ref ? `at ${plugin.ref}` : "with no ref, so it follows Kanon's default branch"}, but the callers pin ${PINNED}: the skills run the release the plugin ships in. Set its ref to ${PINNED} on this pull request (a Dependabot bump moves the callers alone; /kanon:upgrade on its branch moves both), then each person moves their plugin (docs/skills.md, "Moving the plugin") (K-ADOPT-11)`);
   }
 }
 
@@ -844,7 +852,7 @@ if (ERRORS > 0) {
   upgradePointer();
   process.exit(1);
 }
-out(`lane-check: ${CALLERS} lane caller(s) pass, with ${DEFAULTS} documented default(s) taken${WARNINGS ? ` and ${WARNINGS} warning(s) that fail in a later release` : ''}`);
+out(`lane-check: ${CALLERS} lane caller(s) pass, with ${DEFAULTS} documented default(s) taken${WARNINGS ? ` and ${WARNINGS} warning(s) that fail in a later release` : ''}${ADVISORIES ? `, and ${ADVISORIES} warning(s) that never fail` : ''}`);
 
 // ── A red pull request that only moves Kanon's references (K-ADOPT-11, kanon#1106) ──────
 // Dependabot's upgrade moves only the `uses:` refs, so when the release it moves to changes what

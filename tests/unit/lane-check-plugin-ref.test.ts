@@ -34,6 +34,9 @@ laneCheck(() => {
       expect(r.status, r.out).toBe(0);
       expect(r.out).toContain(`${warning} "kanon" at v1.2.2, but the callers pin ${PIN}`);
       expect(r.out).toContain(`Set its ref to ${PIN} on this pull request`);
+      // The closing line counts it as a warning that never fails, not as one a later release fails.
+      expect(r.out).toMatch(/^lane-check: .*, and 1 warning\(s\) that never fail$/m);
+      expect(r.out).not.toContain('fail in a later release');
     });
 
     it('warns on a declared marketplace with no ref, under any name, by its source', () => {

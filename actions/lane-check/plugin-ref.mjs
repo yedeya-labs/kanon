@@ -2,7 +2,8 @@
 // (docs/skills.md, "Declare it in the repository"), read the way Claude Code reads the file, for
 // lane-check's warning on a pull request whose callers' pin moved and the plugin's `ref` didn't, as
 // a Dependabot bump leaves it (kanon#1552). `cli/plugin.mjs`, which `kanon init` and `kanon doctor`
-// read the declaration with, takes `isKanonSource` from here, so both say the same of a source.
+// read the declaration with, takes `isKanonSource` and `kanonMarketplace` from here, so both say
+// the same of a source and pick the same marketplace.
 // Node built-ins only, and no imports: lane-check runs it from the action's own tree.
 
 /** @param {unknown} v @returns {v is Record<string, any>} */
@@ -37,6 +38,18 @@ export const declaredPluginRef = (text) => {
   } catch {
     return undefined;
   }
+  return kanonMarketplace(doc);
+};
+
+/**
+ * The marketplace a parsed settings document declares whose source is Kanon's repository, with
+ * its `ref` (null when it has none). `additionalMarketplaces`
+ * is the alias Claude Code reads only when the canonical key is absent. `cli/plugin.mjs`'s
+ * `readPluginDeclaration` picks the marketplace with it too, so the alias lives here alone.
+ * @param {unknown} doc
+ * @returns {{ name: string, ref: string | null } | undefined}
+ */
+export const kanonMarketplace = (doc) => {
   if (!isMap(doc)) return undefined;
   const markets = doc.extraKnownMarketplaces !== undefined ? doc.extraKnownMarketplaces : doc.additionalMarketplaces;
   const found = Object.entries(isMap(markets) ? markets : {}).find(([, m]) => isMap(m) && isKanonSource(m.source));

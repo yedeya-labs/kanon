@@ -28,7 +28,7 @@
 
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { isKanonSource } from '../actions/lane-check/plugin-ref.mjs';
+import { isKanonSource, kanonMarketplace } from '../actions/lane-check/plugin-ref.mjs';
 
 /** Where a project declares its Claude Code settings for everyone in the repository. */
 export const SETTINGS_PATH = '.claude/settings.json';
@@ -85,13 +85,10 @@ export const readPluginDeclaration = (text) => {
     return { status: 'unreadable', reason: `it is not JSON (${/** @type {Error} */ (e).message})` };
   }
   if (!isMap(doc)) return { status: 'unreadable', reason: 'it is not a JSON object' };
-  const markets = doc.extraKnownMarketplaces !== undefined ? doc.extraKnownMarketplaces : doc.additionalMarketplaces;
   const enabled = isMap(doc.enabledPlugins) ? doc.enabledPlugins : {};
-  const found = Object.entries(isMap(markets) ? markets : {}).find(([, m]) => isMap(m) && isKanonSource(m.source));
+  const found = kanonMarketplace(doc);
   if (!found) return { status: 'undeclared', enabled: Object.keys(enabled).filter((k) => k.startsWith(`${PLUGIN}@`) && enabled[k] === true) };
-  const [name, entry] = found;
-  const ref = typeof entry.source.ref === 'string' && entry.source.ref.trim() ? entry.source.ref.trim() : null;
-  return { status: 'declared', name, ref, enabled: enabled[`${PLUGIN}@${name}`] === true };
+  return { status: 'declared', name: found.name, ref: found.ref, enabled: enabled[`${PLUGIN}@${found.name}`] === true };
 };
 
 // ── The plugin on the person's machine (#1552) ───────────────────────────────────────────────
