@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { EXIT, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
-import { installedBehind, isKanonSource, pluginSettingsFile, pluginsRoot, readMachinePlugin, readPluginDeclaration } from '../../cli/plugin.mjs';
+import { declaresAutoUpdate, installedBehind, isKanonSource, pluginSettings, pluginSettingsFile, pluginsRoot, readMachinePlugin, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { checkout, clone, fakeGitHub, healthyFiles, ids, NEXT, PINNED, REQ, run, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -20,10 +20,12 @@ vi.setConfig({ testTimeout: SPAWNS.timeout });
 // doctor compares the declared release with the one it checks against, without blocking.
 describe("kanon doctor and the kanon plugin's declared release (#376)", () => {
   const SETTINGS = '.claude/settings.json';
-  const declared = (ref: string | null, over: { name?: string; source?: Record<string, unknown>; enabled?: boolean } = {}) => {
+  const declared = (ref: string | null, over: { name?: string; source?: Record<string, unknown>; enabled?: boolean; autoUpdate?: unknown } = {}) => {
     const name = over.name ?? 'kanon';
     const source = over.source ?? { source: 'github', repo: 'yedeya-labs/kanon', ...(ref === null ? {} : { ref }) };
-    return `${JSON.stringify({ permissions: { allow: ['Bash(npm test)'] }, extraKnownMarketplaces: { [name]: { source } }, enabledPlugins: { [`kanon@${name}`]: over.enabled ?? true } }, null, 2)}\n`;
+    // kanon#1578: with the key init writes, unless a case leaves it out.
+    const entry = 'autoUpdate' in over && over.autoUpdate === undefined ? { source } : { source, autoUpdate: 'autoUpdate' in over ? over.autoUpdate : true };
+    return `${JSON.stringify({ permissions: { allow: ['Bash(npm test)'] }, extraKnownMarketplaces: { [name]: entry }, enabledPlugins: { [`kanon@${name}`]: over.enabled ?? true } }, null, 2)}\n`;
   };
   const mismatch = (r: Result) => r.json.findings.filter((f: { id: string }) => f.id === 'plugin.version-mismatch');
 
@@ -78,6 +80,40 @@ describe("kanon doctor and the kanon plugin's declared release (#376)", () => {
     const r = await run(checkout({ ...healthyFiles(), [SETTINGS]: declared(PINNED, { enabled: false }) }), fakeGitHub(), ['--json']);
     expect(r.json.findings).toEqual([]);
     expect(r.json.notes.join('\n')).toContain(`declares the kanon plugin's marketplace "kanon" but doesn't enable kanon@kanon`);
+  });
+
+  // kanon#1578 (the Owner, 2026-11-02): init writes "autoUpdate": true, and doctor notes an entry without it.
+  it('notes a declared marketplace without "autoUpdate": true, without blocking, with the one key to set', async () => {
+    const autoOff = (r: Result) => r.json.findings.filter((f: { id: string }) => f.id === 'plugin.auto-update-off');
+    for (const value of [undefined, false, 'true']) {
+      const r = await run(checkout({ ...healthyFiles(), [SETTINGS]: declared(PINNED, { name: 'tools', autoUpdate: value }) }), fakeGitHub(), ['--json']);
+      expect(r.status, String(value)).toBe(EXIT.healthy);
+      expect(autoOff(r), String(value)).toEqual([{
+        id: 'plugin.auto-update-off', category: 'pin', blocking: false, subject: SETTINGS,
+        message: `declares the kanon plugin's marketplace "tools" without "autoUpdate": true, so Claude Code doesn't update the installed plugin when the ref moves: each person moves it by hand (docs/skills.md, "Moving the plugin").`,
+        fix: { text: expect.stringContaining('Set "autoUpdate": true on the "tools" marketplace entry'), commands: ['"autoUpdate": true'], url: null },
+      }]);
+    }
+    // With the key, or with nothing declared, nothing.
+    expect(autoOff(await run(checkout({ ...healthyFiles(), [SETTINGS]: declared(PINNED) }), fakeGitHub(), ['--json']))).toEqual([]);
+    expect(autoOff(await run(checkout(healthyFiles()), fakeGitHub(), ['--json']))).toEqual([]);
+  });
+
+  it('reads "autoUpdate" on the Kanon marketplace entry alone, through the alias as Claude Code does', () => {
+    expect(pluginSettings(PINNED).extraKnownMarketplaces.kanon).toEqual({ source: { source: 'github', repo: 'yedeya-labs/kanon', ref: PINNED }, autoUpdate: true });
+    expect(declaresAutoUpdate(pluginSettingsFile(PINNED))).toBe(true);
+    expect(declaresAutoUpdate(declared(PINNED, { autoUpdate: undefined }))).toBe(false);
+    expect(declaresAutoUpdate(JSON.stringify({ additionalMarketplaces: { k: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref: PINNED }, autoUpdate: true } } }))).toBe(true);
+    // Another marketplace's key is not Kanon's.
+    expect(declaresAutoUpdate(JSON.stringify({ extraKnownMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon' } }, other: { source: { source: 'github', repo: 'acme/plugins' }, autoUpdate: true } } }))).toBe(false);
+    for (const text of [null, '[]', '{ "permissions": {} }']) expect(declaresAutoUpdate(text), String(text)).toBeNull();
+  });
+
+  it('lets the adoption record waive plugin.auto-update-off, a choice of the project\'s', async () => {
+    const record = `${healthyFiles()['docs/qa/adoption.md']}- **${WAIVER_LABEL}:** \`plugin.auto-update-off\` on \`${SETTINGS}\` (we move the plugin by hand)\n`;
+    const r = await run(checkout({ ...healthyFiles(), [SETTINGS]: declared(PINNED, { autoUpdate: undefined }), 'docs/qa/adoption.md': record }), fakeGitHub(), ['--json']);
+    expect(r.json.findings).toEqual([]);
+    expect(r.json.waived.map((w: { id: string }) => w.id)).toEqual(['plugin.auto-update-off']);
   });
 
   it('is incomplete, exit 4, when the settings file is not a JSON object', async () => {
