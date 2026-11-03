@@ -726,6 +726,7 @@ describe('the JSON contract (ADR 0014, docs/doctor.md)', () => {
       ['secrets', /every secret/],
       ['production', /production/],
       ['lane-check', /lane-check fails/],
+      ["one person's machine", /one person's machine/],
     ];
     const reasons = { ...UNWAIVABLE, ...Object.fromEntries(Object.entries(UNWAIVABLE_UNDER).map(([id, u]) => [id, u.why])) };
     for (const [id, why] of Object.entries(reasons)) expect(kinds.some(([, re]) => re.test(why)), `${id}: ${why}`).toBe(true);
