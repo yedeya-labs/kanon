@@ -12,7 +12,12 @@
 //   • A successful deploy whose smoke check passed (`ok`) closes both, if open.
 //   • A rejection or a cancellation files nothing: a person decided it, and the run says so.
 // Labelled `bug`, and `sev:high` for production (the last environment), `sev:medium` for every
-// other one. The body holds the release, the stage, the refusal's code and the run's link, never
+// other one, and filed on the bucket the planning module's `plan()` names for them, the one home
+// of the routing rule (`K-WORK-8`, kanon#1600). The workflow token opens it, and GitHub starts no
+// run for an `issues: opened` that token caused, so the backstop never gives it a bucket
+// (`K-WORK-1`): `plan()` is the only routing it gets. A failed deploy or smoke check is the
+// product failing to reach or work on an environment, so it names the subject product. The
+// body holds the release, the stage, the refusal's code and the run's link, never
 // a log line: a deploy log can hold what the adopter's `## Data` answer keeps private.
 //
 // A HELD PRODUCTION (kanon#894: under a fallback marker, on a `release` run) is neither a deploy
@@ -37,8 +42,10 @@
 import { appendFileSync } from 'node:fs';
 import { ghApi, splitEnvironments } from './deploy-gate.mjs';
 import { classifyEnvironment, classifyRelease } from './deploy-row.mjs';
+import { plan } from './issue-triage-defaults.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { ROLES } from './lib/deploy-declaration.mjs';
+import { openMilestoneNumber } from './lib/milestones.mjs';
 
 /** The outcomes that file, or comment on, one of the environment's issues. */
 export const FILES = Object.freeze(['failed', 'smoke_failed', 'refused']);
@@ -149,9 +156,11 @@ export function report({ repo, api = ghApi, ...r }) {
   const footer = smoke
     ? `The deploy lane files one smoke issue per environment (plan 0013 §7.2), comments on it at each later failed smoke check, and closes it at the next deploy to \`${r.environment}\` whose smoke check passes. It holds no log line: read the run.`
     : `The deploy lane files one issue per environment (plan 0010 §8), comments on it at each later failure, and closes it at the next successful deploy to \`${r.environment}\`. It holds no log line: read the run.`;
+  const routed = plan(['bug', severity(r.role)], { subject: 'product' });
+  const milestone = openMilestoneNumber(api, repo, routed.milestone);
   const created = api(`repos/${repo}/issues`, {
     method: 'POST',
-    body: { title, body: `${failureText(r)}\n\n${footer}`, labels: ['bug', severity(r.role)] },
+    body: { title, body: `${failureText(r)}\n\n${footer}`, labels: routed.labels, ...(milestone ? { milestone } : {}) },
   });
   return { action: 'filed', number: created?.number };
 }

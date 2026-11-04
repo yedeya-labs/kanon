@@ -103,7 +103,10 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// `planFiling`: `plan` is the promotion's own word here, for what `check` writes and `apply` reads.
+import { plan as planFiling } from './issue-triage-defaults.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { openMilestoneNumber } from './lib/milestones.mjs';
 import { trustedSearchSync } from './lib/search.mjs';
 import { introducedBy, revertsOf } from './metrics/detectors.mjs';
 import { renderNotice } from '../actions/agent-classify/classify-agent-result.mjs';
@@ -180,9 +183,12 @@ export const heldTitle = (candidate) => `Promotion held: ${candidate}`;
 export const HELD_AUTHOR = 'github-actions[bot]';
 /** What marks the held issue's body, with the gates holding it, so a change of gates is noticed. */
 const HELD_MARKER = '<!-- kanon:promotion-held';
-/** The held issue's label and bucket: Kanon's own release operation (`K-WORK-4`, `K-WORK-11`). */
+/**
+ * The held issue's label: Kanon's own release operation is pipeline work (`K-WORK-4`, `K-WORK-11`).
+ * Its bucket is the one `plan()` names for it (`K-WORK-8`, kanon#1600): the workflow token opens
+ * it, so no backstop run ever routes it.
+ */
 export const HELD_LABEL = 'pipeline-improvement';
-export const HELD_MILESTONE = 'Development Automation';
 
 /**
  * The intake gate's comparison (#1502), run from the checkout's root as a script of its own, so
@@ -1167,13 +1173,9 @@ export function notify(o, { api = ghApi, repo, applied = '', runUrl = '' }) {
     } catch {
       assignees = [];
     }
-    let milestone = null;
-    try {
-      milestone = pages(api, `repos/${repo}/milestones?state=open`).find((m) => m?.title === HELD_MILESTONE)?.number ?? null;
-    } catch {
-      milestone = null;
-    }
-    const created = api(`repos/${repo}/issues`, { method: 'POST', body: { title: heldTitle(o.candidate), body, labels: [HELD_LABEL], assignees, ...(milestone ? { milestone } : {}) } });
+    const routed = planFiling([HELD_LABEL], { subject: 'pipeline' });
+    const milestone = openMilestoneNumber(api, repo, routed.milestone);
+    const created = api(`repos/${repo}/issues`, { method: 'POST', body: { title: heldTitle(o.candidate), body, labels: routed.labels, assignees, ...(milestone ? { milestone } : {}) } });
     done.push(`Opened #${created?.number ?? '?'}, ${heldTitle(o.candidate)}${assignees.length ? `, assigned to @${assignees[0]}` : ''}`);
     return done;
   }

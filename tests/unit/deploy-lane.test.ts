@@ -9,6 +9,7 @@ import {
   classifyEnvironment, classifyRelease, DEPLOY_ARTIFACT_FILE, deployArtifactName, environmentRow, isHeld, releaseRow,
 } from '../../scripts/deploy-row.mjs';
 import { callerFile, issueOf, issueTitle, report, reportFrom, smokeIssueTitle } from '../../scripts/deploy-report.mjs';
+import { DEFAULT_MILESTONE, PIPELINE_MILESTONE, plan } from '../../scripts/issue-triage-defaults.mjs';
 import { deployCallerFile } from '../../cli/init.mjs';
 import { loadRequirements } from '../../cli/callers.mjs';
 import * as collected from '../../scripts/lib/telemetry-artifacts.mjs';
@@ -962,6 +963,32 @@ describe("deploy-report.mjs: one issue per environment (plan 0010 §8, decision 
     expect(report({ ...base, api, environment: 'production', role: 'production', position: 2, outcome: 'failed', failed_stage: 'deploy' })).toEqual({ action: 'filed', number: 42 });
     expect(writes).toHaveLength(1);
     expect(writes[0]).toMatchObject({ path: 'repos/acme/app/issues', method: 'POST', body: { title: 'Deploy to production failed', labels: ['bug', 'sev:high'] } });
+  });
+
+  it("files it on the bucket plan() names, by the milestone's number, since the workflow token's issue starts no backstop (kanon#1600, K-WORK-1, K-WORK-8)", () => {
+    const { api: listed, writes } = issues();
+    const buckets = [{ number: 3, title: PIPELINE_MILESTONE }, { number: 4, title: DEFAULT_MILESTONE }];
+    const api = (path: string, opts: { method?: string, body?: unknown } = {}) =>
+      (path.startsWith('repos/acme/app/milestones?state=open') && path.includes('page=1') ? buckets : listed(path, opts));
+    for (const [environment, role, outcome] of [['production', 'production', 'failed'], ['staging', 'pre-production', 'smoke_failed']]) {
+      report({ ...base, api, environment: environment!, role: role!, position: 1, outcome: outcome!, failed_stage: 'deploy' });
+    }
+    const planned = (labels: string[]) => plan(labels, { subject: 'product' });
+    expect(writes.map((x) => x.body)).toMatchObject([
+      { labels: planned(['bug', 'sev:high']).labels, milestone: 4 },
+      { labels: planned(['bug', 'sev:medium']).labels, milestone: 4 },
+    ]);
+    expect(planned(['bug', 'sev:high']).milestone).toBe(DEFAULT_MILESTONE);
+    // No bucket to name, or no listing to read: the issue is still filed, with no milestone.
+    const bare = issues();
+    report({ ...base, api: bare.api, environment: 'staging', role: 'pre-production', position: 1, outcome: 'failed', failed_stage: 'deploy' });
+    expect(bare.writes[0]!.body).not.toHaveProperty('milestone');
+    const unreadable = issues();
+    const throwing = (path: string, opts: { method?: string, body?: unknown } = {}) => {
+      if (path.includes('/milestones')) throw new Error('HTTP 403');
+      return unreadable.api(path, opts);
+    };
+    expect(report({ ...base, api: throwing, environment: 'staging', role: 'pre-production', position: 1, outcome: 'failed', failed_stage: 'deploy' })).toEqual({ action: 'filed', number: 42 });
   });
 
   it('and `sev:medium` for a pre-production environment (MUTATION: `sev:high` there turns this red)', () => {
