@@ -62,7 +62,7 @@ import {
 } from './project-closure.mjs';
 import { appLogin, appPersona } from './app-register.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
-import { declaredEnvironmentAt, referenceDeployAt } from './lib/deploy-declaration.mjs';
+import { declaredEnvironmentAt, referenceDeployAt, UndeclaredDeployError } from './lib/deploy-declaration.mjs';
 import { defaultBranchReader } from './lib/declarations.mjs';
 // EVERY READ OF THE PROJECT GOES THROUGH ONE INJECTED READER (project #1327, `[STAT-1]`): a
 // REST `GET`, its pages, or a GraphQL query, and nothing else. The tick passes `ghReader()`,
@@ -523,6 +523,7 @@ export const DEPLOY_PHASE = {
   reverted: 'deploy-reverted',
   'history-unreadable': 'deploy-history-unreadable',
   'merged-elsewhere': 'deploy-merged-elsewhere',
+  undeclared: 'deploy-undeclared',
 };
 
 
@@ -1070,6 +1071,16 @@ function nextActionsCore(world, {
         : 'Whether this repository\'s own merges for the project are deployed is UNKNOWN';
     const why = `phase 4 is \`deploy-merged-elsewhere\`: ${named} merged in another repository, so no release of this one can contain it and ${deployEnvironment(world)} can't be checked for it. ${here}. Phase 5 has NOT run: no tick verifies the project's acceptance criteria on ${deployEnvironment(world)} while this hold stands. If that pull request doesn't belong to this project, edit it so it no longer closes the issue and remove \`${HELD}\`, and the next tick goes on to phase 5. Otherwise close this project by hand only once that work is deployed where it lives AND you have verified the project's acceptance criteria yourself; that other deploy alone is not enough`;
     return { phase, actions: [], escalateKind: 'stop', escalate: [why], stopped: `${why}. NOT closing it here: the release was never checked for that work, and phase 5 never ran` };
+  }
+
+  // NO REFERENCE ENVIRONMENT DECLARED (kanon#1581, `K-PROJ-11`). The project can't close and
+  // nothing a tick does changes that: only an edit to the adoption record on the default
+  // branch, or a person closing it. So it holds (`K-AGENT-32`), which says it once on the
+  // tracking issue and stops every later tick at `held`, on a green run. A hold rather than a
+  // failed tick: the run history stays red only for a tick that died.
+  if (phase === 'deploy-undeclared') {
+    const why = `phase 4 is \`deploy-undeclared\`: ${world.deploy?.reason ?? 'the adoption record declares no reference environment (K-PROJ-11)'}. Every issue is closed, but no tick can tell whether their merges reached a reference environment, and phase 5 never runs without one. To have the Lead check the deploy, declare the three bullets on the default branch and remove \`${HELD}\`, and the next tick goes on from phase 4. If this repository deploys nothing, close this project by hand once you have checked its acceptance criteria yourself: no tick verified them`;
+    return { phase, actions: [], escalateKind: 'stop', escalate: [why], stopped: `${why}. NOT closing it here: nothing confirmed a deploy, and phase 5 never ran` };
   }
 
   // ── PHASE 5 outcomes ──────────────────────────────────────────────────────
@@ -1901,10 +1912,13 @@ export async function deployRuns(workflow, { reader, repo }) {
  *
  * WHICH WORKFLOW, AND WHICH JOB, THE ADOPTION RECORD SAYS (plan 0004 P6, `K-PROJ-11`).
  * `declared` reads the reference environment's deploy from the record's `## Deploy` section
- * on the default branch (plan 0010 D2, `scripts/lib/deploy-declaration.mjs`), and throws
- * `DeclarationError` by name when it is missing or malformed, or still under `## Choices`:
- * the tick reports that project as failed, and no project can close without one. It is read
- * only when some merge closed an issue, because `nothing-to-deploy` looks for no run.
+ * on the default branch (plan 0010 D2, `scripts/lib/deploy-declaration.mjs`). A record that
+ * declares no reference environment, or isn't there, is the `undeclared` state, carrying the
+ * reason by name: a state the repository declares, which holds the project (kanon#1581). A
+ * malformed one, one still under `## Choices`, or one that can't be read throws
+ * `DeclarationError` by name, and the tick reports that project as failed. No project can close
+ * without one. It is read only when some merge closed an issue, because `nothing-to-deploy`
+ * looks for no run.
  * Every verdict after the read carries the declaration's `environment`, `workflow` and
  * `job`, so the messages name what was looked for.
  *
@@ -1941,7 +1955,17 @@ export async function readDeploy(issues, io = {}) {
 async function walkDeploy(byIssue, { reader, repo, declared }) {
   const shas = byIssue.flatMap((i) => i.shas);
   if (!shas.length) return classifyDeploy({ shas, tag: null, run: null, deployJob: null });
-  const deploy = await declared();
+  // NO DECLARATION IS A STATE, NOT A DEATH (kanon#1581, `K-PROJ-11`). Thrown, it failed every
+  // tick from the deploy phase on, red, with nothing on the tracking issue: 27 runs of 27 on
+  // Kanon itself, whose record declares none on purpose. Only the declared absence is caught;
+  // a malformed or unreadable record still throws and still fails the tick.
+  let deploy;
+  try {
+    deploy = await declared();
+  } catch (err) {
+    if (err instanceof UndeclaredDeployError) return { state: 'undeclared', reason: err.message };
+    throw err;
+  }
   const named = (d) => ({ ...d, environment: deploy.environment, workflow: deploy.workflow, job: deploy.job });
 
   const releases = (await reader.get(`repos/${repo}/releases?per_page=30`)).map((r) => ({ tag: r.tag_name }));

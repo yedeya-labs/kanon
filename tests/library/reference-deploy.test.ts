@@ -10,6 +10,7 @@ import {
   declaredEnvironmentFrom,
   readReferenceDeployFrom,
   requireReferenceDeploy,
+  UndeclaredDeployError,
 } from '../../scripts/lib/deploy-declaration.mjs';
 import * as reExport from '../../scripts/lib/reference-deploy.mjs';
 import { readDeploy } from '../../scripts/lead-reconcile.mjs';
@@ -131,6 +132,8 @@ describe('`reference-deploy.mjs` is the parser re-exported (plan 0010 D2)', () =
 describe('a project needs the declaration to close (K-PROJ-11)', () => {
   it('requireReferenceDeploy fails by name when the record declares none', () => {
     expect(() => requireReferenceDeploy(null, ' on `main`')).toThrow(DeclarationError);
+    // Its own class, so the reconciler can hold on the declared absence alone (kanon#1581).
+    expect(() => requireReferenceDeploy(null, ' on `main`')).toThrow(UndeclaredDeployError);
     expect(() => requireReferenceDeploy(null, ' on `main`')).toThrow(
       /docs\/qa\/adoption\.md on `main` declares no reference environment, so no project can close \(K-PROJ-11\): add `- \*\*Reference environment:\*\*`/,
     );
@@ -172,6 +175,28 @@ describe("the reconciler's reader, from the default branch (K-MERGE-17)", () => 
     expect(() => readReferenceDeployFrom('o/r', run(() => WITH([])))).toThrow(/adoption\.md on `trunk` declares no reference environment, so no project can close/);
     expect(() => readReferenceDeployFrom('o/r', run(() => WITH(DECLARED.slice(1))))).toThrow(/without `Reference environment`/);
     expect(() => readReferenceDeployFrom('o/r', () => '\n')).toThrow(/no default branch to read docs\/qa\/adoption\.md from/);
+  });
+
+  it('throws `UndeclaredDeployError` for a record that is missing or declares none, and only for those (kanon#1581)', () => {
+    const thrown = (f: () => unknown) => {
+      try {
+        f();
+      } catch (e) {
+        return e;
+      }
+      return null;
+    };
+    expect(thrown(() => readReferenceDeployFrom('o/r', run(fail('gh: Not Found (HTTP 404)'))))).toBeInstanceOf(UndeclaredDeployError);
+    expect(thrown(() => readReferenceDeployFrom('o/r', run(() => WITH([]))))).toBeInstanceOf(UndeclaredDeployError);
+    for (const other of [
+      () => readReferenceDeployFrom('o/r', run(fail('gh: Server Error (HTTP 502)'))),
+      () => readReferenceDeployFrom('o/r', run(() => WITH(DECLARED.slice(1)))),
+      () => readReferenceDeployFrom('o/r', () => '\n'),
+    ]) {
+      const e = thrown(other);
+      expect(e).toBeInstanceOf(DeclarationError);
+      expect(e).not.toBeInstanceOf(UndeclaredDeployError);
+    }
   });
 
   it('names the environment for a message, and never throws (kanon#219)', () => {
@@ -222,13 +247,30 @@ describe('readDeploy reads the declared workflow and job (plan 0004 P6)', () => 
     expect((await readDeploy(CLOSED, { ...io, declared: () => ({ ...DECL, job: 'deploy' }) })).state).toBe('deployed');
   });
 
-  it('a missing declaration fails the read by name, but only once there is a merge to look for', async () => {
+  it('a missing declaration is the `undeclared` state, named, and only once there is a merge to look for (kanon#1581)', async () => {
+    // A declared state of the repository, not a failed read (`K-PROJ-11`): the verdict carries
+    // the reason by name, and no release or run is read for a workflow nobody named.
     const io = fakeGh([{ name: 'ship', conclusion: 'success' }]);
     const none = () => requireReferenceDeploy(null, ' on `main`');
-    await expect(readDeploy(CLOSED, { ...io, declared: none })).rejects.toThrow(/declares no reference environment, so no project can close \(K-PROJ-11\)/);
+    const d = await readDeploy(CLOSED, { ...io, declared: none });
+    expect(d.state).toBe('undeclared');
+    expect(d.reason).toMatch(/docs\/qa\/adoption\.md on `main` declares no reference environment, so no project can close \(K-PROJ-11\)/);
+    expect(io.seen.some((s) => /releases|actions\/workflows/.test(s)), 'no release or run is read without a declaration').toBe(false);
+    // A record that isn't there declares none either.
+    const absent = () => { throw new UndeclaredDeployError(`${ADOPTION_RECORD} doesn't exist on \`main\``); };
+    expect((await readDeploy(CLOSED, { ...fakeGh([]), declared: absent })).state).toBe('undeclared');
     // Nothing merged closed these issues: no run is looked for, so nothing is read.
     const noMerge = fakeGh([{ name: 'ship', conclusion: 'success' }], []);
     expect((await readDeploy(CLOSED, { ...noMerge, declared: none })).state).toBe('nothing-to-deploy');
+  });
+
+  it('a malformed or unreadable declaration still fails the read by name (kanon#1581)', async () => {
+    // Only the declared absence is a state. A record that says something wrong, or that
+    // couldn't be read, is a defect or a death, and the tick must still show it as one.
+    const malformed = () => { throw new DeclarationError(`${ADOPTION_RECORD} declares the reference environment's deploy without \`Reference deploy job\``); };
+    await expect(readDeploy(CLOSED, { ...fakeGh([]), declared: malformed })).rejects.toThrow(/without `Reference deploy job`/);
+    const unreadable = () => { throw new DeclarationError(`${ADOPTION_RECORD} couldn't be read from \`main\`: HTTP 502`); };
+    await expect(readDeploy(CLOSED, { ...fakeGh([]), declared: unreadable })).rejects.toThrow(/couldn't be read/);
   });
 });
 

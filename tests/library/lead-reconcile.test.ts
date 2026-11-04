@@ -16,6 +16,7 @@ const { FILE_ONLY, trackingControls } = await import('../../scripts/lead-reconci
 const { membershipUnread } = await import('../../scripts/lead-reconcile.mjs');
 const { appLogin } = await import('../../scripts/app-register.mjs');
 const { signed } = await import('../../scripts/lib/role-marker.mjs');
+const { UndeclaredDeployError } = await import('../../scripts/lib/deploy-declaration.mjs');
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ROOT } from './helpers/adopter.js';
 import { workflowText } from '../unit/helpers/called-workflow.js';
@@ -31,6 +32,8 @@ type LibraryValue = any;
  */
 const DECLARED = { environment: 'staging', workflow: 'deploy-staging.yml', job: 'deploy' };
 const readDeploy = (issues: LibraryValue, io: Record<string, unknown> = {}) => kanonReadDeploy(issues, { declared: () => DECLARED, ...io });
+/** What `requireReferenceDeploy` says of a record that declares no reference environment (kanon#1581). */
+const UNDECLARED = 'docs/qa/adoption.md on `main` declares no reference environment, so no project can close (K-PROJ-11)';
 
 /**
  * RA-955 — the Lead's reconcile tick.
@@ -974,6 +977,8 @@ describe('phases 4 and 6 — deploy watch, then close (RA-1056)', () => {
       // kanon#1412: a closing pull request merged in another repository, which no release of
       // this one can hold.
       [{ state: 'merged-elsewhere', merges: [{ issue: 1, number: 9, repo: 'someone-else/other-repo' }] }, 'deploy-merged-elsewhere'],
+      // kanon#1581: the repository's adoption record declares no reference environment.
+      [{ state: 'undeclared', reason: UNDECLARED }, 'deploy-undeclared'],
       // Nothing merged closed these issues, so nothing shipped — but it must not
       // block, and it must not claim a deploy either.
       [{ state: 'nothing-to-deploy' }, 'file-qa'],
@@ -1007,6 +1012,23 @@ describe('phases 4 and 6 — deploy watch, then close (RA-1056)', () => {
       const r = nextActions(allClosed({ deploy }));
       expect(r.actions).toEqual([]);
       expect(r.stopped).toMatch(re);
+    });
+
+    it('holds the project, by name, when the repository declares no reference environment (kanon#1581)', () => {
+      // A declared state (`K-PROJ-11`), so the project neither closes nor is skipped: it
+      // holds once (`K-AGENT-32`), and the hold says what to declare and the other way out.
+      const r = nextActions(allClosed({ deploy: { state: 'undeclared', reason: UNDECLARED } }));
+      expect(r.actions).toEqual([]);
+      expect(r.escalateKind).toBe('stop');
+      expect(r.escalate).toHaveLength(1);
+      const why = r.escalate?.[0] ?? '';
+      expect(why).toContain('`deploy-undeclared`');
+      expect(why).toContain(UNDECLARED);
+      expect(why).toContain('K-PROJ-11');
+      expect(why).toContain('`needs:human`');
+      expect(why).toMatch(/close this project by hand/);
+      expect(r.stopped).toContain(UNDECLARED);
+      expect(r.stopped).toMatch(/NOT closing it/);
     });
 
     it('holds the project for a closing merge in another repository, naming it (kanon#1412)', () => {
@@ -5014,6 +5036,49 @@ describe('the half of the hold that WRITES it (RA-1202)', () => {
     const { calls, run } = spy();
     applyDecision(w(), { phase: 'reconcile', actions: [], escalate: ['dependency cycle: #1 → #2 → #1'] }, { run, apply: true });
     expect(calls.some((c) => c.includes('--add-label') && c.includes('needs:human'))).toBe(true);
+  });
+
+  it('a project with no reference environment declared holds once, and the tick reconciles the rest without failing (kanon#1581)', async () => {
+    // The tick used to throw out of the deploy phase on every run: the project was reported
+    // as not reconciled, nothing reached the tracking issue, and the tick exited 1 for a state
+    // the adoption record declares. Now the read yields `undeclared`, the decision holds the
+    // project with one comment, and `failures` stays empty, so the tick stays green and a real
+    // death is still told from it.
+    const closed = [{ number: 1, title: 'a', state: 'CLOSED' }];
+    const deploy = await kanonReadDeploy([{ number: 1, state: 'CLOSED' }], {
+      ...fakeReads({ closedBy: { 1: [9] }, prs: { 9: { state: 'MERGED', mergeCommit: { oid: 'a'.repeat(40) } } } }),
+      declared: () => { throw new UndeclaredDeployError(UNDECLARED); },
+    });
+    const worlds: Record<string, LibraryValue> = {
+      '952': { ...worldFrom(BRIEF(['a']), closed), project: '952', deploy },
+      '953': { ...worldFrom(BRIEF(['t1', 't2'])), project: '953' },
+    };
+    const tick = (comments: Array<{ author: { login: string }; body: string }>) => {
+      const { calls, run } = spy(() => false, comments);
+      const out = reconcileAll(Object.keys(worlds), {
+        read: async (p: string) => worlds[p],
+        onDecision: (world: LibraryValue, decision: LibraryValue) => applyDecision(world, decision, { run, apply: true }),
+      } as unknown as Parameters<typeof reconcileAll>[1]);
+      return { calls, out };
+    };
+
+    const first = tick([]);
+    const r = await first.out;
+    expect(r.failures, 'a declared state is not a failed reconcile').toEqual([]);
+    expect(r.decisions.map((d: LibraryValue) => [d.project, d.decision.phase])).toEqual([['952', 'deploy-undeclared'], ['953', 'file']]);
+    const on952 = first.calls.filter((c) => c.includes('952'));
+    expect(on952.some((c) => c.includes('--add-label') && c.includes('needs:human')), 'the tracking issue is held').toBe(true);
+    const said = on952.filter((c) => c[1] === 'comment');
+    expect(said, 'and told why, once').toHaveLength(1);
+    expect(said[0]?.join(' ')).toContain(UNDECLARED);
+    expect(first.calls.some((c) => c[1] === 'close'), 'the project is not closed').toBe(false);
+
+    // The same tick again, the hold's comment already there (a person removed the label
+    // without declaring anything): the label goes back on and nothing is said twice.
+    const posted = said[0]?.[said[0].indexOf('--body') + 1] ?? '';
+    const again = tick([{ author: { login: appLogin('Lead') }, body: posted }]);
+    expect((await again.out).failures).toEqual([]);
+    expect(again.calls.filter((c) => c.includes('952') && c[1] === 'comment')).toEqual([]);
   });
 
   it('takes no action at all when the tick is a dry run', () => {
