@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
 import { appSecrets } from '../../cli/callers.mjs';
-import { CATEGORIES, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, ITEMIZED, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, UNWAIVABLE_UNDER, WAIVER_LABEL } from '../../cli/doctor.mjs';
+import { CATEGORIES, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, ITEMIZED, kanonCall, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, UNWAIVABLE_UNDER, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { laneFiles, laneTree } from './helpers/requirements.js';
 import { checkout, clone, fakeGitHub, healthyFiles, ids, LANES, NEW_DOC, NEXT, nextRelease, permissionsOf, PINNED, put, REPO, REQ, ROOT, run, TAXONOMY, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
@@ -606,6 +606,15 @@ describe('the readers doctor is built from', () => {
     expect(idTokenGrant({ permissions: 'read-all' }, {})).toBeNull();
     expect(idTokenGrant({}, { permissions: { 'id-token': 'none' } })).toBeNull();
     expect(idTokenGrant({}, {})).toBeNull();
+  });
+
+  // GitHub resolves a `uses:` owner and repository without case, so doctor's caller findings read
+  // a call in any case as Kanon's (kanon#1599); the workflow's path keeps its case.
+  it('reads a call of a Kanon workflow whatever the case of its owner and repository', () => {
+    expect(kanonCall('yedeya-labs/kanon/.github/workflows/agent-review.yml@v1.2.3')).toEqual({ workflow: 'agent-review', ref: 'v1.2.3' });
+    expect(kanonCall('Yedeya-Labs/Kanon/.github/workflows/agent-review.yml@v1.2.3')).toEqual({ workflow: 'agent-review', ref: 'v1.2.3' });
+    expect(kanonCall('YEDEYA-LABS/kanon/.github/workflows/release.yml@v1.2.3')).toEqual({ workflow: 'release', ref: 'v1.2.3' });
+    expect(kanonCall('someone/kanon/.github/workflows/agent-review.yml@v1.2.3')).toBeNull();
   });
 
   it('reads Kanon pins outside comments only', () => {

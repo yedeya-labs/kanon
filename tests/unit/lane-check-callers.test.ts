@@ -33,6 +33,12 @@ laneCheck(() => {
     });
     it('refuses `secrets: inherit` on a call to the spine, by name (kanon#500)', () =>
       red((t) => t.write('.github/workflows/spine.yml', spineCaller('inherit')), /spine\.yml,title=lane-check::the job `spine` calls Kanon's agent-lane workflow with `secrets: inherit`/));
+    // GitHub resolves the owner and repository without case, so a call written in another case is
+    // still a call to Kanon's code, held to the same rules (kanon#1599).
+    it('refuses `secrets: inherit` on a call to the spine whose owner and repository are in another case', () =>
+      red((t) => t.write('.github/workflows/spine.yml', spineCaller('inherit').replace('yedeya-labs/kanon/', 'Yedeya-Labs/Kanon/')), /spine\.yml,title=lane-check::the job `spine` calls Kanon's agent-lane workflow with `secrets: inherit`/));
+    it('holds a lane caller whose owner and repository are in another case to the lane caller rules', () =>
+      red((t) => t.edit(TRIAGE, (d) => { job(d).uses = (job(d).uses as string).replace('yedeya-labs/kanon/', 'Yedeya-Labs/Kanon/'); job(d).secrets = 'inherit'; }), 'agent-triage.yml,title=lane-check::maps no secrets explicitly'));
     it('passes a call to the spine that maps its secrets by name', () => {
       const t = adopter();
       t.write('.github/workflows/spine.yml', spineCaller({

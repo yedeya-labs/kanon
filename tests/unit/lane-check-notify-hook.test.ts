@@ -48,6 +48,16 @@ laneCheck(() => {
       expect(r.status, r.out).toBe(0);
       expect(r.out).not.toContain(HOOK);
     });
+    // The owner and repository in another case name the same prebuilt hook (kanon#1599), so its
+    // pin still follows the callers' rather than counting as one of them.
+    it('reads the hook whose owner and repository are in another case as the prebuilt hook', () => {
+      const t = adopter();
+      hook('slack', 'v1.2.2')(t);
+      t.write(HOOK, t.read(HOOK).replace('yedeya-labs/kanon/actions/notify/slack@', 'Yedeya-Labs/Kanon/actions/notify/slack@'));
+      const r = check(t, AT);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain(`::notice file=${HOOK},title=lane-check::pins Kanon's slack hook at v1.2.2, behind the callers' v1.2.3`);
+    });
     it('compares the versions, not the strings: v1.2.10 is ahead of v1.2.3, and v1.1.9 behind it', () => {
       red(hook('slack', 'v1.2.10'), "ahead of the callers' v1.2.3", AT);
       const t = adopter();

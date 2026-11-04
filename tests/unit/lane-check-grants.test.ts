@@ -64,6 +64,12 @@ laneCheck(() => {
       red((t) => retag(t, TRIAGE, 'candidate-v1.2.3'), 'pin candidate-v1.2.3,v1.2.3'));
     it('counts a pin in any workflow, not only in a caller', () =>
       red((t) => t.write('.github/workflows/other.yml', 'on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: yedeya-labs/kanon/actions/pr-title@v1.0.0\n'), 'pin v1.0.0,v1.2.3'));
+    // GitHub resolves a `uses:` owner and repository without case, as the lane gate reads them
+    // (scripts/caller-pin.mjs), so a reference in another case is a pin all the same (kanon#1599).
+    it('counts a reference whose owner and repository are in another case', () =>
+      red((t) => t.write('.github/workflows/other.yml', 'on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: Yedeya-Labs/Kanon/actions/pr-title@v1.0.0\n'), 'pin v1.0.0,v1.2.3'));
+    it('refuses a branch pinned by a reference in another case', () =>
+      red((t) => t.write('.github/workflows/other.yml', 'on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: Yedeya-Labs/kanon/actions/pr-title@main\n'), "pins 'main', not an exact version"));
     it('ignores a commented-out reference, which is not a pin', () => {
       const t = adopter();
       t.write(TRIAGE, `${t.read(TRIAGE)}#    uses: yedeya-labs/kanon/.github/workflows/agent-triage.yml@v0.0.1\n`);

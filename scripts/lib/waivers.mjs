@@ -247,8 +247,13 @@ export const readWaivers = (text) => {
   return { waivers, errors };
 };
 
-/** A call of one of Kanon's reusable workflows: its file name without `.yml`, and its ref. @param {unknown} uses */
+/**
+ * A call of one of Kanon's reusable workflows: its file name without `.yml`, and its ref. GitHub
+ * resolves the owner and repository case-insensitively, so they are matched without case; the
+ * path after them keeps its case (kanon#1599).
+ * @param {unknown} uses
+ */
 export const kanonCall = (uses) => {
-  const m = typeof uses === 'string' ? /^yedeya-labs\/kanon\/\.github\/workflows\/([A-Za-z0-9_.-]+)\.ya?ml@(\S+)$/.exec(uses.trim()) : null;
+  const m = typeof uses === 'string' ? /^yedeya-labs\/kanon\/\.github\/workflows\/([A-Za-z0-9_.-]+)\.ya?ml@(\S+)$/.exec(uses.trim().replace(/^yedeya-labs\/kanon\//i, 'yedeya-labs/kanon/')) : null;
   return m ? { workflow: /** @type {string} */ (m[1]), ref: /** @type {string} */ (m[2]) } : null;
 };

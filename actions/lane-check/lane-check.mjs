@@ -177,7 +177,13 @@ const ymlFiles = (dir) => {
   }
   return found;
 };
-const REF = new RegExp(`yedeya-labs/kanon/[^@ \\t\\n\\v\\f\\r]+@[^ \\t\\n\\v\\f\\r"']+`, 'g');
+// GitHub resolves a `uses:` owner and repository case-insensitively, as the lane gate reads them
+// (scripts/caller-pin.mjs), so `Yedeya-Labs/Kanon/…` is a Kanon reference too: the owner and
+// repository are matched without case and lowercased before comparing, and the path after them
+// keeps its case (kanon#1599).
+const REF = new RegExp(`yedeya-labs/kanon/[^@ \\t\\n\\v\\f\\r]+@[^ \\t\\n\\v\\f\\r"']+`, 'gi');
+/** A reference with Kanon's owner and repository lowercased. @param {string} ref */
+const kanonCase = (ref) => ref.replace(/^yedeya-labs\/kanon\//i, 'yedeya-labs/kanon/');
 /** This release's requirements file, or `null` before it has one. @type {any} */
 const REQUIREMENTS = (() => {
   try { return JSON.parse(readFileSync(join(KANON_ROOT, 'requirements.json'), 'utf8')); } catch { return null; }
@@ -194,11 +200,11 @@ const HOOK_PINS = [];
 /** The files that hold a reference counted toward the one version, which Dependabot must reach. @type {Set<string>} */
 const PINNING = new Set();
 const TAGS = sortU(ymlFiles('.github').flatMap((f) => readFileSync(f, 'utf8').split('\n')
-  .filter((l) => l.includes('yedeya-labs/kanon/') && !new RegExp(`^${SP}*#`).test(l))
+  .filter((l) => l.toLowerCase().includes('yedeya-labs/kanon/') && !new RegExp(`^${SP}*#`).test(l))
   .flatMap((l) => [...l.matchAll(REF)].flatMap((m) => {
     const at = m[0].lastIndexOf('@');
     const tag = m[0].slice(at + 1);
-    const name = f === NOTIFY_HOOK ? PREBUILT.get(m[0].slice(0, at)) : undefined;
+    const name = f === NOTIFY_HOOK ? PREBUILT.get(kanonCase(m[0].slice(0, at))) : undefined;
     if (name === undefined) {
       PINNING.add(f);
       return [tag];
@@ -366,7 +372,7 @@ for (const f of WORKFLOWS) {
   const jobs = jobsOf(doc);
   const lanes = Object.values(jobs).flatMap((j) => {
     const uses = isObject(j) ? alt(/** @type {any} */ (j).uses, undefined) : undefined;
-    const m = typeof uses === 'string' ? LANE_RE.exec(uses) : null;
+    const m = typeof uses === 'string' ? LANE_RE.exec(kanonCase(uses)) : null;
     return m ? [/** @type {string} */ (m[1])] : [];
   });
   // Only a call to a LANE makes a file a caller, and a lane is an `agent-*` workflow. Kanon's
@@ -383,7 +389,7 @@ for (const f of WORKFLOWS) {
   for (const [name, value] of Object.entries(jobs)) {
     if (!isObject(value)) continue;
     const v = /** @type {any} */ (value);
-    const m = LANE_RE.exec(tostring(alt(v.uses, '')));
+    const m = LANE_RE.exec(kanonCase(tostring(alt(v.uses, ''))));
     if (!m) continue;
     const wf = /** @type {string} */ (m[1]);
     if (wf === 'telemetry-collect') COLLECTOR = true;
