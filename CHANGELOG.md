@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.44.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.43.0...candidate-v0.44.0) (2026-11-04)
+
+
+### Features
+
+* **deploy:** hand each environment's role to the hook from KANON_DEPLOY_TARGETS, and init writes the release workflow ([#1575](https://github.com/yedeya-labs/kanon/issues/1575)) ([c4647e4](https://github.com/yedeya-labs/kanon/commit/c4647e4e88fd81a190c083af1fe8c185759bd430))
+* **doctor:** the plugin a person runs follows the pin, and says when it doesn't ([#1576](https://github.com/yedeya-labs/kanon/issues/1576)) ([8c0d381](https://github.com/yedeya-labs/kanon/commit/8c0d381b2fb6ac3c188e6d6f3accfb16330302c9))
+* **init:** write "autoUpdate": true on the Kanon marketplace entry, so the plugin follows the pin ([#1590](https://github.com/yedeya-labs/kanon/issues/1590)) ([eec3b24](https://github.com/yedeya-labs/kanon/commit/eec3b2460e0c74bad5a42f0a323649ad85f5f107))
+* **lane-check:** warn when the plugin's ref differs from the callers' pin, and plugin.behind can't be waived ([#1579](https://github.com/yedeya-labs/kanon/issues/1579)) ([d3481e5](https://github.com/yedeya-labs/kanon/commit/d3481e5927384c2a9b11a68a6d5257432bd7352d))
+* **promote:** hold a candidate whose telemetry rows the deployed intake would refuse ([#1504](https://github.com/yedeya-labs/kanon/issues/1504)) ([51266dd](https://github.com/yedeya-labs/kanon/commit/51266dd1a944aae8a83b04537429fa5df9c0fcad))
+* **status:** serve MCP 2026-07-28 beside a deprecated 2025-11-25 ([#1509](https://github.com/yedeya-labs/kanon/issues/1509)) ([abed009](https://github.com/yedeya-labs/kanon/commit/abed009059a9f6c6cc3dfeddaddb5c30ca29e0df))
+
+
+### Bug Fixes
+
+* **agent-classify:** bind the install marker to the job's check run, so a sibling matrix entry can't read it ([#1521](https://github.com/yedeya-labs/kanon/issues/1521)) ([9d36aad](https://github.com/yedeya-labs/kanon/commit/9d36aad5590ba03817fedb71573f1a540b4a7fa9))
+* **deploy:** file the deploy lane's and the held promotion's issues on plan()'s bucket ([#1603](https://github.com/yedeya-labs/kanon/issues/1603)) ([78f3efa](https://github.com/yedeya-labs/kanon/commit/78f3efa947160606617b26f6a27daf84996931f7))
+* **digest:** decide the Overseer heartbeat by what a workflow calls ([#1550](https://github.com/yedeya-labs/kanon/issues/1550)) ([693d3b2](https://github.com/yedeya-labs/kanon/commit/693d3b2e71ec8c7ee1fc64067cc88a2aaeffbd07))
+* **docs:** state the Overseer's capability bound as one per scan, as K-SELF-17 does ([#1535](https://github.com/yedeya-labs/kanon/issues/1535)) ([ba1ec2b](https://github.com/yedeya-labs/kanon/commit/ba1ec2be263d26299322ceb576284f40b23f7093))
+* **doctor:** pin.dependabot-unreached can't be waived, since lane-check fails it anyway ([#1513](https://github.com/yedeya-labs/kanon/issues/1513)) ([96194f6](https://github.com/yedeya-labs/kanon/commit/96194f612e7a9463ff391649ca643523b2ffc2d7))
+* **implementer-status:** bind the first status to the branch the push job moved, without a branch list ([#1517](https://github.com/yedeya-labs/kanon/issues/1517)) ([c69b684](https://github.com/yedeya-labs/kanon/commit/c69b684e3522a38a4469722509e94826296d75f8))
+* **init:** keep baseline playbooks out of the catalogue requirements, and two adopt-skill fixes ([#1572](https://github.com/yedeya-labs/kanon/issues/1572)) ([0649c27](https://github.com/yedeya-labs/kanon/commit/0649c27a6d5f55931ba4dc0d109590f13b009ee2))
+* **init:** say when the token doesn't cover the repository, read the tag without it, stop on an all-repositories App, replace uncommitted older files ([#1571](https://github.com/yedeya-labs/kanon/issues/1571)) ([24c1fcd](https://github.com/yedeya-labs/kanon/commit/24c1fcd0ff46b4c421e7523df35f308573a54122))
+* **lane-check:** match Kanon's owner and repository without case, as GitHub resolves them ([#1602](https://github.com/yedeya-labs/kanon/issues/1602)) ([99ddc55](https://github.com/yedeya-labs/kanon/commit/99ddc55639293acc33770b75b0d24de076047a4e))
+* **lanes:** keep the starting map and the playbook excerpt out of an agent's commits ([#1540](https://github.com/yedeya-labs/kanon/issues/1540)) ([5daa6a3](https://github.com/yedeya-labs/kanon/commit/5daa6a337007ca65cb643156b78a797aaeef84ec))
+* **lanes:** re-run the push jobs on their own, and check branches at push time ([#1506](https://github.com/yedeya-labs/kanon/issues/1506)) ([aacf47c](https://github.com/yedeya-labs/kanon/commit/aacf47c145aa922c5727f893893fe6ca1e323e47))
+* **lanes:** run without a Releaser, and refuse a brief with no tracking issue ([#1562](https://github.com/yedeya-labs/kanon/issues/1562)) ([f33ad07](https://github.com/yedeya-labs/kanon/commit/f33ad07491c547d06c44a3498327f7db808bb101))
+* **lanes:** the split lane's push and the revise lane's fix-push can be re-run on their own ([#1518](https://github.com/yedeya-labs/kanon/issues/1518)) ([5071c00](https://github.com/yedeya-labs/kanon/commit/5071c006a6181225b6dc6a5527dc9a3ca27281ef))
+* **lead:** hold a project whose repository declares no reference environment ([#1606](https://github.com/yedeya-labs/kanon/issues/1606)) ([c63945e](https://github.com/yedeya-labs/kanon/commit/c63945eae7e667cecfb52f4f67a976d54bd19211))
+* **release:** a candidate's skills and hooks run the CLI at the candidate's own tag ([#1561](https://github.com/yedeya-labs/kanon/issues/1561)) ([26bec92](https://github.com/yedeya-labs/kanon/commit/26bec92142128dab6957b8dd1e1dcbe63786f88c))
+* **release:** the pin pull request's body names the plugin's ref only when it moved it ([#1546](https://github.com/yedeya-labs/kanon/issues/1546)) ([e7d9b19](https://github.com/yedeya-labs/kanon/commit/e7d9b19f945741a4d14b15a188186dd5a9ba3f0a))
+* **review-reask:** count only a Reviewer verdict as reviewing the head ([#1536](https://github.com/yedeya-labs/kanon/issues/1536)) ([a16b2ac](https://github.com/yedeya-labs/kanon/commit/a16b2ac4894a877b6bd24579d2828c57ce1e30d0))
+* **review:** name Kanon at the pinned tag as the incremental scope's origin ([#1537](https://github.com/yedeya-labs/kanon/issues/1537)) ([61ba72f](https://github.com/yedeya-labs/kanon/commit/61ba72fcb7129235eaee818254d27c3c761c4ad7))
+* **skills:** explain the findings that don't block when doctor exits 0 ([#1539](https://github.com/yedeya-labs/kanon/issues/1539)) ([58a04b2](https://github.com/yedeya-labs/kanon/commit/58a04b215db3c850e14c42e457fe8dbf3c209152))
+* **telemetry:** ask the store again on its 503 jwks-unavailable, and delay the rows it still refuses ([#1498](https://github.com/yedeya-labs/kanon/issues/1498)) ([90c37fe](https://github.com/yedeya-labs/kanon/commit/90c37fe5e082cd9c6fa8af640a7703b42a9655da))
+
+
+### Documentation
+
+* **deploy:** give the OIDC subject a role must trust, immutable for repositories created since 2026-07-15 ([#1560](https://github.com/yedeya-labs/kanon/issues/1560)) ([e07d259](https://github.com/yedeya-labs/kanon/commit/e07d259c9e8f578f3e5f8d8adc25c01c73e4c862))
+* **metrics:** refresh the public metrics page ([#1580](https://github.com/yedeya-labs/kanon/issues/1580)) ([4b10a6a](https://github.com/yedeya-labs/kanon/commit/4b10a6a79c2e6e9ba7a759f0b10aa0a90e5806e0))
+* name every kind of unwaivable finding, verifiedAs in the escalation file, and K-AGENT-50's guard ([#1519](https://github.com/yedeya-labs/kanon/issues/1519)) ([bfe06f9](https://github.com/yedeya-labs/kanon/commit/bfe06f98bd8834494c557cb6fcdcac349774c535))
+* **rulebook:** K-LAYOUT-18 names the agent lanes' callers only ([#1514](https://github.com/yedeya-labs/kanon/issues/1514)) ([fb7ef51](https://github.com/yedeya-labs/kanon/commit/fb7ef517c67ca934f76342238e865a076a2f827a))
+* **rulebook:** name fix-push's Actions read under [LANE-12], and keep K-AGENT-50's exceptions in one piece ([#1526](https://github.com/yedeya-labs/kanon/issues/1526)) ([431d84e](https://github.com/yedeya-labs/kanon/commit/431d84e338668a0a1db27f7582c4652cca35015c))
+* **skills:** the doctor and adopt skills follow the Releaser fix and deploy targets ([#1589](https://github.com/yedeya-labs/kanon/issues/1589)) ([5353117](https://github.com/yedeya-labs/kanon/commit/53531176aaaf7bc6fc08e86e468bf47e062403c4))
+* **status:** say the seal and KMS headers' calls happen at the startup key proof ([#1522](https://github.com/yedeya-labs/kanon/issues/1522)) ([ed255e5](https://github.com/yedeya-labs/kanon/commit/ed255e55214e45b00c8200450ef03bd195112140))
+* **status:** the person's-PR readiness line names the decision hold, and the closure paragraph moves back ([#1523](https://github.com/yedeya-labs/kanon/issues/1523)) ([adfdfd1](https://github.com/yedeya-labs/kanon/commit/adfdfd1af41cde628169416a45541605375dba0e))
+
+
+### Tests
+
+* **adoption:** date the CLI rows by the plugin's ref and the skill's npx tag ([#1547](https://github.com/yedeya-labs/kanon/issues/1547)) ([572a34e](https://github.com/yedeya-labs/kanon/commit/572a34e36fb903d4b84e21ad6c59cadf519dfc0e))
+* **merge-gate:** record that GitHub names the Merger App as mergedBy for its queued merges ([#1516](https://github.com/yedeya-labs/kanon/issues/1516)) ([448d027](https://github.com/yedeya-labs/kanon/commit/448d027b6d0df69224a519fe96315740fb9bb058))
+* read .yaml workflows in the workflow-security and self-pinning guards ([#1601](https://github.com/yedeya-labs/kanon/issues/1601)) ([c72a81e](https://github.com/yedeya-labs/kanon/commit/c72a81ed2ff24858915be3d5f749763e0968957c))
+
+
+### CI
+
+* **deps:** Bump anthropics/claude-code-action from 1.0.262 to 1.0.263 in /actions/agent-run in the github-actions group across 1 directory ([#1520](https://github.com/yedeya-labs/kanon/issues/1520)) ([e500bb9](https://github.com/yedeya-labs/kanon/commit/e500bb95ae9f7c4e558b6ffc49e0ea41b6e383ad))
+* **deps:** Bump anthropics/claude-code-action from 1.0.263 to 1.0.266 in /actions/agent-run in the github-actions group across 1 directory ([#1585](https://github.com/yedeya-labs/kanon/issues/1585)) ([1a301c8](https://github.com/yedeya-labs/kanon/commit/1a301c8f199a3f41915831a17eed7823081cd000))
+* **deps:** run Kanon on candidate v0.43.0 ([#1527](https://github.com/yedeya-labs/kanon/issues/1527)) ([30706ab](https://github.com/yedeya-labs/kanon/commit/30706abffa5d2b35d2e7e37b263bf31e8b247217))
+* **rebase:** start Kanon's rebase lane on implement and triage runs too ([#1543](https://github.com/yedeya-labs/kanon/issues/1543)) ([9b4fcc9](https://github.com/yedeya-labs/kanon/commit/9b4fcc9bc2befad0f4b12ecfa4b6fb2e96589f76))
+
 ## [0.43.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.42.0...candidate-v0.43.0) (2026-10-28)
 
 
