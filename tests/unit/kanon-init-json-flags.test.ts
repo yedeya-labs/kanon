@@ -607,6 +607,8 @@ describe('kanon init and the kanon plugin (#376)', () => {
     expect(first.answers.plugin).toBe(true);
     expect(read(dir, SETTINGS)).toBe(pluginSettingsFile(RELEASE));
     expect(readPluginDeclaration(read(dir, SETTINGS))).toEqual({ status: 'declared', name: 'kanon', ref: RELEASE, enabled: true });
+    // kanon#1578: the marketplace entry it creates updates the plugin to the pin in the background.
+    expect(JSON.parse(read(dir, SETTINGS)).extraKnownMarketplaces.kanon.autoUpdate).toBe(true);
     expect(first.files.find((f) => f.path === SETTINGS)).toMatchObject({ status: 'new' });
     expect(first.findings.map((f) => f.id)).not.toContain('plugin.declare');
     const second = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
@@ -624,6 +626,22 @@ describe('kanon init and the kanon plugin (#376)', () => {
     const dd = parse(await run(dry, fakeGitHub(), ['--yes', '--json', '--dry-run']));
     expect(dd.files.find((f) => f.path === SETTINGS)).toMatchObject({ status: 'new', content: pluginSettingsFile(RELEASE) });
     expect(existsSync(join(dry, SETTINGS))).toBe(false);
+  });
+
+  // kanon#1578: init never edits a settings file the project has, so an entry without the key is reported, not changed.
+  it('reports an existing Kanon marketplace entry without "autoUpdate": true, and leaves the file as it is', async () => {
+    const before = { extraKnownMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref: RELEASE } } }, enabledPlugins: { 'kanon@kanon': true } };
+    const own = `${JSON.stringify(before, null, 2)}\n`;
+    const dir = checkout({ [SETTINGS]: own });
+    const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    expect(read(dir, SETTINGS)).toBe(own);
+    expect(d.files.map((f) => f.path)).not.toContain(SETTINGS);
+    const f = d.findings.find((x) => x.id === 'plugin.declare')!;
+    expect(f.message).toBe(`${SETTINGS} declares the kanon plugin's marketplace "kanon" at ${RELEASE}, and doesn't set "autoUpdate": true on it, so each person moves their plugin by hand.`);
+    expect(f.fix.commands.join('\n')).toContain('"autoUpdate": true');
+    // With the key, nothing to report.
+    const withKey = checkout({ [SETTINGS]: `${JSON.stringify({ ...before, extraKnownMarketplaces: { kanon: { ...before.extraKnownMarketplaces.kanon, autoUpdate: true } } }, null, 2)}\n` });
+    expect(parse(await run(withKey, fakeGitHub(), ['--yes', '--json', '--no-apps'])).findings.map((x) => x.id)).not.toContain('plugin.declare');
   });
 
   it('leaves a settings file the project has alone, and names the keys to merge into it', async () => {

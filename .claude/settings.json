@@ -5,7 +5,8 @@
         "source": "github",
         "repo": "yedeya-labs/kanon",
         "ref": "candidate-v0.43.0"
-      }
+      },
+      "autoUpdate": true
     }
   },
   "enabledPlugins": {

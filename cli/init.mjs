@@ -81,7 +81,7 @@ import {
 } from './callers.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { whoami } from './gh-token.mjs';
-import { KANON_MARKETPLACE_REPO, pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
+import { AUTO_UPDATE, declaresAutoUpdate, KANON_MARKETPLACE_REPO, pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { coveringRulesets, rulesetUrl } from './ruleset-bypass.mjs';
 import { BUCKETS, milestones as runMilestones } from './milestones.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -3423,17 +3423,20 @@ const run = async (deps, opts, req, rep) => {
   }
   const settings = read(SETTINGS_PATH);
   const declared = readPluginDeclaration(settings);
-  if (a.plugin && settings !== null && !(declared.status === 'declared' && declared.ref === release && declared.enabled)) {
+  // A marketplace entry without `"autoUpdate": true` is reported too (kanon#1578): init never
+  // edits a settings file the project has, so the key is the person's to add.
+  const autoUpdate = declaresAutoUpdate(settings) === true;
+  if (a.plugin && settings !== null && !(declared.status === 'declared' && declared.ref === release && declared.enabled && autoUpdate)) {
     const lines = JSON.stringify(pluginSettings(release), null, 2).split('\n').slice(1, -1);
     step({
       id: 'plugin.declare',
       category: 'plugin',
       subject: SETTINGS_PATH,
-      prose: `${SETTINGS_PATH} is the project's, so init leaves it alone. To declare the kanon plugin at ${release}, merge these keys into it, or set the kanon marketplace's ref to ${release} where it is declared already:`,
+      prose: `${SETTINGS_PATH} is the project's, so init leaves it alone. To declare the kanon plugin at ${release}, merge these keys into it, or set the kanon marketplace's ref to ${release}, with "${AUTO_UPDATE}": true beside its source, where it is declared already:`,
       message: declared.status === 'declared'
-        ? `${SETTINGS_PATH} declares the kanon plugin's marketplace "${declared.name}" ${[...(declared.ref === release ? [`at ${release}`] : [`${declared.ref ? `at ${declared.ref}` : 'with no ref'}, not at ${release}`]), ...(declared.enabled ? [] : [`and doesn't enable kanon@${declared.name}`])].join(', ')}.`
+        ? `${SETTINGS_PATH} declares the kanon plugin's marketplace "${declared.name}" ${[...(declared.ref === release ? [`at ${release}`] : [`${declared.ref ? `at ${declared.ref}` : 'with no ref'}, not at ${release}`]), ...(declared.enabled ? [] : [`and doesn't enable kanon@${declared.name}`]), ...(autoUpdate ? [] : [`and doesn't set "${AUTO_UPDATE}": true on it, so each person moves their plugin by hand`])].join(', ')}.`
         : `${SETTINGS_PATH} exists, and doesn't declare the kanon plugin${declared.status === 'unreadable' ? ` (${declared.reason})` : ''}.`,
-      text: `Merge these keys into ${SETTINGS_PATH}, keeping its own, or set the kanon marketplace's ref there to ${release} and enable its plugin.`,
+      text: `Merge these keys into ${SETTINGS_PATH}, keeping its own, or set the kanon marketplace's ref there to ${release}, set "${AUTO_UPDATE}": true beside its source, and enable its plugin.`,
       commands: lines,
     });
   }

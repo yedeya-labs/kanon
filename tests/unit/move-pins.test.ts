@@ -131,6 +131,16 @@ describe('move-pins on a fixture tree (plan 0009 S4)', () => {
     expect(settings.extraKnownMarketplaces.other.source.ref).toBe('v0.39.0');
   });
 
+  // kanon#1578: the marketplace entry init writes carries "autoUpdate": true; moving the ref keeps it.
+  it('keeps "autoUpdate" and every other key of the entry when it moves the ref', () => {
+    const entry = { source: { source: 'github', repo: 'yedeya-labs/kanon', ref: 'v0.39.0' }, autoUpdate: true };
+    const text = `${JSON.stringify({ extraKnownMarketplaces: { kanon: entry }, enabledPlugins: { 'kanon@kanon': true } }, null, 2)}\n`;
+    const moved = moveSettings(text, 'v0.40.0');
+    expect(moved.moved).toBe(1);
+    expect(JSON.parse(moved.text)).toEqual({ extraKnownMarketplaces: { kanon: { ...entry, source: { ...entry.source, ref: 'v0.40.0' } } }, enabledPlugins: { 'kanon@kanon': true } });
+    expect(moved.text).toBe(text.replace('"v0.39.0"', '"v0.40.0"'));
+  });
+
   it('never moves a commented-out ref', () => {
     movePins({ root, release: 'candidate-v0.40.0' });
     const ci = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8');

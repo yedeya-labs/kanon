@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { EXIT, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
-import { installedBehind, isKanonSource, pluginSettingsFile, pluginsRoot, readMachinePlugin, readPluginDeclaration } from '../../cli/plugin.mjs';
+import { declaresAutoUpdate, installedBehind, isKanonSource, pluginSettings, pluginSettingsFile, pluginsRoot, readMachinePlugin, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { checkout, clone, fakeGitHub, healthyFiles, ids, NEXT, PINNED, REQ, run, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -16,14 +16,23 @@ import { SPAWNS } from './helpers/spawns.js';
 // Every case runs doctor against a real git checkout (helpers/doctor.ts).
 vi.setConfig({ testTimeout: SPAWNS.timeout });
 
+// kanon#1578: the declaration init writes, without the `"autoUpdate": true` it carries.
+const withoutAutoUpdate = (text: string) => {
+  const doc = JSON.parse(text);
+  delete doc.extraKnownMarketplaces.kanon.autoUpdate;
+  return `${JSON.stringify(doc, null, 2)}\n`;
+};
+
 // #376: a project declares the kanon plugin in its .claude/settings.json (docs/skills.md), and
 // doctor compares the declared release with the one it checks against, without blocking.
 describe("kanon doctor and the kanon plugin's declared release (#376)", () => {
   const SETTINGS = '.claude/settings.json';
-  const declared = (ref: string | null, over: { name?: string; source?: Record<string, unknown>; enabled?: boolean } = {}) => {
+  const declared = (ref: string | null, over: { name?: string; source?: Record<string, unknown>; enabled?: boolean; autoUpdate?: unknown } = {}) => {
     const name = over.name ?? 'kanon';
     const source = over.source ?? { source: 'github', repo: 'yedeya-labs/kanon', ...(ref === null ? {} : { ref }) };
-    return `${JSON.stringify({ permissions: { allow: ['Bash(npm test)'] }, extraKnownMarketplaces: { [name]: { source } }, enabledPlugins: { [`kanon@${name}`]: over.enabled ?? true } }, null, 2)}\n`;
+    // kanon#1578: with the key init writes, unless a case leaves it out.
+    const entry = 'autoUpdate' in over && over.autoUpdate === undefined ? { source } : { source, autoUpdate: 'autoUpdate' in over ? over.autoUpdate : true };
+    return `${JSON.stringify({ permissions: { allow: ['Bash(npm test)'] }, extraKnownMarketplaces: { [name]: entry }, enabledPlugins: { [`kanon@${name}`]: over.enabled ?? true } }, null, 2)}\n`;
   };
   const mismatch = (r: Result) => r.json.findings.filter((f: { id: string }) => f.id === 'plugin.version-mismatch');
 
@@ -44,8 +53,11 @@ describe("kanon doctor and the kanon plugin's declared release (#376)", () => {
     expect(mismatch(r)).toEqual([{
       id: 'plugin.version-mismatch', category: 'pin', blocking: false, subject: SETTINGS,
       message: `declares the kanon plugin's marketplace "kanon" at v0.9.0, not at ${PINNED} (the release the callers pin); the skills run kanon from the release they ship in, and install it (K-ADOPT-11).`,
-      fix: { text: `Set the "kanon" marketplace's ref in ${SETTINGS} to ${PINNED}. Claude Code fetches the marketplace again from the changed source when a session starts, and the installed plugin then moves with claude plugin update kanon@kanon (docs/skills.md, "Moving the plugin").`, commands: [`"ref": "${PINNED}"`], url: null },
+      fix: { text: `Set the "kanon" marketplace's ref in ${SETTINGS} to ${PINNED}. Claude Code fetches the marketplace again from the changed source when a session starts; with "autoUpdate": true on the entry, Claude Code then updates the installed plugin to it in the background, a few minutes into a session (docs/skills.md, "Moving the plugin").`, commands: [`"ref": "${PINNED}"`], url: null },
     }]);
+    // kanon#1578: without the key, the person moves the installed plugin with the update command.
+    const off = await run(checkout({ ...healthyFiles(), [SETTINGS]: declared('v0.9.0', { autoUpdate: undefined }) }), fakeGitHub(), ['--json']);
+    expect(mismatch(off).map((f: { fix: { text: string } }) => f.fix.text)).toEqual([`Set the "kanon" marketplace's ref in ${SETTINGS} to ${PINNED}. Claude Code fetches the marketplace again from the changed source when a session starts, and the installed plugin then moves with claude plugin update kanon@kanon (docs/skills.md, "Moving the plugin").`]);
     const prose = await run(checkout({ ...healthyFiles(), [SETTINGS]: declared('v0.9.0') }), fakeGitHub());
     expect(prose.status).toBe(EXIT.healthy);
     expect(prose.out).toContain(`[Pin, not blocking] ${SETTINGS}: declares the kanon plugin's marketplace "kanon" at v0.9.0`);
@@ -78,6 +90,40 @@ describe("kanon doctor and the kanon plugin's declared release (#376)", () => {
     const r = await run(checkout({ ...healthyFiles(), [SETTINGS]: declared(PINNED, { enabled: false }) }), fakeGitHub(), ['--json']);
     expect(r.json.findings).toEqual([]);
     expect(r.json.notes.join('\n')).toContain(`declares the kanon plugin's marketplace "kanon" but doesn't enable kanon@kanon`);
+  });
+
+  // kanon#1578 (the Owner, 2026-11-02): init writes "autoUpdate": true, and doctor notes an entry without it.
+  it('notes a declared marketplace without "autoUpdate": true, without blocking, with the one key to set', async () => {
+    const autoOff = (r: Result) => r.json.findings.filter((f: { id: string }) => f.id === 'plugin.auto-update-off');
+    for (const value of [undefined, false, 'true']) {
+      const r = await run(checkout({ ...healthyFiles(), [SETTINGS]: declared(PINNED, { name: 'tools', autoUpdate: value }) }), fakeGitHub(), ['--json']);
+      expect(r.status, String(value)).toBe(EXIT.healthy);
+      expect(autoOff(r), String(value)).toEqual([{
+        id: 'plugin.auto-update-off', category: 'pin', blocking: false, subject: SETTINGS,
+        message: `declares the kanon plugin's marketplace "tools" without "autoUpdate": true, so Claude Code doesn't update the installed plugin when the ref moves: each person moves it by hand (docs/skills.md, "Moving the plugin").`,
+        fix: { text: expect.stringContaining('Set "autoUpdate": true on the "tools" marketplace entry'), commands: ['"autoUpdate": true'], url: null },
+      }]);
+    }
+    // With the key, or with nothing declared, nothing.
+    expect(autoOff(await run(checkout({ ...healthyFiles(), [SETTINGS]: declared(PINNED) }), fakeGitHub(), ['--json']))).toEqual([]);
+    expect(autoOff(await run(checkout(healthyFiles()), fakeGitHub(), ['--json']))).toEqual([]);
+  });
+
+  it('reads "autoUpdate" on the Kanon marketplace entry alone, through the alias as Claude Code does', () => {
+    expect(pluginSettings(PINNED).extraKnownMarketplaces.kanon).toEqual({ source: { source: 'github', repo: 'yedeya-labs/kanon', ref: PINNED }, autoUpdate: true });
+    expect(declaresAutoUpdate(pluginSettingsFile(PINNED))).toBe(true);
+    expect(declaresAutoUpdate(declared(PINNED, { autoUpdate: undefined }))).toBe(false);
+    expect(declaresAutoUpdate(JSON.stringify({ additionalMarketplaces: { k: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref: PINNED }, autoUpdate: true } } }))).toBe(true);
+    // Another marketplace's key is not Kanon's.
+    expect(declaresAutoUpdate(JSON.stringify({ extraKnownMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon' } }, other: { source: { source: 'github', repo: 'acme/plugins' }, autoUpdate: true } } }))).toBe(false);
+    for (const text of [null, '[]', '{ "permissions": {} }']) expect(declaresAutoUpdate(text), String(text)).toBeNull();
+  });
+
+  it('lets the adoption record waive plugin.auto-update-off, a choice of the project\'s', async () => {
+    const record = `${healthyFiles()['docs/qa/adoption.md']}- **${WAIVER_LABEL}:** \`plugin.auto-update-off\` on \`${SETTINGS}\` (we move the plugin by hand)\n`;
+    const r = await run(checkout({ ...healthyFiles(), [SETTINGS]: declared(PINNED, { autoUpdate: undefined }), 'docs/qa/adoption.md': record }), fakeGitHub(), ['--json']);
+    expect(r.json.findings).toEqual([]);
+    expect(r.json.waived.map((w: { id: string }) => w.id)).toEqual(['plugin.auto-update-off']);
   });
 
   it('is incomplete, exit 4, when the settings file is not a JSON object', async () => {
@@ -181,8 +227,12 @@ describe('kanon doctor and the kanon plugin installed on this machine (#1552)', 
     expect(behind(r)).toEqual([{
       id: 'plugin.behind', category: 'pin', blocking: false, subject: 'kanon@kanon',
       message: `Claude Code on this machine runs the kanon plugin at ${OLD} (project scope), older than ${PINNED} (the release the callers pin): its skills follow ${OLD}'s rules against this installation (K-ADOPT-11).`,
-      fix: { text: expect.stringContaining('moves an installed plugin only when asked'), commands: ['claude plugin update kanon@kanon'], url: null },
+      fix: { text: expect.stringContaining('hasn\'t updated the installed plugin yet: with "autoUpdate": true on the entry it does so in the background, a few minutes into a session. To move it now, run the command'), commands: ['claude plugin update kanon@kanon'], url: null },
     }]);
+    // kanon#1578: without the key, Claude Code moves it only when asked.
+    const off = checkout({ ...healthyFiles(), [SETTINGS]: withoutAutoUpdate(pluginSettingsFile(PINNED)) });
+    const offRun = await run(off, fakeGitHub(), ['--json'], undefined, machine(known(PINNED), [{ scope: 'project', projectPath: off, version: OLD }]));
+    expect(behind(offRun).map((f: { fix: { text: string } }) => f.fix.text)).toEqual([expect.stringContaining('but, without "autoUpdate": true on the entry, moves an installed plugin only when asked. Run the command')]);
   });
 
   it("names a user's own marketplace entry held at an older ref, which the repository's ref doesn't move, with the steps that move it", async () => {
@@ -253,8 +303,11 @@ describe('kanon doctor and a plugin pinned below the latest release (#1551 point
     expect(below(r)).toEqual([{
       id: 'plugin.below-latest', category: 'pin', blocking: false, subject: SETTINGS,
       message: `pins the kanon plugin's marketplace "kanon" at ${PINNED}, below Kanon's latest release, ${NEXT}. /plugin marketplace update and /plugin update fetch ${PINNED} again, never a later release: the plugin, and the skills it ships, move only when this ref does.`,
-      fix: { text: expect.stringContaining(`on the branch kanon/upgrade-${NEXT}`), commands: [`"ref": "${NEXT}"`, 'claude plugin update kanon@kanon'], url: null },
+      fix: { text: expect.stringContaining(`on the branch kanon/upgrade-${NEXT}, start a new Claude Code session in this repository, where Claude Code updates the plugin itself ("autoUpdate": true), then`), commands: [`"ref": "${NEXT}"`], url: null },
     }]);
+    // kanon#1578: without the key, the second command moves the installed plugin.
+    const off = await run(checkout({ ...healthyFiles(), [SETTINGS]: withoutAutoUpdate(pluginSettingsFile(PINNED)) }), fakeGitHub({ latest: NEXT }), ['--json']);
+    expect(below(off).map((f: { fix: { text: string; commands: string[] } }) => f.fix)).toEqual([expect.objectContaining({ text: expect.stringContaining('in this repository and run the second command there, then'), commands: [`"ref": "${NEXT}"`, 'claude plugin update kanon@kanon'] })]);
   });
 
   it('can be waived, being about the repository\'s ref', async () => {

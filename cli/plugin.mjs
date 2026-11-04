@@ -4,20 +4,23 @@
 // Kanon's own repository, which is also its marketplace. Installed with `claude plugin
 // marketplace add`, its release lives in each person's Claude Code configuration, where neither
 // Dependabot nor `kanon doctor` sees it. A repository can declare it instead, in the project's
-// `.claude/settings.json`, with the two keys Claude Code documents for that
+// `.claude/settings.json`, with the three keys Claude Code documents for that
 // (https://code.claude.com/docs/en/plugins/org#require-plugins-per-repository):
 //
 //   - `extraKnownMarketplaces.<name>.source`, a `github` source with `repo` and `ref`, a branch
 //     or tag (https://code.claude.com/docs/en/plugins/marketplace-reference#marketplace-sources):
 //     the marketplace, pinned to a release tag;
+//   - `extraKnownMarketplaces.<name>.autoUpdate: true`, beside `source`: Claude Code updates the
+//     installed plugin to that `ref` itself (kanon#1578, below);
 //   - `enabledPlugins["kanon@<name>"]: true`: the plugin, on for everyone in the repository
 //     (https://code.claude.com/docs/en/settings-reference#enabledplugins).
 //
 // Claude Code honours the marketplace only once the person trusts the folder, and re-fetches a
 // declared marketplace whose source changed in settings when a session starts
 // (https://code.claude.com/docs/en/plugins/loading), so moving the repository's release is one
-// edit of `ref`. The installed plugin is not moved by that fetch: it moves with
-// `claude plugin update`, and not at all while a marketplace the person added themselves holds
+// edit of `ref`. The fetch alone doesn't move the installed plugin: with `autoUpdate`, Claude Code
+// updates it in the background a few minutes into the session, and without it, it moves with
+// `claude plugin update`; in neither case while a marketplace the person added themselves holds
 // the old `ref` (#1552; docs/skills.md, "Moving the plugin"). `kanon init` offers to write the
 // declaration, and `kanon doctor` reports a `ref` that differs from the release it checks against
 // (`plugin.version-mismatch`), a `ref` below Kanon's latest release (`plugin.below-latest`), and
@@ -28,7 +31,7 @@
 
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { isKanonSource, kanonMarketplace } from '../actions/lane-check/plugin-ref.mjs';
+import { isKanonSource, kanonMarketplace, marketplaces } from '../actions/lane-check/plugin-ref.mjs';
 
 /** Where a project declares its Claude Code settings for everyone in the repository. */
 export const SETTINGS_PATH = '.claude/settings.json';
@@ -40,15 +43,21 @@ export const PLUGIN = 'kanon';
 /** The repository the marketplace is, in `owner/repo` form. */
 export const KANON_MARKETPLACE_REPO = 'yedeya-labs/kanon';
 
+/** The marketplace entry's key that makes Claude Code update its plugins in the background (kanon#1578). */
+export const AUTO_UPDATE = 'autoUpdate';
+
 /** @param {unknown} v @returns {v is Record<string, any>} */
 const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
- * The declaration's keys, pinned to `release`: what `kanon init` writes, or merges by hand.
+ * The declaration's keys, pinned to `release`: what `kanon init` writes, or merges by hand. The
+ * marketplace entry sets `autoUpdate` (kanon#1578, the Owner's decision of 2026-11-02), so Claude
+ * Code updates the installed plugin to the entry's `ref` in the background, with no manual step:
+ * the plugin a person runs follows the repository's pin, and nothing newer.
  * @param {string} release
  */
 export const pluginSettings = (release) => ({
-  extraKnownMarketplaces: { [MARKETPLACE]: { source: { source: 'github', repo: KANON_MARKETPLACE_REPO, ref: release } } },
+  extraKnownMarketplaces: { [MARKETPLACE]: { source: { source: 'github', repo: KANON_MARKETPLACE_REPO, ref: release }, [AUTO_UPDATE]: true } },
   enabledPlugins: { [`${PLUGIN}@${MARKETPLACE}`]: true },
 });
 
@@ -97,9 +106,9 @@ export const readPluginDeclaration = (text) => {
 // what it fetched, under one plugins root per person (https://code.claude.com/docs/en/plugins/loading,
 // "Find plugins on disk"): `known_marketplaces.json`, each marketplace it fetched with its
 // `source`, and `installed_plugins.json`, each install with its `scope`, `projectPath` and
-// `version`. A marketplace the person added themselves keeps its own `ref` there, and an installed
-// plugin moves only when Claude Code is asked to update it, so the plugin can stay releases behind
-// the repository's `ref` without a word. `kanon doctor` reads those two files, and nothing else
+// `version`. A marketplace the person added themselves keeps its own `ref` there, and, without
+// `autoUpdate` on the marketplace, an installed plugin moves only when Claude Code is asked to
+// update it, so the plugin can stay releases behind the repository's `ref` without a word. `kanon doctor` reads those two files, and nothing else
 // under the root: never the person's settings, whose `env` can hold a credential, and never a file
 // it names. It writes nothing there.
 
@@ -204,4 +213,26 @@ export const samePath = (a, b) => {
     }
   };
   return resolve(a) === resolve(b) || real(a) === real(b);
+};
+
+// ── The marketplace's auto-update (kanon#1578) ────────────────────────────────────────────────
+//
+// With `"autoUpdate": true` on the repository's marketplace entry, beside `source`, Claude Code
+// refreshes the marketplace and updates its installed plugins in the background, a few minutes
+// into a session (https://code.claude.com/docs/en/plugins/install#keep-plugins-updated). The
+// `ref` still pins the release, so the plugin follows the repository's pin and nothing newer.
+// Without it, each person moves their plugin by hand (docs/skills.md, "Moving the plugin").
+
+/**
+ * Whether the Kanon marketplace the project's `.claude/settings.json` declares sets
+ * `"autoUpdate": true`; null when the file declares none, or can't be read (what
+ * `readPluginDeclaration` says of it).
+ * @param {string | null} text
+ * @returns {boolean | null}
+ */
+export const declaresAutoUpdate = (text) => {
+  const declared = readPluginDeclaration(text);
+  if (declared.status !== 'declared') return null;
+  const entry = marketplaces(JSON.parse(/** @type {string} */ (text)))[declared.name];
+  return isMap(entry) && entry[AUTO_UPDATE] === true;
 };
