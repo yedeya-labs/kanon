@@ -29,8 +29,9 @@
 // tab-separated line per finding: `notice<TAB><file><TAB><line>` for each default a reader took
 // (an omitted file or section, plan 0005 §5.2), and `error<TAB><file><TAB><message>` for a declaration that doesn't parse,
 // with the reader's own message. Exits 0 when it ran, whatever it found; 2 on a usage error. An
-// adoption record that declares no reference environment passes here: the reconciler fails on
-// it, by name, when a project reaches its deploy phase (K-PROJ-11).
+// adoption record that declares no reference environment passes here: the reconciler holds a
+// project at its deploy phase, by name, with `needs:human` and one comment on its tracking issue
+// (K-PROJ-11).
 
 import { readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import { readExemptions } from '../../scripts/lib/exemptions.mjs';
