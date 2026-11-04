@@ -57,3 +57,29 @@ export const isRoadmapMilestone = (m) => isDatedMilestone(m) && (m?.state ?? 'op
  * `isRoadmapMilestone` excludes. One definition of "dated", shared by both.
  */
 export const isDatedMilestone = (m) => Boolean(m?.due_on ?? m?.dueOn);
+
+/**
+ * The number of the open milestone titled `title`, or null when none is open or the listing can't
+ * be read (kanon#1600). A filer on the REST API names a milestone by number, never by title, so a
+ * script that files with `plan()`'s bucket looks it up here. Null files the issue bare rather than
+ * not at all: an issue with no milestone is still an issue someone can act on.
+ *
+ * @param {(path: string) => unknown} api a REST GET, as `deploy-gate.mjs`'s `ghApi`
+ * @param {string} repo `owner/name`
+ * @param {string} title
+ * @returns {number | null}
+ */
+export function openMilestoneNumber(api, repo, title) {
+  try {
+    for (let page = 1; page <= 10; page += 1) {
+      const list = api(`repos/${repo}/milestones?state=open&per_page=100&page=${page}`);
+      const items = Array.isArray(list) ? list : [];
+      const hit = items.find((m) => m?.title === title);
+      if (hit) return typeof hit.number === 'number' ? hit.number : null;
+      if (items.length < 100) return null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}

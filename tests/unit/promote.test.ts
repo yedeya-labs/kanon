@@ -4,11 +4,12 @@ import { parse } from 'yaml';
 import { UNREACHABLE_TITLE as DOCTOR_UNREACHABLE_TITLE } from '../../cli/doctor.mjs';
 import {
   deployedIntake, INTAKE_FIRST, INTAKE_VARIABLE, intakeFromVerdict, intakeRun, intakeVerdict,
-  ApiError, apply, check, E2E_CHECK, EXPLAIN_MARKER, GATES, gate, gateSummary, HARNESS, HARNESS_WORKFLOW, HELD_LABEL, HELD_MILESTONE, heldTitle,
+  ApiError, apply, check, E2E_CHECK, EXPLAIN_MARKER, GATES, gate, gateSummary, HARNESS, HARNESS_WORKFLOW, HELD_LABEL, heldTitle,
   laneCallers, notify, pinTitle, redIssueTitle, Refusal, REPORTER_APP_ID, RUN_LISTING_CAP, SOAK_MS, SPACING_MS, startJobName, summary,
   HELD_AUTHOR, UNREACHABLE_TITLE, VERDICT_JOB, VERDICT_TITLES,
 } from '../../scripts/promote.mjs';
 import { VERDICT_TITLE as RED_TEST_VERDICT_TITLE, verdictCommand } from '../../scripts/red-test.mjs';
+import { DEFAULT_MILESTONE, PIPELINE_MILESTONE } from '../../scripts/issue-triage-defaults.mjs';
 
 /**
  * Plan 0009 §2, §3 and §7, step S5: the promotion, on fixtures of GitHub's answers. A candidate is
@@ -428,7 +429,7 @@ describe('a held promotion reaches the Owner (#1441)', () => {
   };
   const owner = {
     [`repos/${REPO}/pulls/110`]: { number: 110, merged_by: { login: 'owner' } },
-    [page(`repos/${REPO}/milestones?state=open`)]: [{ number: 3, title: HELD_MILESTONE }, { number: 4, title: 'Product Backlog' }],
+    [page(`repos/${REPO}/milestones?state=open`)]: [{ number: 3, title: PIPELINE_MILESTONE }, { number: 4, title: DEFAULT_MILESTONE }],
   };
   const notified = (soak: number, { over = {}, env = {}, applied = '', open, intake }: { over?: Record<string, Route>; env?: Record<string, string>; applied?: string; open?: { number: number; body: string; title?: string; author?: string }; intake?: Intake } = {}) => {
     const issues = open ? {
