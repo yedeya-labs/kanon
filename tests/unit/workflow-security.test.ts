@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { actionFiles } from './helpers/actions.js';
 import { isReleaseRef } from './helpers/release-ref.js';
+import { workflowFiles } from './helpers/workflows.js';
 
 // K-PRIN-19: the security rules that can be checked by reading Kanon's own workflow files.
 // - K-AGENT-48: no `pull_request_target` workflow checks out the PR's head, or calls one that does,
@@ -19,7 +20,8 @@ type Job = { uses?: unknown; with?: Record<string, unknown>; secrets?: unknown; 
 type Doc = { on?: unknown; env?: Env; jobs?: Record<string, Job>; runs?: { steps?: Step[] } };
 
 const files = [
-  ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => join('.github/workflows', f)),
+  // Every workflow, `.yaml` ones too, which GitHub runs as it runs `.yml` (kanon#1598).
+  ...workflowFiles(),
   // Every Kanon action, nested ones too (plan 0011's `actions/notify/slack/action.yml`).
   ...actionFiles(),
   // The hook files `kanon init` writes into an adopter's repository (plan 0011 §7.1): they call

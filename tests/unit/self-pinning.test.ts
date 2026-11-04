@@ -1,9 +1,10 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { actionFiles } from './helpers/actions.js';
 import { RELEASE_REF } from './helpers/release-ref.js';
+import { workflowFiles } from './helpers/workflows.js';
 
 // Plan 0001 §4 (decision 3): every reference from one Kanon file to another is `$/`, GitHub's
 // self-reference, which resolves to Kanon at the commit the caller pinned. A `./` reference
@@ -16,7 +17,8 @@ import { RELEASE_REF } from './helpers/release-ref.js';
 // pin Kanon by release on purpose (plan 0011 §7.1) and are not read here.
 const files = [
   ...actionFiles(),
-  ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => join('.github/workflows', f)),
+  // Every workflow, `.yaml` ones too, which GitHub runs as it runs `.yml` (kanon#1598).
+  ...workflowFiles(),
 ];
 
 // The first exception is the hook (plan 0001 §5). The spine calls the ADOPTER's project-setup
