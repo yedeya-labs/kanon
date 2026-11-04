@@ -1260,11 +1260,14 @@ export const diagnose = async (deps, opts) => {
   // lane reads it, and the two move at different times (the upgrade skill moves the ref with the
   // pins, Dependabot the pins alone, release-please in Kanon's own repository the ref first).
   const plugin = readPluginDeclaration(read(SETTINGS_PATH));
+  // kanon#1578: with `"autoUpdate": true` on the entry, Claude Code moves the installed plugin to
+  // the `ref` itself, so a fix gives `claude plugin update` only where the key is missing.
+  const autoUpdates = plugin.status === 'declared' && declaresAutoUpdate(read(SETTINGS_PATH)) === true;
   if (plugin.status === 'unreadable') unchecked.push({ check: 'plugin', subject: SETTINGS_PATH, reason: `could not read it: ${plugin.reason}` });
   else if (plugin.status === 'declared') {
     if (plugin.ref !== checked) {
       find('plugin.version-mismatch', SETTINGS_PATH, `declares the kanon plugin's marketplace "${plugin.name}" ${plugin.ref ? `at ${plugin.ref}` : "with no ref, so it follows Kanon's default branch"}, not at ${checking}; the skills run kanon from the release they ship in, and install it (K-ADOPT-11).`, {
-        text: `Set the "${plugin.name}" marketplace's ref in ${SETTINGS_PATH} to ${checked}. Claude Code fetches the marketplace again from the changed source when a session starts, and the installed plugin then moves with claude plugin update kanon@${plugin.name} (docs/skills.md, "Moving the plugin").`,
+        text: `Set the "${plugin.name}" marketplace's ref in ${SETTINGS_PATH} to ${checked}. Claude Code fetches the marketplace again from the changed source when a session starts${autoUpdates ? `; with "${AUTO_UPDATE}": true on the entry, Claude Code then updates the installed plugin to it in the background, a few minutes into a session` : `, and the installed plugin then moves with claude plugin update kanon@${plugin.name}`} (docs/skills.md, "Moving the plugin").`,
         commands: [`"ref": "${checked}"`],
       });
     }
@@ -1288,8 +1291,8 @@ export const diagnose = async (deps, opts) => {
   // under `--to` a release at or past the latest says nothing, since that is the move.
   if (plugin.status === 'declared' && plugin.ref && EXACT_RELEASE.test(plugin.ref) && stable && newer(stable, plugin.ref) > 0 && newer(stable, checked) > 0) {
     find('plugin.below-latest', SETTINGS_PATH, `pins the kanon plugin's marketplace "${plugin.name}" at ${plugin.ref}, below Kanon's latest release, ${stable}. /plugin marketplace update and /plugin update fetch ${plugin.ref} again, never a later release: the plugin, and the skills it ships, move only when this ref does.`, {
-      text: `To move to ${stable}, upgrade Kanon: set the ref to ${stable} on the branch kanon/upgrade-${stable}, start a new Claude Code session in this repository and run the second command there, then run /kanon:upgrade, which moves the callers' pins with it (docs/skills.md, "Moving the plugin").`,
-      commands: [`"ref": "${stable}"`, `claude plugin update ${PLUGIN_ID(plugin.name)}`],
+      text: `To move to ${stable}, upgrade Kanon: set the ref to ${stable} on the branch kanon/upgrade-${stable}, start a new Claude Code session in this repository${autoUpdates ? `, where Claude Code updates the plugin itself ("${AUTO_UPDATE}": true)` : ' and run the second command there'}, then run /kanon:upgrade, which moves the callers' pins with it (docs/skills.md, "Moving the plugin").`,
+      commands: autoUpdates ? [`"ref": "${stable}"`] : [`"ref": "${stable}"`, `claude plugin update ${PLUGIN_ID(plugin.name)}`],
     });
   }
 
@@ -1318,7 +1321,7 @@ export const diagnose = async (deps, opts) => {
         ? `${SETTINGS_PATH} doesn't declare the plugin, so it is in your own Claude Code configuration, pinned to a tag that an update fetches again. Run these in your own terminal: removing the marketplace uninstalls its plugin, which is why the install follows. Then start a new Claude Code session, or run /reload-plugins.`
         : stale
           ? `${declaredRef !== checked ? `First set the ref to ${checked} (plugin.version-mismatch). ` : ''}Claude Code on this machine holds the "${name}" marketplace at ${marketRef ?? "Kanon's default branch"}, not at the ${declaredRef ?? 'default branch'} ${SETTINGS_PATH} declares, so /plugin marketplace update fetches ${marketRef ?? 'it'} again. A marketplace you added yourself (claude plugin marketplace add) keeps its own entry, under the same name, in your user settings, and the repository's ref doesn't move it. Run the first command in this repository, which removes only your own entry and keeps the plugin; then start a new Claude Code session here, which fetches the marketplace at the repository's ref ("Plugins changed"); then run the second command here, and start a new session or run /reload-plugins.`
-          : `${declaredRef !== checked ? `First set the ref to ${checked} (plugin.version-mismatch), and start a new Claude Code session here so Claude Code fetches the marketplace at it. ` : ''}Claude Code fetched the "${name}" marketplace at ${marketRef ?? 'its ref'}, but moves an installed plugin only when asked. Run the command in this repository, then start a new Claude Code session or run /reload-plugins.`;
+          : `${declaredRef !== checked ? `First set the ref to ${checked} (plugin.version-mismatch), and start a new Claude Code session here so Claude Code fetches the marketplace at it. ` : ''}Claude Code fetched the "${name}" marketplace at ${marketRef ?? 'its ref'}, ${autoUpdates ? `but hasn't updated the installed plugin yet: with "${AUTO_UPDATE}": true on the entry it does so in the background, a few minutes into a session. To move it now, run` : `but, without "${AUTO_UPDATE}": true on the entry, moves an installed plugin only when asked. Run`} the command in this repository, then start a new Claude Code session or run /reload-plugins.`;
       const commands = declaredName === null
         ? [`claude plugin marketplace remove ${name}`, `claude plugin marketplace add ${KANON_REPO}#${checked}`, `claude plugin install ${PLUGIN_ID(name)}`]
         : stale

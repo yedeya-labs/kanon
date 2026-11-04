@@ -4,20 +4,23 @@
 // Kanon's own repository, which is also its marketplace. Installed with `claude plugin
 // marketplace add`, its release lives in each person's Claude Code configuration, where neither
 // Dependabot nor `kanon doctor` sees it. A repository can declare it instead, in the project's
-// `.claude/settings.json`, with the two keys Claude Code documents for that
+// `.claude/settings.json`, with the three keys Claude Code documents for that
 // (https://code.claude.com/docs/en/plugins/org#require-plugins-per-repository):
 //
 //   - `extraKnownMarketplaces.<name>.source`, a `github` source with `repo` and `ref`, a branch
 //     or tag (https://code.claude.com/docs/en/plugins/marketplace-reference#marketplace-sources):
 //     the marketplace, pinned to a release tag;
+//   - `extraKnownMarketplaces.<name>.autoUpdate: true`, beside `source`: Claude Code updates the
+//     installed plugin to that `ref` itself (kanon#1578, below);
 //   - `enabledPlugins["kanon@<name>"]: true`: the plugin, on for everyone in the repository
 //     (https://code.claude.com/docs/en/settings-reference#enabledplugins).
 //
 // Claude Code honours the marketplace only once the person trusts the folder, and re-fetches a
 // declared marketplace whose source changed in settings when a session starts
 // (https://code.claude.com/docs/en/plugins/loading), so moving the repository's release is one
-// edit of `ref`. The installed plugin is not moved by that fetch: it moves with
-// `claude plugin update`, and not at all while a marketplace the person added themselves holds
+// edit of `ref`. The fetch alone doesn't move the installed plugin: with `autoUpdate`, Claude Code
+// updates it in the background a few minutes into the session, and without it, it moves with
+// `claude plugin update`; in neither case while a marketplace the person added themselves holds
 // the old `ref` (#1552; docs/skills.md, "Moving the plugin"). `kanon init` offers to write the
 // declaration, and `kanon doctor` reports a `ref` that differs from the release it checks against
 // (`plugin.version-mismatch`), a `ref` below Kanon's latest release (`plugin.below-latest`), and
@@ -105,8 +108,7 @@ export const readPluginDeclaration = (text) => {
 // `source`, and `installed_plugins.json`, each install with its `scope`, `projectPath` and
 // `version`. A marketplace the person added themselves keeps its own `ref` there, and, without
 // `autoUpdate` on the marketplace, an installed plugin moves only when Claude Code is asked to
-// update it, so the plugin can stay releases behind
-// the repository's `ref` without a word. `kanon doctor` reads those two files, and nothing else
+// update it, so the plugin can stay releases behind the repository's `ref` without a word. `kanon doctor` reads those two files, and nothing else
 // under the root: never the person's settings, whose `env` can hold a credential, and never a file
 // it names. It writes nothing there.
 

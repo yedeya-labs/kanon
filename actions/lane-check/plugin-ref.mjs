@@ -2,8 +2,8 @@
 // (docs/skills.md, "Declare it in the repository"), read the way Claude Code reads the file, for
 // lane-check's warning on a pull request whose callers' pin moved and the plugin's `ref` didn't, as
 // a Dependabot bump leaves it (kanon#1552). `cli/plugin.mjs`, which `kanon init` and `kanon doctor`
-// read the declaration with, takes `isKanonSource` and `kanonMarketplace` from here, so both say
-// the same of a source and pick the same marketplace.
+// read the declaration with, takes `isKanonSource`, `kanonMarketplace` and `marketplaces` from
+// here, so both say the same of a source and pick the same marketplace.
 // Node built-ins only, and no imports: lane-check runs it from the action's own tree.
 
 /** @param {unknown} v @returns {v is Record<string, any>} */
