@@ -757,8 +757,8 @@ if (isFile(DATABASE)) {
 // Read by the library's own readers (`declarations.mjs`), so a file this passes is one the
 // guards, the Merger and the reconciler accept. A missing file, or a missing section, is the
 // reader's documented default (plan 0005 §5.2), and each default the reader takes is printed as
-// a notice. A record that declares no reference environment passes: the reconciler fails on it
-// when a project reaches its deploy phase.
+// a notice. A record that declares no reference environment passes: the reconciler holds a
+// project at its deploy phase, by name, with `needs:human` and one comment on its tracking issue.
 //
 // ── Whether the Overseer is installed (K-LAYOUT-10, plan 0004 step 13, decision 12) ────────
 // The Overseer is an optional lane, so the adoption record says whether it is installed, and

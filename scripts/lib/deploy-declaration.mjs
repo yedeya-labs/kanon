@@ -114,6 +114,20 @@ export const ROLES = /** @type {const} */ ({ production: 'production', preProduc
 export { DeclarationError };
 
 /**
+ * A record that declares no reference environment, or isn't there (`K-PROJ-11`): a state the
+ * repository declares, not a defect in what it wrote. Its own class so the reconciler holds the
+ * project on it by name (kanon#1581), while a malformed or unreadable record still fails the
+ * tick. Still a `DeclarationError`, so every other reader treats it as before.
+ */
+export class UndeclaredDeployError extends DeclarationError {
+  /** @param {string} message */
+  constructor(message) {
+    super(message);
+    this.name = 'UndeclaredDeployError';
+  }
+}
+
+/**
  * @typedef {{ environment: string, workflow: string, job: string }} ReferenceDeploy
  * @typedef {{ environment: string, position: number, role: 'production' | 'pre-production' }} Link
  * @typedef {{ environment: string, cron: string }} SmokeSchedule
@@ -403,7 +417,7 @@ export const parseReferenceDeploy = (text) => parseDeployDeclaration(text).refer
  */
 export function requireReferenceDeploy(declared, where) {
   if (declared) return declared;
-  throw new DeclarationError(
+  throw new UndeclaredDeployError(
     `${ADOPTION_RECORD}${where} declares no reference environment, so no project can close (K-PROJ-11): add ${REFERENCE_FIELDS.map((f) => `\`- **${LABELS[f]}:**\``).join(', ')} bullets under \`${DEPLOY_HEADING}\` (K-LAYOUT-10)`,
   );
 }
@@ -460,7 +474,7 @@ export async function referenceDeployAt(files) {
  */
 function referenceDeployOn(text, branch) {
   if (text === null) {
-    throw new DeclarationError(
+    throw new UndeclaredDeployError(
       `${ADOPTION_RECORD} doesn't exist on \`${branch}\`, so it declares no reference environment, and no project can close (K-PROJ-11, K-LAYOUT-10)`,
     );
   }
