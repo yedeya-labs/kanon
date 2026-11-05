@@ -8,6 +8,7 @@ import { REVIEW_LABELS } from '../../scripts/lane-gate.mjs';
 import { FILE_ONLY } from '../../scripts/lead-reconcile.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL } from '../../scripts/lib/upstream-findings.mjs';
 import { FINDINGS } from '../../scripts/lib/waivers.mjs';
+import { appsCheckFile } from '../../cli/callers.mjs';
 
 /**
  * The agent skills (plan 0005 step L11, ADR 0014 audience 1; docs/skills.md) are held to the
@@ -623,6 +624,30 @@ describe('each skill is held to the kanon command it drives', () => {
   it('names the contract its command prints', () => {
     expect(SKILLS.map((s) => [s.dir, contractOf(s)])).toEqual([['adopt', 'init'], ['doctor', 'doctor'], ['upgrade', 'doctor']]);
     for (const s of SKILLS) expect(s.body).toContain(`**The contract is \`${CONTRACT[contractOf(s)].schema}\`.**`);
+  });
+
+  // #1614: GitHub dispatches a workflow only from the default branch, so on a fresh install, where
+  // doctor's reason says apps-check.yml isn't there yet, the skill offers no dispatch.
+  it("offers no apps-check dispatch while doctor says apps-check.yml isn't on the default branch yet (#1614)", () => {
+    const table = rows(section(skill('doctor').body, /^## When a check couldn't run$/)!);
+    const row = table.find((c) => c[0] === '`app-permissions`')![1]!;
+    const unmerged = row.indexOf("says `apps-check.yml` isn't on the default branch yet");
+    // The dispatch offer of the other cases, which follows this case's own sentences.
+    const offer = row.indexOf('Otherwise, offer to run the `apps-check` caller there, `gh workflow run apps-check.yml');
+    expect(unmerged).toBeGreaterThanOrEqual(0);
+    // The case comes first, and tells the agent not to offer it, before the offer.
+    expect(unmerged).toBeLessThan(offer);
+    expect(row.slice(unmerged, offer)).toMatch(/don't offer to run it/);
+    // apps-check runs by hand (its caller is workflow_dispatch only): the merge starts no run, so
+    // the step after it is the dispatch, its watch, and doctor again.
+    expect(row.slice(unmerged, offer)).toMatch(/runs by hand, and can be dispatched only once the pull request that installs it merges/);
+    expect(row.slice(unmerged, offer)).toMatch(/List under `## After merging`, one checkbox each: dispatch it, `gh workflow run apps-check\.yml -R <owner>\/<repo>`, and watch the run \(`gh run watch`\), then run doctor again/);
+    expect(row.slice(unmerged, offer)).not.toMatch(/doctor checks the Apps' permissions when it runs again after that merge/);
+    // doctor's own reason says the same, so the row's condition matches what the agent reads.
+    // The caller init writes runs only on a dispatch, which is why the merge starts no run.
+    expect(appsCheckFile(['judge'], 'v1.2.3')).toMatch(/\non:\n {2}workflow_dispatch:\n\npermissions/);
+    const doctorSource = read('cli/doctor.mjs');
+    expect(doctorSource).toMatch(/isn't on \$\{s\.defaultBranch\} yet, so it has never run: it runs once the pull request that installs it merges/);
   });
 
   it('lists exactly the finding ids its command documents, each with who fixes it', () => {
@@ -1356,6 +1381,10 @@ describe('the friction log of the adopt and upgrade skills (#1607)', () => {
       expect(log()).toMatch(/\*\*File it\*\* \(Recommended\)[^\n]*\*\*Change it first\*\*[^\n]*\*\*Don't file\*\*/);
       expect(log()).toContain('With no yes, nothing is filed.');
       expect(log()).toContain(`gh issue create -R yedeya-labs/kanon --title "${dir}: <n> friction points at <release>" --body-file <the log>`);
+      // kanon#1632: the log is rewritten into the filed form before the draft is shown, and filed without the filing skill.
+      expect(log()).toMatch(/\*\*Before you show the draft, rewrite the log in place into the form Kanon's issues take\*\*/);
+      expect(log()).toMatch(/the draft the person reviews is the file, and the body filed, word for word/);
+      expect(log()).toMatch(/not through the file-issue skill or its plan: those route an issue in a repository that runs Kanon/);
       expect(log()).toContain('`## What must be true`');
       expect(log()).toContain('`## Possible approach — UNVERIFIED, not acceptance criteria`');
       // No special case for Kanon's own repository.
@@ -1368,6 +1397,8 @@ describe('the friction log of the adopt and upgrade skills (#1607)', () => {
     expect(doc).not.toBeNull();
     expect(doc).toContain('`~/.claude/kanon/friction/<skill>-<YYYY-MM-DD-HHMM>.md`');
     expect(doc).toContain('With no yes, nothing is filed.');
+    expect(doc).toMatch(/rewrites the log into the form Kanon's issues take[^.]*, so what you review is exactly what is filed/);
+    expect(doc).toContain('and not through the file-issue skill');
     expect(doc).toMatch(/`<repo>`, `<owner>`, `<person>` and `<app-slug>` by default/);
   });
 });

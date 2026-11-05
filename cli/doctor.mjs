@@ -319,6 +319,7 @@ login; the command says which one it used and whose it is.`;
  *   labels: () => Array<{ name: string, color: string, description: string }>,
  *   now: () => number,
  *   managedSettings: () => string[],
+ *   anon: (url: string) => Promise<{ status: number | null, text: string }>,
  * }} Deps
  */
 
@@ -380,6 +381,17 @@ export const realDeps = {
   now: () => Date.now(),
   // The managed settings files of this system (cli/plugin.mjs), which a test replaces with its own.
   managedSettings: () => managedSettingsPaths(process.platform),
+  // A read of Kanon's public repository with no credential at all (kanon#1574): no header but the
+  // user agent, so neither the person's token nor `gh`'s login is sent anywhere. Only ever called
+  // with a URL of Kanon's own repository, on raw.githubusercontent.com or api.github.com.
+  anon: async (url) => {
+    try {
+      const r = await fetch(url, { headers: { 'user-agent': 'kanon-doctor' }, redirect: 'error' });
+      return { status: r.status, text: await r.text() };
+    } catch (e) {
+      return { status: null, text: String(/** @type {Error} */ (e).message) };
+    }
+  },
 };
 
 /**
@@ -967,6 +979,26 @@ export const restrictsTags = (r) => isMap(r) && r.target === 'tag' && r.enforcem
   && TAG_RULES.every((t) => (Array.isArray(r.rules) ? r.rules : []).some((/** @type {any} */ x) => x?.type === t));
 
 // ── The requirements of a release ─────────────────────────────────────────────────────────
+//
+// KANON'S REPOSITORY IS PUBLIC, BUT THE TOKEN MAY BE REFUSED THERE (kanon#1574). The `yedeya-labs`
+// organisation refuses a fine-grained token whose lifetime is over 366 days, whatever it covers,
+// so a token that works on the person's repository answers 403 on Kanon's (docs/doctor.md, "Its
+// lifetime"). Each read of Kanon's repository that GitHub refuses with a 401 or 403 is made again
+// with no credential (`deps.anon`): a file from `raw.githubusercontent.com`, the latest release
+// from the API. A 404 there still means absent. When that read fails too, the error names the
+// token's refusal on Kanon's repository and the 366-day rule, never a bare `HTTP 403`.
+
+/** Whether `gh` says GitHub refused the token. @param {string} stderr */
+const tokenRefused = (stderr) => /\bHTTP 40[13]\b/.test(stderr);
+
+/** What a refused read of Kanon's repository says, besides the anonymous read's answer. @param {string} why */
+const refusedOnKanon = (why) => `GitHub refused the token on ${KANON_REPO} (${why}), as the yedeya-labs organisation does a fine-grained token whose lifetime is over 366 days, and reading it without the token failed too`;
+
+/**
+ * A file of Kanon's public repository at `ref`, read with no credential.
+ * @param {Deps} deps @param {string} ref @param {string} path
+ */
+const anonFile = (deps, ref, path) => deps.anon(`https://raw.githubusercontent.com/${KANON_REPO}/${encodeURIComponent(ref)}/${path}`);
 
 /**
  * A release's requirements file: this tree's own when it is that release, otherwise read from
@@ -977,12 +1009,18 @@ export const restrictsTags = (r) => isMap(r) && r.target === 'tag' && r.enforcem
 export const requirementsAt = async (deps, release) => {
   if (release === deps.release()) return deps.requirements();
   const r = await deps.gh(['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${KANON_REPO}/contents/requirements.json?ref=${encodeURIComponent(release)}`]);
+  const absent = `Kanon ${release} ships no requirements file (requirements.json); doctor can check against a release from v0.28.0 on, the first that ships one`;
+  let text = r.stdout;
   if (r.status !== 0) {
     const why = r.stderr.trim() || `exit ${r.status}`;
-    throw new Error(/HTTP 404|Not Found/i.test(why) ? `Kanon ${release} ships no requirements file (requirements.json); doctor can check against a release from v0.28.0 on, the first that ships one` : `could not read Kanon ${release}'s requirements file (${why})`);
+    if (!tokenRefused(why)) throw new Error(/HTTP 404|Not Found/i.test(why) ? absent : `could not read Kanon ${release}'s requirements file (${why})`);
+    const a = await anonFile(deps, release, 'requirements.json');
+    if (a.status === 404) throw new Error(absent);
+    if (a.status !== 200) throw new Error(`could not read Kanon ${release}'s requirements file: ${refusedOnKanon(why)} (${a.status ?? a.text}). Use a token whose lifetime is 366 days or less (docs/doctor.md, "A person's fine-grained token")`);
+    text = a.text;
   }
   try {
-    const req = JSON.parse(r.stdout);
+    const req = JSON.parse(text);
     if (!isMap(req) || !isMap(req.lanes) || !isMap(req.identities)) throw new Error('not a requirements file');
     return /** @type {Requirements} */ (req);
   } catch {
@@ -1000,8 +1038,12 @@ export const requirementsAt = async (deps, release) => {
 export const briefTemplateAt = async (deps, release) => {
   if (release === deps.release()) return deps.briefTemplate();
   const r = await deps.gh(['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${KANON_REPO}/contents/rulebook/templates/brief.md?ref=${encodeURIComponent(release)}`]);
-  if (r.status !== 0) throw new Error(`could not read Kanon ${release}'s brief template (${r.stderr.trim() || `exit ${r.status}`})`);
-  return r.stdout;
+  if (r.status === 0) return r.stdout;
+  const why = r.stderr.trim() || `exit ${r.status}`;
+  if (!tokenRefused(why)) throw new Error(`could not read Kanon ${release}'s brief template (${why})`);
+  const a = await anonFile(deps, release, 'rulebook/templates/brief.md');
+  if (a.status === 200) return a.text;
+  throw new Error(`could not read Kanon ${release}'s brief template: ${refusedOnKanon(why)} (${a.status ?? a.text}). Use a token whose lifetime is 366 days or less (docs/doctor.md, "A person's fine-grained token")`);
 };
 
 /**
@@ -1014,8 +1056,16 @@ export const briefTemplateAt = async (deps, release) => {
 export const latestStable = async (deps) => {
   try {
     const r = await deps.gh(['api', `repos/${KANON_REPO}/releases/latest`]);
-    if (r.status !== 0) return null;
-    const tag = JSON.parse(r.stdout)?.tag_name;
+    let text = r.stdout;
+    if (r.status !== 0) {
+      // A refused token reads the public release without it (kanon#1574); any other failure, or
+      // a refusal there too, leaves it unknown, as before.
+      if (!tokenRefused(r.stderr)) return null;
+      const a = await deps.anon(`https://api.github.com/repos/${KANON_REPO}/releases/latest`);
+      if (a.status !== 200) return null;
+      text = a.text;
+    }
+    const tag = JSON.parse(text)?.tag_name;
     return typeof tag === 'string' && STABLE_RELEASE.test(tag) ? tag : null;
   } catch {
     return null;
