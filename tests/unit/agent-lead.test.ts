@@ -50,6 +50,11 @@ describe('trigger surface', () => {
     expect(wf.concurrency['cancel-in-progress']).toBe(false);
   });
 
+  it('keeps every pending dispatch, so a third mandate never cancels the second (kanon#1609)', () => {
+    // Under the default `queue: single` the group holds one pending run and a newer one replaces it.
+    expect(wf.concurrency.queue).toBe('max');
+  });
+
   it('keeps the default token minimal and carries scope on the App token', () => {
     expect(wf.permissions).toEqual({ contents: 'read' });
     // The spine declares no `permissions:` (RA-2592), so this block is still the whole

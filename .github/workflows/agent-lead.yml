@@ -107,9 +107,17 @@ on:
         required: false
 
 concurrency:
+  # One brief at a time, across every project: each run spends the same Claude credential.
   # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
   group: agent-lead-brief${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
+  # EVERY PENDING RUN IS KEPT (kanon#1609). No run of this lane only skips, but each dispatch is
+  # a different mandate, and under the default `queue: single` an arrival cancels the group's one
+  # pending run: four mandates dispatched seconds apart ran the first and the last, and the two
+  # between ended `cancelled` with nothing on their tracking issues. `queue: max` keeps up to 100
+  # pending, in order (kanon#552). GitHub refuses it with `cancel-in-progress: true`, which this
+  # lane never sets.
+  queue: max
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
 # ceiling and must grant at least this, or the run fails to start; `lane-check` fails a
