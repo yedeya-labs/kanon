@@ -19,7 +19,10 @@
 // came with, so release-please still rewrites them, as it does the notify hooks' YAML
 // (`tests/unit/version-references.test.ts`). A reference counts only on a line between
 // `<!-- x-release-please-start-version -->` and `<!-- x-release-please-end -->`, the markers the
-// files already carry.
+// files already carry. The literal placeholders `vX.Y.Z` and `candidate-vX.Y.Z` are no reference:
+// a document names the form with them (`yedeya-labs/kanon#candidate-vX.Y.Z`, the command for a
+// candidate), a reader fills in the release, and neither the promotion nor the check has anything
+// to move or look up (kanon#1607).
 //
 // `move` prints each file it changed, one per line, relative to the root. `check` reads the
 // stable tags from the repository's remote, `git ls-remote`, which needs no token on a public
@@ -41,6 +44,8 @@ const REPO = 'yedeya-labs/kanon';
 const REF = /yedeya-labs\/kanon(?:\/[^\s`'"@]+@|#|", "ref": ")([^\s`'")|]+)/g;
 const START = /x-release-please-start-version/;
 const END = /x-release-please-end/;
+/** The placeholders a document writes in place of a release, which are never a reference. */
+export const PLACEHOLDERS = new Set(['vX.Y.Z', 'candidate-vX.Y.Z']);
 const LEFT_OUT = /^(CHANGELOG\.md|docs\/(decisions|plans)\/|rulebook\/|skills\/)/;
 
 /**
@@ -48,7 +53,8 @@ const LEFT_OUT = /^(CHANGELOG\.md|docs\/(decisions|plans)\/|rulebook\/|skills\/)
  */
 
 /**
- * Each line of a document, with the Kanon refs on it and whether it is between the markers.
+ * Each line of a document, with the Kanon refs on it, placeholders aside, and whether it is
+ * between the markers.
  *
  * @param {string} text
  * @returns {DocLine[]}
@@ -61,7 +67,7 @@ export function scanDoc(text) {
       covered = true;
       if (END.test(line)) inBlock = false;
     } else if (START.test(line)) inBlock = true;
-    return { line: i + 1, text: line, refs: [...line.matchAll(REF)].map((m) => m[1] ?? ''), covered };
+    return { line: i + 1, text: line, refs: [...line.matchAll(REF)].map((m) => m[1] ?? '').filter((r) => !PLACEHOLDERS.has(r)), covered };
   });
 }
 
