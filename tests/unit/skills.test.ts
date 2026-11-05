@@ -625,6 +625,23 @@ describe('each skill is held to the kanon command it drives', () => {
     for (const s of SKILLS) expect(s.body).toContain(`**The contract is \`${CONTRACT[contractOf(s)].schema}\`.**`);
   });
 
+  // #1614: GitHub dispatches a workflow only from the default branch, so on a fresh install, where
+  // doctor's reason says apps-check.yml isn't there yet, the skill offers no dispatch.
+  it("offers no apps-check dispatch while doctor says apps-check.yml isn't on the default branch yet (#1614)", () => {
+    const table = rows(section(skill('doctor').body, /^## When a check couldn't run$/)!);
+    const row = table.find((c) => c[0] === '`app-permissions`')![1]!;
+    const unmerged = row.indexOf("says `apps-check.yml` isn't on the default branch yet");
+    const offer = row.indexOf('gh workflow run apps-check.yml');
+    expect(unmerged).toBeGreaterThanOrEqual(0);
+    // The case comes first, and tells the agent not to offer it, before the offer.
+    expect(unmerged).toBeLessThan(offer);
+    expect(row.slice(unmerged, offer)).toMatch(/don't offer to run it/);
+    expect(row.slice(unmerged, offer)).toMatch(/runs once the pull request that installs it merges/);
+    // doctor's own reason says the same, so the row's condition matches what the agent reads.
+    const doctorSource = read('cli/doctor.mjs');
+    expect(doctorSource).toMatch(/isn't on \$\{s\.defaultBranch\} yet, so it has never run: it runs once the pull request that installs it merges/);
+  });
+
   it('lists exactly the finding ids its command documents, each with who fixes it', () => {
     const tables = SKILLS.flatMap((s) => {
       const m = /^## Who fixes each finding of `kanon ([a-z]+)`$/m.exec(s.body);
