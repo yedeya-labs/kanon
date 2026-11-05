@@ -3418,7 +3418,8 @@ const run = async (deps, opts, req, rep) => {
     }
     if (have !== null && fileStatus(rel, text, have, req) === 'kept') {
       // A declaration, or a hook, is the project's once it exists: init never rewrites one, the
-      // record's Overseer bullet aside (#1315), and its content is the project's to say, so no
+      // record's Overseer bullet (#1315) and the waivers of choices made at install (#1607 point
+      // 14) aside, and its content is the project's to say, so no
       // difference is printed.
       out(`${rel}: exists, and is the project's; left unchanged.`);
       rep.files.push({ path: rel, status: 'kept', content: null, diff: [] });
@@ -3431,7 +3432,8 @@ const run = async (deps, opts, req, rep) => {
       if (!dry) deps.writeFile(join(root, rel), text);
       wrote = true;
       // Or a notifying lane's caller at this release that still maps DIGEST_WEBHOOK (plan 0011
-      // decision 17), or the project's record, given the bullet the Overseer's caller needs (#1315).
+      // decision 17), or the project's record, given the bullet the Overseer's caller needs (#1315)
+      // or the waivers of choices made at install (#1607 point 14).
       const from = rel === DEPLOY_CALLER_PATH ? 'from the declared deploy environments'
         : rel === ADOPTION_RECORD ? `adding ${diff.filter((l) => l.startsWith('+ - ')).map((l) => l.slice(2)).join(' and ')} under ${CHOICES_HEADING}, which the Overseer's caller or a choice made at install needs (K-LAYOUT-10), and nothing else`
         : rel === SETTINGS_PATH ? `as its own: Claude Code's plugin install wrote it, and it was never committed, so init sets "${AUTO_UPDATE}": true and the ref to ${release} (kanon#1607)`
