@@ -1254,7 +1254,8 @@ describe('the adopt skill and the install path (#1607)', () => {
   });
 
   it("stops on a kanon marketplace ref other than the skill's own release, and names a user-level entry", () => {
-    expect(first()).toMatch(/\*\*Stop when that file, tracked or not, declares the kanon marketplace at a `ref` other than this skill's release,\*\*/);
+    expect(first()).toMatch(/\*\*Stop when that file, tracked or not, declares the kanon marketplace at a `ref` other than this skill's release\.\*\* Either of its tags passes/);
+    expect(first()).toMatch(/the stable `vX\.Y\.Z` and the candidate's `candidate-vX\.Y\.Z`, which the `npx` line above names, are the same release/);
     expect(first()).toContain('`claude plugin marketplace add --scope project yedeya-labs/kanon#vX.Y.Z`');
     expect(first()).toMatch(/start a new Claude Code session/);
     expect(first()).toContain('`claude plugin marketplace list`');
