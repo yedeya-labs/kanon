@@ -191,11 +191,13 @@ export const writeRegisterRow = (text, { role, slug, permissions, appId = null }
 /**
  * The App ID each role's row records, read from the `App ID` column (kanon#1607): role → ID, for
  * the rows whose cell holds a positive whole number. Empty for a register without the column, or
- * without a table; it throws on nothing, so a reader falls back to its other sources.
- * @param {string | null} text
+ * without a table; it throws on nothing, so a reader falls back to its other sources. With `slug`,
+ * only the rows that name that App slug: a role's row may name another App than the one a reader
+ * means, and its ID is then that other App's.
+ * @param {string | null} text @param {string} [slug]
  * @returns {Map<string, number>}
  */
-export const registerAppIds = (text) => {
+export const registerAppIds = (text, slug) => {
   /** @type {Map<string, number>} */
   const ids = new Map();
   if (text === null) return ids;
@@ -213,6 +215,7 @@ export const registerAppIds = (text) => {
   for (let i = table.header + 2; i < table.end; i++) {
     const c = cells(lines[i] ?? '');
     const id = /^\d+$/.test(c[col] ?? '') ? Number(c[col]) : 0;
+    if (slug !== undefined && unbold(c[1] ?? '') !== `\`${slug}\``) continue;
     if (id > 0) ids.set(unbold(c[0] ?? ''), id);
   }
   return ids;

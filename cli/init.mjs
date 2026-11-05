@@ -3730,7 +3730,6 @@ const run = async (deps, opts, req, rep) => {
   // each App's ID where an installation or a register records it; without one, `kanon apps` takes
   // it from the register, GitHub or the person. It opens each App's page for a new key and waits
   // for it in the download folder, so the person types no ID or path.
-  const checkoutIds = registerAppIds(read(REGISTER_PATH));
   /** @type {Array<{ app: string, slug: string | null, appId: number | null, why: string }>} */
   const rejoin = [];
   for (const i of reusing) {
@@ -3747,7 +3746,8 @@ const run = async (deps, opts, req, rep) => {
       if (!lacks.length || missing.includes(i)) continue;
       const roles = registerRolesOf(i, req);
       const known = roles.map((r) => rows.get(r)).find(Boolean) ?? null;
-      const appId = roles.map((r) => checkoutIds.get(r)).find((x) => x !== undefined) ?? null;
+      const ids = known ? registerAppIds(read(REGISTER_PATH), known) : new Map();
+      const appId = roles.map((r) => ids.get(r)).find((x) => x !== undefined) ?? null;
       rejoin.push({ app: i, slug: known, appId, why: `The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}.` });
     }
   }

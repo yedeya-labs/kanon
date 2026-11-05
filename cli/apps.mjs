@@ -834,14 +834,15 @@ export const awaitKeyFile = async ({ slug, dir, since, deps }) => {
 
 /**
  * A reused App's ID when the command names none (kanon#1607): the App register's `App ID`
- * column, for a role of the App; then `GET /apps/<slug>`, which answers for a public App only
+ * column, for a role of the App whose row names `slug`; then `GET /apps/<slug>`, which answers for a public App only
  * (#623); then the person, asked. Empty when none of them gives one.
  * @param {{ slug: string, spec: AppSpec, register: string, pages: OwnerPages, deps: Deps }} a
  * @returns {Promise<{ id: string, from: string }>}
  */
 const reusedAppId = async ({ slug, spec, register, pages, deps }) => {
   const text = deps.readFile(register);
-  const ids = registerAppIds(text);
+  // Only a row that names this slug: a role's row may name another App of the owner's.
+  const ids = registerAppIds(text, slug);
   for (const role of appRoles(spec)) {
     const id = ids.get(role);
     if (id) return { id: String(id), from: 'the App register' };

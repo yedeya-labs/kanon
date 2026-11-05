@@ -1453,6 +1453,22 @@ describe('kanon apps --reuse without an ID or a key file (#1607)', () => {
     rmSync(dl, { recursive: true, force: true });
   });
 
+  // #1625's review: a role's row may name another App of the owner's; its ID is that App's.
+  it("never takes the ID of a register row that names another slug", async () => {
+    const dl = downloads();
+    let other: string | null = null;
+    for (const role of ['Reviewer', 'Merger']) other = writeRegisterRow(other, { role, slug: `${SLUG}-old`, permissions: loadApps().judge!.permissions, appId: 9999 }).text;
+    const r = await run({ reuse: { slug: SLUG }, reuseArg: `judge:${SLUG}`, register: other!, publicAppId: '4242', extraArgs: ['--downloads', dl], onKeyPage: () => realDeps.writeFile(join(dl, TODAY), PEM), deps: clock(dl) });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain('App ID is 4242, from GitHub.');
+    expect(r.output).not.toContain('App ID is 9999');
+    expect(r.issuers).toEqual(['4242']);
+    expect(registerAppIds(other!, SLUG)).toEqual(new Map());
+    expect(registerAppIds(other!, `${SLUG}-old`)).toEqual(new Map([['Reviewer', 9999], ['Merger', 9999]]));
+    rmSync(r.dir, { recursive: true, force: true });
+    rmSync(dl, { recursive: true, force: true });
+  });
+
   it('takes the ID from GitHub for a public App, then from the person, before anything changes', async () => {
     const dl = downloads();
     const api = await run({ reuse: { slug: SLUG }, reuseArg: `judge:${SLUG}`, publicAppId: '4242', extraArgs: ['--downloads', dl], onKeyPage: () => realDeps.writeFile(join(dl, TODAY), PEM), deps: clock(dl) });

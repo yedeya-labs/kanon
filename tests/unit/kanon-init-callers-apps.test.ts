@@ -562,6 +562,10 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
     expect(steps[0]!.subject).toBe('author, judge');
     expect(steps[0]!.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse author:acme-kanon-author@917,judge:acme-judge@77']);
     expect(steps[0]!.fix.text).toContain("Add widgets to each App's installation, then run kanon apps --reuse once");
+    // #1625's review: only an ID the row of the slug named records; another App's is never taken.
+    const mixed = '| Role | App slug | App ID |\n|---|---|---|\n| Reviewer | `acme-judge` |  |\n| Merger | `acme-judge-b` | 88 |\n';
+    const m = parse(await run(checkout({ 'docs/qa/agent-identities.md': mixed }), fakeGitHub(), ['--json', '--lanes', 'review']));
+    expect(m.findings.find((x) => x.id === 'app.reuse')!.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-judge']);
   });
 
   it("still cautions against a second App it found nowhere, and offers no App of another account's from a register (plan 0007 G4)", async () => {
