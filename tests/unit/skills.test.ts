@@ -834,6 +834,23 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(section(skill('upgrade').body, /^## Steps$/)).toContain('"Offering the Releaser"');
   });
 
+  // #1563: through a candidate's soak the stable `vX.Y.Z` has no tag, so a plugin installed at a
+  // candidate targets the candidate's own tag, and stable once doctor's `.releases.stable` reaches it.
+  it('targets the tag that exists: the candidate\'s until Kanon promotes it, then its stable release (#1563)', () => {
+    const body = skill('upgrade').body;
+    expect(body).toMatch(/\*\*the target\*\* means the release of the version it names after `#` whose tag exists/);
+    expect(body).toMatch(/its stable release, `v1\.4\.0` for `candidate-v1\.4\.0`, once Kanon has promoted it, and until then that candidate's own tag, `candidate-v1\.4\.0`/);
+    const steps = section(body, /^## Steps$/)!;
+    // Step 2 settles it before anything else, from the candidate's tag, which always resolves.
+    expect(code(steps)).toContain('kanon doctor --to candidate-vX.Y.Z --json');
+    expect(steps).toMatch(/When it is the stable release of that version, `vX\.Y\.Z`, or a later stable release, the candidate has been promoted: the target is `vX\.Y\.Z`/);
+    expect(steps).toMatch(/Otherwise, or when `\.releases\.stable` is null, `vX\.Y\.Z` has no tag yet: the target is the candidate's tag/);
+    expect(steps).toMatch(/running this skill again offers the move to its stable `vX\.Y\.Z`/);
+    // The bump replaces whichever pin there is, a candidate's included.
+    expect(steps).toMatch(/whether either is a stable `vX\.Y\.Z` or a `candidate-vX\.Y\.Z`/);
+    expect(section(body, /^## Moving the plugin$/)).not.toMatch(/the target is still the stable `vX\.Y\.Z`/);
+  });
+
   it('reads Kanon\'s latest stable release from doctor, and offers it to a candidate pin (plan 0009 S6)', () => {
     // The stable release comes from doctor's JSON, `releases.stable`, never from a `gh` call of the
     // skill's own (ADR 0014), and docs/doctor.md documents it, so the test below holds the path.
