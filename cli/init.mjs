@@ -90,7 +90,7 @@ import { HOSTED_INGEST_URL } from '../scripts/lib/telemetry-token.mjs';
 import { OTHER_APP } from '../scripts/app-register.mjs';
 import { hookKind, HOOK_PATH as NOTIFY_HOOK_PATH } from '../actions/notify/notify.mjs';
 import { TARGETS_VARIABLE } from '../scripts/lib/deploy-targets.mjs';
-import { RELEASE_CALLER_PATH, releaseCallerFile, releaseFiles } from './release-files.mjs';
+import { RELEASE_CALLER_PATH, releaseFiles } from './release-files.mjs';
 import { ADOPTION_RECORD as DEPLOY_RECORD, CHAIN_LABELS, CHOICES_HEADING, DeclarationError, DEPLOY_HEADING, LABELS as REFERENCE_LABELS, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
 import { LABEL as OVERSEER_LABEL, OVERSEER_CALLER, parseOverseerInstall } from '../scripts/lib/overseer-install.mjs';
 import { fencedLines } from '../scripts/spec-lib.mjs';
@@ -2495,10 +2495,10 @@ const pinOf = (text) => /yedeya-labs\/kanon\/[^@\s]+@([^\s"']+)/.exec(text)?.[1]
  * inferred or defaulted turns nothing off, since it may be wrong where the file says otherwise. Each
  * comes with the answer, and `ours`, whether a copy is exactly what `init` writes for it: such a
  * copy carries nothing of the project's, so `init` removes it. Any other copy is a `file.stale` step.
- * @param {{ a: Answers, req: Requirements, release: string, repo: string, defaultBranch: string, read: (rel: string) => string | null }} c
+ * @param {{ a: Answers, req: Requirements }} c
  * @returns {Array<{ path: string, answer: string, ours: (text: string) => boolean }>}
  */
-export const turnedOffFiles = ({ a, req, release, repo, defaultBranch, read }) => {
+export const turnedOffFiles = ({ a, req }) => {
   const fixed = (/** @type {string} */ f) => a.why[f]?.source === 'flag' || a.why[f]?.source === 'asked';
   /** @type {Array<{ path: string, answer: string, ours: (text: string) => boolean }>} */
   const out = [];
@@ -2522,16 +2522,10 @@ export const turnedOffFiles = ({ a, req, release, repo, defaultBranch, read }) =
     };
     out.push({ path: '.github/workflows/apps-check.yml', answer: 'lanes that run as no App', ours });
   }
-  if (fixed('releaser') && !writesRelease(a, read, req)) {
-    // The caller, as `init` writes it with or without the Releaser, and the starting configuration.
-    const start = releaseFiles({ release, defaultBranch, releaser: true, packageName: repo.split('/')[1] || 'your-project', read: () => null, calls: false });
-    for (const [path, text] of start) {
-      const ours = path === RELEASE_CALLER_PATH
-        ? (/** @type {string} */ t) => { const pin = pinOf(t); return pin !== null && [true, false].some((r) => t === releaseCallerFile(pin, defaultBranch, r)); }
-        : (/** @type {string} */ t) => t === text;
-      out.push({ path, answer: 'no release workflow (--no-releaser)', ours });
-    }
-  }
+  // Not the release files (#1624's review): a caller of Kanon's release workflow and a release-please
+  // configuration the repository has are the project's (docs/init.md, "The release workflow"), and
+  // where the repository calls Kanon's release workflow, `--no-releaser` only declines the Releaser
+  // App. A copy init wrote on an earlier yes calls that workflow too, so it can't be told apart.
   if (fixed('consent') && a.telemetry !== true) {
     out.push({ path: TELEMETRY_CALLER_PATH, answer: 'no telemetry (--consent no)', ours: (t) => { const pin = pinOf(t); return pin !== null && t === telemetryCallerFile(pin); } });
   }
@@ -2555,7 +2549,9 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   const record = read(DEPLOY_RECORD);
   // So do the waivers of the choices made at install (#1607 point 14), each once.
   const recorded = taken ? { ...a, deployEnvironments: [] } : a;
-  const waivers = installWaivers({ s, a: recorded, req, repo, record });
+  // The answers as given: a deploy list the person gave writes no "none declared" waiver, even
+  // where the deploy caller's path is the project's and the record declares none for now.
+  const waivers = installWaivers({ s, a, req, repo, record });
   const bullets = [...(a.lanes.includes(OVERSEER_LANE) ? [OVERSEER_BULLET] : []), ...waivers];
   const added = record !== null && bullets.length ? withChoices(record, bullets) : null;
   files.set(DEPLOY_RECORD, added ?? adoptionFile(s, recorded, repo, today, waivers));
@@ -3467,7 +3463,7 @@ const run = async (deps, opts, req, rep) => {
   // THE FILES AN ANSWER TURNED OFF (#1607 point 11). One exactly as init writes it is init's, and
   // goes; so does one never committed with --replace-uncommitted, the person's word that nobody
   // edited it (#1551). Any other is the project's, never removed on a guess (#1586): a step.
-  for (const off of turnedOffFiles({ a, req, release, repo, defaultBranch: s.defaultBranch, read })) {
+  for (const off of turnedOffFiles({ a, req })) {
     const have = read(off.path);
     if (have === null || files.has(off.path)) continue;
     if (off.ours(have) || replaces(off.path)) {
@@ -3521,13 +3517,15 @@ const run = async (deps, opts, req, rep) => {
   }
   // THE OVERSEER (#1315). A record the project has that doesn't say `installed`, and that init
   // couldn't give the bullet (it says `not installed`, or the bullet wouldn't parse there), is the
-  // person's to change: lane-check fails on the Overseer's caller until it does.
-  if (record === 'kept' && a.lanes.includes(OVERSEER_LANE)) {
+  // person's to change: lane-check fails on the Overseer's caller until it does. That holds for a
+  // record init rewrote with other bullets, such as an install choice's waiver, as well as one it
+  // kept: what counts is the record as init leaves it.
+  if ((record === 'kept' || record === 'rewritten') && a.lanes.includes(OVERSEER_LANE)) {
     /** @type {string | null} */
     let declared = null;
     let why = '';
     try {
-      declared = parseOverseerInstall(read(ADOPTION_RECORD) ?? '');
+      declared = parseOverseerInstall(rep.files.find((f) => f.path === ADOPTION_RECORD)?.content ?? read(ADOPTION_RECORD) ?? '');
     } catch (e) {
       why = /** @type {Error} */ (e).message;
     }

@@ -75,11 +75,10 @@ describe('kanon init and a file an answer turns off (#1607 point 11)', () => {
     expect(stale(d)).toEqual([]);
   });
 
-  it('does the same for the delegation, the telemetry caller and the release files', async () => {
+  it('does the same for the delegation and the telemetry caller', async () => {
     const cases: Array<[string[], string[], string[]]> = [
       [['--delegate-name', 'Ada', '--delegate-email', 'ada@example.com'], ['--no-delegation'], ['docs/qa/sign-off-delegation.md']],
       [['--consent', 'yes'], ['--consent', 'no'], ['.github/workflows/telemetry.yml']],
-      [['--releaser'], ['--no-releaser'], ['.github/workflows/release.yml', 'release-please-config.json', '.release-please-manifest.json', 'version.txt']],
     ];
     for (const [on, off, paths] of cases) {
       const dir = checkout();
@@ -92,6 +91,35 @@ describe('kanon init and a file an answer turns off (#1607 point 11)', () => {
       }
       expect(stale(d)).toEqual([]);
     }
+  });
+
+  // #1624's review: where the repository calls Kanon's release workflow, --no-releaser declines
+  // the Releaser App only, and a release workflow or configuration of the project's own is never
+  // init's (docs/init.md, "The release workflow"), so neither is removed or reported.
+  const RELEASE = ['.github/workflows/release.yml', 'release-please-config.json', '.release-please-manifest.json', 'version.txt'];
+  it("keeps a Kanon release caller and its configuration on --no-releaser, which only declines the Releaser", async () => {
+    const dir = checkout();
+    await run(dir, fakeGitHub(), json(['--releaser']));
+    const before = RELEASE.map((p) => read(dir, p));
+    for (const extra of [[], ['--replace-uncommitted']]) {
+      const d = parse(await run(dir, fakeGitHub(), json(['--no-releaser', ...extra])));
+      expect(RELEASE.map((p) => read(dir, p)), extra.join(' ')).toEqual(before);
+      for (const p of RELEASE) expect(fileOf(d, p)?.status, p).not.toBe('removed');
+      expect(stale(d)).toEqual([]);
+    }
+  });
+
+  it("never calls the project's own release machinery stale on --no-releaser", async () => {
+    const own = {
+      '.github/workflows/release.yml': 'name: Release\non:\n  push:\n    branches: [main]\njobs:\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./release.sh\n',
+      'release-please-config.json': '{ "packages": { ".": { "release-type": "node" } } }\n',
+      'version.txt': '3.1.4\n',
+    };
+    const dir = checkout(own);
+    commit(dir);
+    const d = parse(await run(dir, fakeGitHub(), json(['--no-releaser'])));
+    for (const [p, t] of Object.entries(own)) expect(read(dir, p), p).toBe(t);
+    expect(stale(d)).toEqual([]);
   });
 
   it('removes the apps-check caller when no chosen lane runs as an App', async () => {
@@ -127,6 +155,42 @@ describe('kanon init and the waivers of choices made at install (#1607 point 14)
     const other = checkout();
     await run(other, fakeGitHub(), json(['--delete-default-labels', '--deploy-environments', 'none']));
     expect(read(other, RECORD)).not.toContain('label.github-default');
+  });
+
+  // #1624's review: a waiver added to a record that says the Overseer is `not installed` rewrites
+  // the record, but the record still doesn't say `installed`, so the step stays.
+  it("still raises overseer.declare where it adds a waiver to a record that says the Overseer is not installed", async () => {
+    const dir = checkout();
+    await run(dir, fakeGitHub(), json([]));
+    writeFileSync(join(dir, RECORD), read(dir, RECORD).replace('- **Review trigger:** `labelled`\n', '- **Review trigger:** `labelled`\n- **Overseer:** `not installed`\n'));
+    commit(dir);
+    const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--feature', 'full', '--deploy-environments', 'none']));
+    expect(fileOf(d, RECORD)?.status).toBe('rewritten');
+    expect(read(dir, RECORD)).toContain(deploy);
+    expect(read(dir, RECORD)).toContain('- **Overseer:** `not installed`');
+    const f = d.findings.find((x) => x.id === 'overseer.declare');
+    expect(f?.message).toMatch(/says the Overseer is `not installed`/);
+    // A record init gives the Overseer's bullet raises nothing.
+    const fine = checkout();
+    await run(fine, fakeGitHub(), json([]));
+    commit(fine);
+    const ok = parse(await run(fine, fakeGitHub(), ['--yes', '--json', '--no-apps', '--feature', 'full', '--deploy-environments', 'none']));
+    expect(ok.findings.map((x) => x.id)).not.toContain('overseer.declare');
+    // In a dry run too, where the record on disk is still without the bullet.
+    const again = checkout();
+    await run(again, fakeGitHub(), json([]));
+    commit(again);
+    const dry = parse(await run(again, fakeGitHub(), ['--yes', '--json', '--no-apps', '--feature', 'full', '--deploy-environments', 'none', '--dry-run']));
+    expect(dry.findings.map((x) => x.id)).not.toContain('overseer.declare');
+  });
+
+  // #1624's review: a deploy list the person gave is no "none declared", even where the deploy
+  // caller's path is the project's own workflow and init writes no list for now.
+  it('writes no deploy waiver for a deploy list given where the deploy caller\'s path is taken', async () => {
+    const dir = checkout({ '.github/workflows/deploy.yml': 'name: Deploy\non: workflow_dispatch\njobs:\n  go:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./deploy.sh\n' });
+    const d = parse(await run(dir, fakeGitHub(), json(['--deploy-environments', 'staging,production'])));
+    expect(d.findings.map((x) => x.id)).toContain('deploy.caller-taken');
+    expect(read(dir, RECORD)).not.toContain('deploy.reference-undeclared');
   });
 
   it('adds them to a record the project has, once, and never a second waiver of the same finding', async () => {
