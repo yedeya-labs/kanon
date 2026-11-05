@@ -8,6 +8,7 @@ import { REVIEW_LABELS } from '../../scripts/lane-gate.mjs';
 import { FILE_ONLY } from '../../scripts/lead-reconcile.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL } from '../../scripts/lib/upstream-findings.mjs';
 import { FINDINGS } from '../../scripts/lib/waivers.mjs';
+import { appsCheckFile } from '../../cli/callers.mjs';
 
 /**
  * The agent skills (plan 0005 step L11, ADR 0014 audience 1; docs/skills.md) are held to the
@@ -631,13 +632,20 @@ describe('each skill is held to the kanon command it drives', () => {
     const table = rows(section(skill('doctor').body, /^## When a check couldn't run$/)!);
     const row = table.find((c) => c[0] === '`app-permissions`')![1]!;
     const unmerged = row.indexOf("says `apps-check.yml` isn't on the default branch yet");
-    const offer = row.indexOf('gh workflow run apps-check.yml');
+    // The dispatch offer of the other cases, which follows this case's own sentences.
+    const offer = row.indexOf('Otherwise, offer to run the `apps-check` caller there, `gh workflow run apps-check.yml');
     expect(unmerged).toBeGreaterThanOrEqual(0);
     // The case comes first, and tells the agent not to offer it, before the offer.
     expect(unmerged).toBeLessThan(offer);
     expect(row.slice(unmerged, offer)).toMatch(/don't offer to run it/);
-    expect(row.slice(unmerged, offer)).toMatch(/runs once the pull request that installs it merges/);
+    // apps-check runs by hand (its caller is workflow_dispatch only): the merge starts no run, so
+    // the step after it is the dispatch, its watch, and doctor again.
+    expect(row.slice(unmerged, offer)).toMatch(/runs by hand, and can be dispatched only once the pull request that installs it merges/);
+    expect(row.slice(unmerged, offer)).toMatch(/List under `## After merging`, one checkbox each: dispatch it, `gh workflow run apps-check\.yml -R <owner>\/<repo>`, and watch the run \(`gh run watch`\), then run doctor again/);
+    expect(row.slice(unmerged, offer)).not.toMatch(/doctor checks the Apps' permissions when it runs again after that merge/);
     // doctor's own reason says the same, so the row's condition matches what the agent reads.
+    // The caller init writes runs only on a dispatch, which is why the merge starts no run.
+    expect(appsCheckFile(['judge'], 'v1.2.3')).toMatch(/\non:\n {2}workflow_dispatch:\n\npermissions/);
     const doctorSource = read('cli/doctor.mjs');
     expect(doctorSource).toMatch(/isn't on \$\{s\.defaultBranch\} yet, so it has never run: it runs once the pull request that installs it merges/);
   });
