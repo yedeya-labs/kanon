@@ -168,7 +168,10 @@ describe('plugin.user-override from the managed drop-ins and the local settings 
   it('reads the entry as the repository\'s is read: the alias, and a blank ref as none', () => {
     const alias = JSON.stringify({ additionalMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref: ' v1.0.0 ' } } } });
     expect(readMarketplaceEntry(alias, 'kanon')).toEqual({ status: 'entry', kanon: true, ref: 'v1.0.0' });
-    expect(readMarketplaceEntry(settings('').replace('"ref":""', '"ref":"  "'), 'kanon')).toEqual({ status: 'entry', kanon: true, ref: null });
+    // A literal blank ref, which reads as none, as the repository's does: never an override "at ".
+    const blank = JSON.stringify({ extraKnownMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref: '  ' } } } });
+    expect(blank).toContain('"ref":"  "');
+    expect(readMarketplaceEntry(blank, 'kanon')).toEqual({ status: 'entry', kanon: true, ref: null });
   });
 
   it('lists the drop-ins in order, and names what it cannot read per system', () => {
