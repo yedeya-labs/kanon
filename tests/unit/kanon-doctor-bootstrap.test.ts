@@ -22,7 +22,13 @@ vi.setConfig({ testTimeout: SPAWNS.timeout });
 const RECORD = `# Adoption record\n\n## People\n\n| Role | Who |\n|---|---|\n| Owner | \`@octo\` |\n\n${HEALTHY_DEPLOY}\n`;
 const record = (bootstrap: string, choices = '- **Overseer:** `not installed`\n') => `${RECORD}## Bootstrap\n\n\`${bootstrap}\`\n\n## Choices\n\n${choices}`;
 
-/** The fake GitHub, with the ruleset requiring `approvals` approving reviews. */
+/** A review on a pull request, as GET pulls/<n>/reviews lists it. */
+const review = (login: string, type = 'Bot') => ({ user: { login, type }, state: 'COMMENTED' });
+
+/**
+ * The fake GitHub, with the ruleset requiring `approvals` approving reviews. The Judge App has
+ * reviewed a pull request (#1610), unless a case takes its review away.
+ */
 const github = (approvals: number, reviewOnDefault: boolean) => {
   const g = fakeGitHub();
   g.st.rulesets = g.st.rulesets.map((r) => ({
@@ -31,6 +37,8 @@ const github = (approvals: number, reviewOnDefault: boolean) => {
   })) as typeof g.st.rulesets;
   // The review lane's caller merged to the default branch: the Reviewer can approve there.
   if (reviewOnDefault) g.st.defaultWorkflows!['agent-review.yml'] = healthyFiles()['.github/workflows/agent-review.yml']!;
+  g.st.pulls = [{ number: 3 }];
+  g.st.reviews = { 3: [review('widgets-judge[bot]')] };
   return g;
 };
 
@@ -55,6 +63,52 @@ describe('kanon doctor, when bootstrap can end (K-ADOPT-6)', () => {
     // And the adoption record's end date.
     expect(f.fix.text).toContain('`ended YYYY-MM-DD`');
     expect(f.fix.text).toContain('docs/qa/adoption.md');
+  });
+
+  // #1610: an approval required before the Judge App has reviewed anything locks out every pull
+  // request if its review lane doesn't work yet, so until it has, the finding is a note.
+  it('notes it, without blocking, until the Judge App has reviewed a pull request, and says to open a test one first', async () => {
+    const g = github(0, true);
+    const cases: Array<[typeof g.st.pulls, typeof g.st.reviews]> = [
+      [[], {}],
+      // A person's review and another App's are not the Judge's.
+      [[{ number: 5 }, { number: 4 }], { 5: [review('octo', 'User')], 4: [review('widgets-author[bot]')] }],
+    ];
+    for (const [pulls, reviews] of cases) {
+      g.st.pulls = pulls;
+      g.st.reviews = reviews;
+      const r = await run(checkout(healthyFiles()), g, ['--json']);
+      expect(ids(r)).toEqual(['ruleset.bootstrap-can-end main']);
+      expect(r.status, r.out).toBe(EXIT.healthy);
+      const [f] = r.json.findings;
+      expect(f.blocking).toBe(false);
+      expect(f.message).toContain('the Judge App has posted no review on any pull request doctor read');
+      expect(f.fix.text).toMatch(/^Open a test pull request first, and add the label `review:please` to it, to see the Reviewer review it\. /);
+      // What ends bootstrap, once it has.
+      expect(f.fix.commands[0]).toBe("gh api -X PUT repos/acme/widgets/rulesets/7 --input - <<'JSON'");
+    }
+  });
+
+  it('blocks once the Judge App has reviewed any pull request it reads, not only the latest', async () => {
+    const g = github(0, true);
+    g.st.pulls = [{ number: 9 }, { number: 8 }];
+    g.st.reviews = { 9: [review('octo', 'User')], 8: [review('Widgets-Judge[bot]')] };
+    const r = await run(checkout(healthyFiles()), g, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.bootstrap-can-end main']);
+    expect(r.json.findings[0].blocking).toBe(true);
+    expect(r.json.findings[0].fix.text).not.toContain('test pull request');
+    expect(r.status).toBe(EXIT.findings);
+  });
+
+  it("notes it, and says why, when the token can't read the pull requests' reviews", async () => {
+    const g = github(0, true);
+    g.st.pullsRefused = 'gh: Resource not accessible by personal access token (HTTP 403)';
+    const r = await run(checkout(healthyFiles()), g, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.bootstrap-can-end main']);
+    const [f] = r.json.findings;
+    expect(f.blocking).toBe(false);
+    expect(f.message).toContain("doctor can't tell whether the Judge App has reviewed a pull request yet: the token can't list acme/widgets's pull requests, which needs Pull requests: read (gh: Resource not accessible by personal access token (HTTP 403))");
+    expect(r.status, r.out).toBe(EXIT.healthy);
   });
 
   it("doesn't report it once the ruleset requires an approving review", async () => {

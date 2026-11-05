@@ -414,6 +414,37 @@ describe('kanon doctor and private Apps, read through apps-check (#417)', () => 
     expect(r.status).toBe(EXIT.incomplete);
   });
 
+  // #1610: on a fresh install the apps-check caller is only on the install branch, so GitHub
+  // answers 404 for its runs. That says the workflow isn't on the default branch yet, unless the
+  // token can't list the repository's runs at all, which a 404 from a token without Actions: read
+  // looks the same as.
+  it("says apps-check runs once the install merges when its workflow isn't on the default branch, and names Actions: read only when no run can be listed", async () => {
+    const reasons = (r: Result) => (r.json.unchecked as Array<{ check: string; reason: string }>).filter((u) => u.check === 'app-permissions').map((u) => u.reason);
+    const github = privately();
+    github.st.appsCheck.runsRefused = 'gh: Not Found (HTTP 404)';
+    const fresh = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(reasons(fresh)).toHaveLength(apps.length);
+    for (const reason of reasons(fresh)) {
+      expect(reason).toContain("apps-check.yml isn't on main yet, so it has never run: it runs once the pull request that installs it merges");
+      expect(reason).not.toContain('Actions: read');
+    }
+    expect(fresh.status).toBe(EXIT.incomplete);
+    // The repository's runs can't be listed either: the 404 may be the token's.
+    github.st.runsRefused = 'gh: Resource not accessible by personal access token (HTTP 403)';
+    const blind = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(reasons(blind)).toHaveLength(apps.length);
+    for (const reason of reasons(blind)) {
+      expect(reason).toContain("the token can't list apps-check.yml's runs, which needs Actions: read (gh: Not Found (HTTP 404))");
+      expect(reason).not.toContain("isn't on main yet");
+    }
+    // A refusal that isn't a 404 is the token's, whatever the repository's runs say.
+    github.st.runsRefused = null;
+    github.st.appsCheck.runsRefused = 'gh: Resource not accessible by personal access token (HTTP 403)';
+    const refused = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(reasons(refused)).toHaveLength(apps.length);
+    for (const reason of reasons(refused)) expect(reason).toContain("the token can't list apps-check.yml's runs, which needs Actions: read (gh: Resource not accessible");
+  });
+
   it('never reads a newer run a fork\'s pull request from its own main started, whose workflow is the fork\'s', async () => {
     const github = privately();
     const [author] = apps as [string];

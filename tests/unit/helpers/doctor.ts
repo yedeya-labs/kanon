@@ -148,6 +148,8 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     /** Slugs of private Apps: GET /apps/<slug> answers 404 to a person's token and the workflow's (#417). */
     private: new Set<string>(),
     appsCheck: { runs: [] as AppsCheckRun[], jobs: {} as Record<number, Array<{ id: number; name: string; conclusion: string }>>, logs: {} as Record<number, string>, ignoresEvent: false /* a server that ignores the event filter, so doctor's own check is what refuses */,
+      /** The workflow's run listing's answer when it fails: a 404 for a workflow not on the default branch yet (#1610). */
+      runsRefused: null as string | null,
       /** The values of the run's secrets, each App's <APP>_APP_ID among them, which the runner masks in every log as `***`. */
       secrets: new Set<string>() },
     /** Each secret's `updatedAt`, as `gh secret list --json name,updatedAt` gives it; a secret not here was stored just now (plan 0009 §11). */
@@ -163,6 +165,11 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     artifacts: [] as FakeArtifact[],
     /** The artifact listing's answer when it fails, such as a token without Actions: read. */
     artifactsRefused: null as string | null,
+    /** The repository's pull requests, most recently updated first, and each one's reviews by number (#1610); none by default. */
+    pulls: [] as Array<{ number: number }>,
+    reviews: {} as Record<number, Array<{ user: { login: string; type: string }; state: string }>>,
+    /** The pull request listing's answer when it fails, such as a token without Pull requests: read. */
+    pullsRefused: null as string | null,
   };
   const calls: string[][] = [];
   const inputs: string[] = [];
@@ -191,10 +198,19 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     if (path === `repos/${REPO}`) return ok({ private: st.noRulesetsOnPlan, default_branch: 'main', owner: { login: 'acme', type: st.ownerType }, permissions: { admin: true } });
     const runs = /^repos\/acme\/widgets\/actions\/workflows\/apps-check\.yml\/runs\?(.*)$/.exec(path);
     if (runs) {
+      if (st.appsCheck.runsRefused) return no(st.appsCheck.runsRefused);
       const q = new URLSearchParams(runs[1]);
       const list = st.appsCheck.runs.filter((x) => (!q.get('branch') || x.head_branch === q.get('branch')) && (!q.get('event') || st.appsCheck.ignoresEvent || x.event === q.get('event')) && (!q.get('status') || q.get('status') === 'completed'));
       return ok({ total_count: list.length, workflow_runs: list.slice(0, Number(q.get('per_page') ?? 30)) });
     }
+    // The repository's runs of every workflow: refused as `gh run list` is, by a token without Actions: read.
+    if (path.startsWith(`repos/${REPO}/actions/runs?`)) return st.runsRefused ? no(st.runsRefused) : ok({ total_count: 0, workflow_runs: [] });
+    if (path.startsWith(`repos/${REPO}/pulls?`)) {
+      if (st.pullsRefused) return no(st.pullsRefused);
+      return ok(st.pulls.slice(0, Number(new URLSearchParams(path.split('?')[1]).get('per_page') ?? 30)));
+    }
+    const reviewed = /^repos\/acme\/widgets\/pulls\/(\d+)\/reviews(\?.*)?$/.exec(path);
+    if (reviewed) return ok(st.reviews[Number(reviewed[1])] ?? []);
     const listed = /^repos\/acme\/widgets\/actions\/artifacts\?per_page=100&page=(\d+)$/.exec(path);
     if (listed) {
       if (st.artifactsRefused) return no(st.artifactsRefused);
