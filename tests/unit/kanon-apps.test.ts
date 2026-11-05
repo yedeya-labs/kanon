@@ -9,6 +9,7 @@ import { parseAppRegister, parseOtherApps, registerFootnotes } from '../../scrip
 import { registerRows } from '../../cli/init.mjs';
 import { appRoles, apps, buildManifest, checkoutCheck, loadApps, loadRoles, ownerPages, realDeps, remoteRepo, rotationSteps } from '../../cli/apps.mjs';
 import { readAppExtras, withExtras } from '../../scripts/lib/app-extras.mjs';
+import { tokenFix } from '../../cli/gh-token.mjs';
 import { branchRules } from './helpers/branch-rules.js';
 import { appsTable, grantsOf } from './helpers/roles-table.js';
 
@@ -1062,7 +1063,7 @@ describe('kanon apps names the token it uses (plan 0005 §5.1)', () => {
     expect(r.opened).toEqual([]);
     expect(r.output).toContain('GitHub refuses the token in GH_TOKEN (gh: Bad credentials (HTTP 401)). Nothing was changed.');
     expect(r.output).toContain('GH_TOKEN is set in this shell, and gh uses it before its stored login');
-    expect(r.output).toContain('`unset GH_TOKEN` to use the stored login (check it with `gh auth status`), or export a fresh token as GH_TOKEN.');
+    expect(r.output).toContain('`unset GH_TOKEN` to use the stored login (`gh api user --jq .login` then says whose it is), or export a fresh token as GH_TOKEN.');
     expect(r.output).not.toContain('ghp_stale');
     rmSync(r.dir, { recursive: true, force: true });
   });
@@ -1072,8 +1073,19 @@ describe('kanon apps names the token it uses (plan 0005 §5.1)', () => {
     expect(r.status).toBe(1);
     expect(r.output).toContain("GitHub refuses gh's stored login");
     expect(r.output).toContain('`gh auth login` signs in again');
+    expect(r.output).toContain('`gh api user --jq .login` then says whose login gh holds');
     expect(r.output).not.toContain('unset');
     rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  // #1573: an agent relays or runs these lines, and `gh auth status` prints part of the token
+  // (#1570), so the fix names the command that prints the login alone.
+  it('never tells anyone to run gh auth status, for any token source', () => {
+    for (const source of ['gh', 'GH_TOKEN', 'GITHUB_TOKEN'] as const) {
+      const fix = tokenFix(source).join('\n');
+      expect(fix, source).not.toContain('gh auth status');
+      expect(fix, source).toContain('`gh api user --jq .login`');
+    }
   });
 
   it('carries on, saying so, when the login cannot be read for another reason', async () => {
