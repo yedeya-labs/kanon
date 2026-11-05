@@ -495,7 +495,7 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
         fix: {
           // #637: the fix says where the key is made, and links GitHub's page on it.
           // kanon#1607: one command, which opens the page and waits for the key; the ID is filled in.
-          text: `acme already has the Judge App acme-kanon-judge, which the chosen lanes run as, and the register lacks it. Add widgets to the App's installation, then run kanon apps --reuse once: it opens each App's settings page in turn, for you to generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}), waits for the key in your Downloads folder, checks and stores it, deletes the file and writes the register rows; commit those rows. With --no-open it prints the pages instead.`,
+          text: `acme already has the Judge App acme-kanon-judge, which the chosen lanes run as, and the register lacks it. Add widgets to the App's installation, then run kanon apps --reuse once: it opens each App's page in turn, for you to generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}), waits for the key in your Downloads folder, checks and stores it, deletes the file and writes the register rows; commit those rows. With --no-open it prints the pages instead.`,
           commands: ['kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge@916'],
           url: 'https://github.com/organizations/acme/settings/apps/acme-kanon-judge',
         },
@@ -721,7 +721,7 @@ describe('the Apps (plan 0005 step L4)', () => {
     expect(r.out).not.toMatch(/gh secret set JUDGE_APP/);
     // #637: where on the App's page the key is made, and GitHub's page on it.
     const f = parse(await run(checkout({ 'docs/qa/agent-identities.md': register }), fakeGitHub(), ['--json', '--lanes', 'review'])).findings.find((x) => x.id === 'app.reuse')!;
-    expect(f.fix.text).toBe(`The register lists the judge App, but the repository lacks JUDGE_APP_ID and JUDGE_APP_PRIVATE_KEY. Add widgets to the App's installation, then run kanon apps --reuse once: it opens each App's settings page in turn, for you to generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}), waits for the key in your Downloads folder, checks and stores it, deletes the file and writes the register rows; commit those rows. With --no-open it prints the pages instead.`);
+    expect(f.fix.text).toBe(`The register lists the judge App, but the repository lacks JUDGE_APP_ID and JUDGE_APP_PRIVATE_KEY. Add widgets to the App's installation, then run kanon apps --reuse once: it opens each App's page in turn, for you to generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}), waits for the key in your Downloads folder, checks and stores it, deletes the file and writes the register rows; commit those rows. With --no-open it prints the pages instead.`);
   });
 
   it('says, where it leaves the Apps to create, to reuse an App the owner already has rather than create a second (#363)', async () => {

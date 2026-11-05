@@ -1588,6 +1588,12 @@ describe('the App register\'s App ID column (#1607)', () => {
     expect(registerAppIds(writeRegisterRow(withIds, { role: 'Reviewer', slug: 'acme-judge', permissions: perms }).text)).toEqual(new Map([['Reviewer', 4242]]));
   });
 
+  // #1625's review: the register's format rule names the column, as it names `Persona`.
+  it("is named in K-LAYOUT-6, the register's format rule", () => {
+    const rule = readFileSync('rulebook/11-repository-layout.md', 'utf8').split('\n').find((l) => l.startsWith('**Rule.** `docs/qa/agent-identities.md`'))!;
+    expect(rule).toMatch(/An optional `App ID` column holds the numeric ID GitHub gave the row's App[^.]*; a blank cell, or no column, means none is recorded\./);
+  });
+
   it('reads alike in every register reader, with or without the column', () => {
     for (const text of [old, withIds]) {
       const dir = mkdtempSync(join(tmpdir(), 'kanon-register-'));

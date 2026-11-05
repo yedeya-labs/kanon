@@ -3773,7 +3773,7 @@ const run = async (deps, opts, req, rep) => {
     const list = rejoin.map((x) => `${x.app}:${x.slug ?? `<the ${x.app} App's slug>`}${x.appId ? `@${x.appId}` : ''}`).join(',');
     const pageOf = (/** @type {string} */ slug) => (s.kind === 'User' ? `https://github.com/settings/apps/${slug}` : `https://github.com/organizations/${s.owner}/settings/apps/${slug}`);
     const firstSlug = rejoin.find((x) => x.slug)?.slug;
-    const todo = `Add ${repoName} to ${rejoin.length > 1 ? 'each App\'s installation' : 'the App\'s installation'}, then run kanon apps --reuse once: it opens each App's settings page in turn, for you to ${NEW_KEY}, waits for the key in your Downloads folder, checks and stores it, deletes the file and writes the register rows`;
+    const todo = `Add ${repoName} to ${rejoin.length > 1 ? 'each App\'s installation' : 'the App\'s installation'}, then run kanon apps --reuse once: it opens each App's page in turn, for you to ${NEW_KEY}, waits for the key in your Downloads folder, checks and stores it, deletes the file and writes the register rows`;
     const whys = rejoin.map((x) => x.why).join(' ');
     step({
       id: 'app.reuse',

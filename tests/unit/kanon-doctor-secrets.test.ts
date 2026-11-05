@@ -177,7 +177,7 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
     const both = await l5(new Set([...all()].filter((n) => !appSecrets('judge').includes(n))), {}, (g) => { g.st.apps['widgets-judge']!.id = 4242; });
     expect(missing(both)[0].fix.commands[1]).toBe('kanon apps --owner acme --repo widgets --reuse judge:widgets-judge');
     // #637: the fix says where on the App's page the key is made, and links GitHub's page on it.
-    expect(missing(both)[0].fix.text).toContain(`which opens the App's settings page for you to generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}), waits for the key in your Downloads folder`);
+    expect(missing(both)[0].fix.text).toContain(`which opens the App's page for you to generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}), waits for the key in your Downloads folder`);
     // kanon#1607: kanon apps finds the App ID itself, so the person copies none.
     expect(missing(both)[0].fix.text).not.toContain('copy its App ID');
     const keyOnly = await l5(new Set([...all()].filter((n) => n !== key)), {}, (g) => { g.st.apps['widgets-judge']!.id = 4242; });

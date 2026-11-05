@@ -1912,7 +1912,7 @@ export const diagnose = async (deps, opts) => {
           url: s.kind === 'Organization' ? `https://github.com/organizations/${s.owner}/settings/apps/${slug}` : `https://github.com/settings/apps/${slug}`,
         }
         : slug
-        ? { text: `Add ${repoName} to the ${id} App's installation. kanon apps is your step: check the token with the first command (it creates nothing), then run the second, which opens the App's settings page for you to ${NEW_KEY}, waits for the key in your Downloads folder, checks it, stores both secrets and deletes the file:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}`] }
+        ? { text: `Add ${repoName} to the ${id} App's installation. kanon apps is your step: check the token with the first command (it creates nothing), then run the second, which opens the App's page for you to ${NEW_KEY}, waits for the key in your Downloads folder, checks it, stores both secrets and deletes the file:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}`] }
         : { text: `Create the ${id} App from this checkout. kanon apps is your step: check the token with the first command (it creates nothing), then create the App with the second, which stores its secrets:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] }];
       });
     }
