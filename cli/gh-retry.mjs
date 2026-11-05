@@ -74,11 +74,47 @@ export const writes = (args) => {
   return args.some((a) => ['-f', '-F', '--field', '--raw-field', '--input'].includes(a));
 };
 
+/**
+ * Whether a write's answer says the thing it creates is there already: `gh label create`'s
+ * `already exists`, or a 422 whose body names `already_exists` (kanon#1622). Sent again after a
+ * 5xx or a timeout, a create GitHub had committed gets this answer.
+ * @param {GhResult} r
+ */
+export const alreadyExists = (r) => /already[ _]exists/i.test(`${r.stderr}\n${r.stdout}`);
+
+/**
+ * Whether a write may be sent again after a 5xx or a timeout, when GitHub may have committed it:
+ * a PUT, PATCH or DELETE, which do the same twice; a create whose duplicate GitHub refuses as
+ * `already exists` (`gh label create`, a milestone's POST); or `gh secret set` and `gh variable
+ * set`, which overwrite. Any other create, such as a ruleset's POST, could make a second one, so
+ * it is retried only on a rate limit, which GitHub refused before doing anything (kanon#1622).
+ * @param {string[]} args
+ */
+export const resendable = (args) => {
+  if (args[0] !== 'api') return (args[0] === 'label' && args[1] === 'create') || ['set', 'delete', 'remove'].includes(args[1] ?? '');
+  const at = args.findIndex((a) => a === '-X' || a === '--method');
+  const method = (args.find((a) => a.startsWith('--method='))?.slice('--method='.length) ?? (at >= 0 ? args[at + 1] : 'POST') ?? 'POST').toUpperCase();
+  if (['PUT', 'PATCH', 'DELETE'].includes(method)) return true;
+  // A write here is a POST, by elimination.
+  return args.some((a) => /^repos\/[^/]+\/[^/]+\/milestones$/.test(a));
+};
+
 /** Marks a runner `withRetry` built, so a test can tell. */
 export const RETRYING = Symbol('kanon.gh-retry');
 
 /**
- * `gh` with writes spaced out and transient answers asked again.
+ * `gh` with writes spaced out and transient answers asked again. Two rules keep a run short and
+ * honest (kanon#1622):
+ *
+ * - **A rate limit that outlasts the retries ends the waiting.** Once one call has used up its
+ *   retries on a rate limit, each call after it is tried once, with no backoff, until one
+ *   succeeds: a limit that persists would otherwise cost every remaining call the full backoff,
+ *   most of an hour for init's labels. The answer it gives is still the rate limit's, so the step
+ *   says to run again, never a permission.
+ * - **A create sent again isn't refused for having worked.** A write that got a 5xx or a timeout,
+ *   then `already exists` on its retry, had been committed the first time: the answer counts as
+ *   success. A write whose second copy could do more than the first (`resendable`) isn't sent
+ *   again after a 5xx or a timeout at all.
  * @param {Gh} gh
  * @param {{ sleep?: (ms: number) => Promise<void>, now?: () => number, progress?: (line: string) => void, pace?: number }} [o]
  * @returns {Gh}
@@ -88,11 +124,15 @@ export const withRetry = (gh, o = {}) => {
   const now = o.now ?? Date.now;
   const pace = o.pace ?? WRITE_PACE;
   let lastWrite = -Infinity;
+  /** Whether a call has used up its retries on a rate limit, since the last success. */
+  let limited = false;
   /** @type {Gh} */
   const run = async (args, input) => {
     const write = writes(args);
     /** @type {GhResult} */
     let r = { status: null, stdout: '', stderr: '' };
+    /** Whether an earlier try of this call failed in a way that may have committed it. */
+    let unsure = false;
     for (let attempt = 0; attempt <= RETRIES; attempt += 1) {
       if (write) {
         const wait = lastWrite + pace - now();
@@ -100,7 +140,19 @@ export const withRetry = (gh, o = {}) => {
         lastWrite = now();
       }
       r = await gh(args, input);
-      if (r.status === 0 || !retryable(r.stderr) || attempt === RETRIES) break;
+      if (r.status !== 0 && write && unsure && alreadyExists(r)) r = { status: 0, stdout: r.stdout, stderr: '' };
+      if (r.status === 0) {
+        limited = false;
+        break;
+      }
+      if (!retryable(r.stderr)) break;
+      if (write && !rateLimited(r.stderr) && !resendable(args)) break;
+      if (rateLimited(r.stderr) && (limited || attempt === RETRIES)) {
+        limited = true;
+        break;
+      }
+      if (attempt === RETRIES) break;
+      if (!rateLimited(r.stderr)) unsure = true;
       const ms = (rateLimited(r.stderr) ? RATE_WAITS : SERVER_WAITS)[attempt] ?? 0;
       o.progress?.(`GitHub ${rateLimited(r.stderr) ? 'asked to slow down' : 'failed'} (${r.stderr.trim().split('\n')[0]?.slice(0, 120)}); trying again in ${Math.round(ms / 1000)} s.`);
       await sleep(ms);

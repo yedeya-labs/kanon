@@ -22,6 +22,8 @@ npx --yes --package github:yedeya-labs/kanon#candidate-v0.44.0 kanon init --dry-
 
 Below, `kanon …` means that `npx` line with the rest of the command in place of `init --dry-run --json`. Read only standard output, which is one JSON document. Standard error is the prose a person reads, and `kanon apps` prints there too: show it to them if it helps, but never decide anything from it.
 
+**Give `kanon init` time** ([#1631](https://github.com/yedeya-labs/kanon/issues/1631)). A run that writes starts its writes about a second apart, so a fresh repository's labels alone take most of a minute. When GitHub limits the rate, it waits up to 100 seconds once, then tries each remaining write once and says to run it again, so a run can take about four minutes. In Claude Code, run every `kanon init` that writes with the Bash tool's longest timeout, 10 minutes (`timeout: 600000`), not its default of 2: a run the tool stops prints no document, and leaves the labels half made. In another agent client, use its longest command timeout. While it waits, `init` says so on standard error. If a run is stopped all the same, run it again with the same flags: it writes only what is still missing.
+
 ## Is this the latest release?
 
 **This skill installs the release it ships in,** the one in the `npx` line above, which is the release of the plugin the person installed, not Kanon's latest ([#1551](https://github.com/yedeya-labs/kanon/issues/1551)). So **as soon as the first dry run's document is in (step 2), before anything else, the token's question included,** read `.latest`:

@@ -80,7 +80,7 @@ import {
   TRIGGERS,
 } from './callers.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
-import { failureCause, firstLine, TRANSIENT_WHY, withRetry } from './gh-retry.mjs';
+import { failureCause, firstLine, transient, TRANSIENT_WHY, withRetry } from './gh-retry.mjs';
 import { skillTokenNeeds, whoami } from './gh-token.mjs';
 import { AUTO_UPDATE, declaresAutoUpdate, KANON_MARKETPLACE_REPO, pluginInstallOnly, pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { coveringRulesets, rulesetUrl } from './ruleset-bypass.mjs';
@@ -3536,8 +3536,14 @@ const run = async (deps, opts, req, rep) => {
     if (code === 0) for (const b of missingBuckets) change('milestone', b, `Created the milestone ${b}`);
     else {
       const cmd = `kanon milestones --repo ${repo}`;
-      const limited = said.some((l) => l.includes(MILESTONES_RATE_LINE)) ? ['HTTP 429'] : [];
-      step({ id: 'milestone.buckets', category: 'milestone', subject: repo, prose: `Create the bucket milestones (K-WORK-4): ${cmd}`, message: `The bucket milestones ${missingBuckets.join(' and ')} are missing (K-WORK-4), and kanon milestones did not create them${limited.length ? ` (${TRANSIENT_WHY})` : ''}.`, text: `Run kanon milestones with ${tokenWith('Issues: write', limited)}.`, commands: [cmd], lines: [] });
+      // Why, from its own lines (kanon#1623): a rate limit; a refusal of the token, which alone names
+      // Issues: write; or anything else, such as a bucket with a due date or a 422, quoted as it said it.
+      const lines = said.filter((l) => l.startsWith('kanon milestones: ')).map((l) => l.slice('kanon milestones: '.length));
+      const refusal = lines.find((l) => /\bHTTP 40[34]\b|Resource not accessible|Must have admin rights/i.test(l) && !transient(l));
+      const cause = said.some((l) => l.includes(MILESTONES_RATE_LINE)) ? 'transient' : refusal !== undefined || !lines.length ? 'permission' : 'other';
+      const why = cause === 'transient' ? ` (${TRANSIENT_WHY})` : cause === 'other' ? ` (kanon milestones said: ${lines[0]})` : ` (${needs('Issues: write', refusal ? [refusal] : [])})`;
+      const text = cause === 'other' ? 'Fix what kanon milestones said, then run it again.' : `Run kanon milestones with ${tokenWith('Issues: write', cause === 'transient' ? ['HTTP 429'] : [])}.`;
+      step({ id: 'milestone.buckets', category: 'milestone', subject: repo, prose: `Create the bucket milestones (K-WORK-4): ${cmd}`, message: `The bucket milestones ${missingBuckets.join(' and ')} are missing (K-WORK-4), and kanon milestones did not create them${why}.`, text, commands: [cmd], lines: [] });
     }
   }
 

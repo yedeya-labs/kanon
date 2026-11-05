@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { failureCause, RATE_WAITS, RETRIES, retryable, SERVER_WAITS, transient, withRetry, WRITE_PACE, writes } from '../../cli/gh-retry.mjs';
+import { alreadyExists, failureCause, RATE_WAITS, resendable, RETRIES, retryable, SERVER_WAITS, transient, withRetry, WRITE_PACE, writes } from '../../cli/gh-retry.mjs';
 
 // kanon#1607 point 9: `gh` retried, with writes spaced out, so a burst such as init's 39 label
 // creates doesn't fail on GitHub's secondary rate limit, and what still fails is told apart from
@@ -90,5 +90,52 @@ describe('gh-retry (#1607)', () => {
     await h.run(['api', 'repos/a/b']);
     expect(h.calls.map((c) => c.at)).toEqual([0, WRITE_PACE, 2 * WRITE_PACE, 2 * WRITE_PACE]);
     expect(h.slept).toEqual([WRITE_PACE, WRITE_PACE]);
+  });
+
+  // kanon#1622: once a call has used up its retries on a rate limit, the calls after it are tried
+  // once each, with no backoff, until one succeeds; so a limit that persists costs one backoff, not
+  // one per call.
+  it('tries each later call once, with no backoff, after a rate limit outlasts the retries, until one succeeds', async () => {
+    const h = harness([...Array.from({ length: RETRIES + 1 }, () => no(SECONDARY)), no(SECONDARY), no(SECONDARY), ok, no(SECONDARY), ok]);
+    expect((await h.run(['api', 'repos/a/b'])).stderr).toBe(SECONDARY);
+    expect(h.slept).toEqual(RATE_WAITS.slice(0, RETRIES));
+    const before = h.calls.length;
+    expect((await h.run(['api', 'repos/a/c'])).stderr).toBe(SECONDARY);
+    expect((await h.run(['api', 'repos/a/d'])).stderr).toBe(SECONDARY);
+    expect(h.calls.length - before).toBe(2);
+    expect(h.slept).toEqual(RATE_WAITS.slice(0, RETRIES));
+    // A success ends it: the next rate limit gets its backoff again.
+    expect(await h.run(['api', 'repos/a/e'])).toEqual(ok);
+    expect(await h.run(['api', 'repos/a/f'])).toEqual(ok);
+    expect(h.slept).toEqual([...RATE_WAITS.slice(0, RETRIES), RATE_WAITS[0]]);
+  });
+
+  it('counts a create sent again after a 5xx as done when GitHub says it already exists', async () => {
+    const exists = no('label with name "bug" already exists; use `--force` to update its color and description');
+    const h = harness([no('gh: Bad Gateway (HTTP 502)'), exists]);
+    expect((await h.run(['label', 'create', 'bug'])).status).toBe(0);
+    const m = harness([no('gh: HTTP 504'), { status: 1, stdout: '{"message":"Validation Failed","errors":[{"resource":"Milestone","code":"already_exists","field":"title"}]}', stderr: 'gh: Validation Failed (HTTP 422)' }]);
+    expect((await m.run(['api', '-X', 'POST', 'repos/a/b/milestones', '-f', 'title=x'])).status).toBe(0);
+    // A first answer of `already exists` is the project's label, not a retry's: it stays a refusal.
+    expect((await harness([exists]).run(['label', 'create', 'bug'])).status).toBe(1);
+    // After a rate limit, which GitHub refused before doing anything, it stays a refusal too.
+    expect((await harness([no(SECONDARY), exists]).run(['label', 'create', 'bug'])).status).toBe(1);
+    expect(alreadyExists(exists)).toBe(true);
+    expect(alreadyExists(no(PERMISSION))).toBe(false);
+  });
+
+  it('never sends a create again after a 5xx where a second copy could be made, only after a rate limit', async () => {
+    expect(resendable(['api', '-X', 'POST', 'repos/a/b/rulesets', '--input', '-'])).toBe(false);
+    expect(resendable(['api', '-X', 'PUT', 'repos/a/b/rulesets/1', '--input', '-'])).toBe(true);
+    expect(resendable(['api', '-X', 'PATCH', 'repos/a/b'])).toBe(true);
+    expect(resendable(['api', 'repos/a/b/milestones', '-f', 'title=x'])).toBe(true);
+    expect(resendable(['label', 'create', 'x'])).toBe(true);
+    expect(resendable(['secret', 'set', 'X'])).toBe(true);
+    expect(resendable(['issue', 'create'])).toBe(false);
+    const h = harness([no('gh: Bad Gateway (HTTP 502)'), ok]);
+    expect((await h.run(['api', '-X', 'POST', 'repos/a/b/rulesets', '--input', '-'])).stderr).toBe('gh: Bad Gateway (HTTP 502)');
+    expect(h.calls).toHaveLength(1);
+    const r = harness([no(SECONDARY), ok]);
+    expect(await r.run(['api', '-X', 'POST', 'repos/a/b/rulesets', '--input', '-'])).toEqual(ok);
   });
 });
