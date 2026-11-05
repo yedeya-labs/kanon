@@ -12,7 +12,7 @@
 // so a command still running when it ends its turn is lost with whatever it meant to do next.
 // `action.yml` takes background tasks and `Monitor` away and raises the foreground cap; this
 // says why, so the agent waits for a long command rather than looking for another way round.
-// Appended to every lane's prompt, last.
+// Appended to every lane's prompt, last, with the precondition rule after it (kanon#1564).
 //
 // Written to `$GITHUB_OUTPUT` as `text`, under a delimiter the prompt can't contain, or to stdout
 // outside a job.
@@ -56,11 +56,26 @@ export const HEADLESS_RULE = [
 ].join('\n');
 
 /**
- * The prompt, with the headless rule appended.
+ * What `withHeadless` appends after the headless rule (kanon#1564): how an agent says it stopped
+ * on a precondition it found mid-run, so the run is neither green and silent nor counted `ok`.
+ * Narrow on purpose: a stop the lane's instructions make part of the work (a question, a plan, a
+ * verdict, a refusal it posts) is the work, and stays a clean run.
+ */
+export const STOP_RULE = [
+  'A PRECONDITION THAT DOESN\'T HOLD (kanon#1564). If you stop without doing this run\'s work because',
+  'something it needs before it can start isn\'t so, such as the issue, pull request or tracking issue',
+  'it is for not existing, or not being what your instructions say it must be, end your final',
+  'message with one line of its own: `KANON-STOP: <what didn\'t hold, in one sentence>`. Never write',
+  'it for a stop your instructions make part of the work, such as asking a question, posting a plan,',
+  'a verdict or a finding. Kanon then records the run as not done and warns on it.',
+].join('\n');
+
+/**
+ * The prompt, with the headless rule and the precondition rule appended.
  * @param {string} prompt
  */
 export function withHeadless(prompt) {
-  return `${prompt.trimEnd()}\n\n${HEADLESS_RULE}`;
+  return `${prompt.trimEnd()}\n\n${HEADLESS_RULE}\n\n${STOP_RULE}`;
 }
 
 if (isCliEntry(import.meta.url)) {
