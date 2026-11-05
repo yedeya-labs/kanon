@@ -131,6 +131,11 @@ jobs:
   # dispatch, so it refuses no human today; it refuses a dispatch by an App outside the
   # register, and it keeps every path through every lane asking the one question.
   #
+  # AND THE TRACKING-ISSUE CHECK (`K-AGENT-30`, kanon#1558, kanon#1569). Once the gate admits the
+  # dispatch, the job also checks that its `context` names a tracking issue. Its `refusal` output
+  # is empty when it does, and otherwise the reason, which the `brief` job hands to `agent-run` as
+  # `refusal`, so the agent never starts on a dispatch it could only stop on.
+  #
   # ONLY ON A DISPATCH, the caller's one trigger. When this file held its trigger no other
   # event could reach it; as a called workflow it runs on whatever its caller is called on.
   filter:
@@ -168,8 +173,9 @@ jobs:
   # the push probe, checkout, install, the action, red-run classification, the RA-2519
   # breadcrumbs, the cost row and the push job. What stays here is what makes this lane THIS lane:
   # the trigger, the workflow-level concurrency, the default-token scope, the App
-  # identity and the prompt. There was never an admission filter and there is none now:
-  # the job above is the membership gate alone.
+  # identity and the prompt. There is no admission filter: the job above is the membership gate,
+  # and the tracking-issue check, whose `refusal` output this job hands to `agent-run`, which
+  # fails the run on it before the agent starts (kanon#1558, kanon#1569).
   brief:
     needs: filter
     if: needs.filter.outputs.member == 'true'

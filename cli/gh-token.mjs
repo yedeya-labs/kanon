@@ -34,15 +34,18 @@ const isUnauthorised = (stderr) => /\bHTTP 401\b|Bad credentials/i.test(stderr);
 
 /**
  * How to fix a token GitHub refused, stale (401) or too narrow (403), for the source `gh` used.
+ * An agent relays or runs these lines, so they name `gh api user`, which prints the login alone,
+ * never `gh auth status`, which prints part of the token (kanon#1573). `gh api user` answers 401
+ * for a stale login, so it comes after the step that signs in again.
  * @param {TokenSource} source
  * @returns {string[]}
  */
 export const tokenFix = (source) =>
   source === 'gh'
-    ? ["Check gh's stored login with `gh auth status`: `gh auth login` signs in again, and `gh auth refresh` renews it."]
+    ? ["`gh auth login` signs in again, and `gh auth refresh` renews gh's stored login; `gh api user --jq .login` then says whose login gh holds."]
     : [
-        `${source} is set in this shell, and gh uses it before its stored login, whoever \`gh auth status\` says you are.`,
-        `If it is stale, \`unset ${source}\` to use the stored login (check it with \`gh auth status\`), or export a fresh token as ${source}.`,
+        `${source} is set in this shell, and gh uses it before its stored login, whichever account that login is.`,
+        `If it is stale, \`unset ${source}\` to use the stored login (\`gh api user --jq .login\` then says whose it is), or export a fresh token as ${source}.`,
       ];
 
 /**

@@ -95,6 +95,8 @@ export type State = {
   unreadableRulesets?: number[];
   settings: Record<string, unknown>;
   labelCreateFails?: boolean;
+  /** What GitHub answers every label create, merge-settings change and ruleset create with, failing (kanon#1607), such as a secondary rate limit. */
+  writesFail?: string;
   /** The workflows on the default branch, as GitHub has them (#444); null when the token can't read them. */
   defaultWorkflows: Record<string, string> | null;
   rulesetUpdateFails?: boolean;
@@ -149,6 +151,7 @@ export const fakeGitHub = (over: Partial<State> = {}) => {
     }
     if (a0 === 'secret' && a1 === 'list') return st.secrets ? ok([...st.secrets].map((name) => ({ name }))) : no('gh: Resource not accessible by integration (HTTP 403)');
     if (a0 === 'label' && a1 === 'create') {
+      if (st.writesFail) return no(st.writesFail);
       if (st.labelCreateFails || st.tokenCovers === false) return no('gh: Resource not accessible by personal access token (HTTP 403)');
       st.labels.add(args[2]!);
       return ok('');
@@ -166,6 +169,7 @@ export const fakeGitHub = (over: Partial<State> = {}) => {
     const method = args.includes('-X') ? args[args.indexOf('-X') + 1] : 'GET';
     const path = args.find((x, i) => i > 0 && /^(repos|orgs)\//.test(x)) ?? '';
     if (method === 'PATCH' && path === `repos/${REPO}`) {
+      if (st.writesFail) return no(st.writesFail);
       if (!st.admin || st.tokenCovers === false) return no('gh: Resource not accessible by personal access token (HTTP 403)');
       for (const f of args.filter((x, i) => args[i - 1] === '-f' || args[i - 1] === '-F')) {
         const [k, v] = [f.slice(0, f.indexOf('=')), f.slice(f.indexOf('=') + 1)];
@@ -174,6 +178,7 @@ export const fakeGitHub = (over: Partial<State> = {}) => {
       return ok('{}');
     }
     if (method === 'POST' && path === `repos/${REPO}/rulesets`) {
+      if (st.writesFail) return no(st.writesFail);
       if (!st.admin || st.tokenCovers === false) return no('gh: Resource not accessible by personal access token (HTTP 403)');
       st.rulesets.push({ id: st.rulesets.length + 100, ...JSON.parse(input ?? '{}') });
       return ok('{}');

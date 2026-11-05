@@ -138,6 +138,10 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     templates: over.templates ?? {},
     /** Kanon's latest release's tag, as GET releases/latest names it (plan 0009 S2); null answers 404. */
     latest: over.latest ?? null,
+    /** GitHub refuses the token on Kanon's repository (kanon#1574), as the organisation does a fine-grained token over 366 days. */
+    kanonRefused: false,
+    /** The anonymous reads fail too, as with no network. */
+    anonDown: false,
     installations: null as Array<{ id: number; app_slug: string; app_id?: number; account: { login: string } }> | null,
     variables: over.variables === undefined ? new Set<string>() : over.variables,
     // The workflows on the default branch, as GitHub has them (#418): CI with the lane check's job.
@@ -233,6 +237,8 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     if (path.startsWith(`repos/${REPO}/milestones?`)) return ok([[]]);
     const app = /^apps\/([a-z0-9-]+)$/.exec(path);
     if (app) return st.apps[app[1]!] && !st.private.has(app[1]!) ? ok({ slug: app[1], ...st.apps[app[1]!] }) : no('gh: Not Found (HTTP 404)');
+    const REFUSED = 'gh: Forbidden. The \'yedeya-labs\' organization forbids access via a fine-grained personal access tokens if the token\'s lifetime is greater than 366 days. (HTTP 403)';
+    if (st.kanonRefused && path.startsWith('repos/yedeya-labs/kanon/')) return no(REFUSED);
     if (path === 'repos/yedeya-labs/kanon/releases/latest') return st.latest ? ok({ tag_name: st.latest, prerelease: false }) : no('gh: Not Found (HTTP 404)');
     const rel = /^repos\/yedeya-labs\/kanon\/contents\/requirements\.json\?ref=(.+)$/.exec(path);
     if (rel) {
@@ -253,7 +259,24 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     if (!a || a.zip === null) return { status: 1, bytes: Buffer.alloc(0), stderr: 'gh: Not Found (HTTP 404)' };
     return { status: 0, bytes: a.zip, stderr: '' };
   };
-  return { st, gh, download, calls, inputs };
+  /** Kanon's public repository read with no credential (kanon#1574): the same data, by URL. */
+  const anonCalls: string[] = [];
+  const anon = async (url: string) => {
+    anonCalls.push(url);
+    if (st.anonDown) return { status: null, text: 'fetch failed' };
+    if (url === 'https://api.github.com/repos/yedeya-labs/kanon/releases/latest') return st.latest ? { status: 200, text: JSON.stringify({ tag_name: st.latest, prerelease: false }) } : { status: 404, text: '' };
+    const raw = /^https:\/\/raw\.githubusercontent\.com\/yedeya-labs\/kanon\/([^/]+)\/(.+)$/.exec(url);
+    if (raw && raw[2] === 'requirements.json') {
+      const r = st.releases[decodeURIComponent(raw[1]!)];
+      return r ? { status: 200, text: JSON.stringify(r) } : { status: 404, text: '404: Not Found' };
+    }
+    if (raw && raw[2] === 'rulebook/templates/brief.md') {
+      const t = st.templates[decodeURIComponent(raw[1]!)];
+      return t !== undefined ? { status: 200, text: t } : { status: 404, text: '404: Not Found' };
+    }
+    return { status: 404, text: '' };
+  };
+  return { st, gh, download, anon, anonCalls, calls, inputs };
 };
 
 /** An artifact as `GET repos/<repo>/actions/artifacts` lists it, with its zip (null: its download fails). */
@@ -311,6 +334,7 @@ export const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, ar
   const status = await doctor(['--dir', dir, ...argv], {
     gh: github.gh,
     download: github.download,
+    anon: github.anon,
     env,
     out: (l: string) => out.push(l),
     err: (l: string) => err.push(l),
