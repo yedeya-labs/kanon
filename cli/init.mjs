@@ -55,7 +55,7 @@
 // Node built-ins only: this runs from a Kanon checkout or through `npx`, with no install.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { URL } from 'node:url';
@@ -98,7 +98,7 @@ import { RELEASE_CALLER_PATH, releaseFiles } from './release-files.mjs';
 import { ADOPTION_RECORD as DEPLOY_RECORD, CHAIN_LABELS, CHOICES_HEADING, DeclarationError, DEPLOY_HEADING, LABELS as REFERENCE_LABELS, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
 import { LABEL as OVERSEER_LABEL, OVERSEER_CALLER, parseOverseerInstall } from '../scripts/lib/overseer-install.mjs';
 import { fencedLines } from '../scripts/spec-lib.mjs';
-import { HOLDER_LABEL } from '../scripts/lib/waivers.mjs';
+import { HOLDER_LABEL, readWaivers, WAIVER_LABEL } from '../scripts/lib/waivers.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
 /** @typedef {{ status: number | null, stdout: string, stderr: string }} GhResult */
@@ -337,6 +337,7 @@ export const usage = (req) => {
  *   readFile: (path: string) => string | null,
  *   listDir: (path: string) => string[],
  *   writeFile: (path: string, text: string) => void,
+ *   removeFile: (path: string) => void,
  *   ask: (question: string, fallback: string) => Promise<string>,
  *   apps: (argv: string[], io?: { out: (line: string) => void, err: (line: string) => void }) => Promise<number>,
  *   milestones: (argv: string[], io?: { out: (line: string) => void, err: (line: string) => void }) => Promise<number>,
@@ -377,6 +378,7 @@ export const realDeps = {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, text);
   },
+  removeFile: (path) => rmSync(path, { force: true }),
   ask: async (question, fallback) => {
     rl ??= createInterface({ input: process.stdin, output: process.stdout });
     const a = (await rl.question(`${question} [${fallback}] `)).trim();
@@ -1936,6 +1938,55 @@ const OVERSEER_LANE = 'agent-overseer';
 export const OVERSEER_BULLET = `- **${OVERSEER_LABEL}:** \`installed\``;
 
 /**
+ * The stock reason of each waiver `init` writes for a choice made at install (#1607 point 14),
+ * which the person may replace with their own. No parentheses: the reason is the bullet's last
+ * parenthesised part.
+ */
+export const INSTALL_WAIVER_REASONS = {
+  'label.github-default': 'kept at install with --keep-default-labels, since issues here may carry them; replace this reason with your own',
+  'deploy.reference-undeclared': 'no deploy environment declared at install, so no project closes on a deploy; replace this reason with your own, or declare the reference deploy and remove this bullet',
+};
+
+/** A waiver bullet's text up to its items and reason: what makes two bullets waive the same finding. @param {string} id @param {string} subject */
+const waiverHead = (id, subject) => `- **${WAIVER_LABEL}:** \`${id}\` on \`${subject}\``;
+
+/**
+ * The `Waived doctor finding` bullets for the choices made at install (#1607 point 14), in doctor's
+ * format (docs/doctor.md, "Waiving a finding"), each with its stock reason: GitHub's default labels
+ * kept by an answer, by name, and no reference deploy where the answer declares no deploy environment
+ * and the record names none. A default answers nothing, so it writes no waiver. `record` is the record the project has, or null.
+ * @param {{ s: Inspection, a: Answers, req: Requirements, repo: string, record: string | null }} c
+ * @returns {string[]}
+ */
+export const installWaivers = ({ s, a, req, repo, record }) => {
+  /** @type {string[]} */
+  const out = [];
+  const keptByAnswer = !a.deleteDefaults && ['flag', 'asked'].includes(a.why.deleteDefaultLabels?.source ?? '');
+  const kept = GITHUB_DEFAULT_LABELS.filter((n) => s.labels.has(n) && !req.labels.includes(n));
+  if (keptByAnswer && kept.length) out.push(`${waiverHead('label.github-default', repo)} for ${kept.map((n) => `\`${n}\``).join(', ')} (${INSTALL_WAIVER_REASONS['label.github-default']})`);
+  /** @type {unknown} */
+  let reference;
+  try {
+    reference = record === null ? null : parseDeployDeclaration(record).reference;
+  } catch {
+    // A record whose deploy section doesn't parse is doctor's `deploy.declaration`, not a choice.
+    reference = 'unreadable';
+  }
+  const noneByAnswer = !a.deployEnvironments.length && ['flag', 'asked'].includes(a.why.deployEnvironments?.source ?? '');
+  if (noneByAnswer && !reference) out.push(`${waiverHead('deploy.reference-undeclared', DEPLOY_RECORD)} (${INSTALL_WAIVER_REASONS['deploy.reference-undeclared']})`);
+  return out;
+};
+
+/** The bullets of a record that `init` adds to one the project has: the Overseer's, and its waivers with their stock reasons. @param {string} text */
+const initsBullets = (text) => text.split('\n').filter((l) => l === OVERSEER_BULLET || (l.startsWith(`- **${WAIVER_LABEL}:** `) && Object.values(INSTALL_WAIVER_REASONS).some((r) => l.endsWith(` (${r})`))));
+
+/** Whether a record already waives the finding a bullet waives, whatever its items and reason. @param {string} record @param {string} bullet */
+const waives = (record, bullet) => {
+  const [w] = readWaivers(bullet.replace(/^/, '## Choices\n')).waivers;
+  return w !== undefined && readWaivers(record).waivers.some((x) => x.id === w.id && x.subject === w.subject);
+};
+
+/**
  * The adoption record the project already has, with the Overseer's bullet added (#1315). `init`
  * never rewrites a record that exists, but the Overseer's caller it writes needs the record to say
  * `installed`, or lane-check fails on init's own files. So where the record doesn't say, the
@@ -1946,12 +1997,25 @@ export const OVERSEER_BULLET = `- **${OVERSEER_LABEL}:** \`installed\``;
  * @param {string} text the record
  * @returns {string | null}
  */
-export const withOverseerBullet = (text) => {
+export const withOverseerBullet = (text) => withChoices(text, [OVERSEER_BULLET]);
+
+/**
+ * The record with `bullets` added under its `## Choices`, as `withOverseerBullet` adds the
+ * Overseer's, leaving out each the record has already: the Overseer's where it says either way, a
+ * waiver where it waives that finding already, whatever its items and reason. Null where none is
+ * left to add, or the result doesn't parse.
+ * @param {string} text the record @param {string[]} bullets
+ * @returns {string | null}
+ */
+export const withChoices = (text, bullets) => {
+  let says = false;
   try {
-    if (parseOverseerInstall(text) !== null) return null;
+    says = parseOverseerInstall(text) !== null;
   } catch {
-    return null;
+    if (bullets.includes(OVERSEER_BULLET)) return null;
   }
+  const adding = bullets.filter((b) => (b === OVERSEER_BULLET ? !says : !waives(text, b)));
+  if (!adding.length) return null;
   const lines = text.split('\n');
   const fenced = fencedLines(lines);
   const at = (/** @type {(l: string) => boolean} */ is) => lines.flatMap((l, i) => (!fenced.has(i) && is(l.trimEnd()) ? [i] : []));
@@ -1960,7 +2024,7 @@ export const withOverseerBullet = (text) => {
   /** Whether line `i` holds text. @param {number} i */
   const filled = (i) => Boolean(lines[i]?.trim());
   if (start === undefined) {
-    const section = [CHOICES_HEADING, '', OVERSEER_BULLET];
+    const section = [CHOICES_HEADING, '', ...adding];
     const [next] = at((l) => l === DATA_HEADING || l === DEPLOY_HEADING);
     if (next !== undefined) lines.splice(next, 0, ...(filled(next - 1) ? [''] : []), ...section, '');
     // At the end, after a blank line, before the record's final newline.
@@ -1970,23 +2034,26 @@ export const withOverseerBullet = (text) => {
     const last = start + 1 + lines.slice(start + 1, end).findLastIndex((l) => l.trim() !== '');
     // Under the heading of an empty section; after the section's last list item; or after its
     // prose, past a blank line.
-    if (last === start) lines.splice(start + 1, 0, '', OVERSEER_BULLET, ...(filled(start + 1) || start + 1 === lines.length ? [''] : []));
-    else lines.splice(last + 1, 0, ...(/^(?:[-*+]\s|\s)/.test(lines[last] ?? '') ? [] : ['']), OVERSEER_BULLET);
+    if (last === start) lines.splice(start + 1, 0, '', ...adding, ...(filled(start + 1) || start + 1 === lines.length ? [''] : []));
+    else lines.splice(last + 1, 0, ...(/^(?:[-*+]\s|\s)/.test(lines[last] ?? '') ? [] : ['']), ...adding);
   }
   const out = lines.join('\n');
   try {
-    return parseOverseerInstall(out) === 'installed' ? out : null;
+    if (adding.includes(OVERSEER_BULLET) && parseOverseerInstall(out) !== 'installed') return null;
   } catch {
     return null;
   }
+  // Nothing added may make a waiver malformed.
+  return readWaivers(out).errors.length > readWaivers(text).errors.length ? null : out;
 };
 
 /**
  * The adoption record (`K-LAYOUT-10`), with what `init` knows: the people, the plan and its
  * fallbacks, and the bootstrap line. `## Choices` only when a choice differs from its default.
  * @param {Inspection} s @param {Answers} a @param {string} repo @param {string} today
+ * @param {string[]} [waivers] the waivers of the choices made at install (`installWaivers`)
  */
-export const adoptionFile = (s, a, repo, today) => {
+export const adoptionFile = (s, a, repo, today, waivers = []) => {
   const account = s.kind === 'User' ? 'a personal account' : 'an organisation';
   const lines = [
     '# Adoption record',
@@ -2032,6 +2099,7 @@ export const adoptionFile = (s, a, repo, today) => {
   if (a.chat) choices.push(`- **Chat channel:** ${CHAT_RECORD[a.chat]}`);
   // The id-token holders the person accepted (#631), in doctor's shape, so doctor finds them accepted.
   for (const h of a.acceptedHolders ?? []) choices.push(holderBullet(h.workflow, h.job, h.reason));
+  choices.push(...waivers);
   if (choices.length) lines.push('## Choices', '', ...choices, '');
   // Q3's answer (plan 0007 §3, K-LAYOUT-10), after `## Choices`: `not declared` when nobody answered.
   const data = a.sensitiveData === true ? 'yes' : a.sensitiveData === false ? 'no' : 'not declared';
@@ -2426,6 +2494,64 @@ export const environmentJobs = (workflows) => {
   return out;
 };
 
+/** The release a file written by `init` pins, from its first Kanon reference, or null. @param {string} text */
+const pinOf = (text) => /yedeya-labs\/kanon\/[^@\s]+@([^\s"']+)/.exec(text)?.[1] ?? null;
+
+/**
+ * THE FILES AN ANSWER TURNED OFF (#1607 point 11): each file `init` writes only on some answer, where
+ * this run's answer, given by a flag or by the person, writes it no more. An answer `init` only
+ * inferred or defaulted turns nothing off, since it may be wrong where the file says otherwise. Each
+ * comes with the answer, and `ours`, whether a copy is exactly what `init` writes for it: such a
+ * copy carries nothing of the project's, so `init` removes it. Any other copy is a `file.stale` step.
+ * @param {{ a: Answers, req: Requirements }} c
+ * @returns {Array<{ path: string, answer: string, ours: (text: string) => boolean }>}
+ */
+export const turnedOffFiles = ({ a, req }) => {
+  const fixed = (/** @type {string} */ f) => a.why[f]?.source === 'flag' || a.why[f]?.source === 'asked';
+  /** @type {Array<{ path: string, answer: string, ours: (text: string) => boolean }>} */
+  const out = [];
+  if (fixed('testDatabase') && a.database !== 'hook') {
+    out.push({ path: 'docs/qa/test-database.md', answer: 'the test database answer none (--test-database none)', ours: (t) => t === TEST_DATABASE_HOOK });
+  }
+  if (fixed('delegation') && !a.delegation) {
+    // Its one row names the delegate and the day, which `init` wrote from the answers of its run.
+    const ours = (/** @type {string} */ t) => {
+      const row = /^\| (.+) \| (\S+) \| (\d{4}-\d{2}-\d{2}) \|$/m.exec(t);
+      return row !== null && t === delegationFile({ name: row[1] ?? '', email: row[2] ?? '' }, row[3] ?? '');
+    };
+    out.push({ path: 'docs/qa/sign-off-delegation.md', answer: 'no sign-off delegation (--no-delegation)', ours });
+  }
+  if ((fixed('lanes') || fixed('releaser')) && !appIdentities(a, req).length) {
+    // Each App it checks is in its secrets; the pin is the release it was written at.
+    const ours = (/** @type {string} */ t) => {
+      const ids = [...t.matchAll(/^ {6}([A-Z0-9_]+)_APP_ID:/gm)].map((m) => (m[1] ?? '').toLowerCase());
+      const pin = pinOf(t);
+      return ids.length > 0 && pin !== null && t === appsCheckFile(ids, pin);
+    };
+    out.push({ path: '.github/workflows/apps-check.yml', answer: 'lanes that run as no App', ours });
+  }
+  // Not the release files (#1624's review): a caller of Kanon's release workflow and a release-please
+  // configuration the repository has are the project's (docs/init.md, "The release workflow"), and
+  // where the repository calls Kanon's release workflow, `--no-releaser` only declines the Releaser
+  // App. A copy init wrote on an earlier yes calls that workflow too, so it can't be told apart.
+  if (fixed('consent') && a.telemetry !== true) {
+    out.push({ path: TELEMETRY_CALLER_PATH, answer: 'no telemetry (--consent no)', ours: (t) => { const pin = pinOf(t); return pin !== null && t === telemetryCallerFile(pin); } });
+  }
+  return out;
+};
+
+/**
+ * The files this run removes (#1607 point 11): each a turned-off file the checkout has, that init
+ * doesn't plan, and that is exactly what init writes, or never committed with `--replace-uncommitted`
+ * (`replaces`). The summary counts them (#1629), and the write loop removes them.
+ * @param {{ a: Answers, req: Requirements, read: (rel: string) => string | null, files: Map<string, string>, replaces: (rel: string) => boolean }} c
+ */
+export const removedFiles = ({ a, req, read, files, replaces }) =>
+  turnedOffFiles({ a, req }).filter((off) => {
+    const have = read(off.path);
+    return have !== null && !files.has(off.path) && (off.ours(have) || replaces(off.path));
+  });
+
 /**
  * Every file `init` would write, by path relative to the checkout. A file it leaves to its
  * default is not here.
@@ -2442,8 +2568,14 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   const taken = a.deployEnvironments.length > 0 && deployPathTaken(read, req);
   // A record the project has is the project's, but the Overseer's caller needs its bullet (#1315).
   const record = read(DEPLOY_RECORD);
-  const added = record !== null && a.lanes.includes(OVERSEER_LANE) ? withOverseerBullet(record) : null;
-  files.set(DEPLOY_RECORD, added ?? adoptionFile(s, taken ? { ...a, deployEnvironments: [] } : a, repo, today));
+  // So do the waivers of the choices made at install (#1607 point 14), each once.
+  const recorded = taken ? { ...a, deployEnvironments: [] } : a;
+  // The answers as given: a deploy list the person gave writes no "none declared" waiver, even
+  // where the deploy caller's path is the project's and the record declares none for now.
+  const waivers = installWaivers({ s, a, req, repo, record });
+  const bullets = [...(a.lanes.includes(OVERSEER_LANE) ? [OVERSEER_BULLET] : []), ...waivers];
+  const added = record !== null && bullets.length ? withChoices(record, bullets) : null;
+  files.set(DEPLOY_RECORD, added ?? adoptionFile(s, recorded, repo, today, waivers));
   files.set('docs/qa/stack.md', stackFile(a.gates));
   if (a.delegation) files.set('docs/qa/sign-off-delegation.md', delegationFile(a.delegation, today));
   if (a.database === 'hook') files.set('docs/qa/test-database.md', TEST_DATABASE_HOOK);
@@ -2593,7 +2725,7 @@ export const projectsOwn = (rel, req) => rel.startsWith('docs/') || rel === req.
  */
 export const fileStatus = (rel, text, have, req) =>
   have === text ? 'same'
-  : have !== null && rel === DEPLOY_RECORD && withOverseerBullet(have) === text ? 'rewritten'
+  : have !== null && rel === DEPLOY_RECORD && withChoices(have, initsBullets(text)) === text ? 'rewritten'
   : have !== null && projectsOwn(rel, req) ? 'kept'
   : have !== null && rel === DEPLOY_CALLER_PATH && callsDeployLane(have, req) ? 'rewritten'
   : have !== null && legacyChatSwap(have, req) === text ? 'rewritten'
@@ -2741,7 +2873,9 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
     const status = st === 'differs' && replaces(rel) ? 'replaced' : st;
     count[status] = (count[status] ?? 0) + 1;
   }
-  line('Files', [], `${count.new} new, ${count.kept} kept, ${count.same} already as written, ${count.differs} differ${count.rewritten ? `, ${count.rewritten} rewritten` : ''}${count.replaced ? `, ${count.replaced} replaced (never committed)` : ''}`, inferred('from the checkout'));
+  // A file an answer turns off, which init removes (#1629): the person confirms that too.
+  count.removed = removedFiles({ a, req, read, files, replaces }).length;
+  line('Files', [], `${count.new} new, ${count.kept} kept, ${count.same} already as written, ${count.differs} differ${count.rewritten ? `, ${count.rewritten} rewritten` : ''}${count.replaced ? `, ${count.replaced} replaced (never committed)` : ''}${count.removed ? `, ${count.removed} removed (an answer turns ${count.removed > 1 ? 'them' : 'it'} off)` : ''}`, inferred('from the checkout'));
   const steps = [
     ...apps.filter((x) => / create$/.test(x)).map((x) => `create the ${x.split(':')[0]} App`),
     ...apps.filter((x) => /: reuse /.test(x)).map((x) => `1 key for the ${x.split(':')[0]}`),
@@ -2790,7 +2924,7 @@ export const SCHEMA = 'kanon-init/v1';
  *   catalogue: ReturnType<typeof laneCatalogue>,
  *   features: ReturnType<typeof featureCatalogue>,
  *   summary: SummaryLine[],
- *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'rewritten' | 'replaced' | 'differs', content: string | null, diff: string[] }>,
+ *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'rewritten' | 'replaced' | 'removed' | 'differs', content: string | null, diff: string[] }>,
  *   changes: Array<{ kind: string, subject: string, message: string }>,
  *   apps: { identities: string[], missing: string[], reuse: Array<{ app: string, slug: string }>, command: string | null, outcome: string, exitCode: number | null } | null,
  *   findings: Finding[],
@@ -3309,7 +3443,8 @@ const run = async (deps, opts, req, rep) => {
     }
     if (have !== null && fileStatus(rel, text, have, req) === 'kept') {
       // A declaration, or a hook, is the project's once it exists: init never rewrites one, the
-      // record's Overseer bullet aside (#1315), and its content is the project's to say, so no
+      // record's Overseer bullet (#1315) and the waivers of choices made at install (#1607 point
+      // 14) aside, and its content is the project's to say, so no
       // difference is printed.
       out(`${rel}: exists, and is the project's; left unchanged.`);
       rep.files.push({ path: rel, status: 'kept', content: null, diff: [] });
@@ -3322,9 +3457,10 @@ const run = async (deps, opts, req, rep) => {
       if (!dry) deps.writeFile(join(root, rel), text);
       wrote = true;
       // Or a notifying lane's caller at this release that still maps DIGEST_WEBHOOK (plan 0011
-      // decision 17), or the project's record, given the bullet the Overseer's caller needs (#1315).
+      // decision 17), or the project's record, given the bullet the Overseer's caller needs (#1315)
+      // or the waivers of choices made at install (#1607 point 14).
       const from = rel === DEPLOY_CALLER_PATH ? 'from the declared deploy environments'
-        : rel === ADOPTION_RECORD ? `adding ${OVERSEER_BULLET} under ${CHOICES_HEADING}, which the Overseer's caller needs (K-LAYOUT-10), and nothing else`
+        : rel === ADOPTION_RECORD ? `adding ${diff.filter((l) => l.startsWith('+ - ')).map((l) => l.slice(2)).join(' and ')} under ${CHOICES_HEADING}, which the Overseer's caller or a choice made at install needs (K-LAYOUT-10), and nothing else`
         : rel === SETTINGS_PATH ? `as its own: Claude Code's plugin install wrote it, and it was never committed, so init sets "${AUTO_UPDATE}": true and the ref to ${release} (kanon#1607)`
         : "mapping its lane's chat secret in place of DIGEST_WEBHOOK, which no lane takes (plan 0011 decision 17)";
       change('file', rel, `${dry ? 'Would rewrite' : 'Rewrote'} ${rel} ${from}`);
@@ -3359,6 +3495,28 @@ const run = async (deps, opts, req, rep) => {
     rep.files.push({ path: rel, status: 'new', content: text, diff: [] });
     out(`${dry ? 'would write' : 'wrote'} ${rel}:`);
     for (const l of text.replace(/\n$/, '').split('\n')) out(`    + ${l}`);
+  }
+  // THE FILES AN ANSWER TURNED OFF (#1607 point 11). One exactly as init writes it is init's, and
+  // goes; so does one never committed with --replace-uncommitted, the person's word that nobody
+  // edited it (#1551). Any other is the project's, never removed on a guess (#1586): a step.
+  for (const off of turnedOffFiles({ a, req })) {
+    const have = read(off.path);
+    if (have === null || files.has(off.path)) continue;
+    if (off.ours(have) || replaces(off.path)) {
+      if (!dry) deps.removeFile(join(root, off.path));
+      wrote = true;
+      const why = off.ours(have) ? 'exactly as init writes it' : 'never committed (--replace-uncommitted)';
+      change('file', off.path, `${dry ? 'Would remove' : 'Removed'} ${off.path}, ${why}, which ${off.answer} turns off`);
+      const diff = have.replace(/\n$/, '').split('\n').map((l) => `- ${l}`);
+      rep.files.push({ path: off.path, status: 'removed', content: null, diff });
+      out(`${off.path}: ${why}, and ${off.answer} turns it off: ${dry ? 'would remove it' : 'removed it'}.`);
+      continue;
+    }
+    const message = `${off.path} is the project's, differing from what init writes, and ${off.answer} turns it off, so init left it: committed, it still says what the earlier answer did.`;
+    const text = untracked(off.path)
+      ? `Delete it, or keep it and give the answer that writes it. It was never committed: if an earlier kanon init wrote it and nobody has edited it, kanon init --replace-uncommitted removes it.`
+      : `Delete it, or keep it and give the answer that writes it.`;
+    step({ id: 'file.stale', category: 'file', subject: off.path, prose: `${message} ${text}`, message, text, commands: [`${untracked(off.path) ? 'rm' : 'git rm'} ${off.path}`] });
   }
   if (replaceable.length) {
     note(`Never committed, and differ from what init writes: ${replaceable.join(', ')}. If an earlier kanon init wrote them and nobody has edited them since, run kanon init again with --replace-uncommitted, which replaces them; init can't tell whether they were edited, so the flag is your word that they weren't.`);
@@ -3395,13 +3553,15 @@ const run = async (deps, opts, req, rep) => {
   }
   // THE OVERSEER (#1315). A record the project has that doesn't say `installed`, and that init
   // couldn't give the bullet (it says `not installed`, or the bullet wouldn't parse there), is the
-  // person's to change: lane-check fails on the Overseer's caller until it does.
-  if (record === 'kept' && a.lanes.includes(OVERSEER_LANE)) {
+  // person's to change: lane-check fails on the Overseer's caller until it does. That holds for a
+  // record init rewrote with other bullets, such as an install choice's waiver, as well as one it
+  // kept: what counts is the record as init leaves it.
+  if ((record === 'kept' || record === 'rewritten') && a.lanes.includes(OVERSEER_LANE)) {
     /** @type {string | null} */
     let declared = null;
     let why = '';
     try {
-      declared = parseOverseerInstall(read(ADOPTION_RECORD) ?? '');
+      declared = parseOverseerInstall(rep.files.find((f) => f.path === ADOPTION_RECORD)?.content ?? read(ADOPTION_RECORD) ?? '');
     } catch (e) {
       why = /** @type {Error} */ (e).message;
     }
