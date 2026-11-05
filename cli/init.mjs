@@ -81,8 +81,8 @@ import {
 } from './callers.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { failureCause, firstLine, TRANSIENT_WHY, withRetry } from './gh-retry.mjs';
-import { whoami } from './gh-token.mjs';
-import { AUTO_UPDATE, declaresAutoUpdate, KANON_MARKETPLACE_REPO, pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
+import { skillTokenNeeds, whoami } from './gh-token.mjs';
+import { AUTO_UPDATE, declaresAutoUpdate, KANON_MARKETPLACE_REPO, pluginInstallOnly, pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { coveringRulesets, rulesetUrl } from './ruleset-bypass.mjs';
 import { BUCKETS, milestones as runMilestones, RATE_LINE as MILESTONES_RATE_LINE } from './milestones.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -2427,12 +2427,13 @@ export const environmentJobs = (workflows) => {
 /**
  * Every file `init` would write, by path relative to the checkout. A file it leaves to its
  * default is not here.
- * @param {{ s: Inspection, a: Answers, req: Requirements, release: string, repo: string, today: string, read: (rel: string) => string | null, workflows: Map<string, Record<string, any>>, callers?: Map<string, string> }} c
+ * @param {{ s: Inspection, a: Answers, req: Requirements, release: string, repo: string, today: string, read: (rel: string) => string | null, workflows: Map<string, Record<string, any>>, callers?: Map<string, string>, untracked?: (rel: string) => boolean }} c
  *   `workflows`: the checkout's, parsed, by path (`checkoutWorkflows`); `callers`: where each
- *   lane's caller lives, when not at its lane's file name (`callerPaths`)
+ *   lane's caller lives, when not at its lane's file name (`callerPaths`); `untracked`: whether
+ *   git shows a file never committed (false, committed, when git can't say)
  * @returns {Map<string, string>}
  */
-export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows, callers = new Map() }) => {
+export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows, callers = new Map(), untracked = () => false }) => {
   /** @type {Map<string, string>} */
   const files = new Map();
   // With the caller's path taken by the project's own workflow, nothing of the lane is written (#956).
@@ -2481,10 +2482,13 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   // under that name (#444, L5's G14).
   else if (!checkReporters(new Map([...workflows].filter(([f]) => f !== LANE_CHECK_PATH)), LANE_CHECK, s.defaultBranch).length) files.set(LANE_CHECK_PATH, laneCheckFile(release));
   if (!read('.github/dependabot.yml')) files.set('.github/dependabot.yml', dependabotFile());
-  // The plugin's declaration is written only into a project that has no settings file yet; one it
-  // has is the project's, and the keys to merge into it are a finding (`plugin.declare`).
+  // The plugin's declaration is written only into a project that has no settings file yet, or
+  // whose file is the one Claude Code's own install wrote, never committed (kanon#1607): nothing
+  // but Kanon's marketplace entry and its plugin, which init rewrites with `autoUpdate` on and the
+  // `ref` at its release. Any other file is the project's, and the keys to merge into it are a
+  // finding (`plugin.declare`).
   const settings = read(SETTINGS_PATH);
-  if (a.plugin && (settings === null || settings === pluginSettingsFile(release))) files.set(SETTINGS_PATH, pluginSettingsFile(release));
+  if (a.plugin && (settings === null || settings === pluginSettingsFile(release) || (pluginInstallOnly(settings) && untracked(SETTINGS_PATH)))) files.set(SETTINGS_PATH, pluginSettingsFile(release));
   // The telemetry collector's caller, only on an explicit yes (#428).
   if (a.telemetry === true) files.set(TELEMETRY_CALLER_PATH, telemetryCallerFile(release));
   // The deploy lane's caller and its hooks' stubs, only for a declared list (plan 0010 D6).
@@ -2576,8 +2580,9 @@ export const projectsOwn = (rel, req) => rel.startsWith('docs/') || rel === req.
 /**
  * What `init` does with a file it plans: `same`, already as it writes it; `kept`, a declaration
  * or a hook that exists, the project's; `rewritten`, the deploy lane's caller, which follows the
- * declared list (plan 0010 D6), or the project's record given the Overseer's bullet (#1315);
- * `differs`, any other workflow that exists and differs; or `new`.
+ * declared list (plan 0010 D6), or the project's record given the Overseer's bullet (#1315), or
+ * the settings file Claude Code's install wrote, which `plannedFiles` plans only while it was never
+ * committed (kanon#1607); `differs`, any other workflow that exists and differs; or `new`.
  * @param {string} rel @param {string} text @param {string | null} have @param {Requirements} req
  * @returns {'same' | 'kept' | 'rewritten' | 'differs' | 'new'}
  */
@@ -2587,6 +2592,7 @@ export const fileStatus = (rel, text, have, req) =>
   : have !== null && projectsOwn(rel, req) ? 'kept'
   : have !== null && rel === DEPLOY_CALLER_PATH && callsDeployLane(have, req) ? 'rewritten'
   : have !== null && legacyChatSwap(have, req) === text ? 'rewritten'
+  : have !== null && rel === SETTINGS_PATH && pluginInstallOnly(have) ? 'rewritten'
   : have !== null ? 'differs'
   : 'new';
 
@@ -2772,7 +2778,7 @@ export const SCHEMA = 'kanon-init/v1';
  * @typedef {{
  *   repository: string | null,
  *   pin: string | null,
- *   token: { source: string, login: string | null } | null,
+ *   token: { source: string, login: string | null, needs: import('./gh-token.mjs').TokenNeed[] | null } | null,
  *   dryRun: boolean,
  *   inspection: Record<string, unknown> | null,
  *   answers: Record<string, unknown> | null,
@@ -3009,7 +3015,9 @@ const run = async (deps, opts, req, rep) => {
 
   const who = await whoami(deps.gh, deps.env);
   out(who.line);
-  rep.token = { source: who.source, login: who.login };
+  // What the adopt skill's token needs, from docs/doctor.md's table (kanon#1607): never what it holds,
+  // which GitHub doesn't show for a fine-grained token.
+  rep.token = { source: who.source, login: who.login, needs: skillTokenNeeds('adopt') };
   if (who.refusal) return stop(1, who.refusal);
 
   // THE PIN (plan 0012 decision 5, CLI-1): the release this tree is when Kanon has its tag, else
@@ -3164,7 +3172,7 @@ const run = async (deps, opts, req, rep) => {
   const a = await askAll(deps, opts, ctx);
   // THE SUMMARY (plan 0007 §4): every value, and where it came from, before anything is written.
   // Without --yes it is confirmed in one question, or changed, a group at a time, and shown again.
-  const plan = () => plannedFiles({ s, a, req, release, repo, today: deps.today(), read, workflows, callers });
+  const plan = () => plannedFiles({ s, a, req, release, repo, today: deps.today(), read, workflows, callers, untracked });
   // A file that differs and was never committed (#1551): an earlier release's init wrote it in
   // this checkout, as a re-run at a newer release over an installation in progress finds them,
   // or the person wrote it. init can't tell which, so it replaces one only with
@@ -3326,6 +3334,7 @@ const run = async (deps, opts, req, rep) => {
       // decision 17), or the project's record, given the bullet the Overseer's caller needs (#1315).
       const from = rel === DEPLOY_CALLER_PATH ? 'from the declared deploy environments'
         : rel === ADOPTION_RECORD ? `adding ${OVERSEER_BULLET} under ${CHOICES_HEADING}, which the Overseer's caller needs (K-LAYOUT-10), and nothing else`
+        : rel === SETTINGS_PATH ? `as its own: Claude Code's plugin install wrote it, and it was never committed, so init sets "${AUTO_UPDATE}": true and the ref to ${release} (kanon#1607)`
         : "mapping its lane's chat secret in place of DIGEST_WEBHOOK, which no lane takes (plan 0011 decision 17)";
       change('file', rel, `${dry ? 'Would rewrite' : 'Rewrote'} ${rel} ${from}`);
       rep.files.push({ path: rel, status: 'rewritten', content: text, diff });
@@ -3444,9 +3453,10 @@ const run = async (deps, opts, req, rep) => {
   const settings = read(SETTINGS_PATH);
   const declared = readPluginDeclaration(settings);
   // A marketplace entry without `"autoUpdate": true` is reported too (kanon#1578): init never
-  // edits a settings file the project has, so the key is the person's to add.
+  // edits a settings file the project has, so the key is the person's to add. The file Claude
+  // Code's install wrote, never committed, is init's to rewrite (kanon#1607), so it is no finding.
   const autoUpdate = declaresAutoUpdate(settings) === true;
-  if (a.plugin && settings !== null && !(declared.status === 'declared' && declared.ref === release && declared.enabled && autoUpdate)) {
+  if (a.plugin && settings !== null && !files.has(SETTINGS_PATH) && !(declared.status === 'declared' && declared.ref === release && declared.enabled && autoUpdate)) {
     const lines = JSON.stringify(pluginSettings(release), null, 2).split('\n').slice(1, -1);
     step({
       id: 'plugin.declare',

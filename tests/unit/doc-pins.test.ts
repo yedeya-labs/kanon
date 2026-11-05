@@ -81,6 +81,20 @@ describe('docProblems', () => {
     ]);
   });
 
+  // kanon#1607: a document names the form of a candidate's command with the placeholder, which a
+  // reader fills in; it is no reference, inside the markers or out. A near miss still is one.
+  it('passes the literal placeholders vX.Y.Z and candidate-vX.Y.Z, inside the markers or out', () => {
+    const text = `${README}To run a candidate: \`claude plugin marketplace add --scope project yedeya-labs/kanon#candidate-vX.Y.Z\`, or \`uses: yedeya-labs/kanon/actions/dco@vX.Y.Z\`.\n`;
+    expect(docProblems([{ path: 'README.md', text }], TAGS)).toEqual([]);
+    const inside = README.replace('#v0.40.2', '#candidate-vX.Y.Z');
+    expect(docProblems([{ path: 'README.md', text: inside }], TAGS)).toEqual([]);
+    expect(moveDocText(inside, 'v0.41.0')).toBe(inside);
+    const near = `${README}\`yedeya-labs/kanon#candidate-vX.Y\`\n`;
+    expect(docProblems([{ path: 'README.md', text: near }], TAGS)).toEqual([
+      "README.md:8: candidate-vX.Y is outside the version markers, so the promotion can't move it",
+    ]);
+  });
+
   it('fails docs that name two releases, both published', () => {
     const problems = docProblems([docs[0] ?? { path: '', text: '' }, { path: 'docs/install.md', text: INSTALL.replaceAll('v0.40.2', 'v0.40.1') }], TAGS);
     expect(problems).toEqual(['the docs name 2 releases, v0.40.1, v0.40.2: they name one, the latest stable']);

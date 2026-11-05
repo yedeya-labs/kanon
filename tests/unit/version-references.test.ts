@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
+import { PLACEHOLDERS } from '../../scripts/doc-pins.mjs';
 
 // K-ADOPT-11: an adopter pins Kanon to an exact version, and copies the `uses:` line from
 // Kanon's documentation to do it. Each such reference sits between
@@ -69,7 +70,8 @@ const scan = (file: string, text: string): Line[] => {
       covered = true;
       if (END.test(line)) inBlock = false;
     } else if (START.test(line)) inBlock = true;
-    return { at: `${file}:${i + 1}`, text: line, refs: [...line.matchAll(REF)].map((m) => m[1] ?? ''), covered };
+    // The placeholders `vX.Y.Z` and `candidate-vX.Y.Z` name the form, not a release (kanon#1607).
+    return { at: `${file}:${i + 1}`, text: line, refs: [...line.matchAll(REF)].map((m) => m[1] ?? '').filter((r) => !PLACEHOLDERS.has(r)), covered };
   });
 };
 
