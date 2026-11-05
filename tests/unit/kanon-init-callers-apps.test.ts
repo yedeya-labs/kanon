@@ -494,8 +494,9 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
         message: 'acme already has the Judge App acme-kanon-judge, which the chosen lanes run as, and the register lacks it.',
         fix: {
           // #637: the fix says where the key is made, and links GitHub's page on it.
-          text: `Add widgets to the App's installation and generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}), then run kanon apps --reuse with the key, and commit the register rows it writes.`,
-          commands: ['kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge@916=<downloaded>.pem'],
+          // kanon#1607: one command, which opens the page and waits for the key; the ID is filled in.
+          text: `acme already has the Judge App acme-kanon-judge, which the chosen lanes run as, and the register lacks it. Add widgets to the App's installation, then run kanon apps --reuse once: it opens each App's settings page in turn, for you to generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}), waits for the key in your Downloads folder, checks and stores it, deletes the file and writes the register rows; commit those rows. With --no-open it prints the pages instead.`,
+          commands: ['kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge@916'],
           url: 'https://github.com/organizations/acme/settings/apps/acme-kanon-judge',
         },
       },
@@ -506,15 +507,16 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
   });
 
   // #640: the App ID comes from the installation, so the person needn't copy it from the App's page.
-  it("fills the installation's app_id into the --reuse command, and keeps <App ID> for an installation without one (#640)", async () => {
+  it("fills the installation's app_id into the --reuse command, and leaves it to kanon apps for an installation without one (#640)", async () => {
     const d = parse(await run(checkout(), fakeGitHub({ kind: 'Organization', orgPlan: 'free', installations: [install('acme-kanon-judge', 'judge', { app_id: 4242 })] }), ['--json']));
     expect(d.apps.reuse).toEqual([{ app: 'judge', slug: 'acme-kanon-judge', appId: 4242 }]);
-    expect(d.findings.find((x) => x.id === 'app.reuse')!.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge@4242=<downloaded>.pem']);
+    expect(d.findings.find((x) => x.id === 'app.reuse')!.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge@4242']);
     const without = parse(await run(checkout(), fakeGitHub({ kind: 'Organization', orgPlan: 'free', installations: [install('acme-kanon-judge', 'judge', { app_id: undefined })] }), ['--json']));
     expect(without.apps.reuse).toEqual([{ app: 'judge', slug: 'acme-kanon-judge', appId: null }]);
     const reuse = without.findings.find((x) => x.id === 'app.reuse')!;
-    expect(reuse.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge@<App ID>=<downloaded>.pem']);
-    expect(reuse.fix.text).toContain('copy its App ID from the same page');
+    // kanon#1607: kanon apps takes the ID from the register, GitHub or the person.
+    expect(reuse.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge']);
+    expect(reuse.fix.text).not.toContain('copy its App ID');
   });
 
   // Plan 0007 G4: an owner whose installations the token can't list (a personal account, or an
@@ -534,7 +536,7 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
       expect(r.appsCalls).toEqual([]);
       const reuse = d.findings.find((x) => x.id === 'app.reuse')!;
       expect(reuse.message).toBe("acme already has the Judge App acme-judge, which the chosen lanes run as, and the register lacks it (acme/site's App register names it).");
-      expect(reuse.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-judge@<App ID>=<downloaded>.pem']);
+      expect(reuse.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-judge']);
       expect(d.notes.some((n: string) => n.startsWith('Not looked for'))).toBe(false);
       expect(registerReads(github)).toHaveLength(1);
       // A fork's register names its upstream's Apps, never the owner's.
@@ -543,6 +545,23 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
     const asked: string[] = [];
     await run(checkout(), fakeGitHub({ kind: 'User', registers: { site: SIBLING } }), [], undefined, REQ, { ask: changing('2', {}, asked) });
     expect(asked.find((q) => /Reuse/.test(q))).toBe("The owner already has the Judge (acme-judge), named in acme/site's App register. Reuse it here with kanon apps --reuse, rather than create a second one? (y/n)");
+  });
+
+  // kanon#1607 points 10 and 18: a register records each App's ID, so a sibling's names it, and
+  // every App to reuse goes in one kanon apps --reuse, its ID filled in where known.
+  it("takes a reused App's ID from the sibling register that records it, and names every App to reuse in one command (#1607)", async () => {
+    const withId = '# App register\n\n| Role | App slug | App ID |\n|---|---|---|\n| Reviewer | `acme-judge` | 4321 |\n| Merger | `acme-judge` | 4321 |\n';
+    const d = parse(await run(checkout(), fakeGitHub({ kind: 'User', registers: { site: withId } }), ['--json']));
+    expect(d.apps.reuse).toEqual([{ app: 'judge', slug: 'acme-judge', appId: 4321 }]);
+    expect(d.findings.find((x) => x.id === 'app.reuse')!.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-judge@4321']);
+    // An App the owner has, and an App the register lists whose secrets the repository lacks: one step, one command.
+    const register = '| Role | App slug | App ID |\n|---|---|---|\n| Reviewer | `acme-judge` | 77 |\n| Merger | `acme-judge` | 77 |\n';
+    const both = parse(await run(checkout({ 'docs/qa/agent-identities.md': register }), fakeGitHub({ kind: 'Organization', orgPlan: 'free', installations: [install('acme-kanon-author', 'author')] }), ['--json', '--lanes', 'review,implement']));
+    const steps = both.findings.filter((x) => x.id === 'app.reuse');
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.subject).toBe('author, judge');
+    expect(steps[0]!.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse author:acme-kanon-author@917,judge:acme-judge@77']);
+    expect(steps[0]!.fix.text).toContain("Add widgets to each App's installation, then run kanon apps --reuse once");
   });
 
   it("still cautions against a second App it found nowhere, and offers no App of another account's from a register (plan 0007 G4)", async () => {
@@ -587,7 +606,7 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
     expect(said.appsCalls).toHaveLength(1);
     const yes = await run(checkout(), fakeGitHub(owned), [], undefined, REQ, { ask: async (_q: string, d: string) => d });
     expect(yes.appsCalls).toEqual([]);
-    expect(yes.out).toContain('kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge@916=<downloaded>.pem');
+    expect(yes.out).toContain('kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge@916');
   });
 
   it('reuses the Apps the owner has and creates the rest, and names each further match once (#653)', async () => {
@@ -597,7 +616,7 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
     expect(d.apps).toMatchObject({ missing: ['author', 'judge'], reuse: [{ app: 'judge', slug: 'acme-judge-a' }], outcome: 'ran' });
     expect(r.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'author', '--dir', expect.any(String)]]);
     const reuse = d.findings.find((x) => x.id === 'app.reuse')!;
-    expect(reuse.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-judge-a@912=<downloaded>.pem']);
+    expect(reuse.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-judge-a@912']);
     expect(reuse.fix.text).toContain('(it also has acme-judge-b (App ID 913), acme-judge-cc (App ID 914), acme-judge-ddd with the same permissions: give the one widgets should share)');
     expect(reuse.fix.text).not.toMatch(/,,|, ,/);
   });
@@ -693,11 +712,12 @@ describe('the Apps (plan 0005 step L4)', () => {
     const r = await run(dir, fakeGitHub(), ['--yes', '--lanes', 'review']);
     expect(r.status, r.err).toBe(0);
     expect(r.appsCalls).toEqual([]);
-    expect(r.out).toContain('kanon apps --owner acme --repo widgets --reuse judge:acme-judge@<App ID>=<downloaded>.pem');
+    expect(r.out).toContain('kanon apps --owner acme --repo widgets --reuse judge:acme-judge');
+    expect(r.out).not.toContain('<downloaded>.pem');
     expect(r.out).not.toMatch(/gh secret set JUDGE_APP/);
     // #637: where on the App's page the key is made, and GitHub's page on it.
     const f = parse(await run(checkout({ 'docs/qa/agent-identities.md': register }), fakeGitHub(), ['--json', '--lanes', 'review'])).findings.find((x) => x.id === 'app.reuse')!;
-    expect(f.fix.text).toBe(`Add widgets to the App's installation, generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}) and copy its App ID from the same page, then run kanon apps --reuse with both.`);
+    expect(f.fix.text).toBe(`The register lists the judge App, but the repository lacks JUDGE_APP_ID and JUDGE_APP_PRIVATE_KEY. Add widgets to the App's installation, then run kanon apps --reuse once: it opens each App's settings page in turn, for you to generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}), waits for the key in your Downloads folder, checks and stores it, deletes the file and writes the register rows; commit those rows. With --no-open it prints the pages instead.`);
   });
 
   it('says, where it leaves the Apps to create, to reuse an App the owner already has rather than create a second (#363)', async () => {
@@ -705,7 +725,7 @@ describe('the Apps (plan 0005 step L4)', () => {
     const f = parse(r).findings.find((x) => x.id === 'app.create')!;
     expect(f.subject).toBe('author, judge');
     expect(f.fix.commands).toEqual([expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps author,judge --dir /)]);
-    expect(f.fix.text).toContain(`If acme already has these Apps for another repository, don't create them again: add widgets to each installation, generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}) and copy its App ID from there, and run kanon apps --owner acme --repo widgets --reuse <app>:<slug>@<App ID>=<key file> instead`);
+    expect(f.fix.text).toContain(`If acme already has these Apps for another repository, don't create them again: add widgets to each installation, and run kanon apps --owner acme --repo widgets --reuse <app>:<slug>[,<app>:<slug>] instead, which opens each App's page for a new key and waits for it`);
     expect(r.err).toContain("If acme already has these Apps for another repository, don't create them again");
   });
 
