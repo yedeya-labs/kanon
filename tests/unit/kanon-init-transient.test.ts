@@ -1,0 +1,65 @@
+import { describe, expect, it, vi } from 'vitest';
+import { realDeps as initDeps } from '../../cli/init.mjs';
+import { RATE_LINE, realDeps as milestonesDeps } from '../../cli/milestones.mjs';
+import { RETRYING, TRANSIENT_WHY } from '../../cli/gh-retry.mjs';
+import { SPAWNS } from './helpers/spawns.js';
+import { checkout, fakeGitHub, parse, run } from './helpers/kanon-init.js';
+
+// kanon#1607 point 9: init created 38 of 39 labels, then GitHub's secondary rate limit refused
+// the rest, the milestones, the merge settings and the ruleset, and init reported each as a
+// permission the token had just been shown to hold. The real `gh` retries such answers
+// (cli/gh-retry.mjs); what still fails is reported as GitHub limiting the rate, never as a
+// permission, which is named only on a 403 without a rate-limit marker, or a 404.
+vi.setConfig({ testTimeout: SPAWNS.timeout });
+
+const SECONDARY = 'gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)';
+
+describe('init and a transient GitHub failure (#1607)', () => {
+  it('runs init and kanon milestones through the retrying gh', () => {
+    expect((initDeps.gh as unknown as Record<symbol, unknown>)[RETRYING]).toBe(true);
+    expect((milestonesDeps.gh as unknown as Record<symbol, unknown>)[RETRYING]).toBe(true);
+  });
+
+  it('reports a write refused by a rate limit, or a 5xx, as GitHub limiting the rate, not a permission', async () => {
+    for (const answer of [SECONDARY, 'gh: HTTP 429', 'gh: Bad Gateway (HTTP 502)']) {
+      const d = parse(await run(checkout(), fakeGitHub({ writesFail: answer }), ['--yes', '--json', '--no-apps']));
+      for (const id of ['label.create', 'merge.settings', 'ruleset.create']) {
+        const f = d.findings.find((x) => x.id === id);
+        expect(f, `${answer}: ${id}`).toBeDefined();
+        const said = `${f!.message} ${f!.fix.text}`;
+        expect(said, `${answer}: ${id}`).not.toMatch(/needs (Issues|Administration)|a token that has/);
+        expect(said, `${answer}: ${id}`).toMatch(/GitHub limited the rate \(or failed\)/);
+        expect(said, `${answer}: ${id}`).toMatch(/run(ning)? kanon init again/);
+        expect(f!.message, `${answer}: ${id}`).toMatch(/GitHub limited the rate \(or failed\) when init tried/);
+        expect(f!.message, `${answer}: ${id}`).not.toContain('the token could not');
+      }
+      expect(d.findings.find((x) => x.id === 'label.create')!.message, answer).toContain(TRANSIENT_WHY);
+    }
+  });
+
+  it('names the permission on a 403 without a rate-limit marker, or a 404, and gives any other refusal as GitHub said it', async () => {
+    for (const answer of ['gh: Resource not accessible by personal access token (HTTP 403)', 'gh: Not Found (HTTP 404)']) {
+      const d = parse(await run(checkout(), fakeGitHub({ writesFail: answer }), ['--yes', '--json', '--no-apps']));
+      expect(d.findings.find((x) => x.id === 'label.create')!.message, answer).toContain('(it needs Issues: write)');
+      expect(d.findings.find((x) => x.id === 'ruleset.create')!.fix.text, answer).toContain('a token that has Administration: write');
+    }
+    const d = parse(await run(checkout(), fakeGitHub({ writesFail: 'gh: Validation Failed (HTTP 422)' }), ['--yes', '--json', '--no-apps']));
+    expect(d.findings.find((x) => x.id === 'label.create')!.message).toContain('(GitHub refused it: gh: Validation Failed (HTTP 422))');
+  });
+
+  it("reports kanon milestones' rate limit as GitHub's, not the token's", async () => {
+    const limited = async (argv: string[], io?: { err: (l: string) => void }) => {
+      void argv;
+      io?.err(`kanon milestones: could not create "Product Backlog" on acme/widgets: ${SECONDARY}`);
+      io?.err(`kanon milestones: ${RATE_LINE}`);
+      return 1;
+    };
+    const d = parse(await run(checkout(), fakeGitHub(), ['--yes', '--json', '--no-apps'], undefined, undefined, { milestones: limited }));
+    const f = d.findings.find((x) => x.id === 'milestone.buckets')!;
+    expect(f.message).toContain(TRANSIENT_WHY);
+    expect(f.fix.text).not.toContain('a token that has');
+    const refused = async () => 1;
+    const p = parse(await run(checkout(), fakeGitHub(), ['--yes', '--json', '--no-apps'], undefined, undefined, { milestones: refused }));
+    expect(p.findings.find((x) => x.id === 'milestone.buckets')!.fix.text).toContain('a token that has Issues: write');
+  });
+});
