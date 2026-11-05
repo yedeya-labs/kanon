@@ -1243,5 +1243,41 @@ describe('the adopt skill and reusing the owner\'s Apps (#1607)', () => {
     expect(row[2]).toMatch(/from the register, then GitHub, then asks them/);
     expect(row[2]).toContain('Never ask for the key\'s path, and never read the key.');
     expect(row[2]).not.toMatch(/key file's path/);
+
+/**
+ * kanon#1607: the install path (`claude plugin marketplace add --scope project`, then `claude
+ * plugin install --scope project`) leaves `.claude/settings.json` in the checkout, untracked, so
+ * the adopt skill's first step takes that file onto `kanon/adopt` instead of asking for a commit
+ * on the default branch (point 7); it stops when the file pins another release than the skill's
+ * (point 1(b)); and it relays the token's needs as `init` gives them (point 17).
+ */
+describe('the adopt skill and the install path (#1607)', () => {
+  const steps = () => section(skill('adopt').body, /^## Steps$/)!;
+  const first = () => steps().split('\n2. **Inspect')[0]!;
+
+  it("accepts a settings file that declares only the kanon marketplace and plugin, and carries it onto kanon/adopt", () => {
+    expect(first()).toMatch(/\*\*Except `\.claude\/settings\.json`, when it is the only change\*\*/);
+    expect(first()).toContain('`extraKnownMarketplaces.kanon`');
+    expect(first()).toContain('`kanon@kanon`');
+    expect(first()).toMatch(/untracked or changed/);
+    expect(first()).toMatch(/goes onto `kanon\/adopt`/);
+    expect(first()).toMatch(/`init` rewrites it as its own while it was never committed/);
+  });
+
+  it("stops on a kanon marketplace ref other than the skill's own release, and names a user-level entry", () => {
+    expect(first()).toMatch(/\*\*Stop when that file, tracked or not, declares the kanon marketplace at a `ref` other than this skill's release\.\*\* Either of its tags passes/);
+    expect(first()).toMatch(/the stable `vX\.Y\.Z` and the candidate's `candidate-vX\.Y\.Z`, which the `npx` line above names, are the same release/);
+    expect(first()).toContain('`claude plugin marketplace add --scope project yedeya-labs/kanon#vX.Y.Z`');
+    expect(first()).toMatch(/start a new Claude Code session/);
+    expect(first()).toContain('`claude plugin marketplace list`');
+    expect(first()).toMatch(/overrides the project's/);
+  });
+
+  it('relays .token.needs as given, never a list of its own, and never says the token holds them', () => {
+    const confirm = section(skill('adopt').body, /^## Confirming the token$/)!;
+    expect(confirm).toMatch(/relay `\.token\.needs` as given/);
+    expect(confirm).toMatch(/each permission with its access/);
+    expect(confirm).toMatch(/never a list of your own/);
+    expect(confirm).toMatch(/never say the token has them/);
   });
 });
