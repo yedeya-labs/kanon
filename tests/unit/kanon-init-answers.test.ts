@@ -36,7 +36,13 @@ describe('kanon init and a file an answer turns off (#1607 point 11)', () => {
     expect(fileOf(dry, DB)).toMatchObject({ status: 'removed', content: null, diff: expect.arrayContaining(['- **Test database:** `hook`']) });
     expect(dry.changes.map((c) => String(c.message))).toContainEqual(expect.stringMatching(/^Would remove docs\/qa\/test-database\.md, exactly as init writes it, which the test database answer none/));
     expect(existsSync(join(dir, DB))).toBe(true);
+    // #1629: the summary the person confirms counts it.
+    expect(dry.summary.find((l) => l.answer === 'Files')?.value).toMatch(/, 1 removed \(an answer turns it off\)$/);
     const d = parse(await run(dir, fakeGitHub(), json(['--test-database', 'none'])));
+    expect(d.summary.find((l) => l.answer === 'Files')?.value).toContain('1 removed');
+    // Nothing to remove on the run after: the count goes.
+    const again = parse(await run(dir, fakeGitHub(), json(['--test-database', 'none'])));
+    expect(again.summary.find((l) => l.answer === 'Files')?.value).not.toContain('removed');
     expect(fileOf(d, DB)?.status).toBe('removed');
     expect(existsSync(join(dir, DB))).toBe(false);
     expect(stale(d)).toEqual([]);
@@ -50,6 +56,8 @@ describe('kanon init and a file an answer turns off (#1607 point 11)', () => {
     const d = parse(await run(dir, fakeGitHub(), json(['--test-database', 'none'])));
     expect(existsSync(join(dir, DB))).toBe(true);
     expect(fileOf(d, DB)).toBeUndefined();
+    // A copy it leaves is no removal (#1629).
+    expect(d.summary.find((l) => l.answer === 'Files')?.value).not.toContain('removed');
     expect(stale(d)).toEqual([expect.objectContaining({ category: 'file', blocking: false, subject: DB, message: expect.stringContaining('--test-database none'), fix: expect.objectContaining({ commands: [`git rm ${DB}`] }) })]);
   });
 

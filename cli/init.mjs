@@ -2536,6 +2536,18 @@ export const turnedOffFiles = ({ a, req }) => {
 };
 
 /**
+ * The files this run removes (#1607 point 11): each a turned-off file the checkout has, that init
+ * doesn't plan, and that is exactly what init writes, or never committed with `--replace-uncommitted`
+ * (`replaces`). The summary counts them (#1629), and the write loop removes them.
+ * @param {{ a: Answers, req: Requirements, read: (rel: string) => string | null, files: Map<string, string>, replaces: (rel: string) => boolean }} c
+ */
+export const removedFiles = ({ a, req, read, files, replaces }) =>
+  turnedOffFiles({ a, req }).filter((off) => {
+    const have = read(off.path);
+    return have !== null && !files.has(off.path) && (off.ours(have) || replaces(off.path));
+  });
+
+/**
  * Every file `init` would write, by path relative to the checkout. A file it leaves to its
  * default is not here.
  * @param {{ s: Inspection, a: Answers, req: Requirements, release: string, repo: string, today: string, read: (rel: string) => string | null, workflows: Map<string, Record<string, any>>, callers?: Map<string, string>, untracked?: (rel: string) => boolean }} c
@@ -2856,7 +2868,9 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
     const status = st === 'differs' && replaces(rel) ? 'replaced' : st;
     count[status] = (count[status] ?? 0) + 1;
   }
-  line('Files', [], `${count.new} new, ${count.kept} kept, ${count.same} already as written, ${count.differs} differ${count.rewritten ? `, ${count.rewritten} rewritten` : ''}${count.replaced ? `, ${count.replaced} replaced (never committed)` : ''}`, inferred('from the checkout'));
+  // A file an answer turns off, which init removes (#1629): the person confirms that too.
+  count.removed = removedFiles({ a, req, read, files, replaces }).length;
+  line('Files', [], `${count.new} new, ${count.kept} kept, ${count.same} already as written, ${count.differs} differ${count.rewritten ? `, ${count.rewritten} rewritten` : ''}${count.replaced ? `, ${count.replaced} replaced (never committed)` : ''}${count.removed ? `, ${count.removed} removed (an answer turns ${count.removed > 1 ? 'them' : 'it'} off)` : ''}`, inferred('from the checkout'));
   const steps = [
     ...apps.filter((x) => / create$/.test(x)).map((x) => `create the ${x.split(':')[0]} App`),
     ...apps.filter((x) => /: reuse /.test(x)).map((x) => `1 key for the ${x.split(':')[0]}`),
