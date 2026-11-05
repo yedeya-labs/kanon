@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 describe('the comments over the tracking-issue refusal (#1569)', () => {
   const lead = readFileSync('.github/workflows/agent-lead.yml', 'utf8');
   it("say the brief lane's filter job checks the tracking issue, and the brief job hands its refusal on", () => {
-    expect(lead).toMatch(/# AND THE TRACKING-ISSUE CHECK \(`K-AGENT-30`[^\n]*\n  # dispatch, the job also checks that its `context` names a tracking issue\. Its `refusal` output/);
+    expect(lead).toMatch(/# AND THE TRACKING-ISSUE CHECK \(`K-AGENT-30`[^\n]*\n {2}# dispatch, the job also checks that its `context` names a tracking issue\. Its `refusal` output/);
     expect(lead).not.toMatch(/the job above is the membership gate alone/);
     expect(lead).toMatch(/# and the tracking-issue check, whose `refusal` output this job hands to `agent-run`/);
   });
