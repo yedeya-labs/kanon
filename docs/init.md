@@ -389,7 +389,7 @@ Every finding is non-blocking, except `app.failed`: `blocking` means it makes th
 |---|---|---|
 | `dependabot.kanon-entry` | `dependabot` | `.github/dependabot.yml` exists without the entry that proposes Kanon upgrades. |
 | `label.create` | `label` | The token could not create some of the taxonomy's labels, or GitHub limited the rate ([above](#the-token-it-needs)). |
-| `label.delete-default` | `label` | The token could not delete a default label it was asked to. |
+| `label.delete-default` | `label` | The token could not delete a default label it was asked to, or GitHub limited the rate. |
 | `milestone.buckets` | `milestone` | `kanon milestones` did not create the bucket milestones; when it said GitHub limited the rate, the step says so and names no permission. |
 | `merge.settings` | `merge` | The token could not set squash-only merging, or GitHub limited the rate. A token that can't read the merge settings (GitHub leaves them out of its answer without Administration: read) gets a note saying they are not known, and `init` neither checks nor changes them. |
 | `ruleset.gaps` | `ruleset` | The default branch's ruleset lacks some of `K-ADOPT-1` step 8. |
