@@ -857,6 +857,10 @@ describe('each skill is held to the kanon command it drives', () => {
     // The bump replaces whichever pin there is, a candidate's included.
     expect(steps).toMatch(/whether either is a stable `vX\.Y\.Z` or a `candidate-vX\.Y\.Z`/);
     expect(section(body, /^## Moving the plugin$/)).not.toMatch(/the target is still the stable `vX\.Y\.Z`/);
+    // docs/install.md's "Running a candidate" says the same, and no longer waits on #1563.
+    const install = read('docs/install.md');
+    expect(install).not.toMatch(/Until \[#1563\][^.]*is fixed/);
+    expect(install).toMatch(/Run from a candidate plugin before the promotion, the upgrade skill moves your pins to that candidate's tag/);
   });
 
   it('reads Kanon\'s latest stable release from doctor, and offers it to a candidate pin (plan 0009 S6)', () => {
