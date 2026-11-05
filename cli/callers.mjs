@@ -19,7 +19,7 @@ import { URL } from 'node:url';
  * @typedef {{ type: string, description: string }} LaneInput
  * @typedef {{ identities: string[], secrets: string[], inputs: Record<string, LaneInput>, grant: Record<string, string>,
  *   reads: string[], readsWorkflows: string[], hooks: string[], qaStore?: boolean, callerName?: string, callerJob?: string, callerRunNameEndsWith?: string,
- *   optionalSecrets?: string[], optionalVariables?: string[], claude?: string[], turns?: { default: number, ceiling: number } }} Lane
+ *   optionalSecrets?: string[], optionalVariables?: string[], claude?: string[], turns?: { default: number, ceiling: number }, setupHook?: boolean }} Lane
  * @typedef {{ name: string, permissions: Record<string, string> }} RoleIdentity
  * @typedef {{ name: string, roles: string[], permissions: Record<string, string> }} AppIdentity
  * @typedef {{ lanes: Record<string, Lane>, hook: { path: string, inputs: string[] },
@@ -359,16 +359,85 @@ const laneCheckJob = (release) => [
 ];
 
 /**
+ * The Lead's lanes, each of which writes, edits or files from a brief under `docs/projects/`: where
+ * one is chosen, `ci.yml` runs Kanon's brief guard on every pull request (#1608).
+ */
+export const LEAD_LANES = ['agent-lead', 'agent-lead-revise', 'agent-lead-split', 'agent-lead-reconcile'];
+
+/**
+ * The `Brief guard` job (actions/brief-guard/README.md): Kanon's brief guard at the pinned release,
+ * on the briefs under `docs/projects/` (`K-PROJ-3`, `K-PROJ-5`, `K-LAYOUT-12`, `K-LAYOUT-13`). It reads
+ * each brief's tracking issue, so the job grants `issues: read` (#1608).
+ * @param {string} release
+ */
+export const briefGuardJob = (release) => [
+  '  brief-guard:',
+  '    name: Brief guard',
+  '    runs-on: ubuntu-latest',
+  '    timeout-minutes: 5',
+  '    permissions:',
+  '      contents: read',
+  '      issues: read',
+  '    steps:',
+  '      - uses: actions/checkout@v7',
+  '        with:',
+  '          persist-credentials: false',
+  `      - uses: yedeya-labs/kanon/actions/brief-guard@${release}`,
+];
+
+/** A step that runs Kanon's brief guard: its action at a pin, or its script, as Kanon's own `kanon-path` jobs run it. */
+const BRIEF_GUARD_STEP = (/** @type {any} */ step) =>
+  /^yedeya-labs\/kanon\/actions\/brief-guard@/i.test(String(step?.uses ?? '').trim()) || /\bscripts\/brief-guard\.mjs\b/.test(String(step?.run ?? ''));
+
+/**
+ * The jobs that run Kanon's brief guard on pull requests (#1608): each job of a workflow triggered on
+ * `pull_request` with a step that runs it, as `<workflow> job <job>`.
+ * @param {Map<string, Record<string, any>>} workflows parsed, by path
+ */
+export const briefGuardJobs = (workflows) =>
+  [...workflows].flatMap(([path, wf]) => {
+    const on = wf.on;
+    const onPr = typeof on === 'string' ? on === 'pull_request' : Array.isArray(on) ? on.includes('pull_request') : on !== null && typeof on === 'object' && 'pull_request' in on;
+    if (!onPr || wf.jobs === null || typeof wf.jobs !== 'object') return [];
+    return Object.entries(wf.jobs).filter(([, j]) => Array.isArray(j?.steps) && j.steps.some(BRIEF_GUARD_STEP)).map(([job]) => `${path} job ${job}`);
+  });
+
+/**
+ * The `Gates` job (#1607 point 12): the project-setup hook, then each gate of the stack document's
+ * `## Gates` in its order, so CI runs what the lanes run. The hook is the project's, and installs its
+ * toolchain: the job sets up no language of its own (#15).
+ * @param {string[]} gates @param {boolean} database whether the project declares a test database
+ */
+export const gatesJob = (gates, database) => [
+  '  gates:',
+  '    name: Gates',
+  '    runs-on: ubuntu-latest',
+  '    timeout-minutes: 30',
+  '    steps:',
+  '      - uses: actions/checkout@v7',
+  '        with:',
+  '          persist-credentials: false',
+  '      - uses: ./.github/actions/project-setup',
+  '        with:',
+  '          lane: ci',
+  '          install: "true"',
+  `          database: ${database ? '"true"' : '"false"'}`,
+  ...gates.flatMap((g) => [`      - name: ${y(g)}`, `        run: ${y(g)}`]),
+];
+
+/**
  * A new `ci.yml`, for a repository with none: the review lane, the reconciler and the dispatch sweep
  * (every lane whose workflow carries `# READS WORKFLOW: ci.yml`) read CI's runs by that file name
- * (`K-LAYOUT-18`), and `lane-check` is its first job. The project's own gates go beside it.
+ * (`K-LAYOUT-18`), and `lane-check` is its first job. Then the `Gates` job, where the stack document
+ * names gates, and the `Brief guard` job, where a Lead lane is chosen.
  * @param {string} release @param {string} defaultBranch
+ * @param {{ gates?: string[], database?: boolean, briefGuard?: boolean }} [jobs]
  */
-export const ciFile = (release, defaultBranch) =>
+export const ciFile = (release, defaultBranch, { gates = [], database = false, briefGuard = false } = {}) =>
   [
     '# The project\'s CI (K-LAYOUT-18): the review lane, the reconciler and the dispatch sweep read its',
-    '# runs by this file name. `kanon init` started it with Kanon\'s lane check; add the project\'s own',
-    '# gates as jobs.',
+    '# runs by this file name. `kanon init` started it with Kanon\'s lane check, the gates of',
+    '# docs/qa/stack.md after the project-setup hook, and, with a Lead lane, Kanon\'s brief guard.',
     'name: CI',
     '',
     'on:',
@@ -382,6 +451,8 @@ export const ciFile = (release, defaultBranch) =>
     '',
     'jobs:',
     ...laneCheckJob(release),
+    ...(gates.length ? ['', ...gatesJob(gates, database)] : []),
+    ...(briefGuard ? ['', ...briefGuardJob(release)] : []),
     '',
   ].join('\n');
 
@@ -422,6 +493,28 @@ export const DEPENDABOT_ENTRY = [
 
 export const dependabotFile = () => ['version: 2', 'updates:', ...DEPENDABOT_ENTRY, ''].join('\n');
 
+/** The one step of the starting hook `hookFile` writes, which installs nothing. */
+const STUB_STEP = 'echo "No project setup yet (.github/actions/project-setup/action.yml)."';
+
+/**
+ * Whether a project-setup hook is still the starting point `hookFile` writes: its steps are that
+ * one `echo` and nothing else, whatever its comments and inputs (#1607 point 12). A hook that
+ * doesn't parse is not called a stub.
+ * @param {string | null} text @param {(t: string) => unknown} parse a YAML parser
+ */
+export const isStubHook = (text, parse) => {
+  if (text === null) return false;
+  /** @type {any} */
+  let doc;
+  try {
+    doc = parse(text);
+  } catch {
+    return false;
+  }
+  const steps = doc?.runs?.steps;
+  return Array.isArray(steps) && steps.length === 1 && String(steps[0]?.run ?? '').trim() === STUB_STEP;
+};
+
 /**
  * A starting project-setup hook (docs/lanes.md, "The project-setup hook"): a composite action that
  * declares every input the lanes pass it and installs nothing yet. The review lane never calls it;
@@ -441,6 +534,6 @@ export const hookFile = (inputs) =>
     '  using: composite',
     '  steps:',
     '    - shell: bash',
-    '      run: echo "No project setup yet (.github/actions/project-setup/action.yml)."',
+    `      run: ${STUB_STEP}`,
     '',
   ].join('\n');

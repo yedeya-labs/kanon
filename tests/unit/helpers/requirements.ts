@@ -67,6 +67,8 @@ const comment = (text: string, key: string): string[] =>
   [...text.matchAll(new RegExp(`^# ${key}: (.+)$`, 'gm'))].map((m) => m[1]!.trim());
 
 export const buildRequirements = (root: string) => {
+  // The spine and the job it runs: their hook call is the one `project-setup: false` turns off.
+  const SPINE = new Set(laneTree(root, 'agent-lane.yml'));
   const permissions = JSON.parse(readFileSync(join(root, 'rulebook/agent-permissions.json'), 'utf8'));
   const labels = JSON.parse(readFileSync(join(root, 'rulebook/labels.json'), 'utf8')).labels as Array<{ name: string }>;
   const lanes: Record<string, unknown> = {};
@@ -110,7 +112,10 @@ export const buildRequirements = (root: string) => {
       // Whether the lane reaches a QA store, through the qa-store block in any file it runs: an
       // `id-token: write` grant alone doesn't say, since the telemetry Explorer's is for the
       // aggregate function (kanon#471).
-      qaStore: laneTree(root, file).some((f) => /^\s*-?\s*uses: \$\/actions\/qa-store\s*$/m.test(readFileSync(join(root, '.github/workflows', f), 'utf8'))),
+      qaStore: laneTree(root, file).some((f) => /^\s*-?\s*uses: \$\/actions\/qa-store\s*$/m.test(readFileSync(join(root, '.github/workflows', f), 'utf8'))),      // Whether a run of the lane calls the project-setup hook, a step `uses: ./.github/actions/project-setup`
+      // in any file it runs (kanon#1607 point 12). The spine's call counts unless the lane passes the
+      // spine `project-setup: false`, as the Lead's brief and revise lanes do (kanon#243).
+      setupHook: laneTree(root, file).some((f) => !(SPINE.has(f) && /^ +project-setup: false *$/m.test(text)) && /^\s*-?\s*uses: \.\/\.github\/actions\/project-setup\s*$/m.test(readFileSync(join(root, '.github/workflows', f), 'utf8'))),
     };
     // The secrets a caller may leave out (kanon#433): the QA store's, which the lane marks and
     // declares `required: false`, as `lane-check` reads them.
@@ -290,7 +295,7 @@ export const buildRequirements = (root: string) => {
   };
   return {
     $comment:
-      "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. A lane's `turns` is its turn limit and Kanon's ceiling on raising it for one dispatched run (kanon#891), through the `max_turns` and `reason` dispatch inputs `kanon init` writes on its caller. `catalogue` is the lane catalogue, and `features` the fixed sets of lanes offered in place of a choice per lane (plan 0007 §2), both copied from docs/lanes.json.",
+      "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. A lane's `turns` is its turn limit and Kanon's ceiling on raising it for one dispatched run (kanon#891), through the `max_turns` and `reason` dispatch inputs `kanon init` writes on its caller. A lane's `setupHook` says whether its runs call the project-setup hook, so `kanon init` and `kanon doctor` say when a chosen lane would call a hook that installs nothing. `catalogue` is the lane catalogue, and `features` the fixed sets of lanes offered in place of a choice per lane (plan 0007 §2), both copied from docs/lanes.json.",
     lanes,
     hook: { path: '.github/actions/project-setup/action.yml', inputs: hookInputs },
     identities: {

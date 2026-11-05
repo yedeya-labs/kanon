@@ -854,6 +854,8 @@ describe("kanon doctor and the Lead's brief template (#749)", () => {
   const withLead = (template: string | null) => {
     const files = healthyFiles();
     files['.github/workflows/agent-lead.yml'] = callerFile('agent-lead', REQ.lanes['agent-lead']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' });
+    // With the Lead, init's ci.yml runs the brief guard (#1608).
+    files['.github/workflows/ci.yml'] = ciFile(PINNED, 'main', { briefGuard: true });
     if (template !== null) files[TEMPLATE] = template;
     return files;
   };

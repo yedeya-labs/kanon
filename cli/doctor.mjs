@@ -55,7 +55,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { URL } from 'node:url';
 import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
-import { appSecrets, callerFile, kanonRelease, loadRequirements, TRIGGERS, yamlScalar } from './callers.mjs';
+import { appSecrets, briefGuardJob, briefGuardJobs, callerFile, isStubHook, kanonRelease, LEAD_LANES, loadRequirements, TRIGGERS, yamlScalar } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
 import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, deployTakesTargets, GITHUB_DEFAULT_LABELS, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, workflowName } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
@@ -2076,6 +2076,23 @@ export const diagnose = async (deps, opts) => {
         }
       }
     }
+  }
+  // A hook still as init's stub installs nothing, so a lane that calls it runs the agent in a tree
+  // with no toolchain (#1607 point 12). A note: the lane runs, and the person may mean it.
+  const hookCallers = installed.filter((l) => req.lanes[l]?.setupHook);
+  if (hookCallers.length && isStubHook(read(req.hook.path), parseYaml)) {
+    find('hook.stub', req.hook.path, `is still the stub kanon init wrote, which installs nothing, and ${hookCallers.join(', ')} call${hookCallers.length > 1 ? '' : 's'} it to install the project before they run its code.`, {
+      text: `Replace its step with the steps that install your toolchain and dependencies, keeping the inputs it declares (docs/lanes.md, "The project-setup hook").`,
+    });
+  }
+  // The brief guard checks the briefs the Lead's lanes write, edit and file from (K-PROJ-3, K-PROJ-5,
+  // K-LAYOUT-12, K-LAYOUT-13); a brief a person edits is checked only where CI runs it (#1608).
+  const leads = installed.filter((l) => LEAD_LANES.includes(l));
+  if (leads.length && !briefGuardJobs(workflows).length) {
+    find('ci.brief-guard-missing', '.github/workflows/ci.yml', `has no job that runs Kanon's brief guard on pull requests, and no other workflow does, though ${leads.join(', ')} ${leads.length > 1 ? 'are' : 'is'} installed: a pull request that changes a brief under docs/projects/ merges unchecked, and the reconciler meets its defects only at its tick.`, {
+      text: `Add this job under \`jobs:\` in .github/workflows/ci.yml, at the release you check (${checked}):`,
+      commands: briefGuardJob(checked),
+    });
   }
   for (const l of installed) {
     for (const h of req.lanes[l]?.hooks ?? []) {
