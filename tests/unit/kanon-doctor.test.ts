@@ -587,6 +587,37 @@ describe('kanon doctor and the waiver of a finding that lists items (#406)', () 
     }
   });
 
+  // #1618: a bullet that fails only because items after `for` lack backticks says so, and gives
+  // the bullet with the person's own items in them; any other malformation keeps its message.
+  it('names unquoted items after `for` as what failed, and gives the bullet with them quoted (#1618)', () => {
+    const at = (bullet: string) => readWaivers(`## Choices\n\n${bullet}\n`).errors;
+    const head = `- **${WAIVER_LABEL}:** \`label.github-default\` on \`${REPO}\``;
+    const fixed = `${head} for \`good first issue\`, \`help wanted\` (our contributors filter by them)`;
+    const says = `docs/qa/adoption.md:3 doesn't parse: the items after \`for\` must each be in backticks. Write it as: ${fixed}`;
+    expect(at(`${head} for good first issue, help wanted (our contributors filter by them)`)).toEqual([says]);
+    expect(at(`${head} for \`good first issue\`, help wanted (our contributors filter by them)`)).toEqual([says]);
+    expect(at(`${head} for good first issue, \`help wanted\` (our contributors filter by them)`)).toEqual([says]);
+    // Written as it says, the bullet reads.
+    expect(readWaivers(`## Choices\n\n${fixed}\n`)).toMatchObject({ errors: [], waivers: [{ items: ['good first issue', 'help wanted'] }] });
+    // Any other malformation, with or without unquoted items, keeps today's message.
+    const generic = `docs/qa/adoption.md:3 is not \`- **${WAIVER_LABEL}:** \`<finding id>\` on \`<subject>\` (<why the finding stands>)\`, with \`for \`<item>\`, \`<item>\`\` before the parentheses for a finding that lists items`;
+    for (const bad of [
+      `- **${WAIVER_LABEL}:** label.github-default on \`${REPO}\` for good first issue (why)`,
+      `${head} for good first issue`,
+      `${head} for \`good first issue\` and \`help wanted\` (why)`,
+      `${head} for \`good first issue\`,\`help wanted\` (why)`,
+      `${head} for \`good first issue\`,help wanted (why)`,
+      `${head} for good first issue,help wanted (why)`,
+      `${head} for good first issue,  help wanted (why)`,
+      `${head} for \`good first issue\`, , help wanted (why)`,
+      `${head} for \`good first issue, help wanted (why)`,
+      `${head} for \`\` (why)`,
+      `${head} (  )`,
+    ]) {
+      expect(at(bad), bad).toEqual([generic]);
+    }
+  });
+
   it('lists every finding id that lists items in ITEMIZED and in docs/doctor.md, and nothing else', () => {
     const source = readFileSync(join(ROOT, 'cli/doctor.mjs'), 'utf8');
     const built = [...new Set([...source.matchAll(/findItems\('([a-z-]+\.[a-z-]+)'/g)].map((m) => m[1]))].sort();

@@ -246,7 +246,9 @@ describe('kanon doctor and the kanon plugin installed on this machine (#1552)', 
 
   it("gives an undeclared plugin's person their own lines, at the checked release", async () => {
     const r = await run(checkout(healthyFiles()), fakeGitHub(), ['--json'], undefined, machine(known('v0.9.0'), [{ scope: 'user', version: OLD }]));
-    expect(behind(r).map((f: { fix: { commands: string[] } }) => f.fix.commands)).toEqual([['claude plugin marketplace remove kanon', `claude plugin marketplace add yedeya-labs/kanon#${PINNED}`, 'claude plugin install kanon@kanon']]);
+    expect(behind(r).map((f: { fix: { commands: string[] } }) => f.fix.commands)).toEqual([['claude plugin marketplace remove kanon', `claude plugin marketplace add --scope project yedeya-labs/kanon#${PINNED}`, 'claude plugin install --scope project kanon@kanon']]);
+    // kanon#1616: at project scope, never the user scope that overrides every repository's pin.
+    expect(behind(r)[0].fix.text).toContain("in this repository's checkout");
     expect(r.json.plugin.declared).toBeNull();
   });
 

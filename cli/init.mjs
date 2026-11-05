@@ -71,7 +71,10 @@ import {
   DEPENDABOT_ENTRY,
   DEPLOY_CALLER_NAME,
   hookFile,
+  isStubHook,
   kanonRelease,
+  setupHookJobs,
+  LEAD_LANES,
   releasePin,
   laneCheckFile,
   loadRequirements,
@@ -2475,7 +2478,10 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   }
   const identities = appIdentities(a, req);
   if (identities.length) files.set('.github/workflows/apps-check.yml', appsCheckFile(identities, release));
-  if (!ci) files.set('.github/workflows/ci.yml', ciFile(release, s.defaultBranch));
+  // A new CI runs the stack document's gates after the hook (#1607 point 12), and with a Lead lane
+  // Kanon's brief guard on the briefs (#1608). A CI the project has is the project's: doctor's
+  // `ci.brief-guard-missing` says what to add to it.
+  if (!ci) files.set('.github/workflows/ci.yml', ciFile(release, s.defaultBranch, { gates: a.gates, database: a.database === 'hook', briefGuard: a.lanes.some((l) => LEAD_LANES.includes(l)) }));
   // `lane-check` gets a workflow of its own unless another workflow has a job that reports its
   // check on every pull request: a step that uses the action in another job reports nothing
   // under that name (#444, L5's G14).
@@ -3413,6 +3419,18 @@ const run = async (deps, opts, req, rep) => {
     const message = `${stubs.join(', ')} ${stubs.length > 1 ? 'are' : 'is'} the stub init wrote, which fails the deploy lane by name until filled.`;
     const text = 'Replace each stub\'s step with your own build, deploy command and smoke check, keeping the inputs it declares (docs/lanes.md, "The deploy lane"), before the first release the lane deploys.';
     step({ id: 'deploy.hooks', category: 'deploy', subject: stubs.join(', '), prose: `${message} ${text}`, message, text, commands: [], lines: [] });
+  }
+  // A project-setup hook still as init's stub installs nothing (#1607 point 12): a chosen lane that
+  // calls it then runs the agent, and its gates, in a tree with no toolchain. Filling it is the person's.
+  // A CI job that calls it, the `Gates` job init writes into a new ci.yml among them, counts too.
+  const ciWorkflows = new Map(workflows);
+  const ciText = files.get('.github/workflows/ci.yml');
+  if (ciText !== undefined) ciWorkflows.set('.github/workflows/ci.yml', /** @type {Record<string, any>} */ (parseYaml(ciText)));
+  const hookCallers = [...a.lanes.filter((l) => req.lanes[l]?.setupHook), ...setupHookJobs(ciWorkflows)];
+  if (hookCallers.length && isStubHook(read(req.hook.path) ?? files.get(req.hook.path) ?? null, parseYaml)) {
+    const message = `${req.hook.path} is the stub init wrote, which installs nothing, and ${hookCallers.join(', ')} call${hookCallers.length > 1 ? '' : 's'} it to install your project before they run your code.`;
+    const text = 'Replace its step with the steps that install your toolchain and dependencies, keeping the inputs it declares (docs/lanes.md, "The project-setup hook"), before the first run of those lanes.';
+    step({ id: 'hook.stub', category: 'hook', subject: req.hook.path, prose: `${message} ${text}`, message, text, commands: [], lines: [] });
   }
   // A caller of the deploy lane with no list is no lane: init writes none, and leaves this one.
   if (!a.deployEnvironments.length && callsDeployLane(read(DEPLOY_CALLER_PATH), req)) {

@@ -1283,3 +1283,54 @@ describe('the adopt skill and the install path (#1607)', () => {
     expect(confirm).toMatch(/never say the token has them/);
   });
 });
+
+// kanon#1607 point 6: adopt and upgrade keep a friction log without being asked, outside the
+// checkout and free of secrets and private names, and file it as one Kanon issue only on the
+// person's yes, after they have seen the draft.
+describe('the friction log of the adopt and upgrade skills (#1607)', () => {
+  for (const dir of ['adopt', 'upgrade']) {
+    const log = () => section(skill(dir).body, /^## The friction log$/);
+    it(`${dir}: keeps it unasked, in a file outside the checkout that is never committed`, () => {
+      expect(log(), dir).not.toBeNull();
+      expect(log()).toMatch(/\*\*Keep a friction log, without being asked\*\*/);
+      expect(log()).toMatch(/Starting it is no question/);
+      expect(log()).toContain(`\`~/.claude/kanon/friction/${dir}-<YYYY-MM-DD-HHMM>.md\``);
+      expect(log()).toMatch(/\*\*never write it inside the repository, never `git add` it, and never commit it\.\*\*/);
+      // Started at step 1, ended after the last step of the run.
+      const steps = section(skill(dir).body, /^## Steps$/)!;
+      expect(steps.split('\n').find((l) => l.startsWith('1. '))).toContain('start the friction log ("The friction log")');
+      expect(steps).toContain('Then end the friction log ("The friction log"): show the draft, and file it only on the person\'s yes.');
+    });
+
+    it(`${dir}: logs each kind of friction with its step, release, what happened, error and suggestion`, () => {
+      for (const kind of ['a command that was refused or failed', 'a retry', 'a finding whose stated cause turned out to be wrong', 'a step you had to improvise', 'a question the person had to ask you']) expect(log(), kind).toContain(kind);
+      for (const field of ['**Step:**', '**Release:**', '**What happened:**', '**Error:**', '**Suggestion:**']) expect(log(), field).toContain(field);
+      expect(log()).toMatch(/trimmed to the lines that matter, at most ten/);
+    });
+
+    it(`${dir}: never holds a token, an App ID, a secret, a key path or the repository's private names`, () => {
+      expect(log()).toMatch(/\*\*What it never holds:\*\* a token[^\n]*an App ID or a Client ID; a secret's value; a private key or its contents; a path, beyond a file's own name/);
+      expect(log()).toMatch(/Write the repository as `<repo>`, its owner as `<owner>`, a person's login or name as `<person>`, and an App's slug as `<app-slug>`, in the error lines too, by default/);
+      expect(log()).toMatch(/A name goes back in only where the person, reviewing the draft, says it may\./);
+    });
+
+    it(`${dir}: shows the draft and files one issue on Kanon only on a yes`, () => {
+      expect(log()).toMatch(/show the person the whole draft, as it would be filed, and ask/);
+      expect(log()).toMatch(/\*\*File it\*\* \(Recommended\)[^\n]*\*\*Change it first\*\*[^\n]*\*\*Don't file\*\*/);
+      expect(log()).toContain('With no yes, nothing is filed.');
+      expect(log()).toContain(`gh issue create -R yedeya-labs/kanon --title "${dir}: <n> friction points at <release>" --body-file <the log>`);
+      expect(log()).toContain('`## What must be true`');
+      expect(log()).toContain('`## Possible approach — UNVERIFIED, not acceptance criteria`');
+      // No special case for Kanon's own repository.
+      expect(log()).toContain("The same holds in every repository, Kanon's own included.");
+    });
+  }
+
+  it('is described once in docs/skills.md', () => {
+    const doc = section(read('docs/skills.md'), /^## The friction log$/);
+    expect(doc).not.toBeNull();
+    expect(doc).toContain('`~/.claude/kanon/friction/<skill>-<YYYY-MM-DD-HHMM>.md`');
+    expect(doc).toContain('With no yes, nothing is filed.');
+    expect(doc).toMatch(/`<repo>`, `<owner>`, `<person>` and `<app-slug>` by default/);
+  });
+});
