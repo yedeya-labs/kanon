@@ -54,9 +54,15 @@ describe('kanon init and the jobs of a new ci.yml', () => {
 
 describe('kanon init and a stub project-setup hook (hook.stub)', () => {
   it('reports the stub it writes while a chosen lane calls the hook, naming the lanes', async () => {
-    const { d } = await init('review,rebase');
+    const { d } = await init('review,rebase', {}, 'none');
     expect(stub(d)).toEqual([expect.objectContaining({ id: 'hook.stub', category: 'hook', blocking: false, subject: HOOK })]);
-    expect(stub(d)[0].message).toContain('agent-rebase calls it');
+    expect(stub(d)[0]!.message).toContain('agent-rebase calls it');
+  });
+
+  it("counts the Gates job it writes into a new ci.yml as a caller, so the Review feature's gates are named too", async () => {
+    const { d } = await init('review');
+    expect(stub(d)).toHaveLength(1);
+    expect(stub(d)[0]!.message).toContain('.github/workflows/ci.yml job gates calls it');
   });
 
   it('reports a stub the project kept as it was', async () => {
@@ -65,8 +71,8 @@ describe('kanon init and a stub project-setup hook (hook.stub)', () => {
   });
 
   it('is quiet where no chosen lane calls the hook, or the hook installs something', async () => {
-    // The review lane and the Lead's brief lane never call it.
-    expect(stub((await init('review,lead')).d)).toEqual([]);
+    // The review lane and the Lead's brief lane never call it, and with no gate no Gates job does.
+    expect(stub((await init('review,lead', {}, 'none')).d)).toEqual([]);
     const filled = hookFile(REQ.hook.inputs).replace(/run: echo[^\n]*/, 'run: npm ci');
     expect(stub((await init('review,rebase', { [HOOK]: filled })).d)).toEqual([]);
   });

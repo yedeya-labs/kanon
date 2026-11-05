@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { KIND_SECRETS, KINDS, VERSIONS } from '../../../scripts/lib/notify-contract.mjs';
@@ -112,7 +112,8 @@ export const buildRequirements = (root: string) => {
       // Whether the lane reaches a QA store, through the qa-store block in any file it runs: an
       // `id-token: write` grant alone doesn't say, since the telemetry Explorer's is for the
       // aggregate function (kanon#471).
-      qaStore: laneTree(root, file).some((f) => /^\s*-?\s*uses: \$\/actions\/qa-store\s*$/m.test(readFileSync(join(root, '.github/workflows', f), 'utf8'))),      // Whether a run of the lane calls the project-setup hook, a step `uses: ./.github/actions/project-setup`
+      qaStore: laneTree(root, file).some((f) => /^\s*-?\s*uses: \$\/actions\/qa-store\s*$/m.test(readFileSync(join(root, '.github/workflows', f), 'utf8'))),
+      // Whether a run of the lane calls the project-setup hook, a step `uses: ./.github/actions/project-setup`
       // in any file it runs (kanon#1607 point 12). The spine's call counts unless the lane passes the
       // spine `project-setup: false`, as the Lead's brief and revise lanes do (kanon#243).
       setupHook: laneTree(root, file).some((f) => !(SPINE.has(f) && /^ +project-setup: false *$/m.test(text)) && /^\s*-?\s*uses: \.\/\.github\/actions\/project-setup\s*$/m.test(readFileSync(join(root, '.github/workflows', f), 'utf8'))),
@@ -322,5 +323,8 @@ export const buildRequirements = (root: string) => {
     qaStore,
     deploy,
     notify,
+    // The composite actions this release ships, each `actions/<name>/action.yml` (#1608): `kanon
+    // doctor` gives a fix that uses one only against a release that has it, such as the brief guard.
+    actions: readdirSync(join(root, 'actions')).filter((d) => existsSync(join(root, 'actions', d, 'action.yml'))).sort(),
   };
 };

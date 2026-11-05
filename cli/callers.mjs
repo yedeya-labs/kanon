@@ -25,7 +25,7 @@ import { URL } from 'node:url';
  * @typedef {{ lanes: Record<string, Lane>, hook: { path: string, inputs: string[] },
  *   identities: { roles: Record<string, RoleIdentity>, apps: Record<string, AppIdentity> }, labels: string[],
  *   declarations?: Record<string, { baseline: boolean, requiredSections: string[] }>,
- *   release?: { dcoExemptsReleaser?: boolean }, catalogue?: Catalogue, features?: Feature[],
+ *   release?: { dcoExemptsReleaser?: boolean }, actions?: string[], catalogue?: Catalogue, features?: Feature[],
  *   telemetry?: { collector: string, variables: string[], grant?: Record<string, string>, token?: boolean, inputs?: string[] }, qaStore?: { hook: string, secrets: string[], secretsOnly?: boolean } }} Requirements
  * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, minutes: string, recommend: 'always' | string[], when: string, mergeQueue?: string, requires?: string[] }} CatalogueEntry
  * @typedef {{ groups: Array<{ id: string, title: string, header: string }>, lanes: Record<string, CatalogueEntry> }} Catalogue
@@ -394,12 +394,25 @@ const BRIEF_GUARD_STEP = (/** @type {any} */ step) =>
  * `pull_request` with a step that runs it, as `<workflow> job <job>`.
  * @param {Map<string, Record<string, any>>} workflows parsed, by path
  */
-export const briefGuardJobs = (workflows) =>
+export const briefGuardJobs = (workflows) => pullRequestJobs(workflows, BRIEF_GUARD_STEP);
+
+/**
+ * The jobs that call the project-setup hook on pull requests, such as the `Gates` job (#1607 point
+ * 12): each job of a workflow triggered on `pull_request` with a step `uses: ./.github/actions/project-setup`.
+ * @param {Map<string, Record<string, any>>} workflows parsed, by path
+ */
+export const setupHookJobs = (workflows) => pullRequestJobs(workflows, (step) => String(step?.uses ?? '').trim().replace(/\/$/, '') === './.github/actions/project-setup');
+
+/**
+ * Each job, as `<workflow> job <job>`, of a workflow triggered on `pull_request` with a step `has` matches.
+ * @param {Map<string, Record<string, any>>} workflows @param {(step: any) => boolean} has
+ */
+const pullRequestJobs = (workflows, has) =>
   [...workflows].flatMap(([path, wf]) => {
     const on = wf.on;
     const onPr = typeof on === 'string' ? on === 'pull_request' : Array.isArray(on) ? on.includes('pull_request') : on !== null && typeof on === 'object' && 'pull_request' in on;
     if (!onPr || wf.jobs === null || typeof wf.jobs !== 'object') return [];
-    return Object.entries(wf.jobs).filter(([, j]) => Array.isArray(j?.steps) && j.steps.some(BRIEF_GUARD_STEP)).map(([job]) => `${path} job ${job}`);
+    return Object.entries(wf.jobs).filter(([, j]) => Array.isArray(j?.steps) && j.steps.some(has)).map(([job]) => `${path} job ${job}`);
   });
 
 /**

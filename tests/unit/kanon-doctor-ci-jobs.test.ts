@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { briefGuardJob, callerFile, ciFile, hookFile } from '../../cli/callers.mjs';
 import { FINDINGS } from '../../scripts/lib/waivers.mjs';
-import { checkout, fakeGitHub, healthyFiles, PINNED, REQ, run, type Result } from './helpers/doctor.js';
+import { checkout, clone, fakeGitHub, healthyFiles, NEXT, PINNED, REQ, run, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 
 // Every case runs doctor against a real git checkout (helpers/doctor.ts).
@@ -36,6 +36,21 @@ describe('ci.brief-guard-missing', () => {
     }]);
   });
 
+  it('is quiet against a release that ships no brief-guard action, whose fix would not resolve', async () => {
+    // One whose action list leaves it out, and one from before the list.
+    const without = clone(REQ);
+    (without as { actions?: string[] }).actions = (REQ as { actions: string[] }).actions.filter((x) => x !== 'brief-guard');
+    const older = clone(REQ);
+    delete (older as { actions?: string[] }).actions;
+    for (const target of [without, older]) {
+      const r = await run(checkout(withLane('agent-lead-reconcile')), fakeGitHub({ releases: { [NEXT]: target } }), ['--json', '--to', NEXT]);
+      expect(of(r, 'ci.brief-guard-missing')).toEqual([]);
+    }
+    // The same --to with a release that ships it names the gap.
+    const r = await run(checkout(withLane('agent-lead-reconcile')), fakeGitHub({ releases: { [NEXT]: clone(REQ) } }), ['--json', '--to', NEXT]);
+    expect(of(r, 'ci.brief-guard-missing')).toHaveLength(1);
+  });
+
   it("is quiet once ci.yml runs the guard, or a workflow runs Kanon's script, or no Lead lane is installed", async () => {
     const files = withLane('agent-lead');
     files[CI] = ciFile(PINNED, 'main', { briefGuard: true });
@@ -55,6 +70,13 @@ describe('hook.stub', () => {
   it("names a lane that calls a hook still as init's stub", async () => {
     const r = await run(checkout(withLane('agent-rebase')), fakeGitHub(), ['--json']);
     expect(of(r, 'hook.stub')).toEqual([expect.objectContaining({ category: 'declaration', blocking: false, subject: REQ.hook.path, message: expect.stringContaining('agent-rebase calls it') })]);
+  });
+
+  it("names a CI job that calls a stub hook on pull requests, such as init's Gates job", async () => {
+    const files = healthyFiles();
+    files[CI] = ciFile(PINNED, 'main', { gates: ['npm test'] });
+    const r = await run(checkout(files), fakeGitHub(), ['--json']);
+    expect(of(r, 'hook.stub')).toEqual([expect.objectContaining({ subject: REQ.hook.path, message: expect.stringContaining('.github/workflows/ci.yml job gates calls it') })]);
   });
 
   it('is quiet where the hook installs something, or no installed lane calls it', async () => {
