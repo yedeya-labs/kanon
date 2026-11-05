@@ -226,14 +226,15 @@ export function classifyResult(result, model = '', opts = {}) {
   // something its run needs doesn't hold (a brief lane dispatched with a `context` that names no
   // tracking issue), and stopped without doing its work, saying so with the `KANON-STOP:` line
   // its prompt asks for (`persona-prompt.mjs`). The CLI reports that as a clean `success`, which
-  // was `ok`, and the run ended green and silent. It is `failed`, `did_not_finish`: the work was
-  // not done, and the row says so without a reason code the deployed intake doesn't know yet
-  // (docs/release.md, "Intake first"). `agent-run` warns with the agent's own words.
+  // was `ok`, and the run ended green and silent. It is `failed`, with its own code,
+  // `precondition_stop` (the Owner's decision on kanon#1639): the work was not done, but nothing
+  // failed, so the rise comparison leaves it out. A new code is a widening of intake, deployed
+  // first (docs/release.md, "Intake first"). `agent-run` warns with the agent's own words.
   const stop = preconditionStop(result);
   if (!errored && stop !== null) {
     return {
       kind: 'failed',
-      code: 'did_not_finish',
+      code: 'precondition_stop',
       why: `the agent stopped on a precondition it found mid-run: ${stop}`,
     };
   }

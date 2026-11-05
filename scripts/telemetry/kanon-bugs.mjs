@@ -87,6 +87,13 @@ export const RISE = Object.freeze({ minRuns: 20, points: 0.10 });
 export const isPlatformStatus = (/** @type {unknown} */ s) => typeof s === 'number' && (s === 429 || (s >= 500 && s <= 599));
 /** The reasons that say the configured model was never reached (plan 0002 §2.3). */
 export const PLATFORM_REASONS = Object.freeze(['model_never_ran', 'no_model_ran']);
+/**
+ * The reasons a lane's failure rate leaves out, as it leaves out the platform's (kanon#1639): an
+ * agent that stopped on a precondition it found mid-run did no work, but nothing in Kanon failed,
+ * so a release whose lanes stop more often on one is no regression. Its runs still group as a
+ * signal of their own, by reason.
+ */
+export const RISE_EXCLUDED_REASONS = Object.freeze(['precondition_stop']);
 
 /** The marker an issue body carries its signature in, so the job finds the open issue to update. */
 export const MARKER = 'kanon:bug-signature';
@@ -233,7 +240,7 @@ export function detect(rows, { known = [], tag = 'run', own = {} } = {}) {
     t.adopters.add(key);
     t.byAdopter.set(key, (t.byAdopter.get(key) ?? 0) + 1);
     if (okOutcome) continue;
-    if (!platform) t.failures += 1;
+    if (!platform && !RISE_EXCLUDED_REASONS.includes(reason)) t.failures += 1;
 
     const gk = JSON.stringify([lane, stage, error, reason, version]);
     const g = groups.get(gk) ?? { lane, failed_stage: stage, kanon_error: error, reason, kanon_version: version, runs: 0, platform: 0, adopters: new Set(), first: row.recorded_at, last: row.recorded_at, statuses: {} };

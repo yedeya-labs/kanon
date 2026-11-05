@@ -106,6 +106,10 @@ export const REASON_OUTCOME = Object.freeze({
   turn_cap: 'exhausted',
   budget_cap: 'exhausted',
   did_not_finish: 'failed',
+  // An agent that stopped on a precondition it found mid-run (kanon#1564, the Owner's decision on
+  // kanon#1639): the work wasn't done, but nothing failed, so it is its own code under `failed`,
+  // and the rise comparison leaves it out (`scripts/telemetry/kanon-bugs.mjs`).
+  precondition_stop: 'failed',
   no_result_file: 'not-reached',
 });
 export const REASONS = Object.freeze(Object.keys(REASON_OUTCOME));

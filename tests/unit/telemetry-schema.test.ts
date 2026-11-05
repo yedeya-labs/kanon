@@ -113,6 +113,12 @@ const CASES: Record<string, { file: string | null; env?: Record<string, string>;
     env: { TELEMETRY_STAGES: 'token=success checkout=success hook=success setup=success agent=failure' },
     outcome: 'failed', reason: 'did_not_finish',
   },
+  // kanon#1639: a clean run whose agent stopped on a precondition it found mid-run (kanon#1564).
+  precondition_stop: {
+    file: file('stopped.json', [INIT, { ...RESULT, result: 'KANON-STOP: the context names no project tracking issue' }]),
+    env: { TELEMETRY_STAGES: 'token=success checkout=success hook=success setup=success agent=success' },
+    outcome: 'failed', reason: 'precondition_stop',
+  },
   no_result_file: {
     file: null,
     env: { TELEMETRY_STAGES: 'token=success checkout=failure hook=skipped setup=skipped agent=skipped', TELEMETRY_JOB_STATUS: 'failure' },

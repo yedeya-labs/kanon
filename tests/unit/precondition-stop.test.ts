@@ -19,11 +19,12 @@ describe('a precondition the agent finds mid-run (#1564)', () => {
     expect(STOP_MARKER).toBe('KANON-STOP:');
   });
 
-  it('classifies a clean run that ends with the marker as failed, did_not_finish, never ok', () => {
+  it('classifies a clean run that ends with the marker as failed, precondition_stop, never ok', () => {
     const stopped = clean('I looked at #12 and #13.\nNeither is a project tracking issue, so I stopped.\nKANON-STOP: the context names no project tracking issue');
     expect(preconditionStop(stopped)).toBe('the context names no project tracking issue');
-    expect(classifyResult(stopped, MODEL)).toEqual({ kind: 'failed', code: 'did_not_finish', why: 'the agent stopped on a precondition it found mid-run: the context names no project tracking issue' });
-    expect(REASON_OUTCOME.did_not_finish).toBe('failed');
+    expect(classifyResult(stopped, MODEL)).toEqual({ kind: 'failed', code: 'precondition_stop', why: 'the agent stopped on a precondition it found mid-run: the context names no project tracking issue' });
+    // kanon#1639: its own code, under `failed`.
+    expect(REASON_OUTCOME.precondition_stop).toBe('failed');
     // The row is valid: a failed outcome needs a failed stage, and a run whose stages all passed gets `agent`.
     expect(failedStage([['agent', 'success'], ['finish', 'success']], 'failed')).toBe('agent');
   });
@@ -47,5 +48,28 @@ describe('a precondition the agent finds mid-run (#1564)', () => {
     // A line break can't reach the annotation: the reason is one line, and CR and LF are encoded.
     const crlf = stopNotice({ ...clean(''), result: 'KANON-STOP: a\rb' })!;
     expect(crlf.annotation).not.toMatch(/[\r\n]/);
+  });
+
+  // kanon#1639: the importer knows the sentence, and the rise comparison leaves the code out.
+  it("imports the sentence as its code, and the rise leaves it out while it groups as a signal of its own", async () => {
+    const { reasonCode } = await import('../../infra/telemetry/import.mjs');
+    expect(reasonCode({ outcome: 'failed', reason: 'the agent stopped on a precondition it found mid-run: no tracking issue' })).toEqual({ code: 'precondition_stop', derived: false });
+    const { RISE, RISE_EXCLUDED_REASONS, detect } = await import('../../scripts/telemetry/kanon-bugs.mjs');
+    expect(RISE_EXCLUDED_REASONS).toEqual(['precondition_stop']);
+    const row = (i: number, version: string, reason: string, outcome = 'failed') => ({
+      adopter: `a${i % 3}`, row_kind: 'run', tag: 'run', recorded_at: `2026-11-0${(i % 5) + 1}T00:00:00Z`, lane: 'lead', outcome, reason,
+      ...(outcome === 'ok' ? {} : { failed_stage: 'agent' }), kanon_version: version,
+    });
+    const n = RISE.minRuns;
+    const rows = [
+      ...Array.from({ length: n }, (_, i) => row(i, '0.43.0', 'none', 'ok')),
+      ...Array.from({ length: n }, (_, i) => row(i, '0.44.0', 'precondition_stop')),
+    ];
+    const r = detect(rows);
+    expect(r.rises).toEqual([]);
+    expect(r.signals.map((s: { reason: string; kanon_version: string }) => `${s.reason} ${s.kanon_version}`)).toEqual(['precondition_stop 0.44.0']);
+    // The same runs as an agent that errored are a rise.
+    const errored = detect([...rows.slice(0, n), ...Array.from({ length: n }, (_, i) => row(i, '0.44.0', 'did_not_finish'))]);
+    expect(errored.rises).toHaveLength(1);
   });
 });
