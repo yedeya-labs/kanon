@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { BUCKETS, milestones } from '../../cli/milestones.mjs';
+import { BUCKETS, milestones, RATE_LINE } from '../../cli/milestones.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 
 /**
@@ -49,6 +49,26 @@ const run = async (github: ReturnType<typeof fakeGitHub>, argv = ['--repo', REPO
 const writes = (calls: string[][]) => calls.filter((c) => !c.includes('--slurp') && c[1] !== 'user');
 const roadmap = (title: string, number = 7): Milestone => ({ number, title, state: 'open', due_on: '2026-12-01T08:00:00Z' });
 const bucket = (title: string, number = 3): Milestone => ({ number, title, state: 'open', due_on: null });
+
+// kanon#1607 point 9: a rate limit or GitHub failing is not the token, so the command says to
+// run it again, and never gives the token's fix.
+describe('kanon milestones and a transient GitHub failure (#1607)', () => {
+  it('says GitHub limited the rate, not the token, and gives no token fix', async () => {
+    const github = fakeGitHub([]);
+    const gh = github.gh;
+    github.gh = async (args: string[]) => (args.includes('POST') ? { status: 1, stdout: '', stderr: 'gh: You have exceeded a secondary rate limit. (HTTP 403)' } : gh(args));
+    const r = await run(github, ['--repo', REPO], { GH_TOKEN: 'x' });
+    expect(r.status).toBe(1);
+    expect(r.err).toContain(`kanon milestones: ${RATE_LINE}`);
+    expect(r.err).not.toContain('GH_TOKEN is set in this shell');
+    const refused = fakeGitHub([]);
+    const g2 = refused.gh;
+    refused.gh = async (args: string[]) => (args.includes('POST') ? { status: 1, stdout: '', stderr: 'gh: Resource not accessible by personal access token (HTTP 403)' } : g2(args));
+    const p = await run(refused, ['--repo', REPO], { GH_TOKEN: 'x' });
+    expect(p.err).not.toContain(RATE_LINE);
+    expect(p.err).toContain('GH_TOKEN is set in this shell');
+  });
+});
 
 // Its cases run `kanon milestones` in `node`, so the block takes the spawn budget (#436).
 describe('kanon milestones creates the bucket milestones (#72, K-ADOPT-1 step 7)', SPAWNS, () => {

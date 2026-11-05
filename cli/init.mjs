@@ -83,10 +83,11 @@ import {
   TRIGGERS,
 } from './callers.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
+import { failureCause, firstLine, transient, TRANSIENT_WHY, withRetry } from './gh-retry.mjs';
 import { skillTokenNeeds, whoami } from './gh-token.mjs';
 import { AUTO_UPDATE, declaresAutoUpdate, KANON_MARKETPLACE_REPO, pluginInstallOnly, pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { coveringRulesets, rulesetUrl } from './ruleset-bypass.mjs';
-import { BUCKETS, milestones as runMilestones } from './milestones.mjs';
+import { BUCKETS, milestones as runMilestones, RATE_LINE as MILESTONES_RATE_LINE } from './milestones.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL, sends } from '../scripts/lib/upstream-findings.mjs';
 import { HOSTED_INGEST_URL } from '../scripts/lib/telemetry-token.mjs';
@@ -351,18 +352,23 @@ let rl = null;
 
 /** @type {Deps} */
 export const realDeps = {
-  gh: (args, input) =>
-    new Promise((done) => {
-      const child = spawn('gh', args, { stdio: ['pipe', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (d) => (stdout += d));
-      child.stderr.on('data', (d) => (stderr += d));
-      child.on('error', (e) => done({ status: null, stdout, stderr: String(e.message) }));
-      child.on('close', (status) => done({ status, stdout, stderr }));
-      child.stdin.on('error', () => {});
-      child.stdin.end(input ?? '');
-    }),
+  // Writes spaced out, and a rate limit or a 5xx asked again, so a burst such as the label
+  // creates doesn't fail on GitHub's secondary rate limit (cli/gh-retry.mjs, kanon#1607).
+  gh: withRetry(
+    (args, input) =>
+      new Promise((done) => {
+        const child = spawn('gh', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d) => (stdout += d));
+        child.stderr.on('data', (d) => (stderr += d));
+        child.on('error', (e) => done({ status: null, stdout, stderr: String(e.message) }));
+        child.on('close', (status) => done({ status, stdout, stderr }));
+        child.stdin.on('error', () => {});
+        child.stdin.end(input ?? '');
+      }),
+    { progress: (line) => process.stderr.write(`kanon init: ${line}\n`) },
+  ),
   git: (args) => {
     // Never a prompt: the anonymous read of Kanon's tags (`anonymousTag`) must fail, not wait.
     const r = spawnSync('git', args, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
@@ -3414,10 +3420,24 @@ const run = async (deps, opts, req, rep) => {
   // A token whose repository access leaves the repository out (#1551) fails every write below
   // for that reason, whatever permissions it holds, so each write's step names the coverage, not
   // a permission the person may well have granted already.
-  /** Why the token couldn't. @param {string} permission */
-  const needs = (permission) => (s.tokenCovers === false ? `the token's repository access doesn't cover ${repo}` : `it needs ${permission}`);
-  /** The token that can. @param {string} permission */
-  const tokenWith = (permission) => (s.tokenCovers === false ? `a token whose repository access covers ${repo}, with ${permission}` : `a token that has ${permission}`);
+  // A write whose last answer, past gh-retry's retries, was still a rate limit or GitHub failing
+  // (kanon#1607) names neither: the token was shown to hold the permission, so the step says to
+  // run init again. A permission is named only on a 403 without a rate-limit marker, or a 404, or
+  // where init made no call (a token that can't administer the repository); another refusal is
+  // given as GitHub said it.
+  /** Why the token couldn't. @param {string} permission @param {string[]} [answers] the failed calls' stderr */
+  const needs = (permission, answers = []) => {
+    const cause = failureCause(answers);
+    return cause === 'transient' ? TRANSIENT_WHY
+      : s.tokenCovers === false ? `the token's repository access doesn't cover ${repo}`
+      : cause === 'other' ? `GitHub refused it: ${firstLine(answers)}`
+      : `it needs ${permission}`;
+  };
+  /** The token that can, or, on a transient failure, the same run again. @param {string} permission @param {string[]} [answers] */
+  const tokenWith = (permission, answers = []) => (failureCause(answers) === 'transient' ? `the same token, by running kanon init again in a few minutes (${TRANSIENT_WHY.split(';')[0]})`
+    : s.tokenCovers === false ? `a token whose repository access covers ${repo}, with ${permission}` : `a token that has ${permission}`);
+  /** Who failed, for a step's message. @param {string[]} answers */
+  const couldNot = (answers) => (failureCause(answers) === 'transient' ? 'GitHub limited the rate (or failed) when init tried' : 'the token could not');
   if (s.tokenCovers === false) {
     note(`The token gh uses doesn't cover ${repo}: GitHub refused it the repository's collaborators, which any token that covers the repository can read, so ${dry ? 'every write to it would fail' : 'every write to it fails'}. Add ${repo} to the fine-grained token's Repository access (https://github.com/settings/personal-access-tokens), or use a token that covers it, then run kanon init again.`);
   }
@@ -3642,6 +3662,8 @@ const run = async (deps, opts, req, rep) => {
   const missingLabels = taxonomy.filter((l) => !s.labels.has(l.name));
   /** @type {string[]} */
   const labelSteps = [];
+  /** @type {string[]} the failed creates' stderr */
+  const labelAnswers = [];
   for (const l of missingLabels) {
     const cmd = ['label', 'create', l.name, '--color', l.color, '--description', l.description, '-R', repo];
     if (dry) {
@@ -3650,7 +3672,10 @@ const run = async (deps, opts, req, rep) => {
     }
     const r = await deps.gh(cmd);
     if (r.status === 0) change('label', l.name, `Created the label ${l.name}`);
-    else labelSteps.push(`gh ${cmd.map((c) => (/^[\w:./-]+$/.test(c) ? c : JSON.stringify(c))).join(' ')}`);
+    else {
+      labelSteps.push(`gh ${cmd.map((c) => (/^[\w:./-]+$/.test(c) ? c : JSON.stringify(c))).join(' ')}`);
+      labelAnswers.push(r.stderr);
+    }
   }
   out(missingLabels.length ? `${dry ? 'Would create' : 'Created'} ${missingLabels.length - labelSteps.length} of the ${missingLabels.length} missing taxonomy label(s).` : `All ${taxonomy.length} taxonomy labels exist.`);
   if (labelSteps.length) {
@@ -3658,9 +3683,9 @@ const run = async (deps, opts, req, rep) => {
       id: 'label.create',
       category: 'label',
       subject: repo,
-      prose: `Create the labels the token could not (${needs('Issues: write')}):`,
-      message: `${labelSteps.length} of the taxonomy's labels are missing, and the token could not create them (${needs('Issues: write')}).`,
-      text: `Create them with ${tokenWith('Issues: write')}.`,
+      prose: `Create the labels ${failureCause(labelAnswers) === 'transient' ? 'init' : 'the token'} could not (${needs('Issues: write', labelAnswers)}):`,
+      message: `${labelSteps.length} of the taxonomy's labels are missing, and ${couldNot(labelAnswers)} create them (${needs('Issues: write', labelAnswers)}).`,
+      text: `Create them with ${tokenWith('Issues: write', labelAnswers)}.`,
       commands: labelSteps,
     });
   }
@@ -3672,7 +3697,7 @@ const run = async (deps, opts, req, rep) => {
         if (r.status === 0) change('label-deleted', n, `Deleted GitHub's default label ${n}`);
         else {
           const cmd = `gh label delete ${JSON.stringify(n)} --yes -R ${repo}`;
-          step({ id: 'label.delete-default', category: 'label', subject: n, prose: `Delete GitHub's default label "${n}" (K-WORK-12): ${cmd}`, message: `GitHub's default label "${n}" is outside Kanon's taxonomy, and the token could not delete it.`, text: `Delete it with ${tokenWith('Issues: write')} (K-WORK-12).`, commands: [cmd], lines: [] });
+          step({ id: 'label.delete-default', category: 'label', subject: n, prose: `Delete GitHub's default label "${n}" (K-WORK-12): ${cmd}`, message: `GitHub's default label "${n}" is outside Kanon's taxonomy, and ${couldNot([r.stderr])} delete it (${needs('Issues: write', [r.stderr])}).`, text: `Delete it with ${tokenWith('Issues: write', [r.stderr])} (K-WORK-12).`, commands: [cmd], lines: [] });
         }
       }
     } else if (a.deleteDefaults) for (const n of extra) change('label-deleted', n, `Would delete GitHub's default label ${n}`);
@@ -3682,11 +3707,21 @@ const run = async (deps, opts, req, rep) => {
   if (!missingBuckets.length) out('Both bucket milestones exist.');
   else if (dry) for (const b of missingBuckets) change('milestone', b, `Would create the milestone ${b}`);
   else {
-    const code = await deps.milestones(['--repo', repo], { out, err });
+    // What kanon milestones said, to tell GitHub limiting the rate from the token (kanon#1607).
+    /** @type {string[]} */
+    const said = [];
+    const code = await deps.milestones(['--repo', repo], { out, err: (l) => (said.push(l), err(l)) });
     if (code === 0) for (const b of missingBuckets) change('milestone', b, `Created the milestone ${b}`);
     else {
       const cmd = `kanon milestones --repo ${repo}`;
-      step({ id: 'milestone.buckets', category: 'milestone', subject: repo, prose: `Create the bucket milestones (K-WORK-4): ${cmd}`, message: `The bucket milestones ${missingBuckets.join(' and ')} are missing (K-WORK-4), and kanon milestones did not create them.`, text: `Run kanon milestones with ${tokenWith('Issues: write')}.`, commands: [cmd], lines: [] });
+      // Why, from its own lines (kanon#1623): a rate limit; a refusal of the token, which alone names
+      // Issues: write; or anything else, such as a bucket with a due date or a 422, quoted as it said it.
+      const lines = said.filter((l) => l.startsWith('kanon milestones: ')).map((l) => l.slice('kanon milestones: '.length));
+      const refusal = lines.find((l) => /\bHTTP 40[34]\b|Resource not accessible|Must have admin rights/i.test(l) && !transient(l));
+      const cause = said.some((l) => l.includes(MILESTONES_RATE_LINE)) ? 'transient' : refusal !== undefined || !lines.length ? 'permission' : 'other';
+      const why = cause === 'transient' ? ` (${TRANSIENT_WHY})` : cause === 'other' ? ` (kanon milestones said: ${lines[0]})` : ` (${needs('Issues: write', refusal ? [refusal] : [])})`;
+      const text = cause === 'other' ? 'Fix what kanon milestones said, then run it again.' : `Run kanon milestones with ${tokenWith('Issues: write', cause === 'transient' ? ['HTTP 429'] : [])}.`;
+      step({ id: 'milestone.buckets', category: 'milestone', subject: repo, prose: `Create the bucket milestones (K-WORK-4): ${cmd}`, message: `The bucket milestones ${missingBuckets.join(' and ')} are missing (K-WORK-4), and kanon milestones did not create them${why}.`, text, commands: [cmd], lines: [] });
     }
   }
 
@@ -3707,9 +3742,9 @@ const run = async (deps, opts, req, rep) => {
         id: 'merge.settings',
         category: 'merge',
         subject: repo,
-        prose: `Make squash the only merge method, with the PR's title and body as the commit's (K-SHIP-3); ${needs('Administration: write')}:`,
-        message: `The repository's merge settings differ from K-SHIP-3's (${settingList}), and the token could not change them.`,
-        text: `Make squash the only merge method, with the PR's title and body as the commit's, with ${tokenWith('Administration: write')}.`,
+        prose: `Make squash the only merge method, with the PR's title and body as the commit's (K-SHIP-3); ${needs('Administration: write', r ? [r.stderr] : [])}:`,
+        message: `The repository's merge settings differ from K-SHIP-3's (${settingList}), and ${couldNot(r ? [r.stderr] : [])} change them.`,
+        text: `Make squash the only merge method, with the PR's title and body as the commit's, with ${tokenWith('Administration: write', r ? [r.stderr] : [])}.`,
         commands: [`gh ${patch.join(' ')}`],
         url: `https://github.com/${repo}/settings`,
       });
@@ -3859,9 +3894,9 @@ const run = async (deps, opts, req, rep) => {
           id: 'ruleset.create',
           category: 'ruleset',
           subject: s.defaultBranch,
-          prose: `Create the default branch's ruleset (K-ADOPT-1 step 8); ${needs('Administration: write')}:`,
-          message: `${s.defaultBranch} has no ruleset, and the token could not create one (K-ADOPT-1 step 8).`,
-          text: `Create it with ${tokenWith('Administration: write')}; the command reads the ruleset from the lines after it.`,
+          prose: `Create the default branch's ruleset (K-ADOPT-1 step 8); ${needs('Administration: write', r ? [r.stderr] : [])}:`,
+          message: `${s.defaultBranch} has no ruleset, and ${couldNot(r ? [r.stderr] : [])} create one (K-ADOPT-1 step 8).`,
+          text: `Create it with ${tokenWith('Administration: write', r ? [r.stderr] : [])}; the command reads the ruleset from the lines after it.`,
           commands: rulesetCmd,
         });
       }

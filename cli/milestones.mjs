@@ -18,6 +18,7 @@
 // refuses the token, how to fix a stale GH_TOKEN (cli/gh-token.mjs, plan 0005 §5.1).
 import { spawn } from 'node:child_process';
 import { BUCKET_MILESTONES } from '../scripts/issue-triage-defaults.mjs';
+import { transient, withRetry } from './gh-retry.mjs';
 import { isAuthFailure, tokenFix, whoami } from './gh-token.mjs';
 
 /** The two buckets, in the order K-WORK-4 names them: the backstop's own list. */
@@ -41,20 +42,27 @@ then GITHUB_TOKEN, then its stored login; the command prints which one it uses a
 
 /** @type {Deps} */
 export const realDeps = {
-  gh: (args) =>
-    new Promise((resolve) => {
-      const child = spawn('gh', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (d) => (stdout += d));
-      child.stderr.on('data', (d) => (stderr += d));
-      child.on('error', (e) => resolve({ status: null, stdout, stderr: String(e.message) }));
-      child.on('close', (status) => resolve({ status, stdout, stderr }));
-    }),
+  // Writes spaced out, and a rate limit or a 5xx asked again (cli/gh-retry.mjs, kanon#1607).
+  gh: withRetry(
+    (args) =>
+      new Promise((resolve) => {
+        const child = spawn('gh', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d) => (stdout += d));
+        child.stderr.on('data', (d) => (stderr += d));
+        child.on('error', (e) => resolve({ status: null, stdout, stderr: String(e.message) }));
+        child.on('close', (status) => resolve({ status, stdout, stderr }));
+      }),
+    { progress: (line) => process.stderr.write(`kanon milestones: ${line}\n`) },
+  ),
   out: (line) => process.stdout.write(`${line}\n`),
   err: (line) => process.stderr.write(`${line}\n`),
   env: process.env,
 };
+
+/** What `kanon milestones` says when GitHub limited the rate or failed, past the retries. */
+export const RATE_LINE = 'GitHub limited the rate (or failed), not the token; run it again in a few minutes.';
 
 /**
  * Parses `kanon milestones`'s arguments. Throws with a message naming the problem.
@@ -106,8 +114,10 @@ export const milestones = async (argv, overrides = {}) => {
     for (const l of who.refusal) deps.err(`kanon milestones: ${l}`);
     return 1;
   }
+  // A rate limit or GitHub failing is no fault of the token (kanon#1607): it says to run again,
+  // where a refusal names the token's fix.
   /** @param {GhResult} r */
-  const fix = (r) => (isAuthFailure(r.stderr) ? tokenFix(who.source).map((l) => `kanon milestones: ${l}`) : []);
+  const fix = (r) => (transient(r.stderr) ? [`kanon milestones: ${RATE_LINE}`] : isAuthFailure(r.stderr) ? tokenFix(who.source).map((l) => `kanon milestones: ${l}`) : []);
 
   // Every milestone, closed ones included: GitHub refuses a second milestone with a closed
   // one's title, and a closed bucket is a finding, not an absence.
