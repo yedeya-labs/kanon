@@ -208,7 +208,8 @@ const WAIVER_HEAD = `^[-*] \\*\\*${WAIVER_LABEL}:\\*\\* \`([^\`\\s]+)\` on \`([^
 /**
  * The bullet to write for a waiver that is well formed but for items after `for` that lack
  * backticks, each item as the person wrote it in a code span (#1618), or null for a bullet
- * malformed in any other way: no reason, an empty item, or a backtick that isn't a whole span.
+ * malformed in any other way: no reason, an empty item, a backtick that isn't a whole span, or items
+ * not separated by exactly `, `.
  * @param {string} line
  */
 const quoteItems = (line) => {
@@ -216,7 +217,7 @@ const quoteItems = (line) => {
   if (!m) return null;
   const items = /** @type {string} */ (m[3]).split(',').map((x) => x.trim());
   const span = new RegExp(`^${CODE_SPAN}$`);
-  if (!items.every((x) => span.test(x) || /^[^`]*[^`\s][^`]*$/.test(x)) || items.every((x) => span.test(x))) return null;
+  if (m[3] !== items.join(', ') || !items.every((x) => span.test(x) || /^[^`]*[^`\s][^`]*$/.test(x)) || items.every((x) => span.test(x))) return null;
   return `- **${WAIVER_LABEL}:** \`${m[1]}\` on \`${m[2]}\` for ${items.map((x) => (span.test(x) ? x : `\`${x}\``)).join(', ')} (${m[4]})`;
 };
 
