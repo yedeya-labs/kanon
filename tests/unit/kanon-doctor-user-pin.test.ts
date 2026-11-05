@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { FINDINGS, UNWAIVABLE } from '../../scripts/lib/waivers.mjs';
-import { managedSettingsPaths, pluginSettingsFile, readMarketplaceEntry, userSettingsPath } from '../../cli/plugin.mjs';
+import { managedSettingFiles, managedSettingsPaths, pluginSettingsFile, readMarketplaceEntry, unreadSettings, userSettingsPath } from '../../cli/plugin.mjs';
 import { checkout, fakeGitHub, healthyFiles, PINNED, run, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -116,13 +116,56 @@ describe("plugin.behind's fix for a stale marketplace, once doctor can tell the 
   it('says the marketplace is only behind where no settings of the person declare it', async () => {
     const r = await run(declaredRepo(), fakeGitHub(), ['--json'], undefined, { HOME: home(null), CLAUDE_CODE_PLUGIN_CACHE_DIR: records('v0.9.0') });
     expect(behind(r).fix.commands).toEqual(['claude plugin update kanon@kanon']);
-    expect(behind(r).fix.text).toContain('No settings of yours declare it, so it is only behind');
+    expect(behind(r).fix.text).toContain("None of the settings files doctor reads declare it over the repository's");
+    // #1630: it names what it can't read, rather than saying nothing overrides the pin.
+    expect(behind(r).fix.text).toContain("Doctor can't read server-managed settings; unless your organisation sets the marketplace there, it is only behind");
   });
 
   it("keeps the remove, as a condition the person checks, where doctor couldn't read their settings", async () => {
     const r = await run(declaredRepo(), fakeGitHub(), ['--json'], undefined, { CLAUDE_CODE_PLUGIN_CACHE_DIR: records('v0.9.0') });
     expect(behind(r).fix.commands).toEqual(['claude plugin marketplace remove kanon --scope user', 'claude plugin update kanon@kanon']);
     expect(behind(r).fix.text).toContain('If you added the marketplace yourself');
+  });
+});
+
+// #1630: the other sources Claude Code takes the entry from, read for the one key as the rest are.
+describe('plugin.user-override from the managed drop-ins and the local settings (#1630)', () => {
+  it('reads the managed drop-ins after the file, the last that declares the entry winning', async () => {
+    const dir = temp();
+    const file = join(dir, 'managed-settings.json');
+    writeFileSync(file, settings(PINNED));
+    const late = join(dir, 'managed-settings.d', '20-late.json');
+    mkdirSync(join(dir, 'managed-settings.d'));
+    writeFileSync(join(dir, 'managed-settings.d', '10-early.json'), settings('v0.1.0'));
+    writeFileSync(late, settings('v0.38.0'));
+    const r = await run(declaredRepo(), fakeGitHub(), ['--json'], undefined, { HOME: home(null) }, [file, join(dir, 'managed-settings.d', '10-early.json'), late]);
+    expect(of(r, 'plugin.user-override')).toEqual([expect.objectContaining({ subject: late, message: expect.stringContaining('at v0.38.0') })]);
+    // A drop-in that sets it back to the repository's ref is the one Claude Code takes: no override.
+    writeFileSync(late, settings(PINNED));
+    expect(of(await run(declaredRepo(), fakeGitHub(), ['--json'], undefined, { HOME: home(null) }, [file, join(dir, 'managed-settings.d', '10-early.json'), late]), 'plugin.user-override')).toEqual([]);
+  });
+
+  it("names the checkout's local settings, whose fix edits that file", async () => {
+    const dir = checkout({ ...healthyFiles(), [SETTINGS]: pluginSettingsFile(PINNED), '.claude/settings.local.json': settings('v0.38.0') });
+    const [f] = of(await run(dir, fakeGitHub(), ['--json'], undefined, { HOME: home(null) }), 'plugin.user-override');
+    expect(f).toMatchObject({ subject: '.claude/settings.local.json', message: expect.stringMatching(/^This checkout's local settings, \.claude\/settings\.local\.json, declare .* in this checkout,/) });
+    expect(f.fix.text).toContain('delete its "kanon" entry under extraKnownMarketplaces');
+    expect(f.fix.commands).not.toContainEqual(expect.stringContaining('remove'));
+  });
+
+  it('reads the entry as the repository\'s is read: the alias, and a blank ref as none', () => {
+    const alias = JSON.stringify({ additionalMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref: ' v1.0.0 ' } } } });
+    expect(readMarketplaceEntry(alias, 'kanon')).toEqual({ status: 'entry', kanon: true, ref: 'v1.0.0' });
+    expect(readMarketplaceEntry(settings('').replace('"ref":""', '"ref":"  "'), 'kanon')).toEqual({ status: 'entry', kanon: true, ref: null });
+  });
+
+  it('lists the drop-ins in order, and names what it cannot read per system', () => {
+    expect(managedSettingFiles('linux', () => ['b.json', 'a.json', 'notes.txt'])).toEqual([
+      '/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d/a.json', '/etc/claude-code/managed-settings.d/b.json',
+    ]);
+    expect(unreadSettings('darwin')).toEqual(['the macOS managed preferences (com.anthropic.claudecode)', 'server-managed settings']);
+    expect(unreadSettings('win32')[0]).toMatch(/registry policy/);
+    expect(unreadSettings('linux')).toEqual(['server-managed settings']);
   });
 });
 
