@@ -236,3 +236,42 @@ export const declaresAutoUpdate = (text) => {
   const entry = marketplaces(JSON.parse(/** @type {string} */ (text)))[declared.name];
   return isMap(entry) && entry[AUTO_UPDATE] === true;
 };
+
+// ── The file Claude Code's own install writes (kanon#1607, point 8) ─────────────────────────
+//
+// `claude plugin marketplace add --scope project yedeya-labs/kanon#<ref>` and `claude plugin
+// install --scope project kanon@kanon` write `.claude/settings.json` with the marketplace's source
+// and the plugin's switch, and nothing else: no `autoUpdate`. A person following the install path
+// reaches `kanon init` with that file, never committed, so `init` takes it as its own (it rewrites
+// it to its template, `autoUpdate` on and `ref` at its release) rather than raising `plugin.declare`
+// for the person to merge two keys by hand. A file with anything else in it, or one in git's
+// history, stays the project's.
+
+/** @param {Record<string, unknown>} m @param {string[]} allowed */
+const onlyKeys = (m, allowed) => Object.keys(m).every((k) => allowed.includes(k));
+
+/**
+ * Whether a settings file's text parses to nothing but Kanon's marketplace entry, named `kanon`
+ * (its source Kanon's repository, at any `ref`, with or without `"autoUpdate": true`), and, if it
+ * enables plugins at all, `kanon@kanon` alone: the file Claude Code's install writes.
+ * @param {string | null} text
+ */
+export const pluginInstallOnly = (text) => {
+  if (text === null) return false;
+  /** @type {unknown} */
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (!isMap(doc) || !onlyKeys(doc, ['extraKnownMarketplaces', 'enabledPlugins'])) return false;
+  const markets = doc.extraKnownMarketplaces;
+  if (!isMap(markets) || !onlyKeys(markets, [MARKETPLACE]) || !isMap(markets[MARKETPLACE])) return false;
+  const entry = markets[MARKETPLACE];
+  if (!onlyKeys(entry, ['source', AUTO_UPDATE]) || (AUTO_UPDATE in entry && entry[AUTO_UPDATE] !== true)) return false;
+  if (!isKanonSource(entry.source) || !onlyKeys(entry.source, ['source', 'repo', 'url', 'ref'])) return false;
+  if (doc.enabledPlugins === undefined) return true;
+  const enabled = doc.enabledPlugins;
+  return isMap(enabled) && onlyKeys(enabled, [`${PLUGIN}@${MARKETPLACE}`]) && enabled[`${PLUGIN}@${MARKETPLACE}`] === true;
+};

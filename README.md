@@ -36,13 +36,15 @@ You need Node 24, Claude Code, `gh` signed in as a repository admin, and a CI wo
 <!-- x-release-please-start-version -->
 
 ```sh
-claude plugin marketplace add yedeya-labs/kanon#v0.42.0
-claude plugin install kanon@kanon
+claude plugin marketplace add --scope project yedeya-labs/kanon#v0.42.0
+claude plugin install --scope project kanon@kanon
 ```
 
 <!-- x-release-please-end -->
 
-Type `/kanon:adopt` next; asking the agent to install Kanon won't start it. It asks three questions, which environments your releases deploy to, if any (with one, it also writes Kanon's release workflow, if you have none, and recommends the Releaser App, so a release starts the deploy), and, where a lane you choose posts to chat (the full pipeline's digests, or the release announcement for each published release), which hook posts it (Slack, a JSON webhook, your own or none), shows one summary to confirm, writes the files on a branch, walks you through the steps only you can take (creating the two Apps, adding a secret), and opens the pull request. Start with **Review**: the Reviewer on your pull requests, nothing else. [docs/install.md](docs/install.md) has every other way to install.
+`--scope project` writes the pin into your repository's `.claude/settings.json`, which `/kanon:adopt` takes onto its branch; Claude Code's default, user scope, writes it into your own settings, where it overrides every repository's own pin. Claude Code keeps one clone of the marketplace per person, so re-pointing it in one repository re-points it for all of them ([docs/skills.md](docs/skills.md#declare-it-in-the-repository)). To run a candidate ahead of stable, see [docs/install.md](docs/install.md#running-a-candidate).
+
+Start a new Claude Code session, so it loads the plugin. Type `/kanon:adopt` there; asking the agent to install Kanon won't start it. It asks three questions, which environments your releases deploy to, if any (with one, it also writes Kanon's release workflow, if you have none, and recommends the Releaser App, so a release starts the deploy), and, where a lane you choose posts to chat (the full pipeline's digests, or the release announcement for each published release), which hook posts it (Slack, a JSON webhook, your own or none), shows one summary to confirm, writes the files on a branch, walks you through the steps only you can take (creating the two Apps, adding a secret), and opens the pull request. Start with **Review**: the Reviewer on your pull requests, nothing else. [docs/install.md](docs/install.md) has every other way to install.
 
 ## What is enforced, honestly
 
