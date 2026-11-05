@@ -843,8 +843,16 @@ describe('each skill is held to the kanon command it drives', () => {
     const steps = section(body, /^## Steps$/)!;
     // Step 2 settles it before anything else, from the candidate's tag, which always resolves.
     expect(code(steps)).toContain('kanon doctor --to candidate-vX.Y.Z --json');
-    expect(steps).toMatch(/When it is the stable release of that version, `vX\.Y\.Z`, or a later stable release, the candidate has been promoted: the target is `vX\.Y\.Z`/);
-    expect(steps).toMatch(/Otherwise, or when `\.releases\.stable` is null, `vX\.Y\.Z` has no tag yet: the target is the candidate's tag/);
+    expect(steps).toMatch(/When it is the stable release of that version, `vX\.Y\.Z`, the candidate has been promoted: the target is `vX\.Y\.Z`/);
+    // A later stable release may have superseded this candidate, which then has no `vX.Y.Z` tag.
+    expect(steps).toMatch(/When it is a later stable release, [^.]*superseded, never tagged `vX\.Y\.Z`[^:]*: don't target `vX\.Y\.Z`/);
+    expect(steps).not.toMatch(/or a later stable release, the candidate has been promoted/);
+    // The opening says the same, and the printed lines take the candidate's tag during a soak.
+    expect(body).toMatch(/its stable release once Kanon has promoted it, and its candidate's tag until then/);
+    expect(body).not.toMatch(/the version in the `npx` line below, as a stable release/);
+    expect(steps).toMatch(/while the target is a candidate's tag, it takes the printed `vX\.Y\.Z`'s place/);
+    expect(section(body, /^## Moving the plugin$/)).toMatch(/while the target is a candidate's tag \(step 2\), and for another release, that tag takes `vX\.Y\.Z`'s place in the second line/);
+    expect(steps).toMatch(/Otherwise, when `\.releases\.stable` is older or null, `vX\.Y\.Z` has no tag yet: the target is the candidate's tag/);
     expect(steps).toMatch(/running this skill again offers the move to its stable `vX\.Y\.Z`/);
     // The bump replaces whichever pin there is, a candidate's included.
     expect(steps).toMatch(/whether either is a stable `vX\.Y\.Z` or a `candidate-vX\.Y\.Z`/);
