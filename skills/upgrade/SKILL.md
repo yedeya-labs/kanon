@@ -33,9 +33,35 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 - **The person signs off.** Commit with `git commit -s` under the person's own git identity. Never sign off as yourself: Kanon's DCO check rejects an AI sign-off.
 - **The contract is `kanon-doctor/v1`.** If the document's `.schema` is anything else, stop and tell the person this skill and the command disagree.
 
+## The friction log
+
+**Keep a friction log, without being asked** ([#1607](https://github.com/yedeya-labs/kanon/issues/1607), the Owner's decision of 2026-11-05). It is how Kanon learns where this skill fell short, and the points a person remembers afterwards are the fewest. Starting it is no question: nothing is asked to turn it on, and nothing in the repository changes because of it.
+
+**Where:** one file per run, `~/.claude/kanon/friction/upgrade-<YYYY-MM-DD-HHMM>.md`, made with its folder at the run's start, the time the run's. It sits under `~/.claude`, not the system's temporary folder, because an install often needs a new Claude Code session, or a restart, partway through, and the log has to outlive both. It is outside every checkout: **never write it inside the repository, never `git add` it, and never commit it.** Say its path to the person once, at the start, in one line.
+
+**What counts as friction:** a command that was refused or failed, a retry, a finding whose stated cause turned out to be wrong, a step you had to improvise because this skill or a finding's fix didn't cover it, an instruction here that didn't match what happened, and a question the person had to ask you because the skill left them unsure. Add each as it happens, not at the end from memory.
+
+**One item each,** under a heading that names it in a few words, with these lines:
+
+- **Step:** this skill's step, and the finding's id where there is one.
+- **Release:** the Kanon release this skill runs, the one in its `npx` line.
+- **What happened:** what you or the person did, and what followed, in Kanon's terms.
+- **Error:** the exact message, trimmed to the lines that matter, at most ten.
+- **Suggestion:** what would have avoided it, marked unverified. Leave it out when you have none.
+
+**What it never holds:** a token, or anything printed by a command that shows one; an App ID or a Client ID; a secret's value; a private key or its contents; a path, beyond a file's own name (a key file is `<slug>.<date>.private-key.pem`); and this repository's private names. Write the repository as `<repo>`, its owner as `<owner>`, a person's login or name as `<person>`, and an App's slug as `<app-slug>`, in the error lines too, by default, whether the repository is public or not: Kanon's public text never names an adopter who hasn't said so. A name goes back in only where the person, reviewing the draft, says it may.
+
+**At the end of the run** (after step 9, and again after "After the merge" when the person comes back in this session and more was logged), when the log holds an item, show the person the whole draft, as it would be filed, and ask, as "How to ask" says: **File it** (Recommended): one issue on Kanon's repository, from their own account; **Change it first**, which takes their edits, shows the draft again and asks again; or **Don't file**. With no yes, nothing is filed. On a yes, file it as one issue, with the body in the form Kanon's issues take (`K-WORK-14`): a line naming the skill and the release, then `## What must be true`, one `### <n>. <heading>` per item with its step, what happened and its error, then `## Possible approach — UNVERIFIED, not acceptance criteria`, holding the suggestions by number. No labels: Kanon's own triage gives them.
+
+```sh
+gh issue create -R yedeya-labs/kanon --title "upgrade: <n> friction points at <release>" --body-file <the log>
+```
+
+Give the person the issue's link. Whatever they chose, say where the file is, and that they may delete it; it is theirs, and you delete it only when they ask. A log with no item is neither shown nor filed: say in one line that nothing was logged. The same holds in every repository, Kanon's own included.
+
 ## Steps
 
-1. **Where you start.** On the default branch, up to date, with a clean working tree; or on `kanon/upgrade-<the target>`, made from it, when the only change there is the plugin's `ref` in `.claude/settings.json` (step 2). If the working tree has other changes, ask the person to commit or stash them first; never do either yourself.
+1. **Where you start,** and start the friction log ("The friction log"). On the default branch, up to date, with a clean working tree; or on `kanon/upgrade-<the target>`, made from it, when the only change there is the plugin's `ref` in `.claude/settings.json` (step 2). If the working tree has other changes, ask the person to commit or stash them first; never do either yourself.
 
    **Or on the branch of a red pull request that only moves Kanon's pins,** such as Dependabot's upgrade, up to date with a clean working tree (or one whose only change is the plugin's `ref` in `.claude/settings.json`, step 2), when `lane-check`'s failure on it sent the person here ([#1106](https://github.com/yedeya-labs/kanon/issues/1106)): it says to run `/kanon:upgrade` on that branch, and lists the steps only a person can do. You finish that pull request instead of opening another. Its pins may already name the target: then step 2's "pinned at the target already" doesn't stop you, and you go on to step 3. Say that once you push to a Dependabot branch, Dependabot stops rebasing it.
 
@@ -91,7 +117,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 
 8. **Hand over what waits for the merge.** Show the person the list under `## After merging`, and say that it stays in the pull request's body, or in its comment when you finished an existing pull request (step 7). When they say it has merged, or `gh pr view <number> --json state --jq .state` says `MERGED`, walk them through it ("After the merge", below).
 
-9. **Say how everyone's plugin moves.** Where `.claude/settings.json` declares the plugin, merging the pull request moves the repository's `ref`, and not anyone's installed plugin: each person pulls, then takes the steps under "Moving the plugin", below, for a declared plugin. Where it doesn't declare it, each person who installed the plugin themselves runs the lines there, as printed. `kanon doctor`, run on a person's machine, names a plugin left behind (`plugin.behind`) with that person's steps.
+9. **Say how everyone's plugin moves.** Where `.claude/settings.json` declares the plugin, merging the pull request moves the repository's `ref`, and not anyone's installed plugin: each person pulls, then takes the steps under "Moving the plugin", below, for a declared plugin. Where it doesn't declare it, each person who installed the plugin themselves runs the lines there, as printed. `kanon doctor`, run on a person's machine, names a plugin left behind (`plugin.behind`) with that person's steps. Then end the friction log ("The friction log"): show the draft, and file it only on the person's yes.
 
 ## After the merge
 
