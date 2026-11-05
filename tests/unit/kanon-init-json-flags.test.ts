@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { CONFLICTS, laneCatalogue, parseArgs, realDeps, SCHEMA, usage, USAGE } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
+import { tokenNeeds } from '../../cli/gh-token.mjs';
 import { consentQuestion } from '../../cli/init.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 import { ROOT, REQ, REPO, PINNED, dirs, checkout, fakeGitHub, writes, run, CONFIRM, changing, read, tableColumn, fields, type Doc, parse, keys } from './helpers/kanon-init.js';
@@ -36,7 +37,9 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(d.status).toBe('steps-left');
     expect(d.exitCode).toBe(0);
     expect(d.repository).toBe(REPO);
-    expect(d.token).toEqual({ source: 'gh', login: 'octo' });
+    expect(d.token).toEqual({ source: 'gh', login: 'octo', needs: tokenNeeds(read(ROOT, 'docs/doctor.md'), 'adopt') });
+    // kanon#1607 point 17: the adopt row of docs/doctor.md's table, Actions: read included, which doctor's apps-check reads need.
+    expect((d.token as { needs: unknown[] }).needs).toContainEqual({ permission: 'Actions', access: 'read' });
     expect(keys(d.inspection)).toEqual(fields('### The inspection').sort());
     expect(keys(d.answers)).toEqual(fields('### The answers').sort());
     expect(keys(d.apps)).toEqual(fields('### The Apps').sort());
@@ -628,11 +631,17 @@ describe('kanon init and the kanon plugin (#376)', () => {
     expect(existsSync(join(dry, SETTINGS))).toBe(false);
   });
 
+  const commit = (dir: string, rel: string) => {
+    execFileSync('git', ['-C', dir, 'add', '--', rel]);
+    execFileSync('git', ['-C', dir, 'commit', '-q', '-m', 'the settings file']);
+    return dir;
+  };
+
   // kanon#1578: init never edits a settings file the project has, so an entry without the key is reported, not changed.
-  it('reports an existing Kanon marketplace entry without "autoUpdate": true, and leaves the file as it is', async () => {
+  it('reports a committed Kanon marketplace entry without "autoUpdate": true, and leaves the file as it is', async () => {
     const before = { extraKnownMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref: RELEASE } } }, enabledPlugins: { 'kanon@kanon': true } };
     const own = `${JSON.stringify(before, null, 2)}\n`;
-    const dir = checkout({ [SETTINGS]: own });
+    const dir = commit(checkout({ [SETTINGS]: own }), SETTINGS);
     const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
     expect(read(dir, SETTINGS)).toBe(own);
     expect(d.files.map((f) => f.path)).not.toContain(SETTINGS);
@@ -640,8 +649,44 @@ describe('kanon init and the kanon plugin (#376)', () => {
     expect(f.message).toBe(`${SETTINGS} declares the kanon plugin's marketplace "kanon" at ${RELEASE}, and doesn't set "autoUpdate": true on it, so each person moves their plugin by hand.`);
     expect(f.fix.commands.join('\n')).toContain('"autoUpdate": true');
     // With the key, nothing to report.
-    const withKey = checkout({ [SETTINGS]: `${JSON.stringify({ ...before, extraKnownMarketplaces: { kanon: { ...before.extraKnownMarketplaces.kanon, autoUpdate: true } } }, null, 2)}\n` });
+    const withKey = commit(checkout({ [SETTINGS]: `${JSON.stringify({ ...before, extraKnownMarketplaces: { kanon: { ...before.extraKnownMarketplaces.kanon, autoUpdate: true } } }, null, 2)}\n` }), SETTINGS);
     expect(parse(await run(withKey, fakeGitHub(), ['--yes', '--json', '--no-apps'])).findings.map((x) => x.id)).not.toContain('plugin.declare');
+  });
+
+  // kanon#1607 point 8: `claude plugin marketplace add --scope project` and `claude plugin install
+  // --scope project` write the file without `autoUpdate`, at the ref the person typed. Never
+  // committed and holding nothing else, it is init's to rewrite, so no `plugin.declare`.
+  it("rewrites the settings file Claude Code's install wrote, never committed, as its own", async () => {
+    const installed = (ref: string, extra: Record<string, unknown> = {}) => `${JSON.stringify({ extraKnownMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref } } }, enabledPlugins: { 'kanon@kanon': true }, ...extra }, null, 2)}\n`;
+    for (const ref of [RELEASE, 'candidate-v0.1.0']) {
+      const dir = checkout({ [SETTINGS]: installed(ref) });
+      const dry = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', '--dry-run']));
+      expect(dry.files.find((f) => f.path === SETTINGS), ref).toMatchObject({ status: 'rewritten', content: pluginSettingsFile(RELEASE) });
+      expect(dry.findings.map((x) => x.id), ref).not.toContain('plugin.declare');
+      expect(read(dir, SETTINGS), ref).toBe(installed(ref));
+      const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+      expect(read(dir, SETTINGS), ref).toBe(pluginSettingsFile(RELEASE));
+      expect(d.files.find((f) => f.path === SETTINGS), ref).toMatchObject({ status: 'rewritten' });
+      expect(d.changes.map((c) => c.subject), ref).toContain(SETTINGS);
+      expect(d.findings.map((x) => x.id), ref).not.toContain('plugin.declare');
+    }
+    // The marketplace alone, before `claude plugin install`, is the install's file too.
+    const marketOnly = `${JSON.stringify({ extraKnownMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref: RELEASE } } } }, null, 2)}\n`;
+    const m = checkout({ [SETTINGS]: marketOnly });
+    await run(m, fakeGitHub(), ['--yes', '--json', '--no-apps']);
+    expect(read(m, SETTINGS)).toBe(pluginSettingsFile(RELEASE));
+    // Anything else in it, or committed, keeps the never-overwrite rule.
+    for (const [why, dir] of [
+      ['another key', checkout({ [SETTINGS]: installed(RELEASE, { permissions: {} }) })],
+      ['another plugin', checkout({ [SETTINGS]: installed(RELEASE, { enabledPlugins: { 'kanon@kanon': true, 'other@else': true } }) })],
+      ['another marketplace', checkout({ [SETTINGS]: `${JSON.stringify({ extraKnownMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref: RELEASE } }, else: { source: { source: 'github', repo: 'acme/else' } } } }, null, 2)}\n` })],
+      ['committed', commit(checkout({ [SETTINGS]: installed(RELEASE) }), SETTINGS)],
+    ] as const) {
+      const have = read(dir, SETTINGS);
+      const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+      expect(read(dir, SETTINGS), why).toBe(have);
+      expect(d.findings.map((x) => x.id), why).toContain('plugin.declare');
+    }
   });
 
   it('leaves a settings file the project has alone, and names the keys to merge into it', async () => {
@@ -661,7 +706,7 @@ describe('kanon init and the kanon plugin (#376)', () => {
     const stale = JSON.parse(pluginSettingsFile('v0.1.0'));
     const off = { ...JSON.parse(pluginSettingsFile(RELEASE)), enabledPlugins: { 'kanon@kanon': false }, permissions: {} };
     const at = { ...JSON.parse(pluginSettingsFile(RELEASE)), permissions: {} };
-    const message = async (doc: unknown) => parse(await run(checkout({ [SETTINGS]: JSON.stringify(doc) }), fakeGitHub(), ['--yes', '--json', '--no-apps'])).findings.find((x) => x.id === 'plugin.declare')?.message;
+    const message = async (doc: unknown) => parse(await run(commit(checkout({ [SETTINGS]: JSON.stringify(doc) }), SETTINGS), fakeGitHub(), ['--yes', '--json', '--no-apps'])).findings.find((x) => x.id === 'plugin.declare')?.message;
     expect(await message(stale)).toBe(`${SETTINGS} declares the kanon plugin's marketplace "kanon" at v0.1.0, not at ${RELEASE}.`);
     expect(await message(off)).toBe(`${SETTINGS} declares the kanon plugin's marketplace "kanon" at ${RELEASE}, and doesn't enable kanon@kanon.`);
     expect(await message(at)).toBeUndefined();

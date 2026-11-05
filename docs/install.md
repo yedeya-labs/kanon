@@ -50,11 +50,13 @@ Each release also ships [`requirements.json`](../requirements.json): what its la
 <!-- x-release-please-start-version -->
 
 ```sh
-claude plugin marketplace add yedeya-labs/kanon#v0.42.0
-claude plugin install kanon@kanon
+claude plugin marketplace add --scope project yedeya-labs/kanon#v0.42.0
+claude plugin install --scope project kanon@kanon
 ```
 
 <!-- x-release-please-end -->
+
+**Install at `--scope project`.** It writes the pin into the repository's `.claude/settings.json`, which the adopt skill carries onto its branch and `kanon init` then completes with `"autoUpdate": true` ([#1607](https://github.com/yedeya-labs/kanon/issues/1607)). Claude Code's default, user scope, writes it into your own settings instead, where it overrides every repository's own pin. Claude Code keeps one clone of the marketplace per person, so re-pointing it in one repository re-points it for all of them ([docs/skills.md](skills.md#declare-it-in-the-repository)). **Start a new Claude Code session before `/kanon:adopt`:** a session that was open during the install still offers the skills it started with. To run a candidate instead, see [Running a candidate](#running-a-candidate).
 
 Or declare the plugin in the repository, in `.claude/settings.json`, which `kanon init` offers to write: everyone who uses Claude Code there then gets the skills at that release, moving the repository to a new one is one edit, and `kanon doctor` says when it differs from your callers' pin ([docs/skills.md](skills.md#declare-it-in-the-repository)). The marketplace entry `init` writes sets `"autoUpdate": true`, so Claude Code updates each person's installed plugin to the new `ref` in the background, a few minutes into a session, and asks for `/reload-plugins` ([#1578](https://github.com/yedeya-labs/kanon/issues/1578)). A `kanon` marketplace a person added themselves still holds the plugin at its own release until they remove it; without the key, each person moves theirs with a new Claude Code session and `claude plugin update kanon@kanon` ([Moving the plugin](skills.md#moving-the-plugin)). `kanon doctor`, run on a person's machine, says when their plugin is behind (`plugin.behind`). **Before you install, check that the plugin is Kanon's latest release:** the adopt skill installs the release it ships in, and stops when a later one is out (`kanon init --dry-run --json` reports it as `latest`).
 
@@ -81,6 +83,17 @@ npx --yes --package github:yedeya-labs/kanon#v0.42.0 kanon apps --owner <owner> 
 <!-- x-release-please-end -->
 
 Every lane in [`docs/lanes.md`](lanes.md) ships at this version ([plan 0001](plans/0001-move-the-agent-lanes.md), steps 1 to 5). **Start with the review lane:** it is the first an adopter installs, because its App is what ends bootstrap (`K-ADOPT-6`), on a plan with rulesets (`K-ADOPT-3`). [`docs/lanes.md`](lanes.md#your-first-lane-the-reviewer) walks through it. The Explorer's sweep (explore), the dispatch sweep, the code audit and the optional Overseer reach their memory through the QA store contract ([`docs/qa-store.md`](qa-store.md)); the dispatch sweep reads run artifacts without a store. That completes the store-coupled lanes ([plan 0004](plans/0004-move-the-remaining-lanes.md)).
+
+### Running a candidate
+
+[`docs/release.md`](release.md#channels-candidates-and-stable) lets a repository pin a candidate to run ahead of stable on purpose. Install the plugin at the candidate's tag, its version in place of `X.Y.Z`, then start a new session and run `/kanon:adopt`, which pins every reference to that candidate:
+
+```sh
+claude plugin marketplace add --scope project yedeya-labs/kanon#candidate-vX.Y.Z
+claude plugin install --scope project kanon@kanon
+```
+
+Move back to stable with `/kanon:upgrade`, which offers the move once Kanon has promoted the candidate or a later stable release is out. Until [#1563](https://github.com/yedeya-labs/kanon/issues/1563) is fixed, the upgrade skill run from a candidate plugin targets that candidate's stable release, a tag that exists only once Kanon promotes it, so run it after the promotion.
 
 ## After merging
 
