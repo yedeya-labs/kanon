@@ -305,7 +305,7 @@ export type Result = { status: number; out: string; err: string; json: any };
 
 // `env` is empty unless a case gives one: with no HOME in it, doctor never finds the plugins root of
 // the machine the suite runs on, so no case reads a real ~/.claude (#1552).
-export const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: string[] = [], now?: number, env: Record<string, string> = {}): Promise<Result> => {
+export const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: string[] = [], now?: number, env: Record<string, string> = {}, managed: string[] = []): Promise<Result> => {
   const out: string[] = [];
   const err: string[] = [];
   const status = await doctor(['--dir', dir, ...argv], {
@@ -316,6 +316,8 @@ export const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, ar
     err: (l: string) => err.push(l),
     requirements: () => REQ,
     release: () => PINNED,
+    // Never the machine's own managed settings (#1577): a case that wants one passes its own.
+    managedSettings: () => managed,
     ...(now === undefined ? {} : { now: () => now }),
   });
   const text = out.join('\n');
