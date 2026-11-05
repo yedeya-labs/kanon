@@ -37,6 +37,7 @@ export function stopNotice(result) {
 if (isCliEntry(import.meta.url)) {
   try {
     const path = process.env.EXECUTION_FILE ?? '';
+    if (!path) console.log('No result file to check for a precondition stop.');
     const notice = path ? stopNotice(readResult(path)) : null;
     if (notice) {
       console.log(notice.annotation);
