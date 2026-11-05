@@ -1306,6 +1306,10 @@ describe('the friction log of the adopt and upgrade skills (#1607)', () => {
       expect(log()).toMatch(/\*\*File it\*\* \(Recommended\)[^\n]*\*\*Change it first\*\*[^\n]*\*\*Don't file\*\*/);
       expect(log()).toContain('With no yes, nothing is filed.');
       expect(log()).toContain(`gh issue create -R yedeya-labs/kanon --title "${dir}: <n> friction points at <release>" --body-file <the log>`);
+      // kanon#1632: the log is rewritten into the filed form before the draft is shown, and filed without the filing skill.
+      expect(log()).toMatch(/\*\*Before you show the draft, rewrite the log in place into the form Kanon's issues take\*\*/);
+      expect(log()).toMatch(/the draft the person reviews is the file, and the body filed, word for word/);
+      expect(log()).toMatch(/not through the file-issue skill or its plan: those route an issue in a repository that runs Kanon/);
       expect(log()).toContain('`## What must be true`');
       expect(log()).toContain('`## Possible approach — UNVERIFIED, not acceptance criteria`');
       // No special case for Kanon's own repository.
@@ -1318,6 +1322,8 @@ describe('the friction log of the adopt and upgrade skills (#1607)', () => {
     expect(doc).not.toBeNull();
     expect(doc).toContain('`~/.claude/kanon/friction/<skill>-<YYYY-MM-DD-HHMM>.md`');
     expect(doc).toContain('With no yes, nothing is filed.');
+    expect(doc).toMatch(/rewrites the log into the form Kanon's issues take[^.]*, so what you review is exactly what is filed/);
+    expect(doc).toContain('and not through the file-issue skill');
     expect(doc).toMatch(/`<repo>`, `<owner>`, `<person>` and `<app-slug>` by default/);
   });
 });

@@ -273,8 +273,9 @@ jobs:
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       kind: ${{ steps.finish.outputs.kind }}
-      # `agent` is the agent-run block, whose only step that can fail is the action, so its
-      # outcome is the action's — see that block's header.
+      # `agent` is the agent-run block. Its outcome is the action's, or that of a check before
+      # the action that refused the run: the credential check, the user-scope step, the
+      # turn-limit check or the lane's precondition refusal (kanon#1569). See that block's header.
       outcome: ${{ steps.agent.outcome }}
       # The checkout's own output, set before any step of the agent's could write one.
       start: ${{ steps.checkout.outputs.commit }}
