@@ -30,7 +30,7 @@ This chapter governs projects: work too large for one issue, planned by the Lead
 
 **Why.** A name and a command survive the next refactor; a line number is true of one commit and silently wrong of every later one. Six briefs in the reference adopter accumulated over three hundred coordinates, twenty post-approval edits and thousands of lines of guard code chasing them. The length target is not enforced because a line cap fires on the honest case.
 
-**Enforced by.** The brief guard fails on a coordinate. The length is deliberately not enforced.
+**Enforced by.** The brief guard fails on a coordinate. The length is deliberately not enforced. The Lead runs the guard on its own brief, and a repository's CI runs it on every pull request: `kanon init` writes a `Brief guard` job, which calls Kanon's `brief-guard` action, into a new `ci.yml` beside a Lead lane, and `kanon doctor` notes a repository with a Lead lane and no job that runs it (`ci.brief-guard-missing`).
 
 **Class.** framework
 
@@ -50,7 +50,7 @@ This chapter governs projects: work too large for one issue, planned by the Lead
 
 **Why.** A brief was once merged with a decision still marked proposed, and seven issues were filed from it within a minute. The Owner is named in the vocabulary because spend and agent authority are the Owner's decisions (`K-OBS-9`, chapter 03), and they are the most common kind of open decision in a first brief; a vocabulary without the Owner can't mark them open.
 
-**Enforced by.** The brief guard fails on an open marker in the decisions section.
+**Enforced by.** The brief guard fails on an open marker in the decisions section, wherever it runs (`K-PROJ-3`).
 
 **Class.** framework
 
