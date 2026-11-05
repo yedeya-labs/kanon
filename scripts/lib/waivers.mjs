@@ -46,6 +46,7 @@ export const UNWAIVABLE = {
   'deploy.environment-missing': 'it protects production: a declared environment that doesn\'t exist has no protection rule and no deployment policy, and a job naming it creates it with none (plan 0010 §12)',
   'deploy.reviewers-missing': 'it protects production: with no required reviewer, nothing stands between a release and production but the lane\'s own code (plan 0010 §12)',
   'plugin.behind': "it is about one person's machine, the kanon plugin Claude Code installed there, not about the repository, so the repository's record can't speak for it: the person moves their plugin instead (docs/skills.md, \"Moving the plugin\")",
+  'plugin.user-override': "it is about one person's machine, a marketplace entry in their own or the machine's managed Claude Code settings, not about the repository, so the repository's record can't speak for it: the person removes or changes the entry instead (docs/skills.md, \"Moving the plugin\")",
   'deploy.subject-custom': 'it protects production: a subject without the environment lets a job outside it assume its role (plan 0010 §5, §12)',
 };
 
@@ -94,6 +95,7 @@ export const FINDINGS = {
   'plugin.version-mismatch': { category: 'pin', blocking: false },
   'plugin.below-latest': { category: 'pin', blocking: false },
   'plugin.behind': { category: 'pin', blocking: false },
+  'plugin.user-override': { category: 'pin', blocking: false },
   'plugin.auto-update-off': { category: 'pin', blocking: false },
   'notify.hook-pin-behind': { category: 'pin', blocking: false },
   'notify.hook-pin-ahead': { category: 'pin', blocking: true },
