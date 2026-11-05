@@ -29,6 +29,7 @@ Every way ends in the same place: Kanon's code used by reference, pinned to one 
 | [Agent telemetry](../actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@v0.42.0` |
 | [Agent lanes: review, triage, implement, implement-revise, lead, lead-revise, lead-reconcile, lead-split, merge, merge-reconcile, rebase, verify-acs, project-digest, weekly-digest, release-announce, explore, dispatch-sweep, issue-backstop, code-audit, explore-telemetry, deploy-diagnose, overseer](lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.42.0` in a job |
 | [Lane check](../actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@v0.42.0` |
+| [Brief guard](../actions/brief-guard/README.md) | `uses: yedeya-labs/kanon/actions/brief-guard@v0.42.0` |
 | [Kanon's scripts from a workflow step](../actions/kanon-path/README.md) | `uses: yedeya-labs/kanon/actions/kanon-path@v0.42.0` |
 
 <!-- x-release-please-end -->

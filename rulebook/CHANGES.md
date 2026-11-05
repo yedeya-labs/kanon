@@ -222,6 +222,14 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** No longer prose only for the live release: a `smoke_failed` deploy is announced as the landed message, flagged, with the changes an `ok` deploy lists, and its test holds that it never reads "failed to deploy" and is never skipped. [Plan 0013](../docs/plans/0013-smoke-lifecycle.md) S4, [#1147](https://github.com/yedeya-labs/kanon/issues/1147)
 - **2026-10-21.** The Owner decided that a failed announcement never blocks a deploy: the deploy lane's `notify` job continues on error, so a failed post still turns it red but leaves its environment's call green and the next environment deploys. A sandbox run measured that a re-run of the failed `notify` job, by job or with the failed jobs, re-runs the next environment's deploy too, so the repair is no longer a re-run of the deploy run. [#1048](https://github.com/yedeya-labs/kanon/issues/1048)
 
+## `K-PROJ-3`
+
+- **2026-11-05.** The enforcement says where the brief guard runs: on the Lead's own brief, and on every pull request in a repository's CI, through the `Brief guard` job `kanon init` writes beside a Lead lane, which `kanon doctor` notes the absence of (`ci.brief-guard-missing`). Before, nothing ran it on an adopter's pull requests. [#1608](https://github.com/yedeya-labs/kanon/issues/1608)
+
+## `K-PROJ-5`
+
+- **2026-11-05.** The enforcement says where the brief guard runs: on the Lead's own brief, and on every pull request in a repository's CI, through the `Brief guard` job `kanon init` writes beside a Lead lane, which `kanon doctor` notes the absence of (`ci.brief-guard-missing`). Before, nothing ran it on an adopter's pull requests. [#1608](https://github.com/yedeya-labs/kanon/issues/1608)
+
 ## `K-PROJ-11`
 
 - **2026-10-20.** The dispatch phase can be withheld on its own: with `lead:file-only` on the tracking issue every other phase runs, each tick names the issues it did not dispatch, and removing the label resumes dispatch. Before, the only stop was `needs:human`, which also stopped the filing. [#1113](https://github.com/yedeya-labs/kanon/issues/1113)
@@ -321,9 +329,14 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-29.** The sentence on which findings can't be waived names every kind of reason doctor gives, production and a finding `lane-check` fails whatever a waiver says among them, and points to `docs/doctor.md` for each finding's own; it had named only the record, independent review and the repository's secrets. A test fails a reason in the code that falls under no kind the rule names. [#1515](https://github.com/yedeya-labs/kanon/issues/1515)
 - **2026-11-02.** The Owner decided that a finding about one person's machine can't be waived: the repository's record can't speak for it. The first is `plugin.behind`, the kanon plugin Claude Code installed there older than the pin. [#1552](https://github.com/yedeya-labs/kanon/issues/1552)
 
+## `K-LAYOUT-12`
+
+- **2026-11-05.** The enforcement says where the brief guard runs: on the Lead's own brief, and on every pull request in a repository's CI, through the `Brief guard` job `kanon init` writes beside a Lead lane, which `kanon doctor` notes the absence of (`ci.brief-guard-missing`). Before, nothing ran it on an adopter's pull requests. [#1608](https://github.com/yedeya-labs/kanon/issues/1608)
+
 ## `K-LAYOUT-13`
 
 - **2026-10-26.** A decision's bold headline is no longer the only part read: the open and answered marks are read there, and the brief guard also warns when an answered decision's body still waits on a person (`K-PROJ-18`). [#1235](https://github.com/yedeya-labs/kanon/issues/1235)
+- **2026-11-05.** The enforcement says where the brief guard runs: on the Lead's own brief, and on every pull request in a repository's CI, through the `Brief guard` job `kanon init` writes beside a Lead lane, which `kanon doctor` notes the absence of (`ci.brief-guard-missing`). Before, nothing ran it on an adopter's pull requests. [#1608](https://github.com/yedeya-labs/kanon/issues/1608)
 
 ## `K-LAYOUT-16`
 

@@ -135,6 +135,7 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
       'agent-run: auth claude-args execution_file prompt-cache-ttl started-at',
       'agent-setup: kanon-error',
       'agent-telemetry: nothing',
+      'brief-guard: nothing',
       'dco: nothing',
       'implementer-status: nothing',
       'kanon-path: node path',

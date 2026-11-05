@@ -170,6 +170,16 @@ describe('requirements.json', () => {
     expect(built.hook.inputs).toEqual(['app-slug', 'browsers', 'database', 'github-token', 'install', 'issue-number', 'lane']);
   });
 
+  it('says which lanes call the project-setup hook, the Lead brief and revise lanes not, which turn it off (kanon#1607 point 12)', () => {
+    const lanes = built.lanes as Record<string, { setupHook: boolean }>;
+    expect(Object.entries(lanes).filter(([, l]) => l.setupHook).map(([n]) => n).sort()).toEqual([
+      'agent-explore', 'agent-implement', 'agent-implement-revise', 'agent-lead-split', 'agent-rebase', 'agent-triage', 'agent-verify-acs',
+    ]);
+    // The Lead runs on the spine, which calls the hook, with `project-setup: false` (kanon#243).
+    expect(lanes['agent-lead']!.setupHook).toBe(false);
+    expect(lanes['agent-review']!.setupHook).toBe(false);
+  });
+
   it("names each dispatchable model lane's turn limit and Kanon's ceiling, and its max_turns and reason inputs (kanon#891)", () => {
     const lanes = built.lanes as Record<string, { inputs: Record<string, unknown>; turns?: { default: number; ceiling: number } }>;
     expect(lanes['agent-lead-revise']!.turns).toEqual({ default: 90, ceiling: 180 });
