@@ -1282,6 +1282,27 @@ describe('the adopt skill and the install path (#1607)', () => {
     expect(confirm).toMatch(/never a list of your own/);
     expect(confirm).toMatch(/never say the token has them/);
   });
+
+  it('has the adopt skill rerun init, not fix the token, when a write step says GitHub limited the rate (#1607)', () => {
+    const body = skill('adopt').body;
+    const row = (id: string) => body.split('\n').find((l) => l.startsWith(`| \`${id}\` |`))!;
+    expect(row('label.create')).toMatch(/says GitHub limited the rate \(or failed\), the token is fine: you run `kanon init --json --no-apps` again with the same flags/);
+    expect(row('merge.settings')).toMatch(/^\| `merge\.settings` \| person \| As `label\.create` when GitHub limited the rate\./);
+    expect(row('ruleset.create')).toMatch(/^\| `ruleset\.create` \| person \| As `label\.create` when GitHub limited the rate\./);
+  });
+});
+
+// kanon#1631: init spaces its writes and waits on rate limits, so the adopt skill runs it with a
+// timeout that covers those waits, rather than its client's default, which would stop it mid-run.
+describe('the adopt skill and how long kanon init takes (#1631)', () => {
+  it('says how long a writing kanon init can take, and to run it with the longest timeout', () => {
+    const how = section(skill('adopt').body, /^## How to run `kanon`$/)!;
+    expect(how).toMatch(/\*\*Give `kanon init` time\*\*/);
+    expect(how).toMatch(/a run can take about four minutes/);
+    expect(how).toContain('10 minutes (`timeout: 600000`), not its default of 2');
+    expect(how).toMatch(/In another agent client, use its longest command timeout\./);
+    expect(how).toMatch(/run it again with the same flags: it writes only what is still missing/);
+  });
 });
 
 // kanon#1607 point 6: adopt and upgrade keep a friction log without being asked, outside the
@@ -1319,6 +1340,10 @@ describe('the friction log of the adopt and upgrade skills (#1607)', () => {
       expect(log()).toMatch(/\*\*File it\*\* \(Recommended\)[^\n]*\*\*Change it first\*\*[^\n]*\*\*Don't file\*\*/);
       expect(log()).toContain('With no yes, nothing is filed.');
       expect(log()).toContain(`gh issue create -R yedeya-labs/kanon --title "${dir}: <n> friction points at <release>" --body-file <the log>`);
+      // kanon#1632: the log is rewritten into the filed form before the draft is shown, and filed without the filing skill.
+      expect(log()).toMatch(/\*\*Before you show the draft, rewrite the log in place into the form Kanon's issues take\*\*/);
+      expect(log()).toMatch(/the draft the person reviews is the file, and the body filed, word for word/);
+      expect(log()).toMatch(/not through the file-issue skill or its plan: those route an issue in a repository that runs Kanon/);
       expect(log()).toContain('`## What must be true`');
       expect(log()).toContain('`## Possible approach — UNVERIFIED, not acceptance criteria`');
       // No special case for Kanon's own repository.
@@ -1331,6 +1356,8 @@ describe('the friction log of the adopt and upgrade skills (#1607)', () => {
     expect(doc).not.toBeNull();
     expect(doc).toContain('`~/.claude/kanon/friction/<skill>-<YYYY-MM-DD-HHMM>.md`');
     expect(doc).toContain('With no yes, nothing is filed.');
+    expect(doc).toMatch(/rewrites the log into the form Kanon's issues take[^.]*, so what you review is exactly what is filed/);
+    expect(doc).toContain('and not through the file-issue skill');
     expect(doc).toMatch(/`<repo>`, `<owner>`, `<person>` and `<app-slug>` by default/);
   });
 });
