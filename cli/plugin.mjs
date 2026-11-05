@@ -215,6 +215,69 @@ export const samePath = (a, b) => {
   return resolve(a) === resolve(b) || real(a) === real(b);
 };
 
+// ── A person's own and the managed settings, one key of them (kanon#1577, #1607 point 1) ──────
+//
+// Claude Code merges a `kanon` marketplace entry from the person's user settings, or from the
+// managed settings an administrator sets for the machine, over the repository's: with one there at
+// another source or `ref`, `claude plugin marketplace add --scope project` refuses ("its source
+// doesn't match its extraKnownMarketplaces entry in user or managed settings"), and the install
+// takes the entry's release, for this repository and every other on the machine. So `kanon doctor`
+// reads that one entry of those two files, the Owner's decision of 2026-11-05, which reverses for
+// this key alone the rule above that it reads no settings: never another key, since a settings file's
+// `env` can hold a credential, never a message that quotes the file, and it writes nothing there.
+
+/**
+ * The person's user settings file, as Claude Code finds it: `settings.json` under
+ * `CLAUDE_CONFIG_DIR`, else `~/.claude/settings.json`. Null when the environment names no home.
+ * @param {Record<string, string | undefined>} env
+ * @returns {string | null}
+ */
+export const userSettingsPath = (env) => {
+  const at = (/** @type {string | undefined} */ v) => (typeof v === 'string' && v.trim() ? v.trim().replace(/[\\/]+$/, '') : null);
+  const config = at(env.CLAUDE_CONFIG_DIR);
+  if (config) return `${config}/settings.json`;
+  const home = at(env.HOME) ?? at(env.USERPROFILE);
+  return home ? `${home}/.claude/settings.json` : null;
+};
+
+/**
+ * The managed settings files Claude Code reads on each system, as its settings documentation lists
+ * them (https://code.claude.com/docs/en/settings, "Settings files").
+ * @type {Record<string, string[]>}
+ */
+export const MANAGED_SETTINGS = {
+  darwin: ['/Library/Application Support/ClaudeCode/managed-settings.json'],
+  linux: ['/etc/claude-code/managed-settings.json'],
+  win32: ['C:\\Program Files\\ClaudeCode\\managed-settings.json'],
+};
+
+/** The managed settings files of a platform (`process.platform`), none for one the docs don't name. @param {string} platform */
+export const managedSettingsPaths = (platform) => MANAGED_SETTINGS[platform] ?? [];
+
+/**
+ * The marketplace entry `name` of a settings file's text, and nothing else of it: none, for no file,
+ * no such entry, or a file that isn't JSON (said without quoting it); or whether its source is
+ * Kanon's repository and the `ref` it names.
+ * @param {string | null} text @param {string} name
+ * @returns {{ status: 'none' } | { status: 'unreadable' } | { status: 'entry', kanon: boolean, ref: string | null }}
+ */
+export const readMarketplaceEntry = (text, name) => {
+  if (text === null) return { status: 'none' };
+  /** @type {unknown} */
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    // Never the parser's message: it can quote the file, credentials among it.
+    return { status: 'unreadable' };
+  }
+  const markets = isMap(doc) && isMap(doc.extraKnownMarketplaces) ? doc.extraKnownMarketplaces : null;
+  const entry = markets && Object.hasOwn(markets, name) ? markets[name] : null;
+  if (!isMap(entry)) return { status: 'none' };
+  const source = entry.source;
+  return { status: 'entry', kanon: isKanonSource(source), ref: isMap(source) && typeof source.ref === 'string' ? source.ref : null };
+};
+
 // ── The marketplace's auto-update (kanon#1578) ────────────────────────────────────────────────
 //
 // With `"autoUpdate": true` on the repository's marketplace entry, beside `source`, Claude Code

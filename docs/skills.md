@@ -72,21 +72,21 @@ Or, inside a Claude Code session, the same two as `/plugin marketplace add …` 
 
 **Declared in the repository.** The repository's `ref` moves with the upgrade's pull request. **With `"autoUpdate": true` on the `kanon` marketplace entry, the default `kanon init` writes** ([#1578](https://github.com/yedeya-labs/kanon/issues/1578)), that is all: Claude Code refreshes the marketplace and updates the plugin in the background, a few minutes into a session in the repository, and asks for `/reload-plugins` ([Configure auto-updates](https://code.claude.com/docs/en/plugins/install#keep-plugins-updated)). The `ref` still pins the release, so it follows the repository's pin and nothing newer. In our check on Claude Code v2.1.316 it moved the plugin to the project's tag about ten minutes into a session, with no entry of the person's own; step 1 still applies to a person who added the marketplace themselves, since their entry wins. Without the key, each person, in the repository's checkout, once it has the new `ref`:
 
-1. **If you added the `kanon` marketplace yourself** (`claude plugin marketplace add`, from before the repository declared it), remove your own entry: `claude plugin marketplace remove kanon --scope user`. That removes only your user settings' entry and keeps the plugin installed; while it is there, the marketplace stays at your `ref` (above).
+1. **If you added the `kanon` marketplace yourself** (`claude plugin marketplace add`, from before the repository declared it), remove your own entry: `claude plugin marketplace remove kanon --scope user`. That removes only your user settings' entry and keeps the plugin installed; while it is there, the marketplace stays at your `ref` (above). `kanon doctor` reads that one entry of your user settings, and of the machine's managed settings, and names one that overrides the repository's pin as `plugin.user-override` ([#1577](https://github.com/yedeya-labs/kanon/issues/1577)).
 2. **Start a new Claude Code session in the repository.** When a session starts, Claude Code fetches a declared marketplace whose source changed, and says `Plugins changed. Run /reload-plugins to activate.` A `claude plugin marketplace update kanon` from the shell didn't do it in our check; whether `/reload-plugins` in an open session does is not verified.
 3. **Update the installed plugin:** `claude plugin update kanon@kanon`, in the repository's checkout. It moves the install for this checkout's scope, and prints `updated from <old> to <new>` and `Restart to apply changes.` Fetching the marketplace alone leaves the installed plugin where it was.
 4. **Start a new session,** or run `/reload-plugins`, and the skills are the new release's.
 
 These are the steps that moved the plugin in a check on Claude Code v2.1.316, with a configuration directory of its own, from `v0.38.0` to `v0.42.0` and on to `candidate-v0.43.0`. `"autoUpdate": true` replaces steps 2 to 4; a settings file that predates it, or one `init` didn't write, gets the key by hand (`plugin.auto-update-off` gives it).
 
-**Installed by the person,** in their own Claude Code configuration, without the declaration: in your own terminal, remove the marketplace, which uninstalls its plugin too, add it again at the release, and install the plugin, then start a new session or run `/reload-plugins`, and run `/kanon:upgrade`. For another release, its tag takes this one's place in the second line:
+**Installed by the person,** in their own Claude Code configuration, without the declaration: in your own terminal, in the repository's checkout, remove the marketplace, which uninstalls its plugin too, add it again at the release, and install the plugin, both at `--scope project`, so the pin goes into the repository's `.claude/settings.json` and not into your own settings, where it would override every repository's own pin ([#1616](https://github.com/yedeya-labs/kanon/issues/1616)), then start a new session or run `/reload-plugins`, and run `/kanon:upgrade`. For another release, its tag takes this one's place in the second line:
 
 <!-- x-release-please-start-version -->
 
 ```sh
 claude plugin marketplace remove kanon
-claude plugin marketplace add yedeya-labs/kanon#v0.42.0
-claude plugin install kanon@kanon
+claude plugin marketplace add --scope project yedeya-labs/kanon#v0.42.0
+claude plugin install --scope project kanon@kanon
 ```
 
 <!-- x-release-please-end -->
