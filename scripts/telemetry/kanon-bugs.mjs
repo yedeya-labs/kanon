@@ -35,7 +35,8 @@
 // before is the lane's own: the most recent earlier release on which that lane ran `RISE.minRuns`
 // times or more, across its adopters, skipping any it barely ran or never ran (the Owner's
 // decision of 2026-10-10 on #569); with none, there is no rise. Platform-coded runs are not
-// counted as failures there, so an outage after a release is not a regression.
+// counted as failures there, so an outage after a release is not a regression, and nor are runs
+// with a reason in `RISE_EXCLUDED_REASONS`, an agent's stop on a precondition (kanon#1639).
 //
 // PUBLIC OR PRIVATE (decision 2 on #41). A signal or a rise is `public` only when at least
 // `MIN_ADOPTERS` distinct adopters contributed to it: the aggregate's three-adopter rule (#449,
