@@ -136,6 +136,7 @@ Then offer a waiver, the person's to make (`docs/doctor.md`, "Waiving a finding"
 ```markdown
 - **Waived doctor finding:** `caller.misplaced` on `.github/workflows/review.yml` (agent-review.yml is the lane's own definition in this repository)
 - **Waived doctor finding:** `secret.missing` on `acme/widgets` for `CLAUDE_CODE_OAUTH_TOKEN` (the lanes run on the organisation's token, an organisation secret doctor doesn't list)
+- **Waived doctor finding:** `label.github-default` on `acme/widgets` for `good first issue`, `help wanted` (new contributors find their first issues by them)
 ```
 
 Propose the bullet and ask for the reason; never invent one. Write it only once the person has given or accepted it, show the diff, and run doctor again: the finding moves to `.waived`. Never offer a waiver to get past a finding you could fix, and never for one `docs/doctor.md` says can't be waived ("What can't be waived"): those you fix. For `id-token.unaccepted`, the waiver is the fix's own `Accepted id-token holder` bullet.

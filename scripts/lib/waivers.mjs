@@ -199,6 +199,27 @@ export const fenced = (lines) => {
   return set;
 };
 
+/** A code span with something in it, as a waiver names its id, subject and items. */
+const CODE_SPAN = '`[^`]*\\S[^`]*`';
+
+/** A waiver bullet up to its items: the label, the finding id, `on` and the subject. */
+const WAIVER_HEAD = `^[-*] \\*\\*${WAIVER_LABEL}:\\*\\* \`([^\`\\s]+)\` on \`([^\`]*\\S[^\`]*)\``;
+
+/**
+ * The bullet to write for a waiver that is well formed but for items after `for` that lack
+ * backticks, each item as the person wrote it in a code span (#1618), or null for a bullet
+ * malformed in any other way: no reason, an empty item, or a backtick that isn't a whole span.
+ * @param {string} line
+ */
+const quoteItems = (line) => {
+  const m = new RegExp(`${WAIVER_HEAD} for (.*?) \\((.*\\S.*)\\)\\s*$`).exec(line);
+  if (!m) return null;
+  const items = /** @type {string} */ (m[3]).split(',').map((x) => x.trim());
+  const span = new RegExp(`^${CODE_SPAN}$`);
+  if (!items.every((x) => span.test(x) || /^[^`]*[^`\s][^`]*$/.test(x)) || items.every((x) => span.test(x))) return null;
+  return `- **${WAIVER_LABEL}:** \`${m[1]}\` on \`${m[2]}\` for ${items.map((x) => (span.test(x) ? x : `\`${x}\``)).join(', ')} (${m[4]})`;
+};
+
 /**
  * The waivers the adoption record declares under `## Choices`, one bullet each:
  * `- **Waived doctor finding:** \`caller.misplaced\` on \`.github/workflows/review.yml\` (why)`.
@@ -208,8 +229,9 @@ export const fenced = (lines) => {
  * outside `## Choices`, with no reason, naming an id doctor doesn't report or one it doesn't
  * waive (`UNWAIVABLE`), naming items of a finding that lists none, waiving a finding that lists
  * none twice, or naming an item another bullet of the same finding names, is returned as an error
- * naming its line. A bullet of an `ITEMIZED` finding that names no items is returned as read:
- * `diagnose` reports it malformed, with the bullet to write from the items it finds.
+ * naming its line; one that fails only because items after `for` lack backticks says so, with
+ * the bullet to write (`quoteItems`). A bullet of an `ITEMIZED` finding that names no items is
+ * returned as read: `diagnose` reports it malformed, with the bullet to write from the items it finds.
  * @param {string | null} text
  * @returns {{ waivers: Array<{ id: string, subject: string, items: string[] | null, reason: string, line: number }>, errors: string[] }}
  */
@@ -222,7 +244,7 @@ export const readWaivers = (text) => {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
   const inFence = fenced(lines);
   const mention = new RegExp(`^\\s*(?:>\\s*)*(?:(?:[-*+]|\\d+[.)])\\s+)?\\*\\*${WAIVER_LABEL}:\\*\\*`, 'i');
-  const entry = new RegExp(`^[-*] \\*\\*${WAIVER_LABEL}:\\*\\* \`([^\`\\s]+)\` on \`([^\`]*\\S[^\`]*)\`(?: for (\`[^\`]*\\S[^\`]*\`(?:, \`[^\`]*\\S[^\`]*\`)*))? \\((.*\\S.*)\\)\\s*$`);
+  const entry = new RegExp(`${WAIVER_HEAD}(?: for (${CODE_SPAN}(?:, ${CODE_SPAN})*))? \\((.*\\S.*)\\)\\s*$`);
   let section = '';
   lines.forEach((line, i) => {
     if (inFence.has(i)) return;
@@ -230,6 +252,8 @@ export const readWaivers = (text) => {
     if (!mention.test(line)) return;
     const m = entry.exec(line);
     const where = `${ADOPTION_RECORD}:${i + 1}`;
+    const quoted = m ? null : quoteItems(line);
+    if (quoted) return errors.push(`${where} doesn't parse: the items after \`for\` must each be in backticks. Write it as: ${quoted}`);
     if (!m) return errors.push(`${where} is not \`- **${WAIVER_LABEL}:** \`<finding id>\` on \`<subject>\` (<why the finding stands>)\`, with \`for \`<item>\`, \`<item>\`\` before the parentheses for a finding that lists items`);
     if (section !== '## Choices') return errors.push(`${where} waives a finding outside \`## Choices\``);
     const [id, subject, reason] = [/** @type {string} */ (m[1]), /** @type {string} */ (m[2]), /** @type {string} */ (m[4]).trim()];
