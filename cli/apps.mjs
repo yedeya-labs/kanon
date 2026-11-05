@@ -619,7 +619,7 @@ const storeSecrets = async ({ owner, repos, app, appId, slug, pem, pages, deps, 
         throw new Error(
           `gh could not set ${secret} on ${owner}/${repo} (${r.stderr.trim() || `exit ${r.status}`}). ` +
             (keyFile
-              ? `The key file ${keyFile} is kept: fix the token and run the command again.`
+              ? `The key file ${basename(keyFile)} is kept: fix the token and run the command again.`
               : `The key was never saved anywhere, so it is lost: generate a new one at ${pages.app(slug)} (Credentials → Key pairs → New key), and run ` +
                 `"kanon apps --owner ${owner} --repo ${repos.join(',')} --reuse ${app}:${slug}@${appId}=<file>.pem".`),
         );
@@ -804,13 +804,20 @@ const createApp = async ({ owner, pages, repos, key, name, spec, register, deps 
   return { slug, appId };
 };
 
-/** The name GitHub gives an App's downloaded private key: `<slug>.<YYYY-MM-DD>.private-key.pem`. @param {string} slug */
-export const keyFileName = (slug) => new RegExp(`^${slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.\\d{4}-\\d{2}-\\d{2}\\.private-key\\.pem$`);
+/**
+ * The name GitHub gives an App's downloaded private key, `<slug>.<YYYY-MM-DD>.private-key.pem`, or
+ * the copy a browser makes of it when a file of that name is there already (kanon#1626), as after a
+ * failed run that kept the key: ` (1)` or `(1)` before `.pem`, or ` 2`. Always anchored on the
+ * exact slug, so another owner's App whose slug differs by a word never matches.
+ * @param {string} slug
+ */
+export const keyFileName = (slug) => new RegExp(`^${slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.\\d{4}-\\d{2}-\\d{2}\\.private-key(?: ?\\(\\d+\\)| \\d+)?\\.pem$`);
 
 /**
  * Waits in `dir` for the key GitHub downloads for `slug` (kanon#1607): a file named exactly
- * `<slug>.<YYYY-MM-DD>.private-key.pem` (`keyFileName`), changed at or after `since`, the newest
- * when there are several. The exact name means a key of another owner's App, whose slug differs
+ * `<slug>.<YYYY-MM-DD>.private-key.pem`, or a browser's renamed copy of it (`keyFileName`), changed
+ * at or after `since`, and holding a private key's header, the newest when there are several: a
+ * browser may create the file empty while the download is still under way (kanon#1626). The exact name means a key of another owner's App, whose slug differs
  * by a word, is never taken, and `since` that an older download of this App's isn't. Polls every
  * `pollMs` until `timeoutMs`, then throws. Says the file's name, never its folder.
  * @param {{ slug: string, dir: string, since: number, deps: Deps }} a
@@ -823,6 +830,7 @@ export const awaitKeyFile = async ({ slug, dir, since, deps }) => {
       .filter((f) => named.test(f))
       .map((f) => ({ f, at: deps.mtime(join(dir, f)) }))
       .filter((x) => x.at !== null && x.at >= since)
+      .filter((x) => /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(deps.readFile(join(dir, x.f)) ?? ''))
       .sort((x, y) => /** @type {number} */ (y.at) - /** @type {number} */ (x.at));
     if (found[0]) return join(dir, found[0].f);
     if (deps.now() - since >= deps.timeoutMs) {
@@ -1189,7 +1197,18 @@ export const apps = async (argv, overrides = {}) => {
         keyFile = await awaitKeyFile({ slug, dir: downloads, since, deps });
         deps.out(`Found ${basename(keyFile)}.`);
       }
-      const r = await reuseApp({ owner, pages, repos, key, slug, id, file: keyFile, spec, specs, register, deps });
+      /** @type {{ slug: string, appId: number }} */
+      let r;
+      try {
+        r = await reuseApp({ owner, pages, repos, key, slug, id, file: keyFile, spec, specs, register, deps });
+      } catch (e) {
+        // A key the command found for itself, and kept: say how the next run uses it, by its file's
+        // name alone (kanon#1626), since a new key would only be saved under a renamed copy.
+        if (!file && deps.readFile(keyFile) !== null) {
+          throw new Error(`${/** @type {Error} */ (e).message} To use the kept key on the next run, once that is fixed: kanon apps --owner ${owner} --repo ${repos.join(',')} --reuse ${key}:${slug}@${id}=<download folder>/${basename(keyFile)}`, { cause: e });
+        }
+        throw e;
+      }
       done.push({ spec, slug: r.slug, appId: r.appId });
     }
   } catch (e) {

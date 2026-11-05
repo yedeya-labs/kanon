@@ -1421,9 +1421,10 @@ describe('kanon apps --reuse without an ID or a key file (#1607)', () => {
     expect(() => parseArgs(['--owner', ORG, '--repo', REPO, '--reuse', `judge:${SLUG},judge:${SLUG}`], loadApps())).toThrow(/names one App twice/);
   });
 
-  it('matches only the exact name GitHub gives the key', () => {
-    expect(keyFileName(SLUG).test(TODAY)).toBe(true);
-    for (const f of [`${ORG}-org-judge.2026-11-05.private-key.pem`, `x${TODAY}`, `${SLUG}.2026-11-05.private-key (1).pem`, `${SLUG}.private-key.pem`]) expect(keyFileName(SLUG).test(f), f).toBe(false);
+  it('matches the exact name GitHub gives the key, and a browser\'s renamed copy of it, for that slug alone', () => {
+    // kanon#1626: a second key of the same day is saved under a renamed copy, as the browsers name it.
+    for (const f of [TODAY, `${SLUG}.2026-11-05.private-key (1).pem`, `${SLUG}.2026-11-05.private-key(2).pem`, `${SLUG}.2026-11-05.private-key 2.pem`]) expect(keyFileName(SLUG).test(f), f).toBe(true);
+    for (const f of [`${ORG}-org-judge.2026-11-05.private-key.pem`, `x${TODAY}`, `x${SLUG}.2026-11-05.private-key (1).pem`, `${SLUG}.private-key.pem`, `${TODAY}.part`, `${SLUG}.2026-11-05.private-key (1).pem.crdownload`, `${SLUG}.2026-11-05.private-key (x).pem`]) expect(keyFileName(SLUG).test(f), f).toBe(false);
   });
 
   it('takes the ID from the register, opens the App\'s page, waits for its new key, and records the ID', async () => {
@@ -1517,8 +1518,57 @@ describe('kanon apps --reuse without an ID or a key file (#1607)', () => {
   });
 
   it('awaitKeyFile takes the newest matching file, and none older than the start', async () => {
-    const deps = { ...realDeps, listDir: () => [`${SLUG}.2026-11-04.private-key.pem`, TODAY, `${SLUG}.2026-11-03.private-key.pem`], mtime: (p: string) => (p.endsWith(TODAY) ? 30 : p.includes('11-04') ? 20 : 5), now: () => 10, sleep: async () => {}, pollMs: 0, timeoutMs: 1 };
+    const deps = { ...realDeps, listDir: () => [`${SLUG}.2026-11-04.private-key.pem`, TODAY, `${SLUG}.2026-11-03.private-key.pem`], mtime: (p: string) => (p.endsWith(TODAY) ? 30 : p.includes('11-04') ? 20 : 5), readFile: () => PEM, now: () => 10, sleep: async () => {}, pollMs: 0, timeoutMs: 1 };
     expect(await awaitKeyFile({ slug: SLUG, dir: '/dl', since: 10, deps })).toBe(join('/dl', TODAY));
+    // kanon#1626: a file the browser has made but not yet filled is not the key; the filled one is.
+    const filling = { ...deps, readFile: (p: string) => (p.endsWith(TODAY) ? '' : PEM) };
+    expect(await awaitKeyFile({ slug: SLUG, dir: '/dl', since: 10, deps: filling })).toBe(join('/dl', `${SLUG}.2026-11-04.private-key.pem`));
+  });
+
+  // kanon#1626: a failed run keeps the key, so the browser saves the next one under a renamed copy.
+  it('takes the renamed copy a second key of the day is saved as, past the kept one', async () => {
+    const dl = downloads();
+    realDeps.writeFile(join(dl, TODAY), PEM);
+    const COPY = `${SLUG}.2026-11-05.private-key (1).pem`;
+    const r = await run({
+      reuse: { slug: SLUG },
+      reuseArg: `judge:${SLUG}@4242`,
+      extraArgs: ['--downloads', dl],
+      onKeyPage: () => realDeps.writeFile(join(dl, COPY), PEM),
+      deps: { now: () => 1_000, mtime: (path: string) => (path.endsWith(COPY) ? 1_001 : 999) },
+    });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain(`Found ${COPY}.`);
+    expect(r.removed).toEqual([join(dl, COPY)]);
+    expect(readdirSync(dl)).toContain(TODAY);
+    rmSync(r.dir, { recursive: true, force: true });
+    rmSync(dl, { recursive: true, force: true });
+  });
+
+  it('says how the next run uses a key it found and kept, by the file\'s name alone', async () => {
+    const dl = downloads();
+    const r = await run({
+      reuse: { slug: SLUG, keySlug: `${ORG}-author` },
+      reuseArg: `judge:${SLUG}@4242`,
+      extraArgs: ['--downloads', dl],
+      onKeyPage: () => realDeps.writeFile(join(dl, TODAY), PEM),
+      deps: clock(dl),
+    });
+    expect(r.status).toBe(1);
+    expect(r.output).toContain('Nothing was stored; the file is kept.');
+    expect(r.output).toContain(`To use the kept key on the next run, once that is fixed: kanon apps --owner ${ORG} --repo ${REPO} --reuse judge:${SLUG}@4242=<download folder>/${TODAY}`);
+    expect(r.output).not.toContain(dl);
+    expect(readdirSync(dl)).toContain(TODAY);
+    // A store that fails keeps the file too, named by its file name alone.
+    const store = await run({ reuse: { slug: SLUG }, setStatus: { JUDGE_APP_PRIVATE_KEY: 1 } });
+    expect(store.status).toBe(1);
+    expect(store.output).toContain('The key file judge.pem is kept: fix the token and run the command again.');
+    rmSync(store.dir, { recursive: true, force: true });
+    // A key file the person named gets no such line: they know where it is.
+    const named = await run({ reuse: { slug: SLUG, keySlug: `${ORG}-author` } });
+    expect(named.status).toBe(1);
+    expect(named.output).not.toContain('To use the kept key on the next run');
+    for (const d of [r.dir, named.dir, dl]) rmSync(d, { recursive: true, force: true });
   });
 });
 
