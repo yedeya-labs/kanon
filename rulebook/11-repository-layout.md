@@ -493,7 +493,7 @@ Kanon's own repository is the one exception. There, `.github/workflows/<lane>.ym
 
 **Why.** Each of these is a place where the parser once read a brief differently from its author and failed quietly: a heading with a summary read as no decomposition, a label run with prose in it filed an issue with no labels, a closing reference in body prose filed a duplicate, and a dependency separated by the wrong punctuation was dropped, which made an item look ready before its prerequisite had landed. An edge stated only in prose was dispatched as though it weren't there, because the reconciler reads only the dependency line. A renumbered criteria list rendered one lower than every reference to it. A fixed syntax, written down, is what lets an author get it right without reading the parser.
 
-**Enforced by.** The brief guard, which parses the decomposition the same way the reconciler does (`K-PROJ-9`). It accepts a bucket by name, and reads the repository's milestones through `gh` only for any other name, so a brief that names a roadmap milestone needs `gh` with read access to the repository's issues; a name it can't check is a finding, never a pass.
+**Enforced by.** The brief guard, which parses the decomposition the same way the reconciler does (`K-PROJ-9`). It accepts a bucket by name, and reads the repository's milestones through `gh` only for any other name, so a brief that names a roadmap milestone needs `gh` with read access to the repository's issues; a name it can't check is a finding, never a pass. Where it runs is `K-PROJ-3`'s.
 
 **Class.** framework
 
@@ -510,6 +510,6 @@ Kanon's own repository is the one exception. There, `.github/workflows/<lane>.ym
 
 **Why.** "Answered" and "open" have to be words a guard can read, and an author has to know which words those are before the guard exists. The Owner answers the most common kind of decision (spend), so an open vocabulary that names only the Maintainer and the Stakeholder can't mark it open. The minimum length catches a heading with nothing under it, which reads exactly like a section with nothing to say. A decisions section whose items were written in a shape the guard doesn't read was once reported as checked while it checked nothing.
 
-**Enforced by.** The brief guard (`K-PROJ-4`, `K-PROJ-5`).
+**Enforced by.** The brief guard (`K-PROJ-4`, `K-PROJ-5`), wherever it runs (`K-PROJ-3`).
 
 **Class.** framework

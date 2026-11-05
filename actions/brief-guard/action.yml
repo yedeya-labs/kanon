@@ -1,0 +1,39 @@
+# Kanon's brief guard (K-PROJ-3, K-PROJ-5, K-LAYOUT-12, K-LAYOUT-13), as a composite action (#1608).
+#
+# It runs `scripts/brief-guard.mjs` from the Kanon tree this action came from, at the ref the
+# adopter pinned, through `kanon-path`, which also puts Kanon's Node on the PATH. So a pull
+# request can't change the guard that judges it, and the guard and its library can never drift
+# apart. It reads the briefs under `docs/projects/` and `docs/qa/exemptions.md` from the checkout,
+# which must come first, and each brief's tracking issue (K-WORK-23), and any roadmap milestone a
+# brief names, through `gh` with the workflow token: the job grants `issues: read`, and nothing
+# else beyond `contents: read`.
+#
+# There are no inputs (ADR 0002). `kanon init` writes the `Brief guard` job that calls this into a
+# new ci.yml where a Lead lane is chosen, and doctor's `ci.brief-guard-missing` notes a repository
+# with a Lead lane and no job that runs it.
+name: Kanon brief guard
+description: Fails unless every project brief under docs/projects/ has the shape the Lead's lanes and the reconciler read.
+author: yedeya-labs
+
+runs:
+  using: composite
+  steps:
+    - uses: $/actions/kanon-path
+      id: kanon
+    - name: Check the briefs
+      shell: bash
+      env:
+        KANON: ${{ steps.kanon.outputs.path }}
+        GH_TOKEN: ${{ github.token }}
+      # The guard calls a run that finds no brief broken, which is right for a repository that has
+      # briefs. A repository with a Lead lane and no project yet has none, and passes here, saying
+      # so. A brief is `docs/projects/<n>.md`, as `isBrief` in brief-guard.mjs reads one. Outside a
+      # checkout `git ls-files` fails, and so does the step.
+      run: |
+        set -euo pipefail
+        tracked="$(git ls-files docs/projects)"
+        if ! grep -qE '^docs/projects/[0-9]+\.md$' <<<"$tracked"; then
+          echo "brief-guard: no brief under docs/projects/ yet, so there is nothing to check."
+          exit 0
+        fi
+        node "$KANON/scripts/brief-guard.mjs"

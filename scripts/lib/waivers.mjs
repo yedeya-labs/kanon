@@ -121,6 +121,8 @@ export const FINDINGS = {
   'deploy.hook-missing': { category: 'declaration', blocking: true },
   'hook.missing': { category: 'declaration', blocking: true },
   'hook.input-missing': { category: 'declaration', blocking: true },
+  'hook.stub': { category: 'declaration', blocking: false },
+  'ci.brief-guard-missing': { category: 'declaration', blocking: false },
   'workflow.missing': { category: 'declaration', blocking: true },
   'lead.template-missing': { category: 'declaration', blocking: false },
   'lead.template-stale': { category: 'declaration', blocking: false },
