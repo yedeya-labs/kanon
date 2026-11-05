@@ -3330,8 +3330,15 @@ const run = async (deps, opts, req, rep) => {
     }
     return tracked !== null && !tracked.has(rel);
   };
+  /**
+   * Whether this run replaces a file that differs: one never committed, with the flag, and nothing
+   * marking it as the project's own (#1586). A release workflow at the caller's path that calls no
+   * Kanon release workflow is the project's (cli/release-files.mjs): init only shows it, flag or no.
+   * @param {string} rel
+   */
+  const ownFile = (rel) => rel === RELEASE_CALLER_PATH && !callsRelease(read(rel));
   /** Whether this run replaces a file that differs. @param {string} rel */
-  const replaces = (rel) => opts.replaceUncommitted && untracked(rel);
+  const replaces = (rel) => opts.replaceUncommitted && untracked(rel) && !ownFile(rel);
   for (;;) {
     rep.summary = summaryOf({ s, a, req, repo, release, read, files: plan(), rows, ownerApps, met, holders, legacyCallers, replaces });
     out('');
@@ -3495,7 +3502,7 @@ const run = async (deps, opts, req, rep) => {
       continue;
     }
     if (have !== null) {
-      if (untracked(rel)) replaceable.push(rel);
+      if (untracked(rel) && !ownFile(rel)) replaceable.push(rel);
       out(`${rel}: exists and differs from what init would write; left unchanged. The difference:`);
       const diff = lineDiff(have, text).filter((l) => !l.startsWith('  '));
       for (const l of diff) out(`    ${l}`);
