@@ -85,7 +85,7 @@ describe('isStubHook', () => {
   });
 
   it('calls a hook with a step of the project\'s own, or one that does not parse, or none, no stub', () => {
-    const filled = hookFile(['lane']).replace(/    - shell: bash\n      run: echo[^\n]*\n/, '    - uses: actions/setup-node@v4\n    - shell: bash\n      run: npm ci\n');
+    const filled = hookFile(['lane']).replace(/ {4}- shell: bash\n {6}run: echo[^\n]*\n/, '    - uses: actions/setup-node@v4\n    - shell: bash\n      run: npm ci\n');
     expect(filled).not.toBe(hookFile(['lane']));
     expect(isStubHook(filled, parse)).toBe(false);
     expect(isStubHook(`${hookFile(['lane'])}    - shell: bash\n      run: npm ci\n`, parse)).toBe(false);
