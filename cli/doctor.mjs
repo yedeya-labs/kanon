@@ -107,6 +107,12 @@ export const UNREACHABLE = /** @type {const} */ ({ runs: 2, days: 14, perCaller:
  */
 export const TURN_CAP = /** @type {const} */ ({ runs: 2, share: 0.25, days: 14, perLane: 20, maxPages: MAX_PAGES, downloads: 8 });
 /**
+ * `ruleset.bootstrap-can-end` (#1610): how many of the repository's most recently updated pull
+ * requests doctor reads for a review by the Judge App. The review lane reviews the pull requests
+ * opened after its caller merges, so the Judge's first reviews are among the latest.
+ */
+export const JUDGE_REVIEW_PULLS = 30;
+/**
  * The title GitHub stores for an annotation a workflow command (`::error title=<title>::…`) gives:
  * the runner splits the command's properties on every `,`, unescaped, and keeps only `key=value`
  * segments, so a title with a comma keeps its first segment's value alone.
@@ -1621,7 +1627,16 @@ export const diagnose = async (deps, opts) => {
       if (!appsCheckPath) return { reason: `no apps-check workflow is there to read it from: ${runAppsCheck}` };
       const runs = await deps.gh(['api', `repos/${repo}/actions/workflows/${appsCheckName}/runs?branch=${encodeURIComponent(s.defaultBranch)}&event=workflow_dispatch&status=completed&per_page=1`]);
       const list = ghJsonOf(runs)?.workflow_runs;
-      if (!Array.isArray(list)) return { reason: `the token can't list ${appsCheckName}'s runs, which needs Actions: read (${runs.stderr.trim() || `exit ${runs.status}`})` };
+      if (!Array.isArray(list)) {
+        // A workflow not yet on the default branch answers 404, as a fresh install's caller does
+        // until its pull request merges (#1610). A token without Actions: read can answer 404 too,
+        // so the 404 is the branch's only when the repository's own runs can be listed.
+        const unknown = runs.status !== 0 && /HTTP 404/.test(runs.stderr);
+        if (unknown && ghJsonOf(await deps.gh(['api', `repos/${repo}/actions/runs?per_page=1`])) !== null) {
+          return { reason: `${appsCheckName} isn't on ${s.defaultBranch} yet, so it has never run: it runs once the pull request that installs it merges; then ${runAppsCheck}` };
+        }
+        return { reason: `the token can't list ${appsCheckName}'s runs, which needs Actions: read (${runs.stderr.trim() || `exit ${runs.status}`})` };
+      }
       const run = list[0];
       if (!isMap(run)) return { reason: `${appsCheckName} has no completed run on ${s.defaultBranch}: ${runAppsCheck}` };
       const from = isMap(run.head_repository) ? String(run.head_repository.full_name ?? '') : '';
@@ -2283,6 +2298,27 @@ export const diagnose = async (deps, opts) => {
     // first. An organisation's ruleset is edited on its page.
     const own = s.covering.filter((r) => (r.source_type ?? 'Repository') === 'Repository');
     const target = own.find((r) => (r.rules ?? []).some((/** @type {any} */ x) => x?.type === 'pull_request')) ?? own[0];
+    /**
+     * Whether the Judge App has posted a review on one of the repository's most recently updated
+     * pull requests (#1610), read through the pulls listing, not search, whose zero can be wrong
+     * (scripts/lib/search.mjs). A review by an App is its bot's: `<slug>[bot]`.
+     * @param {string} slug
+     * @returns {Promise<{ reviewed: number | null, read: number } | { reason: string }>}
+     */
+    const judgeReviewed = async (slug) => {
+      const listed = await deps.gh(['api', `repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=${JUDGE_REVIEW_PULLS}`]);
+      const pulls = ghJsonOf(listed);
+      if (!Array.isArray(pulls)) return { reason: `the token can't list ${repo}'s pull requests, which needs Pull requests: read (${listed.stderr.trim() || `exit ${listed.status}`})` };
+      const bot = `${slug}[bot]`.toLowerCase();
+      for (const p of pulls) {
+        const number = Number(p?.number);
+        const got = await deps.gh(['api', `repos/${repo}/pulls/${number}/reviews?per_page=100`]);
+        const reviews = ghJsonOf(got);
+        if (!Array.isArray(reviews)) return { reason: `the token can't read the reviews of pull request #${number}, which needs Pull requests: read (${got.stderr.trim() || `exit ${got.status}`})` };
+        if (reviews.some((r) => String(r?.user?.login ?? '').toLowerCase() === bot)) return { reviewed: number, read: pulls.length };
+      }
+      return { reviewed: null, read: pulls.length };
+    };
     const switchOn = () => {
       if (s.rulesets === 'no') return { text: `A private repository on a plan without rulesets can't require it (K-ADOPT-3): make the repository public, or move to a plan with rulesets, and require one approving review there.` };
       // An unread ruleset may be the one that should require it, and init creates none beside it.
@@ -2316,10 +2352,19 @@ export const diagnose = async (deps, opts) => {
         const reviewCallers = [...(onDefault.workflows ?? new Map())].filter(([, wf]) => Object.values(isMap(wf.jobs) ? wf.jobs : {}).some((j) => isMap(j) && kanonCall(j.uses)?.workflow === REVIEW_LANE)).map(([f]) => f);
         if (reviewCallers.length) {
           const fix = switchOn();
-          find('ruleset.bootstrap-can-end', s.defaultBranch, `The Judge App \`${judge}\` is installed, and ${reviewCallers.join(', ')} on ${s.defaultBranch} calls the review lane, so the Reviewer can approve; but the ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) requires no approving review, so any merge still needs none, and the repository is still in bootstrap. Requiring one is what ends it (K-ADOPT-6, K-ADOPT-1 step 14).`, {
+          // An approval required before the Judge App has reviewed anything locks out every pull
+          // request if the review lane can't run yet, so until it has, the finding is a note
+          // (#1610, the Owner's decision of 2026-11-05), and so it is when its reviews can't be read.
+          const seen = await judgeReviewed(judge);
+          const why = 'reason' in seen
+            ? ` It doesn't block yet, because doctor can't tell whether the Judge App has reviewed a pull request yet: ${seen.reason}.`
+            : seen.reviewed === null
+              ? ` It doesn't block yet: the Judge App has posted no review on any pull request doctor read (${seen.read ? `the ${seen.read} most recently updated in ${repo}` : `${repo} has none`}), and an approval required before the Reviewer has reviewed one would lock out every pull request if it can't.`
+              : '';
+          find('ruleset.bootstrap-can-end', s.defaultBranch, `The Judge App \`${judge}\` is installed, and ${reviewCallers.join(', ')} on ${s.defaultBranch} calls the review lane, so the Reviewer can approve; but the ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) requires no approving review, so any merge still needs none, and the repository is still in bootstrap. Requiring one is what ends it (K-ADOPT-6, K-ADOPT-1 step 14).${why}`, {
             ...fix,
-            text: `${fix.text} Then record the date in ${ADOPTION_RECORD}: under ## Bootstrap, write \`ended YYYY-MM-DD\` with the day you switched it on, in place of \`in bootstrap since\` (K-ADOPT-6, K-LAYOUT-10). From then on doctor fails a ruleset that stops requiring it (ruleset.approval-off).`,
-          });
+            text: `${why ? 'Open a test pull request first, and add the label `review:please` to it, to see the Reviewer review it. Once it has: ' : ''}${fix.text} Then record the date in ${ADOPTION_RECORD}: under ## Bootstrap, write \`ended YYYY-MM-DD\` with the day you switched it on, in place of \`in bootstrap since\` (K-ADOPT-6, K-LAYOUT-10). From then on doctor fails a ruleset that stops requiring it (ruleset.approval-off).`,
+          }, why !== '');
         }
       }
     }
@@ -3418,7 +3463,7 @@ export const diagnose = async (deps, opts) => {
  * is a branch's, and the rule waits for its merge. Returns the ruleset's gaps still to ask for.
  * @param {{ defaultWorkflows: () => ReturnType<typeof branchWorkflows>, s: Inspection, checked: string, gaps: string[],
  *   checkout: Map<string, Record<string, any>>,
- *   find: (id: string, subject: string, message: string, fix: { text: string, commands?: string[], url?: string | null }) => void,
+ *   find: (id: string, subject: string, message: string, fix: { text: string, commands?: string[], url?: string | null }, warnOnly?: boolean) => void,
  *   unchecked: Array<{ check: string, subject: string, reason: string }> }} c
  * @returns {Promise<string[]>}
  */
@@ -3449,6 +3494,8 @@ const checkGaps = async ({ defaultWorkflows, s, checked, gaps, checkout, find, u
   const lacking = unqueued.length ? ` ${unqueued.join(', ')} ${unqueued.length > 1 ? "don't" : "doesn't"} run on merge_group, the event the merge queue on ${s.defaultBranch} runs its checks on, so a queued merge never gets the check and waits on it.` : '';
   const workflowsOf = (/** @type {string[]} */ list) => [...new Set(list.map((j) => j.split('#')[0]))].join(', ');
   const fixes = [...(filters.length ? [`take ${filters.join(', ')} off the workflow's trigger`] : []), ...(unqueued.length ? [`add merge_group to the triggers of ${workflowsOf(unqueued)}`] : [])];
+  // A note while this checkout adds the job (#1610): its own pull request is what reports the
+  // check, and blocking on it asks for nothing that can happen before that pull request merges.
   find('ruleset.check-unreported', LANE_CHECK, required
     ? `The ruleset on ${s.defaultBranch} requires the status check "${LANE_CHECK}", but no job of a workflow on ${s.defaultBranch} reports it on ${every}, so every ${queue ? 'one' : 'pull request'} that doesn't get it waits on it (K-ADOPT-1 step 8).${skipping}${lacking}`
     : `No job of a workflow on ${s.defaultBranch} reports the status check "${LANE_CHECK}" on ${every}, so the ruleset can't require it yet: a required check that nothing reports blocks every pull request (K-ADOPT-1 step 8).${skipping}${lacking}`, {
@@ -3458,7 +3505,7 @@ const checkGaps = async ({ defaultWorkflows, s, checked, gaps, checkout, find, u
         ? `Run the job on ${every}: ${fixes.join(', and ')}, or move the job to a workflow of its own on pull_request${queue ? ' and merge_group' : ''} with no filter, as actions/lane-check's README shows, and merge it. ${then}`
         : `Add a job of its own named "${LANE_CHECK}", in a workflow that runs on pull_request${queue ? ' and merge_group' : ''}, as actions/lane-check's README shows (a step in another job reports nothing under that name), and merge it. ${then}`,
     url: `https://github.com/${KANON_REPO}/blob/${checked}/actions/lane-check/README.md`,
-  });
+  }, here.length > 0);
   return rest;
 };
 
