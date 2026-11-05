@@ -109,8 +109,8 @@ export const readPluginDeclaration = (text) => {
 // `version`. A marketplace the person added themselves keeps its own `ref` there, and, without
 // `autoUpdate` on the marketplace, an installed plugin moves only when Claude Code is asked to
 // update it, so the plugin can stay releases behind the repository's `ref` without a word. `kanon doctor` reads those two files, and nothing else
-// under the root: never the person's settings, whose `env` can hold a credential, and never a file
-// it names. It writes nothing there.
+// under the root, never a file it names, and of the person's settings only the one entry below
+// (kanon#1577), since a settings file's `env` can hold a credential. It writes nothing there.
 
 /** The two records doctor reads, relative to the plugins root. */
 export const KNOWN_MARKETPLACES = 'known_marketplaces.json';
