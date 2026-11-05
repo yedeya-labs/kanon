@@ -415,16 +415,17 @@ describe('kanon doctor and the job behind a required check (#418)', () => {
     expect(r.json.findings[0].message).toContain('require the status check "Lane check"');
   });
 
-  it("doesn't offer the rule for a check whose job is only on this checkout's branch: the job's pull request merges first", async () => {
+  it("doesn't offer the rule for a check whose job is only on this checkout's branch, and notes it without blocking: the job's pull request merges first", async () => {
     const dir = checkout(healthyFiles());
     const github = fakeGitHub();
     withoutCheck(github);
     github.st.defaultWorkflows = {};
     const r = await run(dir, github, ['--json']);
     expect(ids(r)).toEqual(['ruleset.check-unreported Lane check']);
-    expect(r.status).toBe(EXIT.findings);
+    // A note, not blocking (#1610): this checkout's pull request is what reports it, and it can't merge sooner.
+    expect(r.status).toBe(EXIT.healthy);
     const f = r.json.findings[0];
-    expect(f).toMatchObject({ category: 'ruleset', blocking: true, subject: 'Lane check', fix: { url: `https://github.com/yedeya-labs/kanon/blob/${PINNED}/actions/lane-check/README.md` } });
+    expect(f).toMatchObject({ category: 'ruleset', blocking: false, subject: 'Lane check', fix: { url: `https://github.com/yedeya-labs/kanon/blob/${PINNED}/actions/lane-check/README.md` } });
     expect(f.message).toContain('so the ruleset can\'t require it yet');
     expect(f.fix.text).toContain('This checkout adds it (.github/workflows/ci.yml#lanes): merge the pull request that adds it to main first.');
     expect(f.fix.text).toContain('once the job is on main');
@@ -440,6 +441,9 @@ describe('kanon doctor and the job behind a required check (#418)', () => {
     const r = await run(dir, github, ['--json']);
     expect(ids(r)).toEqual(['ruleset.check-unreported Lane check']);
     expect(r.json.findings[0].fix.text).toMatch(/^Add a job of its own named "Lane check", in a workflow that runs on pull_request/);
+    // Blocking: nothing this checkout adds reports it (#1610).
+    expect(r.json.findings[0].blocking).toBe(true);
+    expect(r.status).toBe(EXIT.findings);
   });
 
   it('names a ruleset that already requires a check no job on the default branch reports', async () => {
