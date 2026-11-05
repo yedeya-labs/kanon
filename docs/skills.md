@@ -18,7 +18,7 @@ The skills live in `skills/`, as a Claude Code plugin, `kanon`, not in a reposit
 
 ## Declare it in the repository
 
-The way to pin it is in the repository, in its `.claude/settings.json`, which Claude Code reads for everyone who works there ([Require plugins per repository](https://code.claude.com/docs/en/plugins/org#require-plugins-per-repository)). `kanon init` offers to write it (`--plugin`, the default, or `--no-plugin`; [`docs/init.md`](init.md)); into a settings file the project already has, merge the two keys yourself, `init` reporting them (`plugin.declare`) and changing nothing there:
+The way to pin it is in the repository, in its `.claude/settings.json`, which Claude Code reads for everyone who works there ([Require plugins per repository](https://code.claude.com/docs/en/plugins/org#require-plugins-per-repository)). `kanon init` offers to write it (`--plugin`, the default, or `--no-plugin`; [`docs/init.md`](init.md)). The file `claude plugin marketplace add --scope project` and `claude plugin install --scope project` write, never committed and holding nothing else, `init` takes as its own and completes, with `"autoUpdate": true` and the `ref` at its pin ([`docs/init.md`](init.md#the-plugins-settings-file), [#1607](https://github.com/yedeya-labs/kanon/issues/1607)). Into any other settings file the project already has, merge the keys yourself, `init` reporting them (`plugin.declare`) and changing nothing there:
 
 <!-- x-release-please-start-version -->
 
@@ -51,20 +51,20 @@ Each skill runs `kanon` through an `npx` line that names its release's candidate
 
 ## Or install it yourself
 
-Without the declaration, each person installs the plugin in their own Claude Code configuration:
+Without a declaration yet, each person installs the plugin from their own checkout, at project scope:
 
 <!-- x-release-please-start-version -->
 
 ```sh
-claude plugin marketplace add yedeya-labs/kanon#v0.42.0
-claude plugin install kanon@kanon
+claude plugin marketplace add --scope project yedeya-labs/kanon#v0.42.0
+claude plugin install --scope project kanon@kanon
 ```
 
 <!-- x-release-please-end -->
 
-Or, inside a Claude Code session, the same two as `/plugin marketplace add …` and `/plugin install kanon@kanon`. Start a new session, or run `/reload-plugins`, and the skills are there.
+`--scope project` writes the pin into the repository's `.claude/settings.json`, which the adopt skill carries onto its branch and `kanon init` completes ([#1607](https://github.com/yedeya-labs/kanon/issues/1607)). Claude Code's default, user scope, writes it into your own settings instead, where it overrides every repository's own pin (above). Claude Code keeps one clone of the marketplace per person, so re-pointing it in one repository re-points it for all of them (above). Or, inside a Claude Code session, the same two as `/plugin marketplace add --scope project …` and `/plugin install --scope project kanon@kanon`. **Start a new Claude Code session** before `/kanon:adopt`, or run `/reload-plugins`, and the skills are there: a session open during the install still offers the skills it started with. To run a candidate ahead of stable, put its tag, `candidate-vX.Y.Z`, in place of the release ([`docs/install.md`](install.md#running-a-candidate)), and move back with `/kanon:upgrade`.
 
-**That pin lives in each person's configuration, not in the repository,** so Dependabot doesn't propose it, and `kanon doctor` sees it only on that person's machine (`plugin.behind`). To move it to a newer release, see [Moving the plugin](#moving-the-plugin).
+**A pin added at user scope lives in each person's configuration, not in the repository,** so Dependabot doesn't propose it, and `kanon doctor` sees it only on that person's machine (`plugin.behind`). To move it to a newer release, see [Moving the plugin](#moving-the-plugin).
 
 ## Moving the plugin
 
@@ -79,7 +79,7 @@ Or, inside a Claude Code session, the same two as `/plugin marketplace add …` 
 
 These are the steps that moved the plugin in a check on Claude Code v2.1.316, with a configuration directory of its own, from `v0.38.0` to `v0.42.0` and on to `candidate-v0.43.0`. `"autoUpdate": true` replaces steps 2 to 4; a settings file that predates it, or one `init` didn't write, gets the key by hand (`plugin.auto-update-off` gives it).
 
-**Installed by the person,** in their own Claude Code configuration, without the declaration: in your own terminal, in the repository's checkout, remove the marketplace, which uninstalls its plugin too, add it again at the release, and install the plugin, both at `--scope project`, so the pin goes into the repository's `.claude/settings.json` and not into your own settings, where it would override every repository's own pin ([#1616](https://github.com/yedeya-labs/kanon/issues/1616)), then start a new session or run `/reload-plugins`, and run `/kanon:upgrade`. For another release, its tag takes this one's place in the second line:
+**Installed by the person,** in their own Claude Code configuration, without the declaration: in your own terminal, in the repository's checkout, remove the marketplace, which uninstalls its plugin too, add it again at the release, and install the plugin, both at `--scope project`, so the pin goes into the repository's `.claude/settings.json` and not into your own settings, where it would override every repository's own pin (as [Or install it yourself](#or-install-it-yourself) says, [#1616](https://github.com/yedeya-labs/kanon/issues/1616)), then start a new session or run `/reload-plugins`, and run `/kanon:upgrade`. For another release, its tag takes this one's place in the second line:
 
 <!-- x-release-please-start-version -->
 
