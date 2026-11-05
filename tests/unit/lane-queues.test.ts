@@ -19,6 +19,10 @@ import { TRIGGERS } from '../../cli/callers.mjs';
  *   - KEYED_OUT: the group key sends a run that would skip to a group of its own;
  *   - ONLY_RUNS: every event its caller sends runs, so no skip-only run reaches the group.
  *
+ * A lane none of whose runs skip still needs `queue: max` when two of its runs are different work:
+ * kanon#1609 is the Lead's brief lane, where a third mandate dispatched cancelled the second's
+ * pending run. So it is listed under QUEUE_MAX, with the real runs a new arrival would replace.
+ *
  * A new reusable workflow with a workflow-level group fails until it is classified.
  */
 
@@ -43,6 +47,8 @@ const QUEUE_MAX: Record<string, string> = {
   'agent-release-announce.yml': 'a dispatch or release the gate refuses, for a tag a real run waits on (kanon#1190)',
   // Its runtime-version trigger is a `pull_request_target: closed` on its caller's path (kanon#833).
   'agent-overseer.yml': 'an unmerged close of a pull request that changes the caller',
+  // None of its runs skip; each is a different mandate, so a replaced pending run is a lost brief (kanon#1609).
+  'agent-lead.yml': 'none, but every dispatch is another project\'s mandate',
 };
 /** Each, with the clause of its group key that sends a would-be skip elsewhere. */
 const KEYED_OUT: Record<string, RegExp> = {
@@ -58,7 +64,6 @@ const KEYED_OUT: Record<string, RegExp> = {
 };
 /** Each, with why every event its caller sends runs. */
 const ONLY_RUNS: Record<string, string> = {
-  'agent-lead.yml': 'a dispatch only',
   'agent-code-audit.yml': 'a schedule and a dispatch',
   'agent-explore.yml': 'a schedule and a dispatch',
   'agent-explore-telemetry.yml': 'a schedule and a dispatch',
@@ -93,8 +98,7 @@ describe('kanon#552: a run that only skips never replaces a pending real one', (
     for (const k of ['issues', 'pr', 'prTarget', 'review', 'ci', 'merged', 'pinMoved']) expect(t[k], `${file}: ${k}`).toBeUndefined();
     // And its first job admits exactly those.
     const first = Object.values(read(file).jobs)[0]!;
-    if (file === 'agent-lead.yml') expect(first.if).toBe("github.event_name == 'workflow_dispatch'");
-    else expect(String(first.if ?? '')).toMatch(/^github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'$/);
+    expect(String(first.if ?? '')).toMatch(/^github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'$/);
   });
 
   // Mutations: each turns the QUEUE_MAX check red.
@@ -103,7 +107,9 @@ describe('kanon#552: a run that only skips never replaces a pending real one', (
     ['the default spelled out', (t: string) => t.replace(/^ {2}queue: max$/m, '  queue: single')],
     ['cancel-in-progress turned on', (t: string) => t.replace(/^ {2}cancel-in-progress: false$/m, '  cancel-in-progress: true')],
   ] as const)('goes red on a QUEUE_MAX lane with %s', (_name, mutate) => {
-    const text = mutate(readFileSync(join(WF, 'agent-implement-revise.yml'), 'utf8'));
-    expect(keepsPending((parse(text) as Workflow).concurrency)).toBe(false);
+    for (const file of ['agent-implement-revise.yml', 'agent-lead.yml']) {
+      const text = mutate(readFileSync(join(WF, file), 'utf8'));
+      expect(keepsPending((parse(text) as Workflow).concurrency), file).toBe(false);
+    }
   });
 });
