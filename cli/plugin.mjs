@@ -259,14 +259,14 @@ export const managedSettingsPaths = (platform) => MANAGED_SETTINGS[platform] ?? 
 /**
  * Every managed settings file of a platform, in the order Claude Code merges them, a later one over
  * an earlier: `managed-settings.json`, then each `*.json` of `managed-settings.d/` beside it, in
- * alphabetical order (#1630). `list` names a directory's entries, none when it isn't there.
+ * alphabetical order, a hidden one left out as Claude Code leaves it out (#1630). `list` names a directory's entries, none when it isn't there.
  * @param {string} platform @param {(dir: string) => string[]} list
  */
 export const managedSettingFiles = (platform, list) =>
   managedSettingsPaths(platform).flatMap((file) => {
     const sep = file.includes('\\') ? '\\' : '/';
     const dir = `${file.slice(0, file.lastIndexOf(sep))}${sep}managed-settings.d`;
-    return [file, ...list(dir).filter((n) => n.endsWith('.json')).sort().map((n) => `${dir}${sep}${n}`)];
+    return [file, ...list(dir).filter((n) => n.endsWith('.json') && !n.startsWith('.')).sort().map((n) => `${dir}${sep}${n}`)];
   });
 
 /**

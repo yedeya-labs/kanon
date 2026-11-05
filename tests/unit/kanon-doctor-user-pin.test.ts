@@ -121,6 +121,16 @@ describe("plugin.behind's fix for a stale marketplace, once doctor can tell the 
     expect(behind(r).fix.text).toContain("Doctor can't read server-managed settings; unless your organisation sets the marketplace there, it is only behind");
   });
 
+  it('keeps the remove where a managed or local settings file is not JSON, though the user file was read', async () => {
+    const managed = managedFile('{ not json');
+    const r = await run(declaredRepo(), fakeGitHub(), ['--json'], undefined, { HOME: home(null), CLAUDE_CODE_PLUGIN_CACHE_DIR: records('v0.9.0') }, [managed]);
+    expect(behind(r).fix.commands).toEqual(['claude plugin marketplace remove kanon --scope user', 'claude plugin update kanon@kanon']);
+    expect(behind(r).fix.text).not.toContain('only behind');
+    const local = checkout({ ...healthyFiles(), [SETTINGS]: pluginSettingsFile(PINNED), '.claude/settings.local.json': '{ not json' });
+    const l = await run(local, fakeGitHub(), ['--json'], undefined, { HOME: home(null), CLAUDE_CODE_PLUGIN_CACHE_DIR: records('v0.9.0') });
+    expect(behind(l).fix.commands[0]).toBe('claude plugin marketplace remove kanon --scope user');
+  });
+
   it("keeps the remove, as a condition the person checks, where doctor couldn't read their settings", async () => {
     const r = await run(declaredRepo(), fakeGitHub(), ['--json'], undefined, { CLAUDE_CODE_PLUGIN_CACHE_DIR: records('v0.9.0') });
     expect(behind(r).fix.commands).toEqual(['claude plugin marketplace remove kanon --scope user', 'claude plugin update kanon@kanon']);
@@ -148,7 +158,9 @@ describe('plugin.user-override from the managed drop-ins and the local settings 
   it("names the checkout's local settings, whose fix edits that file", async () => {
     const dir = checkout({ ...healthyFiles(), [SETTINGS]: pluginSettingsFile(PINNED), '.claude/settings.local.json': settings('v0.38.0') });
     const [f] = of(await run(dir, fakeGitHub(), ['--json'], undefined, { HOME: home(null) }), 'plugin.user-override');
-    expect(f).toMatchObject({ subject: '.claude/settings.local.json', message: expect.stringMatching(/^This checkout's local settings, \.claude\/settings\.local\.json, declare .* in this checkout,/) });
+    expect(f).toMatchObject({ subject: '.claude/settings.local.json', message: expect.stringMatching(/^This checkout's local settings, \.claude\/settings\.local\.json, declare .*: Claude Code installs the plugin from this entry in this checkout \(K-ADOPT-11\)\.$/) });
+    // Its refusal names user and managed settings alone, so the local message claims none.
+    expect(f.message).not.toContain('refuses');
     expect(f.fix.text).toContain('delete its "kanon" entry under extraKnownMarketplaces');
     expect(f.fix.commands).not.toContainEqual(expect.stringContaining('remove'));
   });
@@ -160,7 +172,8 @@ describe('plugin.user-override from the managed drop-ins and the local settings 
   });
 
   it('lists the drop-ins in order, and names what it cannot read per system', () => {
-    expect(managedSettingFiles('linux', () => ['b.json', 'a.json', 'notes.txt'])).toEqual([
+    // A hidden drop-in is one Claude Code ignores.
+    expect(managedSettingFiles('linux', () => ['b.json', '.old.json', 'a.json', 'notes.txt'])).toEqual([
       '/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d/a.json', '/etc/claude-code/managed-settings.d/b.json',
     ]);
     expect(unreadSettings('darwin')).toEqual(['the macOS managed preferences (com.anthropic.claudecode)', 'server-managed settings']);

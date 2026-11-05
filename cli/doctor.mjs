@@ -1355,9 +1355,10 @@ export const diagnose = async (deps, opts) => {
     if (found && found.entry) {
       override = { path: found.path, kind: found.kind, ref: found.entry.ref, kanon: found.entry.kanon };
       const at = found.entry.kanon ? `at ${found.entry.ref ?? "Kanon's default branch"}` : 'from a source that isn\'t Kanon\'s repository';
-      const who = found.kind === 'managed' ? 'The managed settings declare' : found.kind === 'local' ? `This checkout's local settings, ${LOCAL_SETTINGS_PATH}, declare` : 'Your user settings declare';
-      const where = found.kind === 'local' ? 'in this checkout' : 'here and in every other repository on this machine';
-      const message = `${who} the "${plugin.name}" marketplace ${at}, which overrides the ${plugin.ref ?? 'default-branch'} pin ${SETTINGS_PATH} declares: Claude Code installs the plugin from this entry, ${where}, and refuses to add the repository's at project scope (K-ADOPT-11).`;
+      const holder = found.kind === 'managed' ? 'The managed settings declare' : found.kind === 'local' ? `This checkout's local settings, ${LOCAL_SETTINGS_PATH}, declare` : 'Your user settings declare';
+      // Claude Code's refusal names user and managed settings alone, so a local entry's message claims none.
+      const effect = found.kind === 'local' ? 'Claude Code installs the plugin from this entry in this checkout' : "Claude Code installs the plugin from this entry, here and in every other repository on this machine, and refuses to add the repository's at project scope";
+      const message = `${holder} the "${plugin.name}" marketplace ${at}, which overrides the ${plugin.ref ?? 'default-branch'} pin ${SETTINGS_PATH} declares: ${effect} (K-ADOPT-11).`;
       const add = `claude plugin marketplace add --scope project ${KANON_MARKETPLACE_REPO}${plugin.ref ? `#${plugin.ref}` : ''}`;
       const install = `claude plugin install --scope project ${PLUGIN_ID(plugin.name)}`;
       find('plugin.user-override', shown(found.path), message, found.kind === 'managed'
