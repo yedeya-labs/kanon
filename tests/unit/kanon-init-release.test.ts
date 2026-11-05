@@ -125,6 +125,28 @@ describe('kanon init and the release workflow (kanon#1553)', () => {
     for (const p of [CONFIG, MANIFEST, VERSION]) expect(status(p), p).toBeUndefined();
   });
 
+  // kanon#1586: never committed, the project's own workflow still isn't init's to replace, flag or no.
+  it("never replaces a release workflow of the project's own, never committed, even with --replace-uncommitted", async () => {
+    const own = 'name: Release\non: push\njobs:\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make release\n';
+    for (const flags of [['--releaser'], ['--releaser', '--replace-uncommitted']]) {
+      const { dir, status, d } = await init({ [CALLER]: own }, flags);
+      expect(status(CALLER), flags.join(' ')).toBe('differs');
+      expect(read(dir, CALLER)).toBe(own);
+      expect(d.changes.map((c) => String(c.subject))).not.toContain(CALLER);
+      // Nor offered to the flag: the note names only files init may have written.
+      expect(d.notes.join('\n')).not.toMatch(/Never committed, and differ from what init writes: [^\n]*\.github\/workflows\/release\.yml/);
+      expect(d.summary.find((l) => l.answer === 'Files')?.value).not.toContain('replaced');
+      for (const p of [CONFIG, MANIFEST, VERSION]) expect(status(p), p).toBeUndefined();
+    }
+  });
+
+  it('still replaces, with the flag, an uncommitted file init writes that nothing marks as the project\'s', async () => {
+    // A lane caller an earlier init wrote at another release, never committed: init's own, so the flag replaces it.
+    const lane = '.github/workflows/agent-review.yml';
+    const { d } = await init({ [lane]: 'name: Review (Reviewer)\non: pull_request\njobs:\n  review:\n    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.0.1\n' }, ['--replace-uncommitted']);
+    expect(d.files.find((f) => f.path === lane)?.status).toBe('replaced');
+  });
+
   it('leaves what it wrote alone on a second run, and a manifest and version.txt release-please moved', async () => {
     const first = await init({}, ['--deploy-environments', 'production']);
     const written = read(first.dir, CALLER);

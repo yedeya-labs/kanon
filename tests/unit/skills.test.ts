@@ -1294,6 +1294,27 @@ describe('the adopt skill and the install path (#1607)', () => {
     expect(confirm).toMatch(/never a list of your own/);
     expect(confirm).toMatch(/never say the token has them/);
   });
+
+  it('has the adopt skill rerun init, not fix the token, when a write step says GitHub limited the rate (#1607)', () => {
+    const body = skill('adopt').body;
+    const row = (id: string) => body.split('\n').find((l) => l.startsWith(`| \`${id}\` |`))!;
+    expect(row('label.create')).toMatch(/says GitHub limited the rate \(or failed\), the token is fine: you run `kanon init --json --no-apps` again with the same flags/);
+    expect(row('merge.settings')).toMatch(/^\| `merge\.settings` \| person \| As `label\.create` when GitHub limited the rate\./);
+    expect(row('ruleset.create')).toMatch(/^\| `ruleset\.create` \| person \| As `label\.create` when GitHub limited the rate\./);
+  });
+});
+
+// kanon#1631: init spaces its writes and waits on rate limits, so the adopt skill runs it with a
+// timeout that covers those waits, rather than its client's default, which would stop it mid-run.
+describe('the adopt skill and how long kanon init takes (#1631)', () => {
+  it('says how long a writing kanon init can take, and to run it with the longest timeout', () => {
+    const how = section(skill('adopt').body, /^## How to run `kanon`$/)!;
+    expect(how).toMatch(/\*\*Give `kanon init` time\*\*/);
+    expect(how).toMatch(/a run can take about four minutes/);
+    expect(how).toContain('10 minutes (`timeout: 600000`), not its default of 2');
+    expect(how).toMatch(/In another agent client, use its longest command timeout\./);
+    expect(how).toMatch(/run it again with the same flags: it writes only what is still missing/);
+  });
 });
 
 // kanon#1607 point 6: adopt and upgrade keep a friction log without being asked, outside the

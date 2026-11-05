@@ -21,6 +21,8 @@
 // UNREADABLE; the command's exit code says the run is incomplete. A listing that can't be
 // finished, an exhausted rate limit or a GraphQL error stops the run.
 
+import { retryable } from './gh-retry.mjs';
+
 /** @typedef {{ status: number | null, stdout: string, stderr: string }} GhResult */
 /** @typedef {(args: string[]) => Promise<GhResult>} Gh */
 
@@ -134,8 +136,7 @@ export const pageQuery = (list, first) => {
  * @typedef {{ prPage?: number, nestedPage?: number }} ReadSizes
  */
 
-/** @param {string} stderr */
-const retryable = (stderr) => /secondary rate limit|abuse detection|HTTP 429|HTTP 502|HTTP 503|HTTP 504|timed? ?out/i.test(stderr);
+// `retryable` is cli/gh-retry.mjs's, shared with `kanon init` and `kanon milestones` (kanon#1607).
 
 /**
  * One GraphQL call, its `data` returned. Retries a secondary rate limit or a gateway error;
