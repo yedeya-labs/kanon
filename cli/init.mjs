@@ -95,6 +95,7 @@ import { OTHER_APP } from '../scripts/app-register.mjs';
 import { hookKind, HOOK_PATH as NOTIFY_HOOK_PATH } from '../actions/notify/notify.mjs';
 import { TARGETS_VARIABLE } from '../scripts/lib/deploy-targets.mjs';
 import { RELEASE_CALLER_PATH, releaseFiles } from './release-files.mjs';
+import { LOCKED_SET, serialiseLockedSet } from '../scripts/locked-set.mjs';
 import { ADOPTION_RECORD as DEPLOY_RECORD, CHAIN_LABELS, CHOICES_HEADING, DeclarationError, DEPLOY_HEADING, LABELS as REFERENCE_LABELS, parseDeployDeclaration } from '../scripts/lib/deploy-declaration.mjs';
 import { LABEL as OVERSEER_LABEL, OVERSEER_CALLER, parseOverseerInstall } from '../scripts/lib/overseer-install.mjs';
 import { fencedLines } from '../scripts/spec-lib.mjs';
@@ -2588,6 +2589,10 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   // The Lead writes each brief from the brief template, so it comes with the Lead's caller, and
   // one the repository has is the project's (#749).
   if (a.lanes.includes(LEAD_LANE)) files.set(BRIEF_TEMPLATE_PATH, briefTemplate());
+  // And the empty locked set (K-LAYOUT-4): the Lead runs kanon-spec-coverage on its briefs, which
+  // stops on a missing baseline rather than reading it as empty (kanon#1644). One the project has
+  // is the project's, `kept` as any declaration.
+  if (a.lanes.includes(LEAD_LANE)) files.set(LOCKED_SET, serialiseLockedSet([]));
 
   const ci = read('.github/workflows/ci.yml');
   const ciName = ci === null ? 'CI' : workflowName(ci, '.github/workflows/ci.yml');

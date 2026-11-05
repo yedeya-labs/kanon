@@ -36,7 +36,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { idPattern, loadPrefixes, parseAll, qaToolingImport } from './spec-lib.mjs';
 import { printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
-import { LOCKED_SET, byId, readLockedSet, serialiseLockedSet } from './locked-set.mjs';
+import { LOCKED_SET, LockedSetError, byId, readLockedSet, serialiseLockedSet } from './locked-set.mjs';
 import { conventionFor, isTestFile } from './lib/test-conventions.mjs';
 import { codeAreasDefaults, readCodeAreas } from './lib/code-areas.mjs';
 import { execFileSync } from 'node:child_process';
@@ -961,4 +961,14 @@ function main() {
 const IS_CLI = (() => {
   try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href; } catch { return false; }
 })();
-if (IS_CLI) main();
+// A locked set that can't be read is the person's to make or restore, said in one line, not a
+// stack trace (kanon#1644). Anything else still throws.
+if (IS_CLI) {
+  try {
+    main();
+  } catch (e) {
+    if (!(e instanceof LockedSetError)) throw e;
+    console.error(`spec-coverage: ${e.message}`);
+    process.exitCode = 1;
+  }
+}
