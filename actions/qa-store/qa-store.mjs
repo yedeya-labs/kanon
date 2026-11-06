@@ -221,6 +221,10 @@ export function costRowsProblem(v) {
     for (const k of ['ts', 'issue_number', 'outcome', 'run_id']) {
       if (!stringOrNull(/** @type {Record<string, unknown>} */ (r)[k] ?? null)) return `rows[${i}].${k} is neither a string nor null`;
     }
+    // Optional (kanon#1592): the lines the run committed, a whole number or null. A hook that
+    // leaves it out keeps working; the sweep then re-dispatches an empty run as before.
+    const produced = /** @type {Record<string, unknown>} */ (r).produced_lines ?? null;
+    if (produced !== null && !(Number.isInteger(produced) && /** @type {number} */ (produced) >= 0)) return `rows[${i}].produced_lines is neither a whole number nor null`;
   }
   return null;
 }
@@ -229,7 +233,7 @@ export function costRowsProblem(v) {
  * Read a `cost-rows` file as `readCostRows` returns its result: FAILS CLOSED, so an unreadable
  * or malformed file is `{ rows: [], error }`, which charges every dispatch and says why.
  * @param {string} path
- * @returns {{ rows: Array<{ ts: string|null, issue_number: string|null, outcome: string|null, run_id: string|null }>, error: string|null }}
+ * @returns {{ rows: Array<{ ts: string|null, issue_number: string|null, outcome: string|null, run_id: string|null, produced_lines?: number }>, error: string|null }}
  */
 export function readCostRowsFile(path) {
   /** @type {unknown} */
@@ -241,10 +245,10 @@ export function readCostRowsFile(path) {
   }
   const problem = costRowsProblem(v);
   if (problem) return { rows: [], error: `the store's cost rows are malformed (${problem})` };
-  const o = /** @type {{ rows: Array<Record<string, string|null>>, error?: string|null }} */ (v);
+  const o = /** @type {{ rows: Array<{ ts?: string|null, issue_number?: string|null, outcome?: string|null, run_id?: string|null, produced_lines?: unknown }>, error?: string|null }} */ (v);
   if (o.error) return { rows: [], error: o.error };
   return {
-    rows: o.rows.map((r) => ({ ts: r.ts ?? null, issue_number: r.issue_number ?? null, outcome: r.outcome ?? null, run_id: r.run_id ?? null })),
+    rows: o.rows.map((r) => ({ ts: r.ts ?? null, issue_number: r.issue_number ?? null, outcome: r.outcome ?? null, run_id: r.run_id ?? null, ...(Number.isInteger(r.produced_lines) ? { produced_lines: /** @type {number} */ (r.produced_lines) } : {}) })),
     error: null,
   };
 }

@@ -26,15 +26,16 @@ import { join } from 'node:path';
 import { isCliEntry } from '../../../scripts/lib/cli-entry.mjs';
 import { UNMARKED, keyed, repositoryId } from './keys.mjs';
 
-/** Exactly the attributes the sweep reads (`dispatch-sweep.mjs`'s `COST_PROJECTION`). */
-export const COST_PROJECTION = ['sk', 'issue_number', 'outcome', 'run_id'];
+/** Exactly the attributes the sweep reads (`dispatch-sweep.mjs`'s `COST_PROJECTION`); `produced_lines`
+ *  says a run committed work it may not have delivered (kanon#1592). */
+export const COST_PROJECTION = ['sk', 'issue_number', 'outcome', 'run_id', 'produced_lines'];
 
 /**
  * One agent's cost rows for one repository after `since` (a store stamp), and up to `to` when it
  * is given; the unkeyed rows while the repository has none of its own, which it logs through `log`.
  * Returns the rows and the partition they came from. Throws on any failure of a query or its parse.
  * @param {{ agent: string, since: string, to?: string, table: string, region: string, repository: string, log?: (line: string) => void }} q
- * @returns {{ rows: Array<{ ts: string|null, issue_number: string|null, outcome: string|null, run_id: string|null }>, partition: string }}
+ * @returns {{ rows: Array<{ ts: string|null, issue_number: string|null, outcome: string|null, run_id: string|null, produced_lines?: number }>, partition: string }}
  */
 export function readCostPartition({ agent, since, to = '', table, region, repository, log = console.log }) {
   const own = keyed(`COST#${agent}`, repository);
@@ -52,6 +53,8 @@ export function readCostPartition({ agent, since, to = '', table, region, reposi
     issue_number: it.issue_number?.N ?? null,
     outcome: it.outcome?.S ?? null,
     run_id: it.run_id?.S ?? null,
+    // Only when the row records it (kanon#1592): an older row has none.
+    ...(it.produced_lines?.N != null && Number.isInteger(Number(it.produced_lines.N)) ? { produced_lines: Number(it.produced_lines.N) } : {}),
   }));
   // The upper bound is the contract's (`query(lane, from, to)`); the sweep passes none.
   return { rows: to ? rows.filter((/** @type {{ ts: string|null }} */ r) => r.ts !== null && r.ts <= to) : rows, partition };

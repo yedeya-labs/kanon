@@ -571,7 +571,9 @@ describe('the spine\'s push job holds the key and runs nothing else (kanon#1383)
     }
     // Commits, not a closing comment alone, which uploads too (kanon#1591).
     expect(agentJob.jobs.run.outputs.commits).toBe("${{ steps.upload.outcome == 'success' && steps.handoff.outputs.commits == 'true' }}");
-    expect(agentJob.jobs.run.outputs.comment).toBe("${{ steps.upload.outcome == 'success' && steps.handoff.outputs.comment == 'true' }}");
+    expect(agentJob.jobs.run.outputs.comment).toBe("${{ inputs.closing-comment && steps.upload.outcome == 'success' && steps.handoff.outputs.comment == 'true' }}");
+    // The caller sees it only through the called workflow's declared outputs (#1654's review).
+    expect(agentJob.on.workflow_call.outputs.comment.value).toBe('${{ jobs.run.outputs.comment }}');
   });
 
   it('[LANE-14] runs no agent and no project code, checks nothing out, and moves the branch with the verified-commit helper', () => {

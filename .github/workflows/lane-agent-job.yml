@@ -197,6 +197,14 @@ on:
         required: false
         type: boolean
         default: false
+      run-summary:
+        description: >-
+          Upload a safe summary of the agent's run as a short-retention artifact (kanon#1593): its
+          final message, each tool call's name and whether it errored, and its turn and cost counts,
+          never a tool's input or output (`scripts/run-summary.mjs`).
+        required: false
+        type: boolean
+        default: false
       closing-comment:
         description: >-
           On a lane that sets `push`, hand the push job the agent's closing comment too
@@ -295,7 +303,8 @@ jobs:
       start: ${{ steps.checkout.outputs.commit }}
       commits: ${{ steps.upload.outcome == 'success' && steps.handoff.outputs.commits == 'true' }}
       # The agent's closing comment, handed to the push job (kanon#1591).
-      comment: ${{ steps.upload.outcome == 'success' && steps.handoff.outputs.comment == 'true' }}
+      # On a lane that sets `closing-comment` only: any other lane's push job leaves a stray one alone.
+      comment: ${{ inputs.closing-comment && steps.upload.outcome == 'success' && steps.handoff.outputs.comment == 'true' }}
       attempt: ${{ github.run_attempt }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1): a cancelled
@@ -585,6 +594,26 @@ jobs:
             echo "The agent left its closing comment for the push job to post"
           fi
           if [ "$commits" != true ] && [ ! -f "$out/comment.md" ]; then rm -rf "$out"; fi
+      # A SAFE SUMMARY OF THE RUN (kanon#1593), on a lane that asks for one. The result file holds every
+      # tool call's raw input and output, which the log's masking never reaches, so it is never
+      # uploaded; the summary keeps the final message, each tool call's name and error flag, and the
+      # counts. Seven days, enough to read why a run stopped, and `continue-on-error`: it never reds a run.
+      - name: Summarise the agent's run, without what its tools read or wrote
+        id: run-summary
+        if: always() && inputs.run-summary && steps.agent.outcome != 'skipped'
+        continue-on-error: true
+        env:
+          EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
+        run: node "$KANON/scripts/run-summary.mjs" --execution-file "$EXECUTION_FILE" --out "$RUNNER_TEMP/kanon-run-summary/summary.json"
+      - name: Upload the run summary
+        if: always() && inputs.run-summary && steps.run-summary.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-run-summary-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kanon-run-summary/summary.json
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Upload the agent's commits for the push job
         id: upload
         if: always() && (steps.handoff.outputs.commits == 'true' || steps.handoff.outputs.comment == 'true')

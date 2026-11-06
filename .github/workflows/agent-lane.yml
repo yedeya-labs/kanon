@@ -305,6 +305,14 @@ on:
         required: false
         type: boolean
         default: false
+      run-summary:
+        description: >-
+          Upload a safe summary of the agent's run as a seven-day artifact (kanon#1593): the final
+          message, each tool call's name and error flag, and the turn and cost counts, never a tool's
+          input or output.
+        required: false
+        type: boolean
+        default: false
       closing-comment:
         description: >-
           With `push`, the agent writes its closing comment to `docs/.kanon-issue-comment.md`, and
@@ -518,6 +526,7 @@ jobs:
       project-setup: ${{ inputs.project-setup }}
       push: ${{ inputs.push }}
       closing-comment: ${{ inputs.closing-comment }}
+      run-summary: ${{ inputs.run-summary }}
       quality-pr-label: ${{ inputs.quality-pr-label }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}

@@ -1754,7 +1754,7 @@ export function readStoreCostRows(lane, env = process.env) {
   if (problem) return { rows: [], error: `the store job's cost rows are malformed (${problem})` };
   if (v.error) return { rows: [], error: v.error };
   return {
-    rows: v.rows.map((/** @type {any} */ r) => ({ ts: r.ts ?? null, issue_number: r.issue_number ?? null, outcome: r.outcome ?? null, run_id: r.run_id ?? null })),
+    rows: v.rows.map((/** @type {any} */ r) => ({ ts: r.ts ?? null, issue_number: r.issue_number ?? null, outcome: r.outcome ?? null, run_id: r.run_id ?? null, ...(Number.isInteger(r.produced_lines) ? { produced_lines: r.produced_lines } : {}) })),
     error: null,
   };
 }

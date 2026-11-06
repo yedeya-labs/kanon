@@ -29,7 +29,7 @@ The block reads the hook from a checkout of the commit the run is for, made with
 | `record-skip` | the Explorer's change gate | `dir/skip.json`: `{commit, trigger, tier, reason}` | nothing |
 | `put` | the code audit and the Explorer, after the agent | `dir/report.json`: the Explorer's sweep summary ([its format](explore-sweep.md#the-summary)) or the audit's report | nothing |
 | `export` | the code audit and the Overseer, before the agent | nothing | `dir/export/`: the files below |
-| `cost-rows` | the dispatch sweep, before its job | nothing | `dir/cost-rows.json`: `{rows, error}`, each row `{ts, issue_number, outcome, run_id}`, strings or null |
+| `cost-rows` | the dispatch sweep, before its job | nothing | `dir/cost-rows.json`: `{rows, error}`, each row `{ts, issue_number, outcome, run_id, produced_lines}`: the first four strings or null, and `produced_lines`, optional, the lines the run committed, a whole number or null ([#1592](https://github.com/yedeya-labs/kanon/issues/1592)) |
 
 An **export** holds JSON arrays of objects, one per row, with each row's attributes as plain JSON and its sort key named for what it is:
 

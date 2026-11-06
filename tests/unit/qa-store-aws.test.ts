@@ -578,18 +578,19 @@ describe('the scripts, against a stub aws', SPAWNS, () => {
   });
 
   describe('cost-rows (readCostRows\' query, moved)', () => {
-    const ROWS = '{"Items":[{"sk":{"S":"20261001T000000Z"},"issue_number":{"N":"7"},"outcome":{"S":"unavailable"},"run_id":{"S":"9"}},{"sk":{"S":"20261003T000000Z"},"outcome":{"S":"ok"}}]}';
+    const ROWS = '{"Items":[{"sk":{"S":"20261001T000000Z"},"issue_number":{"N":"7"},"outcome":{"S":"unavailable"},"run_id":{"S":"9"}},{"sk":{"S":"20261003T000000Z"},"outcome":{"S":"ok"},"produced_lines":{"N":"9496"}}]}';
     it('writes one agent\'s rows after FROM in readCostRows\' shape, with the sweep\'s query', () => {
       aws(`echo '${ROWS}'`);
       expect(run('cost-rows', { KIND: 'implementer', FROM: '20260920T000000Z' }).status).toBe(0);
       expect(readCostRowsFile(join(dir, 'cost-rows.json'))).toEqual({ rows: [
         { ts: '20261001T000000Z', issue_number: '7', outcome: 'unavailable', run_id: '9' },
-        { ts: '20261003T000000Z', issue_number: null, outcome: 'ok', run_id: null },
+        // kanon#1592: the lines a run committed, when its row records them.
+        { ts: '20261003T000000Z', issue_number: null, outcome: 'ok', run_id: null, produced_lines: 9496 },
       ], error: null });
       const [q] = logged();
       expect(q).toEqual(['dynamodb', 'query', '--table-name', 't', '--region', 'eu-central-1', '--key-condition-expression', 'pk = :p AND sk > :s',
         '--expression-attribute-values', '{":p":{"S":"COST#implementer#101"},":s":{"S":"20260920T000000Z"}}',
-        '--projection-expression', 'sk, issue_number, outcome, run_id', '--output', 'json']);
+        '--projection-expression', 'sk, issue_number, outcome, run_id, produced_lines', '--output', 'json']);
     });
 
     it('drops rows after TO, the contract\'s upper bound', () => {

@@ -161,6 +161,14 @@ export function decide({ kind, labels, project, spoke, hasPr, crashes, body = ''
   if (!labels.includes(IMPLEMENT)) return { act: 'none', why: `\`${IMPLEMENT}\` is already off — nothing holds a slot` };
   // A PR EXISTS — work was produced, whatever the run did after.
   if (hasPr) return { act: 'none', why: 'a PR would close this issue — work exists' };
+  // THE WORK EXISTS BUT WAS NOT DELIVERED (kanon#1592). The agent's job handed commits to the
+  // push job, and no pull request closes the issue: the push failed, or never opened one. A retry
+  // would pay for the work again (an adopter's lost three runs, about $55, this way), when it is
+  // the push job, which runs no agent, that is to re-run. A person reads the run and re-runs it.
+  // Before the project check: a hand-labelled issue would otherwise be left to the sweep's retry.
+  if (committed) {
+    return { act: 'stop', label: STOP_LABEL, undelivered: true, why: 'the run committed its work and handed it to the push job, but no pull request closes this issue, so a retry would only redo it. Re-run the failed `push` job on the run above ("Re-run failed jobs"); it runs no agent, and reads the commits this run left' };
+  }
   // ONLY A PROJECT MEMBER. Removing the label is only a retry because `lead-reconcile`
   // re-dispatches brief items; an issue a human labelled by hand has no such tick, and
   // dropping its label would strand it. The dispatch sweep owns that one, as before.
@@ -171,14 +179,6 @@ export function decide({ kind, labels, project, spoke, hasPr, crashes, body = ''
   // the sweep re-dispatches) into `in-flight` and then `awaiting-human`, which it does not.
   // The red run is the signal, and the sweep reads it: the run's jobs show the empty check
   // failed and this recovery ran, and the issue reads `ran-empty` there (kanon#254).
-  // THE WORK EXISTS BUT WAS NOT DELIVERED (kanon#1592). The agent's job handed commits to the
-  // push job, and no pull request closes the issue: the push failed, or never opened one. A retry
-  // would pay for the work again (an adopter's lost three runs, about $55, this way), when it is
-  // the push job, which runs no agent, that is to re-run. A person reads the run and re-runs it.
-  // Before the project check: a hand-labelled issue would otherwise be left to the sweep's retry.
-  if (committed) {
-    return { act: 'stop', label: STOP_LABEL, undelivered: true, why: 'the run committed its work and handed it to the push job, but no pull request closes this issue, so a retry would only redo it. Re-run the failed `push` job on the run above ("Re-run failed jobs"); it runs no agent, and reads the commits this run left' };
-  }
   if (project == null) return { act: 'none', why: 'not a project member, so no tick would re-dispatch it — the dispatch sweep owns its retry' };
   // NEVER REACHED THE MODEL. A cap or an outage is a fact about the pipeline, and an
   // hourly retry into it spends the attempts RA-1517 says must not be charged. The sweep's

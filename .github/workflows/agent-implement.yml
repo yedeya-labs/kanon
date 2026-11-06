@@ -329,6 +329,9 @@ jobs:
       # And it posts the agent's closing comment, with a token minted after the run (kanon#1591):
       # this lane may run three hours, and the agent's token lives one.
       closing-comment: true
+      # A safe summary of each run, kept seven days (kanon#1593): why a run stopped, when its log
+      # doesn't say, with nothing a tool read or wrote.
+      run-summary: true
     secrets:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
