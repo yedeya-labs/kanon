@@ -50,7 +50,7 @@ export const AGENT_LANES = Object.freeze({
 });
 
 /**
- * The classifier's seven sentence templates (`classifyResult`), each to its code. A version-1
+ * The classifier's eight sentence templates (`classifyResult`), each to its code. A version-1
  * `reason` is the sentence; version 2 stores the code.
  * @type {ReadonlyArray<[RegExp, string]>}
  */
@@ -61,6 +61,7 @@ export const REASON_TEMPLATES = Object.freeze([
   [/^it stopped at its turn cap \(num_turns /, 'turn_cap'],
   [/^it stopped at its dollar cap, --max-budget-usd \(/, 'budget_cap'],
   [/^the agent ran and did not finish \(num_turns /, 'did_not_finish'],
+  [/^the agent stopped on a precondition it found mid-run: /, 'precondition_stop'],
   [/^num_turns (\d+|\?)$/, 'none'],
 ]);
 

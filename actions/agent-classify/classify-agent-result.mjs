@@ -115,6 +115,9 @@ const configuredModelRan = (usage, model) => {
  * (#314). The sentence, which carries model ids and numbers, stays in the annotation and the
  * step summary and never leaves the run (ADR 0007, `K-OBS-16`).
  *
+ * `failed` covers a clean run whose agent ended with a `KANON-STOP:` line too (kanon#1564): it
+ * stopped on a precondition and did no work, so the run is not `ok`.
+ *
  * There is no `unknown` return. `renderNotice` keeps an arm for it as a fall-through
  * for an unexpected caller, but every path above returns one of the five.
  *
@@ -219,6 +222,22 @@ export function classifyResult(result, model = '', opts = {}) {
         + `${Number.isFinite(cost) ? cost.toFixed(2) : '?'}, num_turns ${Number.isFinite(turns) ? turns : '?'})`,
     };
   }
+  // A STOP ON A PRECONDITION THE AGENT FOUND MID-RUN (kanon#1564). The agent ran, found that
+  // something its run needs doesn't hold (a brief lane dispatched with a `context` that names no
+  // tracking issue), and stopped without doing its work, saying so with the `KANON-STOP:` line
+  // its prompt asks for (`persona-prompt.mjs`). The CLI reports that as a clean `success`, which
+  // was `ok`, and the run ended green and silent. It is `failed`, with its own code,
+  // `precondition_stop` (the Owner's decision on kanon#1639): the work was not done, but nothing
+  // failed, so the rise comparison leaves it out. A new code is a widening of intake, deployed
+  // first (docs/release.md, "Intake first"). `agent-run` warns with the agent's own words.
+  const stop = preconditionStop(result);
+  if (!errored && stop !== null) {
+    return {
+      kind: 'failed',
+      code: 'precondition_stop',
+      why: `the agent stopped on a precondition it found mid-run: ${stop}`,
+    };
+  }
   if (errored) {
     return {
       kind: 'failed',
@@ -228,6 +247,24 @@ export function classifyResult(result, model = '', opts = {}) {
     };
   }
   return { kind: 'ok', code: 'none', why: `num_turns ${Number.isFinite(turns) ? turns : '?'}` };
+}
+
+/** The line an agent ends its final message with when it stops on a precondition (kanon#1564). */
+export const STOP_MARKER = 'KANON-STOP:';
+
+/**
+ * The precondition an agent stopped on, from a `KANON-STOP: <reason>` line in its final message
+ * (the result's `result` text), trimmed to 300 characters; null when it wrote none. Only a line
+ * that starts with the marker counts, so the marker quoted inside a sentence doesn't.
+ * @param {unknown} result
+ * @returns {string | null}
+ */
+export function preconditionStop(result) {
+  const text = result && typeof result === 'object' && typeof (/** @type {any} */ (result)).result === 'string' ? (/** @type {any} */ (result)).result : '';
+  const line = text.split(/\r?\n/).map((l) => l.trim()).find((l) => l.startsWith(STOP_MARKER));
+  if (line === undefined) return null;
+  const why = line.slice(STOP_MARKER.length).trim();
+  return why ? why.slice(0, 300) : 'no reason given';
 }
 
 /**

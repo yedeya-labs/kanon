@@ -57,9 +57,10 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, briefGuardJob, briefGuardJobs, callerFile, isStubHook, kanonRelease, LEAD_LANES, loadRequirements, setupHookJobs, TRIGGERS, yamlScalar } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
+import { registerAppIds } from './app-register.mjs';
 import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, deployTakesTargets, GITHUB_DEFAULT_LABELS, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, workflowName } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
-import { AUTO_UPDATE, declaresAutoUpdate, INSTALLED_PLUGINS, installedBehind, KANON_MARKETPLACE_REPO, KNOWN_MARKETPLACES, managedSettingsPaths, pluginsRoot, readMachinePlugin, readMarketplaceEntry, readPluginDeclaration, samePath, SETTINGS_PATH, userSettingsPath } from './plugin.mjs';
+import { AUTO_UPDATE, declaresAutoUpdate, INSTALLED_PLUGINS, installedBehind, KANON_MARKETPLACE_REPO, KNOWN_MARKETPLACES, LOCAL_SETTINGS_PATH, managedSettingFiles, pluginsRoot, readMachinePlugin, readMarketplaceEntry, readPluginDeclaration, samePath, SETTINGS_PATH, unreadSettings, userSettingsPath } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '../scripts/lib/upstream-findings.mjs';
@@ -319,6 +320,7 @@ login; the command says which one it used and whose it is.`;
  *   labels: () => Array<{ name: string, color: string, description: string }>,
  *   now: () => number,
  *   managedSettings: () => string[],
+ *   platform: () => string,
  *   anon: (url: string) => Promise<{ status: number | null, text: string }>,
  * }} Deps
  */
@@ -379,8 +381,16 @@ export const realDeps = {
   briefTemplate,
   labels: () => JSON.parse(readFileSync(new URL('../rulebook/labels.json', import.meta.url), 'utf8')).labels,
   now: () => Date.now(),
-  // The managed settings files of this system (cli/plugin.mjs), which a test replaces with its own.
-  managedSettings: () => managedSettingsPaths(process.platform),
+  // The managed settings files of this system, its drop-ins among them (cli/plugin.mjs), and the
+  // system, both of which a test replaces with its own.
+  managedSettings: () => managedSettingFiles(process.platform, (dir) => {
+    try {
+      return readdirSync(dir);
+    } catch {
+      return [];
+    }
+  }),
+  platform: () => process.platform,
   // A read of Kanon's public repository with no credential at all (kanon#1574): no header but the
   // user agent, so neither the person's token nor `gh`'s login is sent anywhere. Only ever called
   // with a URL of Kanon's own repository, on raw.githubusercontent.com or api.github.com.
@@ -1355,35 +1365,65 @@ export const diagnose = async (deps, opts) => {
     });
   }
 
-  // ── A user-level or managed entry that overrides the repository's pin (#1577, #1607 point 1) ──
-  // Claude Code takes a `kanon` marketplace entry in the person's user settings, or the managed
-  // settings, over the repository's: the install then follows that entry's release in every
-  // repository on the machine, and `marketplace add --scope project` refuses. Doctor reads that one
-  // entry and nothing else of either file (cli/plugin.mjs). Not blocking, and not waivable: it is
-  // one person's machine, as `plugin.behind` is. A file that isn't there, or isn't JSON, is no entry.
+  // ── An entry in another settings source that overrides the repository's pin (#1577, #1630) ──
+  // Claude Code takes a `kanon` marketplace entry from the managed settings (the file and its
+  // drop-ins, a later one over an earlier), the checkout's local settings, or the person's user
+  // settings, over the repository's: the install then follows that entry's release, and
+  // `marketplace add --scope project` refuses. Doctor reads that one entry and nothing else of each
+  // file (cli/plugin.mjs). The macOS managed preferences, the Windows registry policy and
+  // server-managed settings aren't files it can read, so it never says nothing overrides the pin.
+  // Not blocking, and not waivable: it is one person's machine, as `plugin.behind` is.
   const userPath = userSettingsPath(deps.env);
   const home = (deps.env.HOME ?? deps.env.USERPROFILE ?? '').replace(/[\\/]+$/, '');
   const shown = (/** @type {string} */ p) => (home && p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p);
-  /** @type {{ path: string, managed: boolean, ref: string | null, kanon: boolean } | null} */
+  /** @type {{ path: string, kind: 'managed' | 'local' | 'user', ref: string | null, kanon: boolean } | null} */
   let override = null;
+  // Whether every settings file doctor reads was read: none of them unreadable, and a home to read.
+  let allRead = userPath !== null;
   if (plugin.status === 'declared') {
-    for (const [path, managed] of [...deps.managedSettings().map((p) => /** @type {[string, boolean]} */ ([p, true])), ...(userPath ? [/** @type {[string, boolean]} */ ([userPath, false])] : [])]) {
-      const entry = readMarketplaceEntry(deps.readFile(path), plugin.name);
-      if (entry.status === 'unreadable') notes.push(`${shown(path)} isn't JSON, so doctor couldn't tell whether it declares the "${plugin.name}" marketplace over ${SETTINGS_PATH}'s.`);
-      if (entry.status !== 'entry' || (entry.kanon && entry.ref === plugin.ref)) continue;
-      override = { path, managed, ref: entry.ref, kanon: entry.kanon };
-      const at = entry.kanon ? `at ${entry.ref ?? "Kanon's default branch"}` : 'from a source that isn\'t Kanon\'s repository';
-      const message = `${managed ? 'The managed settings declare' : 'Your user settings declare'} the "${plugin.name}" marketplace ${at}, which overrides the ${plugin.ref ?? 'default-branch'} pin ${SETTINGS_PATH} declares: Claude Code installs the plugin from this entry, here and in every other repository on this machine, and refuses to add the repository's at project scope (K-ADOPT-11).`;
+    /** @param {string} path @param {string | null} text */
+    const entryOf = (path, text) => {
+      const entry = readMarketplaceEntry(text, plugin.name);
+      if (entry.status === 'unreadable') {
+        allRead = false;
+        notes.push(`${shown(path)} isn't JSON, so doctor couldn't tell whether it declares the "${plugin.name}" marketplace over ${SETTINGS_PATH}'s.`);
+      }
+      return entry.status === 'entry' ? entry : null;
+    };
+    /** @type {Array<{ path: string, kind: 'managed' | 'local' | 'user', entry: { kanon: boolean, ref: string | null } | null }>} */
+    const sources = [];
+    // The managed files merge, a later one over an earlier: the last that declares it is the one.
+    /** @type {{ path: string, kind: 'managed', entry: { kanon: boolean, ref: string | null } } | null} */
+    let managed = null;
+    for (const p of deps.managedSettings()) {
+      const e = entryOf(p, deps.readFile(p));
+      if (e) managed = { path: p, kind: 'managed', entry: e };
+    }
+    if (managed) sources.push(managed);
+    sources.push({ path: LOCAL_SETTINGS_PATH, kind: 'local', entry: entryOf(LOCAL_SETTINGS_PATH, read(LOCAL_SETTINGS_PATH)) });
+    if (userPath) sources.push({ path: userPath, kind: 'user', entry: entryOf(userPath, deps.readFile(userPath)) });
+    const found = sources.find((x) => x.entry !== null && !(x.entry.kanon && x.entry.ref === plugin.ref));
+    if (found && found.entry) {
+      override = { path: found.path, kind: found.kind, ref: found.entry.ref, kanon: found.entry.kanon };
+      const at = found.entry.kanon ? `at ${found.entry.ref ?? "Kanon's default branch"}` : 'from a source that isn\'t Kanon\'s repository';
+      const holder = found.kind === 'managed' ? 'The managed settings declare' : found.kind === 'local' ? `This checkout's local settings, ${LOCAL_SETTINGS_PATH}, declare` : 'Your user settings declare';
+      // Claude Code's refusal names user and managed settings alone, so a local entry's message claims none.
+      const effect = found.kind === 'local' ? 'Claude Code installs the plugin from this entry in this checkout' : "Claude Code installs the plugin from this entry, here and in every other repository on this machine, and refuses to add the repository's at project scope";
+      const message = `${holder} the "${plugin.name}" marketplace ${at}, which overrides the ${plugin.ref ?? 'default-branch'} pin ${SETTINGS_PATH} declares: ${effect} (K-ADOPT-11).`;
       const add = `claude plugin marketplace add --scope project ${KANON_MARKETPLACE_REPO}${plugin.ref ? `#${plugin.ref}` : ''}`;
-      find('plugin.user-override', shown(path), message, managed
-        ? { text: `Managed settings are set for every user of this machine, and nothing in this repository changes them: ask whoever manages them to remove the "${plugin.name}" entry, or set its ref to ${plugin.ref ?? 'the repository\'s'}. Then, in this repository's checkout, add the marketplace at project scope, install the plugin there and start a new Claude Code session:`, commands: [add, `claude plugin install --scope project ${PLUGIN_ID(plugin.name)}`] }
-        : { text: `In your own terminal, in this repository's checkout: remove your user entry, which keeps the plugin, then add the marketplace again at project scope, which follows ${SETTINGS_PATH}, install the plugin there, and start a new Claude Code session (docs/skills.md, "Moving the plugin").`, commands: [`claude plugin marketplace remove ${plugin.name} --scope user`, add, `claude plugin install --scope project ${PLUGIN_ID(plugin.name)}`] });
-      break;
+      const install = `claude plugin install --scope project ${PLUGIN_ID(plugin.name)}`;
+      find('plugin.user-override', shown(found.path), message, found.kind === 'managed'
+        ? { text: `Managed settings are set for every user of this machine, and nothing in this repository changes them: ask whoever manages them to remove the "${plugin.name}" entry, or set its ref to ${plugin.ref ?? 'the repository\'s'}. Then, in this repository's checkout, add the marketplace at project scope, install the plugin there and start a new Claude Code session:`, commands: [add, install] }
+        : found.kind === 'local'
+          ? { text: `${LOCAL_SETTINGS_PATH} is this checkout's own, never committed: delete its "${plugin.name}" entry under extraKnownMarketplaces, keeping the rest of the file. Then, in this checkout, add the marketplace at project scope, which follows ${SETTINGS_PATH}, install the plugin there, and start a new Claude Code session:`, commands: [add, install] }
+          : { text: `In your own terminal, in this repository's checkout: remove your user entry, which keeps the plugin, then add the marketplace again at project scope, which follows ${SETTINGS_PATH}, install the plugin there, and start a new Claude Code session (docs/skills.md, "Moving the plugin").`, commands: [`claude plugin marketplace remove ${plugin.name} --scope user`, add, install] });
     }
   }
-  // Whether the person's own settings were read and declare nothing over the repository's: then a
-  // stale marketplace is only behind, and no command of theirs removes anything (#1577).
-  const userClear = plugin.status === 'declared' && override === null && userPath !== null && readMarketplaceEntry(deps.readFile(userPath), plugin.name).status !== 'unreadable';
+  // Whether every settings file doctor reads was read and none declares the marketplace over the
+  // repository's: then a stale marketplace is most likely only behind, and no command of the
+  // person's removes anything (#1577). What doctor can't read is named beside it (#1630).
+  const settingsClear = plugin.status === 'declared' && override === null && allRead;
+  const unreadSources = unreadSettings(deps.platform());
 
   // ── The kanon plugin on this machine (#1552) ───────────────────────────────────────────
   // What Claude Code installed here, from its own records (cli/plugin.mjs): read only, never the
@@ -1410,15 +1450,15 @@ export const diagnose = async (deps, opts) => {
         ? `${SETTINGS_PATH} doesn't declare the plugin, so it is in your own Claude Code configuration, pinned to a tag that an update fetches again. Run these in your own terminal, in this repository's checkout: removing the marketplace uninstalls its plugin, which is why the install follows, and \`--scope project\` writes the pin into this repository's ${SETTINGS_PATH}, not into your user settings, where it would override every repository's own pin. Then start a new Claude Code session, or run /reload-plugins.`
         : stale
           ? `${declaredRef !== checked ? `First set the ref to ${checked} (plugin.version-mismatch). ` : ''}Claude Code on this machine holds the "${name}" marketplace at ${marketRef ?? "Kanon's default branch"}, not at the ${declaredRef ?? 'default branch'} ${SETTINGS_PATH} declares, so /plugin marketplace update fetches ${marketRef ?? 'it'} again. ${override
-            ? `${override.managed ? 'The managed settings declare' : 'Your user settings declare'} the marketplace over the repository's (plugin.user-override): follow that fix first. Then run the command here, and start a new session or run /reload-plugins.`
-            : userClear
-              ? `No settings of yours declare it, so it is only behind: start a new Claude Code session here, which fetches the marketplace at the repository's ref ("Plugins changed"); then run the command here, and start a new session or run /reload-plugins.`
+            ? `${override.kind === 'managed' ? 'The managed settings declare' : override.kind === 'local' ? `${LOCAL_SETTINGS_PATH} declares` : 'Your user settings declare'} the marketplace over the repository's (plugin.user-override): follow that fix first. Then run the command here, and start a new session or run /reload-plugins.`
+            : settingsClear
+              ? `None of the settings files doctor reads declare it over the repository's: your user settings, ${LOCAL_SETTINGS_PATH} and the managed settings files. Doctor can't read ${unreadSources.join(' or ')}; unless your organisation sets the marketplace there, it is only behind: start a new Claude Code session here, which fetches the marketplace at the repository's ref ("Plugins changed"); then run the command here, and start a new session or run /reload-plugins.`
               : `If you added the marketplace yourself (claude plugin marketplace add), it keeps its own entry, under the same name, in your user settings, and the repository's ref doesn't move it: run the first command in this repository, which removes only your own entry and keeps the plugin. Otherwise skip it. Then start a new Claude Code session here, which fetches the marketplace at the repository's ref ("Plugins changed"); then run the second command here, and start a new session or run /reload-plugins.`}`
           : `${declaredRef !== checked ? `First set the ref to ${checked} (plugin.version-mismatch), and start a new Claude Code session here so Claude Code fetches the marketplace at it. ` : ''}Claude Code fetched the "${name}" marketplace at ${marketRef ?? 'its ref'}, ${autoUpdates ? `but hasn't updated the installed plugin yet: with "${AUTO_UPDATE}": true on the entry it does so in the background, a few minutes into a session. To move it now, run` : `but, without "${AUTO_UPDATE}": true on the entry, moves an installed plugin only when asked. Run`} the command in this repository, then start a new Claude Code session or run /reload-plugins.`;
       const commands = declaredName === null
         ? [`claude plugin marketplace remove ${name}`, `claude plugin marketplace add --scope project ${KANON_REPO}#${checked}`, `claude plugin install --scope project ${PLUGIN_ID(name)}`]
         : stale
-          ? [...(override || userClear ? [] : [`claude plugin marketplace remove ${name} --scope user`]), `claude plugin update ${PLUGIN_ID(name)}`]
+          ? [...(override || settingsClear ? [] : [`claude plugin marketplace remove ${name} --scope user`]), `claude plugin update ${PLUGIN_ID(name)}`]
           : [`claude plugin update ${PLUGIN_ID(name)}`];
       find('plugin.behind', PLUGIN_ID(name), `Claude Code on this machine runs the kanon plugin at ${version} (${scope} scope), older than ${checking}: its skills follow ${version}'s rules against this installation (K-ADOPT-11).`, { text: fixText, commands });
     } else if (marketplaceStale(machine, declaredName, plugin)) {
@@ -1961,7 +2001,7 @@ export const diagnose = async (deps, opts) => {
           url: s.kind === 'Organization' ? `https://github.com/organizations/${s.owner}/settings/apps/${slug}` : `https://github.com/settings/apps/${slug}`,
         }
         : slug
-        ? { text: `Add ${repoName} to the ${id} App's installation, ${NEW_KEY}, and copy its App ID from the same page. kanon apps is your step: check the token with the first command (it creates nothing), then store the key with the second (it checks the key, stores both secrets and deletes the file):`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}@<App ID>=<downloaded>.pem`] }
+        ? { text: `Add ${repoName} to the ${id} App's installation. kanon apps is your step: check the token with the first command (it creates nothing), then run the second, which opens the App's page for you to ${NEW_KEY}, waits for the key in your Downloads folder, checks it, stores both secrets and deletes the file:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}`] }
         : { text: `Create the ${id} App from this checkout. kanon apps is your step: check the token with the first command (it creates nothing), then create the App with the second, which stores its secrets:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] }];
       });
     }
@@ -2327,6 +2367,16 @@ export const diagnose = async (deps, opts) => {
       let appId = appIdOf.get('releaser');
       /** @type {string | null} */
       let noId = null;
+      // The register records each App's ID (kanon#1607), which a person's token can't read for a
+      // private App on a personal account: the Releaser's row gives it, for the slug it names.
+      if (slug !== undefined && appId === undefined) {
+        const ids = registerAppIds(registerText);
+        const recorded = registerRolesOf('releaser', req).filter((role) => rows.get(role) === slug).map((role) => ids.get(role)).find((x) => x !== undefined);
+        if (recorded !== undefined) {
+          appId = recorded;
+          notes.push(`The Releaser App \`${slug}\`'s id, ${recorded}, is the one ${REGISTER_PATH} records: GitHub shows a private App's id only to the App and its owner's installations, so doctor checks the bypass against that.`);
+        }
+      }
       // A private Releaser's permissions come from apps-check, but not its id: that is the
       // <RELEASER>_APP_ID secret's value, which the run's log masks, and doctor never works
       // around a mask (K-AGENT-47). Its installation, which an organisation's owner can list,

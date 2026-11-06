@@ -342,6 +342,8 @@ export const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, ar
     release: () => PINNED,
     // Never the machine's own managed settings (#1577): a case that wants one passes its own.
     managedSettings: () => managed,
+    // One system for every case, so a fix that names what doctor can't read reads the same anywhere.
+    platform: () => 'linux',
     ...(now === undefined ? {} : { now: () => now }),
   });
   const text = out.join('\n');

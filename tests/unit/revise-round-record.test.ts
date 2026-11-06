@@ -165,10 +165,13 @@ for (const lane of LANES) {
       expect(inner.filter((s) => /claude-code-action/.test(String(s.uses))), 'exactly one agent step').toHaveLength(1);
       const after = inner.slice(action + 1);
       expect(after.map((s) => s.name), 'a step after the action could red a green agent run')
-        .toEqual(['Record whether claude-code-action failed to install Claude Code']);
+        .toEqual(['Record whether claude-code-action failed to install Claude Code', 'Warn when the agent stopped on a precondition it found mid-run']);
       expect(after[0]?.['continue-on-error'], 'the runtime check must not be able to red the block').toBe(true);
       expect(after[0]?.if, "the runtime check runs only on the agent step's failure")
         .toBe("!cancelled() && steps.agent.outcome == 'failure'");
+      // kanon#1564: the precondition-stop warning can't red the block either, and runs only after a green agent step.
+      expect(after[1]?.['continue-on-error'], 'the precondition-stop warning must not be able to red the block').toBe(true);
+      expect(after[1]?.if).toBe("!cancelled() && steps.agent.outcome == 'success'");
       const fallible = inner.slice(0, action).filter((s) => s['continue-on-error'] !== true).map((s) => s.name);
       expect(fallible).toEqual([
         'Record when the agent started', 'Check the turn limit raised for this run', "Refuse a run its lane's precondition stops",

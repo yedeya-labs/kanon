@@ -5,7 +5,7 @@ import { parse } from 'yaml';
 
 import { claudeArgWords } from '../../scripts/lib/claude-args.mjs';
 
-const { HEADLESS_RULE, withHeadless } = await import('../../actions/agent-run/persona-prompt.mjs');
+const { HEADLESS_RULE, STOP_RULE, withHeadless } = await import('../../actions/agent-run/persona-prompt.mjs');
 
 /**
  * kanon#621 — a headless run must not end its session with work still running.
@@ -66,7 +66,8 @@ describe('kanon#621: agent-run tells the agent its session ends when it stops', 
   it('appends the rule to the prompt, after what the lane wrote', () => {
     const out = withHeadless('Do the work.\n');
     expect(out.startsWith('Do the work.\n\nTHIS IS A HEADLESS RUN')).toBe(true);
-    expect(out.endsWith(HEADLESS_RULE)).toBe(true);
+    // The precondition rule follows it (kanon#1564).
+    expect(out.endsWith(`${HEADLESS_RULE}\n\n${STOP_RULE}`)).toBe(true);
   });
 
   it('says nothing resumes the session, to run in the foreground with a timeout, and never to wait on a background task', () => {
