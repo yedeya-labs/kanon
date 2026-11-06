@@ -240,6 +240,11 @@ describe('with a hook', () => {
       expect(r.line).toBe('QA store `cost-rows` (implementer): 1 rows.');
     });
 
+    it('passes the lines a run committed through, when the hook gives them (kanon#1592)', () => {
+      const withLines = { ...row, produced_lines: 12 };
+      expect(run(JSON.stringify({ rows: [withLines], error: null })).read).toEqual({ rows: [withLines], error: null });
+    });
+
     it('fails closed, and says why, on a failed hook or a malformed file', () => {
       expect(run(JSON.stringify({ rows: [row], error: null }), 'failure').read).toEqual({ rows: [], error: 'the store hook failed' });
       expect(run(JSON.stringify({ rows: [], error: 'the store query failed (AccessDenied)' }), 'failure').read)

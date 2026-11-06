@@ -535,7 +535,8 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
       const spineOutputs = called('agent-lane.yml').on.workflow_call.outputs ?? {};
       // What the spine hands up from the agent's job is how it ended, never a head or a base.
       const fromRun = Object.entries(spineOutputs).filter(([, o]) => /jobs\.run\./.test(o.value)).map(([k]) => k);
-      expect(fromRun.sort()).toEqual(['kind', 'outcome']);
+      // `commits` says only that the agent's job handed commits on, for crash recovery (kanon#1592): never a head or a base.
+      expect(fromRun.sort()).toEqual(['commits', 'kind', 'outcome']);
       for (const k of ['push-heads', 'push-base', 'push-pr']) expect(spineOutputs[k]?.value, k).toMatch(/^\$\{\{ jobs\.push\.outputs\.\w+ \}\}$/);
       // And each spine lane's status reads its call's push outputs, or the revise lane's fix-push.
       for (const file of ['agent-implement.yml', 'agent-triage.yml', 'agent-implement-revise.yml'] as const) {

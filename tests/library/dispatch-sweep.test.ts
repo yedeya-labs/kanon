@@ -536,10 +536,10 @@ describe('RA-1517 — a dispatch that never reached the model is not an attempt'
     expect(fn, 'it must never write').not.toMatch(/put-item|update-item|delete-item|batch-write/);
   });
 
-  it('the projection bound is the four attributes the sweep reads (RA-1586)', () => {
+  it('the projection bound is the five attributes the sweep reads (RA-1586, kanon#1592)', () => {
     // The reference adopter also holds its records of this bound to the constant; those
     // records are its documents, not Kanon's.
-    expect(COST_PROJECTION).toEqual(['sk', 'issue_number', 'outcome', 'run_id']);
+    expect(COST_PROJECTION).toEqual(['sk', 'issue_number', 'outcome', 'run_id', 'produced_lines']);
   });
 
   it('each lane names the telemetry agent whose partition holds its runs', () => {

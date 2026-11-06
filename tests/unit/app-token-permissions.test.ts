@@ -163,7 +163,8 @@ const SPINE_CALLERS: Record<string, Perms> = {
  * agent and revokes it at once.
  */
 const SPINE_PUSH: Record<string, Perms> = {
-  'agent-implement.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write', actions: 'read' },
+  // The implement lane's push job posts the agent's closing comment too (kanon#1591).
+  'agent-implement.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write', issues: 'write', actions: 'read' },
   'agent-triage.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write', actions: 'read' },
   'agent-implement-revise.yml': { contents: 'write', 'pull-requests': 'write', workflows: 'write', actions: 'read' },
   'agent-lead.yml': { contents: 'write', 'pull-requests': 'write', actions: 'read' },
@@ -409,13 +410,13 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     const probe = (spineDoc.jobs?.mint?.steps ?? []).find((s) => s.id === 'push-probe')!;
     // One set, written once in each place: the probe proves exactly what the push job will ask.
     for (const step of [pushMint, probe]) {
-      expect(requested(step.with)).toEqual({ contents: 'write', 'pull-requests': 'write', workflows: "${{ inputs.push-workflows && 'write' || '' }}", actions: 'read' });
+      expect(requested(step.with)).toEqual({ contents: 'write', 'pull-requests': 'write', workflows: "${{ inputs.push-workflows && 'write' || '' }}", issues: "${{ inputs.closing-comment && 'write' || '' }}", actions: 'read' });
     }
     const jobs = Object.values(read(`.github/workflows/${name}`).jobs ?? {}).filter((j) => String(j.uses ?? '').endsWith(`/${SPINE}`));
     expect(jobs.length).toBeGreaterThan(0);
     for (const job of jobs) {
       expect(job.with?.push, `${name} sets push`).toBe(true);
-      const asked: Perms = { contents: 'write', 'pull-requests': 'write', ...(job.with?.['push-workflows'] === true ? { workflows: 'write' } : {}), actions: 'read' };
+      const asked: Perms = { contents: 'write', 'pull-requests': 'write', ...(job.with?.['push-workflows'] === true ? { workflows: 'write' } : {}), ...(job.with?.['closing-comment'] === true ? { issues: 'write' } : {}), actions: 'read' };
       expect(asked).toEqual(perms);
       withinGrant(name, job.secrets?.['app-id'], perms);
     }

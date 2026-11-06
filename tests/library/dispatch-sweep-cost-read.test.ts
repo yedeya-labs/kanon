@@ -182,6 +182,16 @@ describe('readStoreCostRows — the store job\'s answer, failing closed', () => 
   it('passes the rows through', () => {
     expect(readStoreCostRows(lane, env(JSON.stringify({ rows: [row], error: null })))).toEqual({ rows: [row], error: null });
   });
+  // kanon#1592, end to end: a hook's row with the lines its run committed reaches the sweep's verdict.
+  it('carries produced_lines from the store job to the latest run the sweep reads, and refuses a malformed one', async () => {
+    const withLines = { ...row, outcome: 'ok', produced_lines: 9496 };
+    const read = readStoreCostRows(lane, env(JSON.stringify({ rows: [withLines], error: null })));
+    expect(read).toEqual({ rows: [withLines], error: null });
+    const { latestRunByIssue } = await import('../../scripts/dispatch-sweep.mjs');
+    const latest = latestRunByIssue(read.rows, [7]).get(7)!;
+    expect(latest.produced).toBe(9496);
+    expect(readStoreCostRows(lane, env(JSON.stringify({ rows: [{ ...row, produced_lines: 'many' }] }))).error).toMatch(/produced_lines is neither a whole number nor null/);
+  });
   it('keeps the store\'s own error, so a degraded read says why', () => {
     expect(readStoreCostRows(lane, env(JSON.stringify({ rows: [], error: 'the store query failed (AccessDenied)' }))))
       .toEqual({ rows: [], error: 'the store query failed (AccessDenied)' });
