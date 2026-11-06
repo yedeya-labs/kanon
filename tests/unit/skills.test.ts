@@ -884,7 +884,7 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(section(body, /^## Moving the plugin$/)).not.toMatch(/the target is still the stable `vX\.Y\.Z`/);
     // docs/install.md's "Running a candidate" says the same, and no longer waits on #1563.
     const install = read('docs/install.md');
-    expect(install).not.toMatch(/Until \[#1563\][^.]*is fixed/);
+    expect(install).not.toMatch(/Until \[#1563\]\([^)]*\) is fixed/);
     expect(install).toMatch(/Run from a candidate plugin before the promotion, the upgrade skill moves your pins to that candidate's tag/);
   });
 
