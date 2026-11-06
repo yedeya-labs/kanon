@@ -766,7 +766,16 @@ jobs:
             commit, so the required checks have SETTLED and you never have to reason
             about a pending one: a RED required check → `REQUEST_CHANGES`, never APPROVE
             over red (RA-293); all green → your findings decide, and a wrong PR body
-            is one that blocks (below). Still NEVER poll, wait for, or
+            is one that blocks (below).
+            BUT A RED CHECK MAY BE THE BASE BRANCH'S, NOT THIS PR'S (kanon#1568). Before
+            you request changes over a red required check, look up the same check on the
+            base branch's latest push run (`gh run list --branch <base> --event push
+            --limit 5 --json name,conclusion,url,headSha`, or `gh api` on the base's
+            check runs). When it is red there too, the PR did not cause it: say so in
+            your review, naming the base branch's red run and the open issue the
+            dispatch sweep files for it (search open issues for
+            `kanon:default-branch-red`), and ask nothing of the PR for that check. Still
+            never APPROVE over red; your other findings decide the rest. Still NEVER poll, wait for, or
             re-run a check — your run is finite and a backgrounded wait means your
             verdict is never posted. If a check somehow IS still pending, that is an
             anomaly rather than the normal case: say so in your review body and give
