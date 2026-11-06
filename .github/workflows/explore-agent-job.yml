@@ -146,9 +146,11 @@ jobs:
         if: ${{ !cancelled() && steps.hook.outcome == 'success' && steps.project.outcome == 'success' }}
         env:
           KANON: ${{ steps.kanon.outputs.path }}
+          KANON_NODE: ${{ steps.kanon.outputs.node }}
           COMMIT: ${{ github.sha }}
           TIER: ${{ inputs.tier }}
-        run: node "$KANON/scripts/explore-summary.mjs" check qa-explore-summary.json --commit "$COMMIT" --tier "$TIER"
+        run: |
+          "$KANON_NODE" "$KANON/scripts/explore-summary.mjs" check qa-explore-summary.json --commit "$COMMIT" --tier "$TIER"
 
       # For the `put` job, which holds the store's credentials and runs nothing of the lane's.
       # Uploaded before the agent runs, so the record is the sweep's, whatever the agent does to
@@ -199,7 +201,9 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           KANON: ${{ steps.kanon.outputs.path }}
-        run: node "$KANON/scripts/ensure-labels.mjs" agent:explorer qa:needs-triage bug sev:critical sev:high sev:medium sev:low signal:spec-violation signal:security signal:contract
+          KANON_NODE: ${{ steps.kanon.outputs.node }}
+        run: |
+          "$KANON_NODE" "$KANON/scripts/ensure-labels.mjs" agent:explorer qa:needs-triage bug sev:critical sev:high sev:medium sev:low signal:spec-violation signal:security signal:contract
 
       # THE AGENT TRIAGES THE SUMMARY (plan 0004 §4's second open item). It reads the summary
       # Kanon fixes, never the hook's own raw report, whose format is the project's tool's.
@@ -287,6 +291,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           KANON: ${{ steps.kanon.outputs.path }}
+          KANON_NODE: ${{ steps.kanon.outputs.node }}
         run: |
           # THIS RUN'S OWN START, not a fixed lookback: a window would count what an earlier run
           # filed. An over-count is worse than an absent value, so a failed read leaves both unset.
@@ -295,7 +300,7 @@ jobs:
             echo "::warning title=quality::could not read this run's start; leaving the filed columns unset rather than guessing a window"
             exit 0
           fi
-          node "$KANON/scripts/agent-quality-columns.mjs" --filed-since "$SINCE" --label 'agent:explorer'
+          "$KANON_NODE" "$KANON/scripts/agent-quality-columns.mjs" --filed-since "$SINCE" --label 'agent:explorer'
 
       # Explain a red run (RA-1408) and record what it cost (RA-1485). `always()` because a run
       # that FAILED is the one you most want explained and measured; `continue-on-error` because

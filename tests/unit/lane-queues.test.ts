@@ -52,8 +52,9 @@ const QUEUE_MAX: Record<string, string> = {
 };
 /** Each, with the clause of its group key that sends a would-be skip elsewhere. */
 const KEYED_OUT: Record<string, RegExp> = {
-  // The label is in the key: another label's run waits in another group.
-  'agent-implement.yml': /\$\{\{ github\.event\.label\.name \|\| 'dispatch' \}\}/,
+  // The label is in the key: another label's run waits in another group. A comment takes a group
+  // of its own, one per comment (kanon#1649): nearly every comment's run skips.
+  'agent-implement.yml': /\$\{\{ github\.event_name == 'issue_comment' && format\('comment-\{0\}', github\.event\.comment\.id\) \|\| github\.event\.label\.name \|\| 'dispatch' \}\}/,
   'agent-triage.yml': /\$\{\{ github\.event\.label\.name \|\| 'dispatch' \}\}/,
   // A label that neither starts nor cancels a review takes a group of its run's own (kanon#627).
   'agent-review.yml': /format\('label-\{0\}', github\.run_id\)/,

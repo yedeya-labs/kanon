@@ -8,7 +8,9 @@
 // Implementer either; this is the lane's own guard behind them.
 //
 // It reads the issue's labels from the event's payload (`LABELS`, the label event's
-// `issue.labels`), and for a dispatch, which carries none, from GitHub with the workflow token.
+// `issue.labels`), and from GitHub with the workflow token for a dispatch, which carries none, and for
+// a comment, whose payload holds the labels from before the implement lane's restart step took
+// `decision:needed` off (kanon#1649).
 // A read that fails admits the run, with a warning: a dispatch is a person's explicit act, and
 // refusing it on a flaky read would be the silent stop this gate exists to replace with a word.
 //
@@ -53,7 +55,7 @@ export const decide = ({ env, gh = (args) => execFileSync('gh', args, { encoding
       labels = null;
     }
   }
-  if (labels === null) return { admit: true, reason: `could not read issue #${env.ISSUE}'s labels, so whether it carries \`${DECISION_NEEDED}\` is unknown: admitting this dispatch` };
+  if (labels === null) return { admit: true, reason: `could not read issue #${env.ISSUE}'s labels, so whether it carries \`${DECISION_NEEDED}\` is unknown: admitting this ${env.EVENT === 'issue_comment' ? 'reply to a scope-first bail' : 'dispatch'}` };
   if (labels.includes(DECISION_NEEDED)) return { admit: false, reason: `issue #${env.ISSUE} carries \`${DECISION_NEEDED}\`: it waits on a person's decision, which an agent mustn't make in code (K-WORK-24)` };
   return { admit: true, reason: `issue #${env.ISSUE} doesn't carry \`${DECISION_NEEDED}\`` };
 };

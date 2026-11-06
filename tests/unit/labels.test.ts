@@ -135,7 +135,8 @@ describe('every label the library applies is in the taxonomy', () => {
 // ── Every lane that labels creates before it applies ─────────────────────────────────────────
 
 const LABEL_STEP = "Create the lane's labels the repository lacks";
-const ENSURE = /^node "\$KANON\/scripts\/ensure-labels\.mjs"((?: [a-z:-]+)+)$/;
+// `node`, or Kanon's Node from the kanon step's output in a job that runs the project-setup hook (#1667).
+const ENSURE = /^(?:node|"\$KANON_NODE") "\$KANON\/scripts\/ensure-labels\.mjs"((?: [a-z:-]+)+)\n?$/;
 
 /**
  * The taxonomy labels a lane's file names: what its agent's prompt may tell it to apply. A family
@@ -256,7 +257,7 @@ describe('every lane whose agent labels creates the labels first (plan 0005 §5.
     expect(step?.name).toBe(LABEL_STEP);
     expect(step?.env?.LABELS).toBe('${{ inputs.labels }}');
     expect(step?.env?.GH_TOKEN).toBe(steps[agent]?.with?.['github-token']);
-    expect(step?.run).toContain('node "$KANON/scripts/ensure-labels.mjs" "${names[@]}"');
+    expect(step?.run).toContain('"$KANON_NODE" "$KANON/scripts/ensure-labels.mjs" "${names[@]}"');
   });
 });
 
@@ -269,7 +270,7 @@ describe('every script that applies a label creates it first, from its gh wrappe
 
   it('finds the labelling scripts, so the check below is not vacuous', () => {
     expect(scripts.filter(applies).sort()).toEqual([
-      'scripts/brief-revise-recovery.mjs', 'scripts/dispatch-sweep.mjs', 'scripts/implement-crash.mjs', 'scripts/issue-backstop.mjs', 'scripts/lead-reconcile.mjs',
+      'scripts/bail-restart.mjs', 'scripts/brief-revise-recovery.mjs', 'scripts/dispatch-sweep.mjs', 'scripts/implement-crash.mjs', 'scripts/issue-backstop.mjs', 'scripts/lead-reconcile.mjs',
       'scripts/merge-gate.mjs', 'scripts/overseer-file.mjs', 'scripts/review-recovery.mjs', 'scripts/split-lineage.mjs', 'scripts/telemetry-file.mjs',
       'scripts/workflow-health.mjs',
     ]);

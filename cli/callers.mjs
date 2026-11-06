@@ -119,14 +119,16 @@ export const anonymousTag = (git, tag) => {
  * schedule (docs/lanes.md, "Schedules are best effort"). The lane admits no run that skipped and
  * none of its own caller, and acts only when it hasn't inside its window. `release` (kanon#1190) is a
  * `release` of the repository, `published` only: a stable release and a pre-release alike, never a draft.
+ * `comments` (kanon#1649) is an `issue_comment` of the types it lists: a reply on an issue, which the
+ * implement lane acts on only as a reply to the Implementer's scope-first bail, restarting the run.
  * `openers` (kanon#1427) adds the callers of the lanes it lists, named as `reask` names them, to the
  * `ci` trigger's `workflow_run`: a pull request one of them opens may already conflict, and the merges
  * that made it conflict started the lane before it existed. The lane admits no run that skipped.
- * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', openers?: string[], merged?: boolean, schedule?: string, pinMoved?: boolean, deployRun?: boolean, reask?: string[], release?: boolean }>}
+ * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], comments?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', openers?: string[], merged?: boolean, schedule?: string, pinMoved?: boolean, deployRun?: boolean, reask?: string[], release?: boolean }>}
  */
 export const TRIGGERS = {
   'agent-triage': { name: 'Triage (Implementer)', job: 'triage', issues: ['labeled'], dispatch: { issue_number: true } },
-  'agent-implement': { name: 'Implement (Implementer)', job: 'implement', issues: ['labeled'], dispatch: { issue_number: true } },
+  'agent-implement': { name: 'Implement (Implementer)', job: 'implement', issues: ['labeled'], comments: ['created'], dispatch: { issue_number: true } },
   'agent-implement-revise': { name: 'Implement (Implementer) — revise', job: 'revise', review: true, pr: ['labeled'], dispatch: { pr_number: true, reset: false } },
   'agent-lead-revise': { name: 'Lead (Lead) — revise', job: 'revise', review: true, pr: ['labeled'], dispatch: { pr_number: true, reset: false } },
   'agent-merge-reconcile': { name: 'Merge Reconcile (Reviewer)', job: 'reconcile', pr: ['closed'], review: true, dispatch: { pr_number: true } },
@@ -228,6 +230,10 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   if (t.pr) out.push('  pull_request:', `    types: [${t.pr.join(', ')}]`);
   if (t.prTarget) out.push('  pull_request_target:', `    types: [${t.prTarget.join(', ')}]`);
   if (t.issues) out.push('  issues:', `    types: [${t.issues.join(', ')}]`);
+  if (t.comments) {
+    out.push('  # A reply to the Implementer\'s scope-first bail restarts the run; the lane turns every other', '  # comment away before a runner starts (docs/lanes.md).',
+      '  issue_comment:', `    types: [${t.comments.join(', ')}]`);
+  }
   if (t.release) out.push('  release:', '    types: [published]');
   if (t.schedule) out.push('  schedule:', `    - cron: "${t.schedule}"`);
   if (t.reask) {
@@ -282,11 +288,14 @@ const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
  * written before the template gained a type keeps its old list, because an upgrade only moves the
  * pin, and the lane then never hears of that activity. READ FROM THE CALLER `callerFile` WRITES,
  * never listed here, so a type the template gains later is checked too; `doctor` and `lane-check`
- * report what this returns. Only an event the caller subscribes to with a `types:` list is compared:
- * an event it leaves out, or takes with GitHub's default types, is the caller's own choice. None when
- * the lane has no caller template, or the template can't be written for it.
+ * report what this returns. An event the caller takes with a `types:` list is compared type by
+ * type; one it takes with GitHub's default types (no list) is the caller's choice, and isn't. An
+ * event the template writes and the caller doesn't take at all is reported whole, `absent`, with
+ * every type the template lists (kanon#1649: a caller written before the implement lane's
+ * `issue_comment` has none). None when the lane has no caller template, or the template can't be
+ * written for it.
  * @param {string} lane @param {Lane} spec @param {unknown} on the caller's `on:`
- * @returns {Array<{ event: string, have: string[], missing: string[] }>}
+ * @returns {Array<{ event: string, have: string[], missing: string[], absent?: true }>}
  */
 export const missingEventTypes = (lane, spec, on) => {
   if (!TRIGGERS[lane] || !isMap(on)) return [];
@@ -298,12 +307,18 @@ export const missingEventTypes = (lane, spec, on) => {
     return [];
   }
   if (!isMap(written) || !isMap(written.on)) return [];
-  /** @type {Array<{ event: string, have: string[], missing: string[] }>} */
+  /** @type {Array<{ event: string, have: string[], missing: string[], absent?: true }>} */
   const gaps = [];
   for (const [event, trigger] of Object.entries(written.on)) {
     const want = isMap(trigger) ? typesOf(trigger.types) : null;
+    if (!want) continue;
+    if (!Object.hasOwn(on, event)) {
+      // A missing `workflow_run` is `caller.workflow-run-missing`'s, which names the workflows (#1461).
+      if (event !== 'workflow_run') gaps.push({ event, have: [], missing: want, absent: true });
+      continue;
+    }
     const have = isMap(on[event]) ? typesOf(on[event].types) : null;
-    if (!want || !have) continue;
+    if (!have) continue;
     const missing = want.filter((x) => !have.includes(x));
     if (missing.length) gaps.push({ event, have, missing });
   }
