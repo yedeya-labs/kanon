@@ -2,7 +2,8 @@
 # 0001, step 3).
 #
 # A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
-# triggers (`issues: [labeled]` and a `workflow_dispatch` taking `issue_number`), the
+# triggers (`issues: [labeled]`, `issue_comment: [created]` and a `workflow_dispatch` taking
+# `issue_number`), the
 # `permissions:` ceiling, and one job that `uses:` this file at an exact Kanon tag, passes
 # `issue_number` through, and maps the three secrets below by name (never
 # `secrets: inherit`). Everything else is here: the `github` context in a called workflow
@@ -15,7 +16,13 @@
 # nothing to "reproduce", so the issue's acceptance criteria (or the referenced
 # L2 spec) is the specification, and he builds to it test-first.
 #
-# Trigger: an issue is labeled `agent:implement`.
+# Trigger: an issue is labeled `agent:implement`; or a member replies to the Implementer's
+# scope-first bail on it, which restarts the run (kanon#1649).
+# CALLER TYPES: issues labeled
+# CALLER TYPES: issue_comment created
+# The lines above are read by `lane-check` (#1652, #1649): the activity types the caller `kanon
+# init` writes takes. A caller at this release without one, or without the event, gets a warning:
+# one written before #1649 has no `issue_comment`, so a reply to a bail restarts nothing.
 # Identity: the Author App, as the Implementer (the same identity as the triage lane).
 # Output: a PR labeled `review:please` so the Reviewer reviews it; a human merges.
 # See docs/qa/triage-fix-playbook.md ("Implementer mode") and docs/qa/agent-identities.md.
@@ -82,7 +89,11 @@ concurrency:
   # Scope by the just-added label (see agent-triage.yml for why issue-only would let
   # sibling label events cancel the legitimate run).
   # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
-  group: qa-implement-${{ github.event.issue.number || inputs.issue_number }}-${{ github.event.label.name || 'dispatch' }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
+  # A comment takes a group of its own (kanon#1649): every comment on an issue starts the caller,
+  # and in the label's or the dispatch's group the many that skip would queue behind a real run
+  # and replace one another, and a reply that restarts the run among them. A restart needs the
+  # bail to be the Implementer's last word, so no run of this issue is going when one starts.
+  group: qa-implement-${{ github.event.issue.number || inputs.issue_number }}-${{ github.event_name == 'issue_comment' && format('comment-{0}', github.event.comment.id) || github.event.label.name || 'dispatch' }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
@@ -96,18 +107,36 @@ jobs:
   # Its own job so that the gate runs before the spine's job starts its database and mints
   # the App token, and so that the lane's admission rule decides first: an unrelated label
   # starts no runner at all.
+  #
+  # A COMMENT STARTS THE CALLER ON EVERY ISSUE (kanon#1649), so this `if` turns away, with no
+  # runner, every comment but one that may be a reply to a scope-first bail: a person's (not an
+  # App's) new comment on an open issue, not a pull request, that carries both `agent:implement`
+  # and `decision:needed`, which the `bail-ask` job below adds to a bail. The `restart` step then
+  # decides from the conversation.
   filter:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.label.name == 'agent:implement'
+      || (github.event_name == 'issue_comment'
+          && github.event.action == 'created'
+          && !github.event.issue.pull_request
+          && github.event.issue.state == 'open'
+          && github.event.comment.user.type != 'Bot'
+          && contains(github.event.issue.labels.*.name, 'agent:implement')
+          && contains(github.event.issue.labels.*.name, 'decision:needed'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # `issues: write` for the decision gate's one comment on a refused issue (kanon#1594); the
-    # caller grants it already, for this lane's App token.
+    # `issues: write` for the decision gate's one comment on a refused issue (kanon#1594), and for
+    # the restart step, which takes `decision:needed` off (kanon#1649); the caller grants it
+    # already, for this lane's App token.
     permissions:
-      contents: read
+      contents: read # the App register, read over the API by the restart step
       issues: write
     outputs:
       # A member's event on an issue that awaits a person's decision is refused too (kanon#1594).
-      member: ${{ steps.gate.outputs.member == 'true' && steps.decision.outputs.admit == 'true' && 'true' || 'false' }}
+      # A comment is admitted only as a restart: a member's comment that is no reply to a bail
+      # starts nothing (kanon#1649).
+      member: ${{ steps.gate.outputs.member == 'true' && steps.decision.outputs.admit == 'true' && (github.event_name != 'issue_comment' || steps.restart.outputs.restart == 'true') && 'true' || 'false' }}
       since: ${{ steps.before.outputs.since }}
     steps:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
@@ -121,18 +150,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
 
+      # A REPLY TO A SCOPE-FIRST BAIL RESTARTS THE RUN (kanon#1649, the Owner's option A): when
+      # the Implementer's last word is a bail, a member's reply after it is the answer the bail
+      # asked for. `decision:needed` comes off here, before the decision gate below, which reads
+      # the labels again from GitHub on a comment, so it admits the restart; and a second reply
+      # restarts nothing.
+      - name: Is the comment a reply to a scope-first bail?
+        id: restart
+        if: github.event_name == 'issue_comment' && steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          MODE: restart
+        run: node "$KANON/scripts/bail-restart.mjs"
+
       # THE DECISION GATE (kanon#1594): an issue labelled `decision:needed` waits on a person's
       # decision, which an agent mustn't make in code (K-WORK-24). Refused here, before any
       # token is minted, with a comment naming the label; not a dispatch attempt.
       - name: Does the issue wait on a decision?
         id: decision
-        if: steps.gate.outputs.member == 'true'
+        if: steps.gate.outputs.member == 'true' && (github.event_name != 'issue_comment' || steps.restart.outputs.restart == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
-          LABELS: ${{ toJSON(github.event.issue.labels) }}
+          # A comment's payload holds the labels from before the restart step took the label off,
+          # so on a comment the gate reads them from GitHub (kanon#1649).
+          LABELS: ${{ github.event_name != 'issue_comment' && toJSON(github.event.issue.labels) || '' }}
           LANE: implement
           COMMENT: "true"
         run: node "$KANON/scripts/decision-gate.mjs"
@@ -147,7 +194,7 @@ jobs:
       # stamps nothing and says why.
       - name: Record when the run started
         id: before
-        if: steps.gate.outputs.member == 'true' && steps.decision.outputs.admit == 'true'
+        if: steps.gate.outputs.member == 'true' && steps.decision.outputs.admit == 'true' && (github.event_name != 'issue_comment' || steps.restart.outputs.restart == 'true')
         continue-on-error: true
         run: echo "since=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
@@ -164,7 +211,7 @@ jobs:
       agent: implementer
       role: Implementer
       lane: implement
-      labels: agent:implement review:please
+      labels: agent:implement review:please decision:needed
       arm: implementer agent
       # WALL-CLOCK CEILING — 180 since RA-2212, raised from 120 when the turn cap doubled.
       #
@@ -297,7 +344,15 @@ jobs:
         credential / security change, or DESTRUCTIVE schema (dropping / renaming /
         narrowing a column or table). You MAY do ADDITIVE schema and unique-index /
         constraint changes (a new column, a partial unique index, etc.) — but only
-        with the ritual below.
+        with the ritual below. Open that plan-comment with the words `SCOPE-FIRST
+        BAIL` (kanon#1649): a job after yours finds the bail by them, labels the
+        issue `decision:needed` and asks the person, and a member's reply restarts
+        you at once. So end the plan with "Reply on this issue: `approved`, with any
+        changes, and the Implementer restarts and builds exactly this." If this
+        issue's latest comments are your bail and a person's reply after it, this
+        run IS that restart: the reply is the answer. Build what it approves, with
+        the changes it asks for, and never bail again on the plan it approved; if
+        the reply asks a question or declines, answer it in your comment and STOP.
 
         SCHEMA CHANGES (FAIL CLOSED): if you change the schema, follow the stack
         document's `## Schema changes` section exactly, then RUN THE CHECKS its
@@ -381,6 +436,31 @@ jobs:
           since: ${{ needs.filter.outputs.since }}
           # The heads the push job moved, never what the agent's job reports (`LANE-16`).
           heads: ${{ needs.implement.outputs.push-heads }}
+
+  # A SCOPE-FIRST BAIL WAITS WHERE A PERSON SEES IT (kanon#1649). When the Implementer's last word
+  # is a bail posted during this run, this labels the issue `decision:needed` and posts the ask in
+  # `K-WORK-24`'s fixed form, so `kanon inbox` lists it; a member's reply then restarts the run
+  # (the `restart` step above). The default token: its comment reads as `github-actions`, so the
+  # bail stays the Implementer's last word, and its label starts no workflow. It never reds the lane.
+  bail-ask:
+    needs: [filter, implement]
+    if: needs.implement.result == 'success' && needs.filter.outputs.member == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # the App register, read over the API
+      issues: write # the label and the ask
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Ask a person about a scope-first bail
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
+          SINCE: ${{ needs.filter.outputs.since }}
+          MODE: ask
+        run: node "$KANON/scripts/bail-restart.mjs"
 
   # A RUN THAT ENDS GREEN WITH NOTHING TO SHOW IS RED (kanon#181).
   #

@@ -48,16 +48,39 @@ describe('the lanes run it', () => {
   type Step = { id?: string; run?: string; if?: string; env: Record<string, string> };
   type Filter = { steps: Step[]; outputs: Record<string, string>; permissions?: Record<string, string> };
   const filter = (file: string) => (parse(readFileSync(join(process.cwd(), '.github/workflows', file), 'utf8')) as { jobs: { filter: Filter } }).jobs.filter;
-  it.each([['agent-implement.yml', 'true'], ['agent-triage.yml', 'false']])('%s: after the membership gate, and its refusal skips the lane', (file, comment) => {
-    const f = filter(file);
+  it('agent-triage.yml: after the membership gate, and its refusal skips the lane', () => {
+    const f = filter('agent-triage.yml');
     const ids = f.steps.map((s) => s.id ?? '');
     expect(ids.indexOf('decision')).toBe(ids.indexOf('gate') + 1);
     const step = f.steps[ids.indexOf('decision')]!;
     expect(step.run).toBe('node "$KANON/scripts/decision-gate.mjs"');
     expect(step.if).toBe("steps.gate.outputs.member == 'true'");
-    expect(step.env.COMMENT).toBe(comment);
+    expect(step.env.COMMENT).toBe('false');
     expect(step.env.LABELS).toBe('${{ toJSON(github.event.issue.labels) }}');
     expect(f.outputs.member).toBe("${{ steps.gate.outputs.member == 'true' && steps.decision.outputs.admit == 'true' && 'true' || 'false' }}");
+  });
+
+  // #1649: on the implement lane a member's reply to a scope-first bail restarts the run, and the
+  // restart step takes `decision:needed` off first, so the gate sits after it and, on a comment,
+  // reads the labels from GitHub rather than from the payload, which still holds the label.
+  it('agent-implement.yml: after the membership gate and the restart step, and its refusal skips the lane', () => {
+    const f = filter('agent-implement.yml');
+    const ids = f.steps.map((s) => s.id ?? '');
+    expect(ids.indexOf('restart')).toBe(ids.indexOf('gate') + 1);
+    expect(ids.indexOf('decision')).toBe(ids.indexOf('restart') + 1);
+    const step = f.steps[ids.indexOf('decision')]!;
+    expect(step.run).toBe('node "$KANON/scripts/decision-gate.mjs"');
+    expect(step.if).toBe("steps.gate.outputs.member == 'true' && (github.event_name != 'issue_comment' || steps.restart.outputs.restart == 'true')");
+    expect(step.env.COMMENT).toBe('true');
+    expect(step.env.LABELS).toBe("${{ github.event_name != 'issue_comment' && toJSON(github.event.issue.labels) || '' }}");
+    expect(f.outputs.member).toBe("${{ steps.gate.outputs.member == 'true' && steps.decision.outputs.admit == 'true' && (github.event_name != 'issue_comment' || steps.restart.outputs.restart == 'true') && 'true' || 'false' }}");
+  });
+
+  it('reads the labels from GitHub when the payload gives none, as on a restart', () => {
+    const calls: string[][] = [];
+    const d = decide({ env: { EVENT: 'issue_comment', REPO: 'o/r', ISSUE: '7', LABELS: '' }, gh: (a) => { calls.push(a); return JSON.stringify([{ name: 'agent:implement' }]); } });
+    expect(d.admit).toBe(true);
+    expect(calls).toEqual([['api', 'repos/o/r/issues/7', '--jq', '.labels']]);
   });
 
   it('gives the implement filter the issues: write its comment needs, which its caller grants', () => {

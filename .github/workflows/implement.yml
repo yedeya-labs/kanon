@@ -11,7 +11,9 @@
 #
 # It starts on an `agent:implement` label or a dispatch, from a member only: the lane's first
 # job is its membership gate (K-AGENT-45), and an issue a stranger filed is never built until
-# a member labels it. Any other label skips the run before a token is minted.
+# a member labels it. Any other label skips the run before a token is minted. A member's reply
+# to the Implementer's scope-first bail restarts the run (kanon#1649); the lane turns every other
+# comment away in its first job's `if:`, before a runner starts.
 #
 # THE AUTHOR APP EXISTS (2026-10-05), SO A LABEL NOW RUNS THE MODEL. Don't label an
 # issue `agent:implement` until the pin below includes #234: before it, the lane's commits are
@@ -24,6 +26,8 @@ name: Implement
 on:
   issues:
     types: [labeled]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       issue_number:

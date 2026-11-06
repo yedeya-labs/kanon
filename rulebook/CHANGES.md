@@ -93,6 +93,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-AGENT-13`
 
 - **2026-11-06.** The Owner decided that the bail list binds whoever implements a change, not only the Implementer lane: a person or a local Claude session too. Where no lane runs, as on a brief item reserved with `qa:human-action`, the plan is the pull request's first section, `## Plan`, which the Reviewer checks before the code. [#1566](https://github.com/yedeya-labs/kanon/issues/1566)
+- **2026-11-06.** The Owner decided that a scope-first bail waits where a person sees it, and that their reply restarts the work: "Enforced by" now names the implement lane's `decision:needed` ask and its restart on a member's reply. [#1649](https://github.com/yedeya-labs/kanon/issues/1649)
 
 ## `K-AGENT-24`
 

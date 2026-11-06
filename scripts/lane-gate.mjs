@@ -9,6 +9,10 @@
 //
 // WHO THE ACTOR IS, per event (the `github` context of a called workflow is its caller's):
 //   pull_request_review      the reviewer: `review.user` and `review.author_association`.
+//   issue_comment `created`  the commenter: `comment.user` and `comment.author_association`
+//                            (kanon#1649). Only the implement lane acts on it, and only on a
+//                            reply to the Implementer's scope-first bail, which restarts the
+//                            run. Any other `issue_comment` action is refused.
 //   issues / pull_request    `labeled`: whoever applied the label, `sender`. The payload
 //                            carries no association for the sender, so it is read from
 //                            `GET /repos/{o}/{r}/collaborators/{login}/permission`, which needs
@@ -172,6 +176,7 @@ const MEMBER_PERMISSIONS = ['admin', 'maintain', 'push', 'triage'];
  *   action?: string,
  *   sender?: User,
  *   review?: { user?: User, author_association?: string },
+ *   comment?: { user?: User, author_association?: string },
  *   pull_request?: { merged?: boolean, merged_by?: User },
  *   workflow_run?: { triggering_actor?: User, actor?: User, head_sha?: string, head_repository?: { full_name?: string } },
  *   schedule?: string,
@@ -194,6 +199,11 @@ export function triggeringActor(eventName, event, env) {
   switch (eventName) {
     case 'pull_request_review':
       return found(event.review?.user?.login, 'reviewer', event.review?.author_association ?? '');
+    case 'issue_comment':
+      // A reply to the Implementer's scope-first bail restarts its run (kanon#1649).
+      return event.action === 'created'
+        ? found(event.comment?.user?.login, 'commenter', event.comment?.author_association ?? '')
+        : { refuse: `the issue_comment event's \`${event.action ?? ''}\` action is not one a lane acts on` };
     case 'issues':
     case 'pull_request':
     case 'pull_request_target':

@@ -11,6 +11,7 @@ import { ROOT } from './helpers/adopter.js';
  */
 const CLIS: Array<[string, string[]]> = [
   ['actions-minutes', []],
+  ['bail-restart', []],
   ['brief-revise-recovery', []],
   ['capability-interlock', []],
   ['deploy-diagnose', []],

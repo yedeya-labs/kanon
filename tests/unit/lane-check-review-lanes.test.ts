@@ -77,11 +77,25 @@ laneCheck(() => {
       roles(now);
       expect(check(now, { ACTION_REF: 'v1.2.3' }).out).not.toContain("types don't list");
     });
-    it("names on its CALLER TYPES lines exactly the types the caller template writes, for each typed event of the template's", () => {
-      const lines = readFileSync(join(ROOT, REVIEW), 'utf8').split('\n').filter((l) => l.startsWith('# CALLER TYPES: ')).map((l) => l.slice('# CALLER TYPES: '.length).trim().split(/\s+/));
-      const template = parse(callerFile('agent-review', loadRequirements().lanes['agent-review']!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'main' })) as { on: Record<string, { types?: string[] }> };
+    it.each(['agent-review', 'agent-implement'])("%s names on its CALLER TYPES lines exactly the types the caller template writes, for each typed event of the template's", (lane) => {
+      const lines = readFileSync(join(ROOT, `.github/workflows/${lane}.yml`), 'utf8').split('\n').filter((l) => l.startsWith('# CALLER TYPES: ')).map((l) => l.slice('# CALLER TYPES: '.length).trim().split(/\s+/));
+      const template = parse(callerFile(lane, loadRequirements().lanes[lane]!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'main' })) as { on: Record<string, { types?: string[] }> };
       const typed = Object.entries(template.on).filter(([e, t]) => e !== 'workflow_run' && Array.isArray(t?.types)).map(([e, t]) => [e, ...t.types!]);
       expect(lines).toEqual(typed);
+    });
+    // #1649: a caller from before the implement lane's `issue_comment` doesn't take it at all.
+    it('warns of an implement caller that does not take issue_comment, at its pin only', () => {
+      const IMPLEMENT = '.github/workflows/agent-implement.yml';
+      const t = adopter();
+      t.edit(IMPLEMENT, (d) => { delete (d.on as Record<string, unknown>).issue_comment; });
+      const r = check(t, { ACTION_REF: 'v1.2.3' });
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain("::warning file=.github/workflows/agent-implement.yml,title=lane-check::doesn't take `issue_comment`");
+      expect(r.out).toContain('Add `issue_comment: { types: [created] }` under `on:`');
+      const other = adopter();
+      other.edit(IMPLEMENT, (d) => { delete (d.on as Record<string, unknown>).issue_comment; });
+      expect(check(other).out).not.toContain("doesn't take `issue_comment`");
+      expect(check(adopter(), { ACTION_REF: 'v1.2.3' }).out).not.toContain("doesn't take");
     });
     it('refuses the verify-acs caller while the register has no Explorer', () =>
       red((t) => { extra(t, VERIFY); }, 'lists the role Explorer 0 times'));
