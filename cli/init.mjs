@@ -3451,10 +3451,15 @@ const run = async (deps, opts, req, rep) => {
       : `it needs ${permission}`;
   };
   /** The token that can, or, on a transient failure, the same run again. @param {string} permission @param {string[]} [answers] */
+  // A refusal that is neither the rate nor a permission, quoted after `GitHub refused it:`, is
+  // fixed where GitHub says, with the same token (kanon#1633): the fix never asks for another.
   const tokenWith = (permission, answers = []) => (failureCause(answers) === 'transient' ? `the same token, by running kanon init again in a few minutes (${TRANSIENT_WHY.split(';')[0]})`
-    : s.tokenCovers === false ? `a token whose repository access covers ${repo}, with ${permission}` : `a token that has ${permission}`);
+    : s.tokenCovers === false ? `a token whose repository access covers ${repo}, with ${permission}`
+    : failureCause(answers) === 'other' ? 'the same token, once what GitHub refused is fixed'
+    : `a token that has ${permission}`);
   /** Who failed, for a step's message. @param {string[]} answers */
-  const couldNot = (answers) => (failureCause(answers) === 'transient' ? 'GitHub limited the rate (or failed) when init tried' : 'the token could not');
+  const couldNot = (answers) => (failureCause(answers) === 'transient' ? 'GitHub limited the rate (or failed) when init tried'
+    : failureCause(answers) === 'other' && s.tokenCovers !== false ? 'init could not' : 'the token could not');
   if (s.tokenCovers === false) {
     note(`The token gh uses doesn't cover ${repo}: GitHub refused it the repository's collaborators, which any token that covers the repository can read, so ${dry ? 'every write to it would fail' : 'every write to it fails'}. Add ${repo} to the fine-grained token's Repository access (https://github.com/settings/personal-access-tokens), or use a token that covers it, then run kanon init again.`);
   }
@@ -3700,7 +3705,7 @@ const run = async (deps, opts, req, rep) => {
       id: 'label.create',
       category: 'label',
       subject: repo,
-      prose: `Create the labels ${failureCause(labelAnswers) === 'transient' ? 'init' : 'the token'} could not (${needs('Issues: write', labelAnswers)}):`,
+      prose: `Create the labels ${failureCause(labelAnswers) === 'permission' || s.tokenCovers === false ? 'the token' : 'init'} could not (${needs('Issues: write', labelAnswers)}):`,
       message: `${labelSteps.length} of the taxonomy's labels are missing, and ${couldNot(labelAnswers)} create them (${needs('Issues: write', labelAnswers)}).`,
       text: `Create them with ${tokenWith('Issues: write', labelAnswers)}.`,
       commands: labelSteps,
