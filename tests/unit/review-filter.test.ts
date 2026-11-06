@@ -105,6 +105,8 @@ type Opts = {
   reviews?: unknown[];      // kanon#88: the PR's reviews verbatim, in place of `lastReviewed`
   comments?: unknown[];     // #1379: the PR's top-level comments, as the REST API lists them
   commentsFail?: boolean;   // #1379: that read failed
+  isDraft?: boolean;        // #1565: the PR is a draft
+  wfPrs?: unknown[] | null; // #1567: the PRs CI's own payload lists (`workflow_run.pull_requests`)
 };
 
 const runDecide = ({
@@ -133,6 +135,8 @@ const runDecide = ({
   reviews: reviewsOverride,
   comments = [],
   commentsFail = false,
+  isDraft = false,
+  wfPrs = null,
 }: Opts) => {
   // The payload agrees with the API read unless a test deliberately splits them.
   const headRepo =
@@ -148,6 +152,7 @@ const runDecide = ({
     labels: labels.map((name) => ({ name })),
     isCrossRepository: Boolean(fork),
     headRepositoryOwner: { login: fork ?? 'example-org' },
+    isDraft,
   });
   // THE CI-COMPLETION READ IS `gh run list --workflow ci.yml --commit <sha>` (RA-1413).
   // The rollup could not express "no CI entries registered yet" — it returned the same
@@ -207,6 +212,7 @@ esac
       EVENT_PR: event.startsWith('pull_request') ? '964' : '',
       WF_EVENT: 'pull_request',
       WF_SHA: wfSha,
+      WF_PRS: wfPrs === null ? '' : JSON.stringify(wfPrs),
       // GitHub renders an unset expression as the empty string, which is exactly what
       // a `workflow_dispatch` gets for both of these — so the empty default is the
       // real payload, not a fixture shortcut.
@@ -236,6 +242,37 @@ esac
 
 const evidenceOf = (stdout: string) =>
   Object.fromEntries([...stdout.matchAll(/^\s*(\w+): \[([\s\S]*?)\]$/gm)].map((m) => [m[1], m[2]]));
+
+// #1565: a draft carries unfinished work, such as a base PR's commits, so it is never reviewed;
+// an explicit dispatch still is. #1567: a head just force-pushed may belong to no PR in GitHub's
+// commit lookup yet, and CI's own payload names the PR instead.
+describe('drafts, and a head the commit lookup does not know yet (#1565, #1567)', () => {
+  it('skips a draft on every trigger but an explicit dispatch', () => {
+    for (const event of ['workflow_run', 'pull_request_target'] as const) {
+      const r = runDecide({ event, action: event === 'workflow_run' ? 'completed' : 'labeled', label: 'review:please', sender: 'a-person', lastReviewed: null, isDraft: true });
+      expect(r.review, event).toBe('false');
+      expect(r.stdout).toContain('is a draft');
+      // It asks GitHub for the field, rather than reading one the answer never carries.
+      expect(r.calls).toMatch(/pr view 964 .*--json [^ ]*isDraft/);
+    }
+    expect(runDecide({ event: 'workflow_dispatch', action: '', lastReviewed: null, isDraft: true }).review).toBe('true');
+    // The same PR, ready, is reviewed.
+    expect(runDecide({ lastReviewed: null, isDraft: false }).review).toBe('true');
+  });
+
+  it("finds the PR in CI's payload when the commit lookup answers nothing", () => {
+    const r = runDecide({ prForSha: '', lastReviewed: null, wfPrs: [{ number: 964, head: { sha: HEAD, ref: 'feat/x' } }] });
+    expect(r.pr).toBe('964');
+    expect(r.review).toBe('true');
+    expect(evidenceOf(r.stdout).PR_FROM_PAYLOAD).toBe('964');
+    // A payload PR whose head is another commit is not this one's, and nothing resolves.
+    const other = runDecide({ prForSha: '', lastReviewed: null, wfPrs: [{ number: 7, head: { sha: 'c'.repeat(40), ref: 'x' } }] });
+    expect(other.review).toBe('false');
+    expect(other.stdout).toContain('no open PR resolved');
+    // The lookup still comes first when it answers.
+    expect(runDecide({ prForSha: '964', lastReviewed: null, wfPrs: [{ number: 7, head: { sha: HEAD, ref: 'x' } }] }).pr).toBe('964');
+  });
+});
 
 describe('the trigger is CI finishing, not the branch changing (RA-378, RA-965)', () => {
   /**
