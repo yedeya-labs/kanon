@@ -30,6 +30,8 @@ const EVENT_OF: Record<Trigger, string> = {
   'pr-target-opened': 'pull_request_target:opened',
   'pr-target-ready': 'pull_request_target:ready_for_review',
   'pr-target-milestoned': 'pull_request_target:milestoned',
+  // kanon#1649: a reply that restarts the Implementer after a scope-first bail.
+  'issue-comment': 'issue_comment:created',
   'pr-target-merged': 'pull_request_target:closed',
   schedule: 'schedule',
   'release-published': 'release:published',
