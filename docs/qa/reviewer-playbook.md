@@ -32,6 +32,10 @@ Every finding cites the rule it rests on.
 14. **A brief's decisions are the humans' to answer.** On a brief under [`docs/projects/`](../projects/), check its decisions against `K-PROJ-1`'s list, that none in the Owner's or the Stakeholder's domain is marked answered by the Lead (`K-PROJ-18`), and that it cites its tracking issue's mandate rather than restating it (`K-PROJ-15`). The brief guard warns on a Lead-answered decision whose headline names spend, paging or roadmap placement; its silence is not a pass, so read every decision.
 15. **Observability and spend are decided in the change.** A pull request that adds a workflow, a job, a webhook or an integration states its observability decision (`K-OBS-1`). A change that raises spend, in Actions minutes, the telemetry store's cloud account or a paid service, states its monthly delta and has the Owner's agreement (`K-OBS-9`), and so does a change to a lane's model tier or cadence (`K-OBS-11`).
 
+## A pull request no lane opened, on a brief item
+
+A pull request that closes a brief item labelled `qa:human-action`, one reserved for a person or a local session rather than the Implementer, opens with a `## Plan` section, the plan `K-AGENT-13` asks for. The bail list binds whoever implements the item. Read the plan before the code. With no `## Plan` section, request changes asking for it and review nothing else yet. When the plan touches the bail list, check that it names a person who approved it; if it names none, request changes rather than approving code built on an unapproved plan ([#1566](https://github.com/yedeya-labs/kanon/issues/1566)).
+
 ## Across rounds
 
 An incremental review lists each earlier finding as addressed or not. A finding that has survived two pushes goes to the Owner, not into a third round of the same argument (`K-MERGE-16`). On a pull request that closes a follow-up, another instance of the same defect is fixed as a class, or filed once as the whole class (`K-WORK-18`).

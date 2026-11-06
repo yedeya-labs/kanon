@@ -598,13 +598,19 @@ jobs:
       # tool call's raw input and output, which the log's masking never reaches, so it is never
       # uploaded; the summary keeps the final message, each tool call's name and error flag, and the
       # counts. Seven days, enough to read why a run stopped, and `continue-on-error`: it never reds a run.
+      # Kanon's path and Node come from the `kanon` step's outputs (kanon#1661), as `kanon-path`'s
+      # contract says for a step after the project's code: the hook and the agent have both run by
+      # now, and either can rewrite `$GITHUB_ENV` and `$PATH`, which its outputs are out of reach of.
       - name: Summarise the agent's run, without what its tools read or wrote
         id: run-summary
         if: always() && inputs.run-summary && steps.agent.outcome != 'skipped'
         continue-on-error: true
         env:
           EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
-        run: node "$KANON/scripts/run-summary.mjs" --execution-file "$EXECUTION_FILE" --out "$RUNNER_TEMP/kanon-run-summary/summary.json"
+          KANON: ${{ steps.kanon.outputs.path }}
+          KANON_NODE: ${{ steps.kanon.outputs.node }}
+        run: |
+          "$KANON_NODE" "$KANON/scripts/run-summary.mjs" --execution-file "$EXECUTION_FILE" --out "$RUNNER_TEMP/kanon-run-summary/summary.json"
       - name: Upload the run summary
         if: always() && inputs.run-summary && steps.run-summary.outcome == 'success'
         continue-on-error: true

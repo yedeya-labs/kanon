@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { appSecrets, callerFile, ciFile, hookFile, TRIGGERS } from '../../cli/callers.mjs';
+import { appSecrets, callerFile, ciFile, hookFile, missingEventTypes, TRIGGERS } from '../../cli/callers.mjs';
 import { rulesetBody } from '../../cli/init.mjs';
 import { branchPattern, branchWorkflows, checkJobs, checkReporters, doctor, EXIT, parseArgs, runWorkflows, SCHEMA, startsOnMerge, templateRunCallers, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { checkout, fakeGitHub, healthyFiles, identitiesOf, ids, LANES, no, ok, PINNED, registerText, REPO, REQ, run, scratch, type Gh, type Result } from './helpers/doctor.js';
@@ -701,6 +701,73 @@ describe('kanon doctor on a caller whose workflow_run lacks a caller the templat
     const r = await run(checkout(f), fakeGitHub(), ['--json']);
     expect(ofId(r).map((x: { message: string }) => x.message.split(':')[0])).toEqual(['starts the lane agent-rebase on no run of Implement (Implementer)']);
     expect(r.json.waived).toEqual([expect.objectContaining({ id: ID, subject: at('agent-rebase'), items: ['Triage (Implementer)'] })]);
+  });
+});
+
+// #1652: a caller written before the template gave one of its events another activity type, such
+// as the review caller's `ready_for_review`, keeps its old list, since an upgrade moves only the
+// pin. Doctor notes each type it lacks, read from the caller the template writes. It blocks nothing.
+describe('kanon doctor on a caller whose event lacks an activity type the template lists (#1652)', () => {
+  const ID = 'caller.event-types-missing';
+  const REVIEW = '.github/workflows/agent-review.yml';
+  const ofId = (r: Result) => r.json.findings.filter((f: { id: string }) => f.id === ID);
+  // The review caller as kanon init wrote it before #1652.
+  const before1652 = () => {
+    const text = callerFile('agent-review', REQ.lanes['agent-review']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }).replace('types: [opened, labeled, ready_for_review]', 'types: [opened, labeled]');
+    expect(text).toContain('  pull_request_target:\n    types: [opened, labeled]\n');
+    return text;
+  };
+
+  it('notes nothing for the callers kanon init writes', async () => {
+    expect(ofId(await run(checkout(healthyFiles()), fakeGitHub(), ['--json']))).toEqual([]);
+  });
+
+  it('notes a review caller from before #1652, with the type it lacks and the line to write, without blocking', async () => {
+    const r = await run(checkout({ ...healthyFiles(), [REVIEW]: before1652() }), fakeGitHub(), ['--json']);
+    expect(ofId(r)).toEqual([expect.objectContaining({ category: 'caller', blocking: false, subject: REVIEW })]);
+    const [f] = ofId(r);
+    expect(f.message).toContain('starts the lane agent-review on no pull_request_target event of type ready_for_review');
+    expect(f.fix.commands).toEqual(['    types: [opened, labeled, ready_for_review]']);
+  });
+
+  it('can be waived for the types it lists', async () => {
+    const f: Record<string, string> = { ...healthyFiles(), [REVIEW]: before1652() };
+    f['docs/qa/adoption.md'] += `- **${WAIVER_LABEL}:** \`${ID}\` on \`${REVIEW}\` for \`ready_for_review\` (drafts are dispatched by hand here)\n`;
+    const r = await run(checkout(f), fakeGitHub(), ['--json']);
+    expect(ofId(r)).toEqual([]);
+    expect(r.json.waived).toEqual([expect.objectContaining({ id: ID, subject: REVIEW, items: ['ready_for_review'] })]);
+  });
+});
+
+describe('missingEventTypes: the activity types a caller lacks that the template lists (#1652)', () => {
+  const spec = REQ.lanes['agent-review']!;
+  const on = (types: unknown) => ({ workflow_run: { workflows: ['CI'], types: ['completed'] }, pull_request_target: { types } });
+
+  it('names each type the caller kanon init writes lists for an event, by event', () => {
+    expect(missingEventTypes('agent-review', spec, on(['opened', 'labeled']))).toEqual([{ event: 'pull_request_target', have: ['opened', 'labeled'], missing: ['ready_for_review'] }]);
+    expect(missingEventTypes('agent-review', spec, on('labeled'))).toEqual([{ event: 'pull_request_target', have: ['labeled'], missing: ['opened', 'ready_for_review'] }]);
+    expect(missingEventTypes('agent-review', spec, on(['opened', 'labeled', 'ready_for_review']))).toEqual([]);
+  });
+
+  it("compares only an event the caller takes with a types list: the rest is the caller's choice", () => {
+    expect(missingEventTypes('agent-review', spec, { workflow_run: { workflows: ['CI'], types: ['completed'] } })).toEqual([]);
+    expect(missingEventTypes('agent-review', spec, { pull_request_target: null })).toEqual([]);
+    expect(missingEventTypes('agent-review', spec, { pull_request_target: {} })).toEqual([]);
+    expect(missingEventTypes('agent-review', spec, 'pull_request_target')).toEqual([]);
+    expect(missingEventTypes('agent-nope', spec, on([]))).toEqual([]);
+  });
+
+  it('holds a type the template gains, with no list of its own to update', () => {
+    const triage = TRIGGERS['agent-triage']!;
+    const lane = REQ.lanes['agent-triage']!;
+    expect(missingEventTypes('agent-triage', lane, { issues: { types: ['labeled'] } })).toEqual([]);
+    const was = triage.issues;
+    triage.issues = ['labeled', 'reopened'];
+    try {
+      expect(missingEventTypes('agent-triage', lane, { issues: { types: ['labeled'] } })).toEqual([{ event: 'issues', have: ['labeled'], missing: ['reopened'] }]);
+    } finally {
+      triage.issues = was;
+    }
   });
 });
 

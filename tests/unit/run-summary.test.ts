@@ -51,6 +51,11 @@ describe('the run summary (#1593)', () => {
     const job = parse(spine).jobs.run;
     const step = job.steps.find((s: { id?: string }) => s.id === 'run-summary');
     expect(step.run).toContain('scripts/run-summary.mjs');
+    // #1661: Kanon's path and Node from the `kanon` step's outputs, which neither the project's hook
+    // nor the agent, both run by now, can rewrite as they can `$GITHUB_ENV` and `$PATH`.
+    expect(job.steps.find((s: { id?: string }) => s.id === 'kanon').uses).toMatch(/actions\/kanon-path$/);
+    expect(step.env).toMatchObject({ KANON: '${{ steps.kanon.outputs.path }}', KANON_NODE: '${{ steps.kanon.outputs.node }}' });
+    expect(step.run).toMatch(/^"\$KANON_NODE" "\$KANON\/scripts\/run-summary\.mjs" /);
     expect(step['continue-on-error']).toBe(true);
     const upload = job.steps.find((s: { name?: string }) => s.name === 'Upload the run summary');
     expect(upload.with).toMatchObject({ path: '${{ runner.temp }}/kanon-run-summary/summary.json', 'retention-days': 7 });

@@ -24,7 +24,7 @@ export const LANES = readdirSync(WORKFLOWS)
   .sort();
 
 /** The triggers each lane's caller holds (docs/lanes.md), as the event the gate sees. */
-export type Trigger = 'review' | 'issue-label' | 'issue-opened' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-merged' | 'schedule' | 'deploy-failed' | 'release-published';
+export type Trigger = 'review' | 'issue-label' | 'issue-opened' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-ready' | 'pr-target-merged' | 'schedule' | 'deploy-failed' | 'release-published';
 export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-implement-revise.yml': ['review', 'pr-label', 'dispatch'],
   'agent-implement.yml': ['issue-label', 'dispatch'],
@@ -36,7 +36,8 @@ export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-merge.yml': ['review', 'ci-finished', 'schedule', 'dispatch'],
   // kanon#484: a merged pull request too, which a merge through a merge queue still starts.
   'agent-rebase.yml': ['ci-finished', 'pr-target-merged', 'schedule', 'dispatch'],
-  'agent-review.yml': ['ci-finished', 'pr-target-label', 'pr-target-opened', 'dispatch'],
+  // kanon#1652: a labelled draft marked ready for review, judged by whoever marked it ready.
+  'agent-review.yml': ['ci-finished', 'pr-target-label', 'pr-target-opened', 'pr-target-ready', 'dispatch'],
   'agent-triage.yml': ['issue-label', 'dispatch'],
   'agent-verify-acs.yml': ['issue-label', 'dispatch'],
   'agent-project-digest.yml': ['schedule', 'dispatch'],
@@ -295,6 +296,8 @@ export const eventFor = (trigger: Trigger, actor: Actor): { name: string; payloa
       return { name: 'pull_request_target', payload: { action: 'labeled', sender: user }, env: {} };
     case 'pr-target-opened':
       return { name: 'pull_request_target', payload: { action: 'opened', sender: user }, env: {} };
+    case 'pr-target-ready':
+      return { name: 'pull_request_target', payload: { action: 'ready_for_review', sender: user }, env: {} };
     case 'pr-target-merged':
       return { name: 'pull_request_target', payload: { action: 'closed', pull_request: { merged: true, merged_by: user }, sender: { login: 'someone-else' } }, env: {} };
     case 'schedule':

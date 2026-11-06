@@ -24,6 +24,12 @@
 //                            (`K-WORK-7`, kanon#1242). Setting a milestone needs triage access,
 //                            so a member who did it always passes; an App outside the register
 //                            is refused. The `issues` event's `milestoned` is refused.
+//   pull_request_target      whoever marked the pull request ready, `sender`, checked the same
+//     `ready_for_review`     way (kanon#1652). Only the review lane acts on it, and only on a pull
+//                            request carrying a review label. A pull request's author can mark it
+//                            ready, so an outside contributor's labelled draft is refused here:
+//                            a member re-applies the label, which is judged by who applied it.
+//                            The `pull_request` event's `ready_for_review` is refused.
 //   issues `opened`          REFUSED, EXCEPT on a lane whose gate step sets
 //                            `LANE_GATE_ISSUE_OPENED=anyone`: there it is admitted whoever
 //                            opened it, with no lookup. Only the issue backstop sets it
@@ -205,6 +211,8 @@ export function triggeringActor(eventName, event, env) {
       if (eventName !== 'issues' && event.action === 'opened') return found(event.sender?.login, 'user who opened it');
       // The issue backstop takes a milestone off a pull request (`K-WORK-7`, kanon#1242).
       if (eventName === 'pull_request_target' && event.action === 'milestoned') return found(event.sender?.login, 'user who set the milestone');
+      // The review lane reviews a labelled draft once it is marked ready (kanon#1652).
+      if (eventName === 'pull_request_target' && event.action === 'ready_for_review') return found(event.sender?.login, 'user who marked it ready for review');
       if (event.action === 'closed') {
         // A `pull_request_target` close is acted on only as a merge, and judged by who merged it.
         if (eventName === 'pull_request_target') {

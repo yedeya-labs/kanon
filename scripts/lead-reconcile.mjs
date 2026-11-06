@@ -157,6 +157,11 @@ export const NEEDS_INFO = 'qa:needs-info';
  * belongs, and the tick says so by name rather than as a bare "held". Closing it without
  * a PR is fine for phase 4: `closingMergeShas` contributes nothing for it and the walk
  * runs on the other members' merges.
+ *
+ * It has a second meaning since kanon#1566 (`K-PROJ-9`): an item RESERVED for a person or a
+ * local session rather than the Implementer, which does open a pull request, its plan first
+ * (`K-AGENT-13`). The tick treats it the same way, never dispatched and holding no slot, and a
+ * merge that closes it is a member's merge like any other (`closingMergeShas`).
  */
 export const HUMAN_ACTION = 'qa:human-action';
 
@@ -1533,7 +1538,7 @@ function nextActionsCore(world, {
         if (i.dependsOn?.length) return `#${i.number} waits on ${i.dependsOn.map((n) => `#${n}`).join(', ')}`;
         if (i.labels.includes(NEEDS_INFO)) return `#${i.number} is parked with \`${NEEDS_INFO}\``;
         if (i.labels.includes(DECISION_NEEDED)) return `#${i.number} waits on a person's decision (\`${DECISION_NEEDED}\`) — never dispatched until the decision is recorded and the label removed (K-WORK-24, kanon#1594)`;
-        if (i.labels.includes(HUMAN_ACTION)) return `#${i.number} awaits a HUMAN action (\`${HUMAN_ACTION}\`) — never dispatched; close it when the action is done (RA-1301)`;
+        if (i.labels.includes(HUMAN_ACTION)) return `#${i.number} awaits a HUMAN action (\`${HUMAN_ACTION}\`) — never dispatched; it closes when a person closes it with its evidence, or when the pull request of a person or a local session merges and closes it (RA-1301, K-PROJ-9)`;
         if (i.labels.includes(SPLIT_LABEL)) return `#${i.number} awaits a SPLIT (\`${SPLIT_LABEL}\`) — its implementer run hit its cap, so the Lead proposes smaller children as a PR against the brief; merging that PR closes it. If no split PR opens within ${SPLIT_STALL_HOURS}h, this tick re-delivers \`${SPLIT_WORKFLOW}\` ONCE, then hands it to \`${NEEDS_INFO}\` (RA-2406)`;
         return `#${i.number} held`;
       });
