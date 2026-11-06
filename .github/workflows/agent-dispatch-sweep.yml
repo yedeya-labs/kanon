@@ -371,3 +371,18 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           APPLY: ${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}
         run: node "$KANON/scripts/review-reask.mjs"
+
+      # A RED DEFAULT BRANCH IS ONE ISSUE (kanon#1568, the Owner's decision of 2026-11-06). Not a
+      # dispatch, but the same kind of job: it reads the latest completed push run of `ci.yml` on the
+      # default branch, files one issue naming the run and its first failing job, notes each new red
+      # run on it, and closes it once the branch is green. With or without a merge queue. A
+      # repository whose adoption record names a watcher of its own under `## Choices` gets nothing
+      # from this, so the two never both file. On this job's Lead token, which holds Issues write
+      # and Actions read already. `scripts/default-branch-red.mjs` says how. `!cancelled()`, as above.
+      - name: File, update or close the issue for a red default branch
+        if: ${{ !cancelled() && steps.app-token.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          APPLY: ${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}
+        run: node "$KANON/scripts/default-branch-red.mjs"

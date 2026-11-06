@@ -61,6 +61,8 @@ const SITES: Site[] = [
   { file: 'scripts/review-recovery.mjs', line: "'--workflow', 'ci.yml'", reaches: 'ci.yml' },
   // The dispatch sweep's review re-ask waits for CI on a head, as the review lane's filter does (kanon#1197).
   { file: 'scripts/review-reask.mjs', line: "'--workflow', 'ci.yml'", reaches: 'ci.yml' },
+  // The dispatch sweep's red default branch reads CI's push runs there (kanon#1568).
+  { file: 'scripts/default-branch-red.mjs', line: 'actions/workflows/${CI_WORKFLOW}/runs?branch=', reaches: 'ci.yml', constant: 'CI_WORKFLOW' },
   { file: 'scripts/workflow-health.mjs', line: "f.startsWith('agent-')", reaches: 'callers' },
   { file: 'scripts/workflow-health.mjs', line: "'--workflow', file,", reaches: 'callers' },
   { file: 'scripts/workflow-health.mjs', line: 'actions/workflows/${encodeURIComponent(file)}', reaches: 'callers' },

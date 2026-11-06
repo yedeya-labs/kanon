@@ -17,7 +17,7 @@ import { PIPELINE_ROUTING } from '../../scripts/workflow-health.mjs';
  */
 const FILERS = [
   'scripts/overseer-file.mjs', 'scripts/workflow-health.mjs', 'scripts/telemetry-file.mjs',
-  'scripts/deploy-report.mjs', 'scripts/promote.mjs',
+  'scripts/deploy-report.mjs', 'scripts/promote.mjs', 'scripts/default-branch-red.mjs',
 ];
 /** The Lead's reconcile tick asks `plan()` too, and `tests/library/lead-reconcile.test.ts` holds each of its creates to it. */
 const HELD_ELSEWHERE = ['scripts/lead-reconcile.mjs'];
