@@ -1604,6 +1604,9 @@ describe('the App register\'s App ID column (#1607)', () => {
   it("is named in K-LAYOUT-6, the register's format rule", () => {
     const rule = readFileSync('rulebook/11-repository-layout.md', 'utf8').split('\n').find((l) => l.startsWith('**Rule.** `docs/qa/agent-identities.md`'))!;
     expect(rule).toMatch(/An optional `App ID` column holds the numeric ID GitHub gave the row's App[^.]*; a blank cell, or no column, means none is recorded\./);
+    // And its Why says what the column is for (the Owner, reviewing #1625).
+    const why = readFileSync('rulebook/11-repository-layout.md', 'utf8').split('\n').find((l, i, all) => l.startsWith('**Why.**') && all.slice(0, i).reverse().find((x) => x.startsWith('**Rule.**')) === rule)!;
+    expect(why).toMatch(/A row records its App's ID because GitHub shows a private App's ID only to its owner's installations, so reusing the App in another repository, or checking the Releaser's bypass, would otherwise need it pasted by hand\./);
   });
 
   it('reads alike in every register reader, with or without the column', () => {
