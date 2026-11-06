@@ -168,11 +168,11 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 ### `K-AGENT-13` Assess scope first, and bail with a plan on the bail list
 
-**Rule.** Assess a change's size and risk before starting. If it falls on the project's bail list, or the right fix is unclear, stop and hand off a plan: root cause, reproduction status, proposed approach, and why it needs human design. A review finding that would require a bail-list change is treated the same way: reply and stop, because a reviewer asking is not a human authorising.
+**Rule.** Assess a change's size and risk before starting. If it falls on the project's bail list, or the right fix is unclear, stop and hand off a plan: root cause, reproduction status, proposed approach, and why it needs human design. A review finding that would require a bail-list change is treated the same way: reply and stop, because a reviewer asking is not a human authorising. The bail list binds whoever implements the change, a lane, a person or a local Claude session alike. Where no lane runs, as on a brief item reserved with `qa:human-action`, the plan is the pull request's first section, `## Plan`, and the Reviewer checks it before reviewing the code.
 
 **Why.** A clean hand-off beats a half-finished risky change. The bail list can be relaxed where a fail-closed test makes a class of change safe, which is how additive schema changes came off the reference adopter's list.
 
-**Enforced by.** The agent prompt; the merge gate independently escalates the same paths to a human (chapter 04).
+**Enforced by.** The agent prompt; the merge gate independently escalates the same paths to a human (chapter 04). For a pull request no lane opened, the Reviewer's playbook has it check the `## Plan` section before the code; that a person or a local session writes it is prose only.
 
 **Class.** split. Scope-first bailing is framework. **The project supplies:** the bail list, kept under `## Bail list` in `docs/qa/escalation-paths.md` (`K-LAYOUT-8`), typically data migrations, security, auth and credential changes, destructive schema changes and cross-cutting refactors.
 
