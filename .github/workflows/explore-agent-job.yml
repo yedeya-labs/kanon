@@ -123,6 +123,8 @@ jobs:
       - uses: $/actions/agent-setup
         id: setup
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           arm: Explorer agent
           app-slug: ""
           # The role by name, since there is no slug to look it up by: the Explorer's agent

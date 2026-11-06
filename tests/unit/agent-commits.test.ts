@@ -264,7 +264,8 @@ describe('the agent-setup block runs it, and the lanes give it the App token', (
     // Only the review lane passes no slug: it calls the block before its token is minted.
     expect(step?.if).toBe("inputs.app-slug != ''");
     expect(step?.run).toBe('DCO_MJS="$GITHUB_ACTION_PATH/../dco/dco.mjs" bash "$GITHUB_ACTION_PATH/agent-commits.sh"');
-    expect(step?.env).toEqual({ APP_SLUG: '${{ inputs.app-slug }}', GH_TOKEN: '${{ inputs.github-token }}' });
+    // Kanon's Node, for the sign-off resolution (kanon#1676).
+    expect(step?.env).toEqual({ APP_SLUG: '${{ inputs.app-slug }}', GH_TOKEN: '${{ inputs.github-token }}', KANON_NODE: '${{ inputs.node }}' });
     expect(setup.inputs['github-token']).toMatchObject({ required: false, default: '${{ github.token }}' });
   });
 

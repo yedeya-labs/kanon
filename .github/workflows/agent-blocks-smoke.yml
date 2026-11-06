@@ -117,6 +117,8 @@ jobs:
       - name: Set up, without the push probe
         uses: $/actions/agent-setup
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           arm: smoke
           app-slug: github-actions
           push-probe: "false"

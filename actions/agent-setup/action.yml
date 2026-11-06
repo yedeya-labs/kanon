@@ -41,6 +41,13 @@ description: >-
   App can push.
 
 inputs:
+  node:
+    description: >-
+      The Node this action runs its scripts on, by absolute path: the kanon step's `node`
+      output (`actions/kanon-path`), from a caller whose job ran the project-setup hook first,
+      which may put another Node first on the PATH (kanon#1676). Defaults to `node` from the PATH.
+    required: false
+    default: node
   arm:
     description: Human name for this arm, used in the error messages.
     required: true
@@ -92,7 +99,9 @@ runs:
         ROLE: ${{ inputs.role }}
         APP_SLUG: ${{ inputs.app-slug }}
         GH_TOKEN: ${{ inputs.github-token }}
-      run: node "$GITHUB_ACTION_PATH/persona.mjs"
+        KANON_NODE: ${{ inputs.node }}
+      run: |
+        "$KANON_NODE" "$GITHUB_ACTION_PATH/persona.mjs"
 
     # KANON'S DEFAULTS FOR WHAT THE PROJECT LEAVES OUT (plan 0005 §5.2, `K-LAYOUT-17`): a playbook
     # the project keeps none of is Kanon's baseline for the role, copied into place for the agent
@@ -115,6 +124,8 @@ runs:
       env:
         APP_SLUG: ${{ inputs.app-slug }}
         GH_TOKEN: ${{ inputs.github-token }}
+        # The script resolves the sign-off on Kanon's Node (kanon#1676).
+        KANON_NODE: ${{ inputs.node }}
       run: DCO_MJS="$GITHUB_ACTION_PATH/../dco/dco.mjs" bash "$GITHUB_ACTION_PATH/agent-commits.sh"
 
     # PROBE THE CAPABILITY, DO NOT ASK THE API ABOUT IT (RA-951, moved into the spine by
