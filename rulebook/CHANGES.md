@@ -89,6 +89,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-15.** The Owner decided that a repository widens one of its Apps beyond Kanon's shared grant only by declaring it, as an `Extra App permission` bullet under the adoption record's `## Choices`, which `kanon apps`, `apps-check` and doctor honour for that repository alone; the shared grant stays. Kanon declares Workflows write for its Releaser, for a candidate's pin pull request. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md) S4, [#575](https://github.com/yedeya-labs/kanon/issues/575)
 - **2026-10-22.** The Owner decided to guard the record of a broadened permission: `lane-check` fails a register row whose permission is broader than its App's grant, with what the adoption record declares, and that has no numbered footnote, and a test fails a pointer to a register footnote that Kanon's register doesn't define. The rule is unchanged; its Enforced by line names the two checks. [#1236](https://github.com/yedeya-labs/kanon/issues/1236), [#1250](https://github.com/yedeya-labs/kanon/issues/1250)
 
+## `K-AGENT-13`
+
+- **2026-11-06.** The Owner decided that the bail list binds whoever implements a change, not only the Implementer lane: a person or a local Claude session too. Where no lane runs, as on a brief item reserved with `qa:human-action`, the plan is the pull request's first section, `## Plan`, which the Reviewer checks before the code. [#1566](https://github.com/yedeya-labs/kanon/issues/1566)
+
 ## `K-AGENT-24`
 
 - **2026-10-12.** The Reviewer's token mint asks for Checks, Commit statuses and Actions read again, after a narrowing of its permissions dropped the reads this rule depends on; a test now fails a mint that drops any of the three. [#691](https://github.com/yedeya-labs/kanon/issues/691)

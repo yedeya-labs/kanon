@@ -72,7 +72,7 @@ A measurement item's deliverable is the number and the command that produced it,
 
 - **The milestone is required**, chosen by the routing rules (`K-WORK-4`, `K-WORK-5`).
 - **Labels** are applied at creation, and added (never replaced) on adoption. Separate them with `·` and keep prose off the label run.
-- An item whose deliverable is **not a pull request** carries `qa:human-action`. It is never dispatched, does not park the project's other items, and is closed by a human with its evidence recorded on the issue (`K-PROJ-9`).
+- An item whose deliverable is **not a pull request** carries `qa:human-action`. It is never dispatched, does not park the project's other items, and is closed by a human with its evidence recorded on the issue (`K-PROJ-9`). So does an item **reserved for a person or a local session** rather than the Implementer: when it opens a pull request, that pull request's first section is `## Plan`, the plan `K-AGENT-13` asks for (root cause, approach, and which bail-list items it touches and why), and the Reviewer reads the plan before the code.
 - **`Closes #<n>`** adopts an existing issue instead of filing a new one, and is read **only** from the metadata line. Written anywhere else it is not adopted, and a duplicate is filed.
 - **`Depends on:`** cites items by letter. Only the leading run of `Issue X` references counts.
 
@@ -96,7 +96,7 @@ Deciding **not** to page is a decision and has a home: a signal that fails the a
 
 ## 6. Blast radius — what will need a human
 
-Name every item in `docs/qa/escalation-paths.md` this project will touch: its escalation paths and its bail list (`K-LAYOUT-8`). These are otherwise discovered mid-PR, which turns one up-front decision into N interrupts, and avoiding that is the whole premise of the brief.
+Name every item in `docs/qa/escalation-paths.md` this project will touch: its escalation paths and its bail list (`K-LAYOUT-8`). The bail list binds whoever implements an item, the Implementer lane, a person or a local Claude session alike (`K-AGENT-13`). These are otherwise discovered mid-PR, which turns one up-front decision into N interrupts, and avoiding that is the whole premise of the brief.
 
 Also name the softer ones: anything touching the pipeline itself, and anything a reviewer will escalate rather than approve.
 
