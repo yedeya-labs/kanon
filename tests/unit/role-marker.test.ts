@@ -208,6 +208,7 @@ const SIGNED: Record<string, string> = {
  */
 const HANDED_PERSONA = new Set(['scripts/overseer-file.mjs', 'scripts/telemetry-file.mjs']);
 const UNSIGNED: Record<string, string> = {
+  'scripts/decision-gate.mjs': 'the filter job refuses before any App token is minted, so it posts on the default token (kanon#1594)',
   'scripts/implement-crash.mjs': 'posts as github-actions, deliberately not as the Implementer (its header says why)',
   'scripts/split-lineage.mjs': 'its gate posts on the default token, before the Lead\'s is minted',
   'scripts/workflow-health.mjs': 'the project digest runs it on the default token',
