@@ -261,6 +261,15 @@ describe('classifyDispatch — the classification the digest must not get wrong'
     expect(d({ comments: [c(BAIL, '2026-08-30T00:00:00Z'), sweep, h('stop, this needs design', '2026-09-01T06:00:00Z')], ageDays: 2 }).disposition).toBe('human-held');
   });
 
+  // kanon#1657: an issue the sweep holds for a person's decision is never called a stalled dispatch.
+  it('a member labelled decision:needed reads as awaiting a decision, never as a stall', () => {
+    const r = d({ comments: [], labels: ['agent:implement', 'decision:needed'], ageDays: 30 });
+    expect(r.disposition).toBe('decision-held');
+    expect(STOPPED.has('decision-held')).toBe(true);
+    // Without the label the same silent, old member is the stall it was.
+    expect(d({ comments: [], labels: ['agent:implement'], ageDays: 30 }).disposition).toBe('stall');
+  });
+
   it('out of re-dispatches: an answered stop stays authorised, silence stays a stall', () => {
     const sweep = (at: string) => ({ login: 'example-lead[bot]', body: '<!-- qa:dispatch-sweep -->', createdAt: at });
     const spent = [sweep('2026-08-27T00:00:00Z'), sweep('2026-08-29T00:00:00Z')];
@@ -277,7 +286,7 @@ describe('classifyDispatch — the classification the digest must not get wrong'
     // Every digest disposition is a function of the sweep's state for the same comments.
     const expected: Record<string, string[]> = {
       'never-ran': ['stall', 'dispatched'], 'answered': ['authorised'], 'awaiting-human': ['bail'],
-      'in-flight': ['bail', 'authorised'], 'human-held': ['human-held'], 'parked': ['needs-info'],
+      'in-flight': ['bail', 'authorised'], 'human-held': ['human-held'], 'parked': ['needs-info'], 'decision-held': ['decision-held'],
       'exhausted': ['authorised', 'stall', 'dispatched'],
     };
     const shapes = [
@@ -288,7 +297,7 @@ describe('classifyDispatch — the classification the digest must not get wrong'
       [c(BAIL, '2026-08-20T00:00:00Z'), { login: IMPL, body: 'Stopping: this needs design.', createdAt: '2026-08-25T00:00:00Z' }],
     ];
     for (const comments of shapes) {
-      for (const labels of [['agent:implement'], ['agent:implement', 'qa:needs-info']]) {
+      for (const labels of [['agent:implement'], ['agent:implement', 'qa:needs-info'], ['agent:implement', 'decision:needed']]) {
         const sweep = sweepClassify({ labels: labels.map((name) => ({ name })) }, comments, false, { now: NOW.getTime(), lane: LANES[0] });
         expect(expected[sweep.state], `${sweep.state} for ${JSON.stringify(comments)}`)
           .toContain(d({ comments, labels, ageDays: 2 }).disposition);
@@ -503,6 +512,10 @@ describe('renderMember', () => {
 
   it('says "stalled" only for a stall', () => {
     expect(renderMember(member({ disposition: 'stall' }))).toContain('stalled dispatch');
+    // kanon#1657: a decision-held member names the label and what to do, and no stall.
+    const held = renderMember(member({ disposition: 'decision-held' }));
+    expect(held).toContain('**awaiting a decision** — it carries `decision:needed`');
+    expect(held).not.toContain('stalled dispatch');
     expect(renderMember(member({ disposition: 'bail' }))).not.toContain('stalled');
   });
 
