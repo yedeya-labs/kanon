@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -420,6 +420,40 @@ describe('the spine\'s steps around it (kanon#1383)', () => {
     expect(existsSync(join(f.temp, 'kanon-push', 'commits.bundle'))).toBe(false);
   });
 
+  // kanon#1591: the agent's closing comment goes to the push job, which posts it with a token minted
+  // after the run, so a run longer than the agent's token lives still reports.
+  it('the agent\'s job hands on its closing comment, with no commit too, kept out of its commits', () => {
+    const NOTE = 'docs/.kanon-issue-comment.md';
+    const alone = fixture();
+    const only = runAgentJob(alone, () => {
+      mkdirSync(join(alone.work, 'docs'), { recursive: true });
+      writeFileSync(join(alone.work, NOTE), 'Done: see the pull request.\n');
+    });
+    expect(only.outputs.commits).toBeUndefined();
+    expect(only.outputs.comment).toBe('true');
+    expect(readFileSync(join(alone.temp, 'kanon-push', 'comment.md'), 'utf8')).toBe('Done: see the pull request.\n');
+    expect(existsSync(join(alone.temp, 'kanon-push', 'commits.bundle'))).toBe(false);
+    const both = fixture();
+    const handed = runAgentJob(both, () => {
+      both.sh(both.work, 'switch', '-q', '-c', 'feat/7-thing');
+      mkdirSync(join(both.work, 'docs'), { recursive: true });
+      writeFileSync(join(both.work, NOTE), 'Built it.\n');
+      both.commit('src/thing.txt', 'thing\n');
+    });
+    expect(handed.outputs).toMatchObject({ commits: 'true', comment: 'true' });
+    expect(both.sh(both.work, 'ls-tree', '-r', '--name-only', 'HEAD')).not.toContain(NOTE);
+    // An empty file, or a link, is no comment; with nothing else, nothing is handed on.
+    for (const write of [(w: string) => writeFileSync(join(w, NOTE), ''), (w: string) => symlinkSync('/etc/hostname', join(w, NOTE))]) {
+      const f = fixture();
+      const none = runAgentJob(f, () => {
+        mkdirSync(join(f.work, 'docs'), { recursive: true });
+        write(f.work);
+      });
+      expect(none.outputs.comment).toBeUndefined();
+      expect(existsSync(join(f.temp, 'kanon-push'))).toBe(false);
+    }
+  });
+
   it('the agent\'s `git add -A` leaves the request out, and the handoff carries it beside the bundle', () => {
     const f = fixture();
     const handed = runAgentJob(f, () => {
@@ -502,7 +536,7 @@ describe('the spine\'s push job holds the key and runs nothing else (kanon#1383)
   const job = spine.jobs.push as Job;
   const steps = job.steps ?? [];
   /** The job's `if:`, for these inputs and needs. Only the forms it uses. */
-  const gate = (expr: string, { push = true, commits = 'true', result = 'success' }: { push?: boolean; commits?: string; result?: string }) => {
+  const gate = (expr: string, { push = true, commits = 'true', result = 'success', comment = '', closing = false }: { push?: boolean; commits?: string; result?: string; comment?: string; closing?: boolean }) => {
     // GitHub prefixes `success() &&` to an `if` that calls no status function, so a job gated on
     // outputs alone is skipped when the job it needs failed (kanon#1476).
     if (!/\b(always|cancelled|failure|success)\(\)/.test(expr) && result !== 'success') return false;
@@ -511,6 +545,8 @@ describe('the spine\'s push job holds the key and runs nothing else (kanon#1383)
       .replace(/inputs\.push\b(?!-)/g, String(push))
       .replace(/needs\.run\.result/g, JSON.stringify(result))
       .replace(/needs\.run\.outputs\.commits/g, JSON.stringify(commits))
+      .replace(/needs\.run\.outputs\.comment\b/g, JSON.stringify(comment))
+      .replace(/inputs\.closing-comment/g, String(closing))
       .replace(/'([^']*)'/g, (_, s: string) => JSON.stringify(s));
     expect(js, `an expression this evaluator doesn't read: ${expr}`).toMatch(/^[\s"\w!=&|()-]*$/);
     return Boolean(new Function(`return (${js});`)());
@@ -522,6 +558,10 @@ describe('the spine\'s push job holds the key and runs nothing else (kanon#1383)
     expect(gate(job.if!, { result: 'failure' })).toBe(true);
     expect(gate(job.if!, { commits: '' })).toBe(false);
     expect(gate(job.if!, { commits: 'false' })).toBe(false);
+    // kanon#1591: a closing comment alone runs it, on a lane that hands one on; nothing does elsewhere.
+    expect(gate(job.if!, { commits: 'false', comment: 'true', closing: true })).toBe(true);
+    expect(gate(job.if!, { commits: 'false', comment: 'true', closing: false })).toBe(false);
+    expect(gate(job.if!, { commits: 'false', comment: 'false', closing: true })).toBe(false);
     // A lane that doesn't commit (the deploy diagnosis) gets no push job and no write token.
     expect(gate(job.if!, { push: false })).toBe(false);
     // The agent's job hands its commits on whatever the agent did: always(), never success().
@@ -529,7 +569,11 @@ describe('the spine\'s push job holds the key and runs nothing else (kanon#1383)
       const step = agentSteps.find((s) => s.id === id)!;
       expect(step.if, id).toMatch(/always\(\)/);
     }
-    expect(agentJob.jobs.run.outputs.commits).toBe("${{ steps.upload.outcome == 'success' }}");
+    // Commits, not a closing comment alone, which uploads too (kanon#1591).
+    expect(agentJob.jobs.run.outputs.commits).toBe("${{ steps.upload.outcome == 'success' && steps.handoff.outputs.commits == 'true' }}");
+    expect(agentJob.jobs.run.outputs.comment).toBe("${{ inputs.closing-comment && steps.upload.outcome == 'success' && steps.handoff.outputs.comment == 'true' }}");
+    // The caller sees it only through the called workflow's declared outputs (#1654's review).
+    expect(agentJob.on.workflow_call.outputs.comment.value).toBe('${{ jobs.run.outputs.comment }}');
   });
 
   it('[LANE-14] runs no agent and no project code, checks nothing out, and moves the branch with the verified-commit helper', () => {
@@ -572,6 +616,7 @@ describe('the spine\'s push job holds the key and runs nothing else (kanon#1383)
       'permission-contents': 'write',
       'permission-pull-requests': 'write',
       'permission-workflows': "${{ inputs.push-workflows && 'write' || '' }}",
+      'permission-issues': "${{ inputs.closing-comment && 'write' || '' }}",
       'permission-actions': 'read',
     });
     expect(pushStep.env?.GH_TOKEN).toBe('${{ steps.push-token.outputs.token }}');
@@ -1173,7 +1218,7 @@ describe('the split lane\'s push job holds the key and runs nothing else (kanon#
     expect(gate(job.if!, { commits: 'false' })).toBe(false);
     // The agent's job hands its commits on whatever the agent did: always(), never success().
     for (const id of ['handoff', 'upload']) expect(splitSteps.find((s) => s.id === id)?.if, id).toMatch(/^always\(\)/);
-    expect(splitAgent.jobs.split.outputs.commits).toBe("${{ steps.upload.outcome == 'success' }}");
+    expect(splitAgent.jobs.split.outputs.commits).toBe("${{ steps.upload.outcome == 'success' && steps.handoff.outputs.commits == 'true' }}");
     for (const k of ['commits', 'start', 'act']) expect(splitAgent.on.workflow_call.outputs[k].value, k).toBe(`\${{ jobs.split.outputs.${k} }}`);
     const upload = splitSteps.find((s) => s.id === 'upload')!;
     expect(upload.with?.name).toBe('kanon-push-${{ github.run_attempt }}');

@@ -8,7 +8,7 @@ import { parse } from 'yaml';
 import { laneBlockOf, readBlock, readSpine } from '../unit/helpers/spine.js';
 import {
   CRASH_AUTHOR, CRASH_MARKER, EMPTY_KIND, MAX_CRASH_RETRIES, STOP_LABEL,
-  agentSpokeSince, branchPattern, decide, emptyRun, plan, priorCrashes, projectOf, renderComment, unmarkedSince, unmarkedWarning,
+  agentSpokeSince, branchPattern, decide, emptyRun, plan, priorCrashes, projectOf, pushedHeads, renderComment, unmarkedSince, unmarkedWarning,
 } from '../../scripts/implement-crash.mjs';
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { SPLIT_LABEL, splitMarker } from '../../scripts/split-lineage.mjs';
@@ -30,6 +30,32 @@ const IMPL = 'agent:implement';
 // The RA-2118 shape: a project member, a run that reached the model and died, no comment,
 // no PR, no earlier crash.
 const crashed = { kind: 'failed', labels: [IMPL], project: 27, spoke: false, hasPr: false, crashes: 0 };
+
+// kanon#1592: a run that committed its work, handed it to the push job, and got no pull request
+// is not retried, which would pay for the work again: a person re-runs the push job.
+describe('decide — work committed but not delivered (#1592)', () => {
+  it('stops for a person, before every other route but a PR, and says to re-run the push job', () => {
+    for (const c of [crashed, { ...crashed, spoke: true }, { ...crashed, project: null }, { ...crashed, crashes: 5 }]) {
+      const v = decide({ ...c, committed: true });
+      expect(v, JSON.stringify(c)).toMatchObject({ act: 'stop', label: STOP_LABEL, undelivered: true });
+      expect(v.why).toMatch(/Re-run the failed `push` job/);
+    }
+    expect(decide({ ...crashed, committed: true, hasPr: true }).act).toBe('none');
+    expect(decide({ ...crashed, committed: false }).act).toBe('retry');
+    const body = renderComment(decide({ ...crashed, committed: true }), { runUrl: 'https://example.invalid/run/1', kind: 'failed' });
+    expect(body).toContain('**The implementer run committed its work, but it was not delivered**');
+    expect(body).toMatch(/re-run the push job, not the agent/);
+    expect(body).not.toMatch(/acceptance criteria/);
+  });
+
+  it('reads the push job\'s heads: a branch it moved is delivered, and anything unreadable counts as moved', () => {
+    expect(pushedHeads('')).toBe(false);
+    expect(pushedHeads(undefined)).toBe(false);
+    expect(pushedHeads('[]')).toBe(false);
+    expect(pushedHeads('[{"ref":"fix/7-x","sha":"a"}]')).toBe(true);
+    expect(pushedHeads('not json')).toBe(true);
+  });
+});
 
 describe('decide — AC1: a crash that produced nothing is released for re-dispatch', () => {
   it('retries the measured RA-2072/RA-2077/RA-2079 shape', () => {
