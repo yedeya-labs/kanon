@@ -215,8 +215,10 @@ jobs:
             1. Read EVERY review on PR #${{ env.PR_NUMBER }} (latest state per reviewer,
                `gh pr view ${{ env.PR_NUMBER }} --json reviews`). Enumerate each
                ACTIONABLE finding — a blocking / request-changes item, or a fold-in
-               suggestion the review expected the author to amend into this PR. IGNORE
-               pure confirmations, cosmetics, and no-action nits (per the playbook's bar).
+               suggestion the review expected the author to amend into this PR, and any
+               defect or gap the review named without filing it (kanon#1595). IGNORE only
+               what the playbook's "Capturing follow-ups" keeps in the review: by default,
+               a question about intent and a nit that asks for nothing.
             2. For each actionable finding, decide on the MERGED code whether it was
                APPLIED. This checkout IS the merged default branch — grep/read it (and
                `git log` it) to verify. Separately, search issues (OPEN and CLOSED,
