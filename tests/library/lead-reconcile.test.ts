@@ -5616,6 +5616,9 @@ describe('RA-2038 — an issue parked on a human does not occupy an implementer 
     // Once STALE (RA-2112) — a fresh `human-held` may be a human replying mid-run.
     expect(isParkedOnHuman({ ...base, laneState: 'human-held', laneLastAt: '2020-01-01T00:00:00Z' })).toBe(true);
 
+    // `decision-held` is parked too (kanon#1594): the lanes refuse the issue, so its run never comes.
+    expect(isParkedOnHuman({ ...base, laneState: 'decision-held' })).toBe(true);
+
     // The sweep's two ACTIONABLE states are not parked — something is about to run.
     expect(isParkedOnHuman({ ...base, laneState: 'answered' })).toBe(false);
     expect(isParkedOnHuman({ ...base, laneState: 'never-ran' })).toBe(false);
