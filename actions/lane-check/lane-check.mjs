@@ -519,6 +519,25 @@ for (const f of WORKFLOWS) {
       (level === 'error' ? fail : warn)(f, message);
     }
   }
+  // AN ACTIVITY TYPE THE CALLER TEMPLATE GAINED (#1652), as doctor's `caller.event-types-missing`
+  // reads it: the lane names the types the caller `kanon init` writes takes, an event and its
+  // types on each `# CALLER TYPES: <event> <type>...` line (the review lane's `ready_for_review`).
+  // An upgrade moves only the pin, so a caller written before keeps its old list, and the lane never
+  // hears of that activity. Only an event the caller takes with a `types:` list is compared. Judged
+  // only at the release the caller pins, whose lane this is, and a warning that never fails: the
+  // lane still runs on the caller's other triggers. Read from the lane, not from `cli/`, which this
+  // check, run with a credential by the pin job, does not import.
+  const callerPin = isObject(job) ? tostring(alt(job.uses, '')) : '';
+  if (ACTION_REF && callerPin.slice(callerPin.lastIndexOf('@') + 1) === ACTION_REF) {
+    for (const line of marked(laneFile, '# CALLER TYPES: ')) {
+      const [event = '', ...want] = words([line]);
+      const t = isObject(doc.on) ? doc.on[event] : null;
+      const have = isObject(t) ? (typeof t.types === 'string' ? [t.types] : Array.isArray(t.types) ? t.types.map(tostring) : null) : null;
+      const missing = have ? want.filter((x) => !have.includes(x)) : [];
+      if (!have || !missing.length) continue;
+      advise(f, `its \`${tsv(event)}\` types don't list ${missing.map((x) => `\`${tsv(x)}\``).join(', ')}, which the caller \`kanon init\` writes at ${ACTION_REF} does, so the Kanon lane ${lane} never hears of ${missing.length > 1 ? 'those events' : 'that event'}. Write \`types: [${[...have, ...missing].map(tsv).join(', ')}]\` under \`${tsv(event)}:\`, or run \`kanon init\` again (docs/lanes.md; caller.event-types-missing)`);
+    }
+  }
   const jobExtra = isObject(job) ? keys(job).filter((k) => !['name', 'uses', 'with', 'secrets', 'permissions'].includes(k)).join(', ') : '';
   if (jobExtra) fail(f, `the calling job holds only uses, with, secrets and permissions; it also has: ${jobExtra}`);
 

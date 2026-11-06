@@ -55,7 +55,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { URL } from 'node:url';
 import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
-import { appSecrets, briefGuardJob, briefGuardJobs, callerFile, isStubHook, kanonRelease, LEAD_LANES, loadRequirements, setupHookJobs, TRIGGERS, yamlScalar } from './callers.mjs';
+import { appSecrets, briefGuardJob, briefGuardJobs, callerFile, isStubHook, kanonRelease, LEAD_LANES, loadRequirements, missingEventTypes, setupHookJobs, TRIGGERS, yamlScalar } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
 import { registerAppIds } from './app-register.mjs';
 import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, deployTakesTargets, GITHUB_DEFAULT_LABELS, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, workflowName } from './init.mjs';
@@ -1644,6 +1644,15 @@ export const diagnose = async (deps, opts) => {
       findItems('caller.workflow-run-missing', c.file, lacks, (xs) => [`starts the lane ${c.lane} on no run of ${xs.join(', ')}: its workflow_run doesn't name ${xs.length > 1 ? 'them' : 'it'}, and the caller kanon init ${kanonRelease()} writes does, so a run of ${xs.length > 1 ? 'one' : 'it'} starts the lane at once, where this caller leaves it to the lane's other triggers and its schedule (docs/lanes.md).`, {
         text: have.length ? `Name ${xs.length > 1 ? 'them' : 'it'} in the workflow_run's workflows:, or run kanon init again, which writes the caller with ${xs.length > 1 ? 'them' : 'it'}:` : `Add under the caller's on:, or run kanon init again, which writes the caller with ${xs.length > 1 ? 'them' : 'it'}:`,
         commands: have.length ? [`    workflows: [${[...have, ...xs].map(yamlScalar).join(', ')}]`] : ['  workflow_run:', `    workflows: [${xs.map(yamlScalar).join(', ')}]`, '    types: [completed]'],
+      }]);
+    }
+    // AN ACTIVITY TYPE THE TEMPLATE GAINED SINCE (#1652), such as the review caller's
+    // `ready_for_review`: an upgrade of the pin alone doesn't add it, and the lane never hears of
+    // that activity. It blocks nothing: the lane still runs on the caller's other triggers.
+    for (const gap of missingEventTypes(c.lane, spec, c.wf.on)) {
+      findItems('caller.event-types-missing', c.file, gap.missing, (xs) => [`starts the lane ${c.lane} on no ${gap.event} event of type ${xs.join(', ')}: its ${gap.event} types don't list ${xs.length > 1 ? 'them' : 'it'}, and the caller kanon init ${kanonRelease()} writes does. This caller's lane never hears of that activity and waits for its other triggers (docs/lanes.md).`, {
+        text: `List ${xs.length > 1 ? 'them' : 'it'} in the ${gap.event} trigger's types:, or run kanon init again, which writes the caller with ${xs.length > 1 ? 'them' : 'it'}:`,
+        commands: [`    types: [${[...gap.have, ...xs].join(', ')}]`],
       }]);
     }
   }

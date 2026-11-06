@@ -8,6 +8,7 @@ import { writeStub } from './helpers/stub-bin.js';
 import { handedIn, readFlattened, workflowText } from './helpers/called-workflow.js';
 import { headerLine } from '../../scripts/lib/role-marker.mjs';
 import { SPAWNS } from './helpers/spawns.js';
+import { evaluate } from './helpers/expression.js';
 import { DECLINED_BY_DESIGN, declinedByDesign, filterDecision } from '../../scripts/review-reask.mjs';
 
 // Its cases run the review filter's step in `bash` against a stub `gh`, so every case takes the
@@ -274,6 +275,48 @@ describe('drafts, and a head the commit lookup does not know yet (#1565, #1567)'
   });
 });
 
+// #1652: marking a draft ready starts no CI run, so the caller takes `ready_for_review`, and the
+// filter takes it as it takes a review label added to the PR: it reviews a labelled PR once CI has
+// finished on its head, waits for CI while it runs, and leaves an unlabelled PR alone.
+describe('a labelled draft marked ready for review (#1652)', () => {
+  const ready = (labels: string[]) => ({
+    github: {
+      event_name: 'pull_request_target',
+      event: { action: 'ready_for_review', pull_request: { labels: labels.map((name) => ({ name })), user: { type: 'User' } } },
+    },
+    steps: { login: { outputs: { login: 'example-reviewer' } } },
+  });
+  const decideIf = String(decide.if);
+
+  it('starts the filter, and its decide step, on a PR carrying a review label, and on no other', () => {
+    for (const label of ['review:please', 'agent:triage', 'agent:implement']) {
+      expect(evaluate(filterIf, ready([label])), label).toBe(true);
+      expect(evaluate(decideIf, ready([label])), label).toBe(true);
+    }
+    expect(evaluate(filterIf, ready([]))).toBe(false);
+    expect(evaluate(filterIf, ready(['sev:low']))).toBe(false);
+    expect(evaluate(decideIf, ready([]))).toBe(false);
+  });
+
+  it('reviews it once CI has finished on the head, as a label event, and waits for CI while it runs', () => {
+    const r = runDecide({ event: 'pull_request_target', action: 'ready_for_review', sender: 'a-person', lastReviewed: null });
+    expect(r.review).toBe('true');
+    expect(r.pr).toBe('964');
+    const running = runDecide({ event: 'pull_request_target', action: 'ready_for_review', sender: 'a-person', lastReviewed: null, ciPending: true });
+    expect(running.review).toBe('false');
+    expect(running.stdout).toContain('CI still running');
+    // It reads the draft from the PR, not the payload: one still a draft is skipped.
+    expect(runDecide({ event: 'pull_request_target', action: 'ready_for_review', sender: 'a-person', lastReviewed: null, isDraft: true }).review).toBe('false');
+    // A head the Reviewer already read is not reviewed again.
+    expect(runDecide({ event: 'pull_request_target', action: 'ready_for_review', sender: 'a-person', lastReviewed: HEAD }).review).toBe('false');
+  });
+
+  it('says on a draft that marking it ready starts the review', () => {
+    const r = runDecide({ lastReviewed: null, isDraft: true });
+    expect(r.stdout).toContain('marking it ready for review starts the review');
+  });
+});
+
 describe('the trigger is CI finishing, not the branch changing (RA-378, RA-965)', () => {
   /**
    * The Reviewer raced CI: forbidden to wait on a pending check, he posted a `COMMENT`
@@ -286,11 +329,11 @@ describe('the trigger is CI finishing, not the branch changing (RA-378, RA-965)'
     // A called workflow holds no triggers of its own; its contract names the caller's.
     expect(Object.keys(wf.on)).toEqual(['workflow_call']);
     expect(CONTRACT).toMatch(/#\s+workflow_run:\n#\s+workflows: \[CI\]\n#\s+types: \[completed\]/);
-    expect(CONTRACT).toMatch(/#\s+types: \[opened, labeled\]/);
+    expect(CONTRACT).toMatch(/#\s+types: \[opened, labeled, ready_for_review\]/);
     expect(CALLER.on.workflow_run).toEqual({ workflows: ['CI'], types: ['completed'] });
     // `synchronize` is the trigger this change exists to remove; `opened` survives
     // only for `notify-unlabeled`, and the filter defers it (asserted below).
-    expect(CALLER.on.pull_request_target.types).toEqual(['opened', 'labeled']);
+    expect(CALLER.on.pull_request_target.types).toEqual(['opened', 'labeled', 'ready_for_review']);
   });
 
   it('never runs a PR-supplied copy of its caller on an automatic trigger (RA-1415)', () => {

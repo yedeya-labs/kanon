@@ -33,11 +33,11 @@ type Trigger = {
 /** Every key a `TRIGGERS` entry may carry. A new kind of trigger needs a phrase below first. */
 const KNOWN = new Set(['name', 'job', 'issues', 'pr', 'prTarget', 'review', 'ci', 'openers', 'merged', 'pinMoved', 'schedule', 'dispatch', 'deployRun', 'reask', 'release']);
 
-const VERB: Record<string, string> = { labeled: 'labelled', opened: 'opened', closed: 'closed', milestoned: 'put on a milestone' };
+const VERB: Record<string, string> = { labeled: 'labelled', opened: 'opened', closed: 'closed', milestoned: 'put on a milestone', ready_for_review: 'marked ready for review' };
 const verbs = (events: string[]) => events.map((e) => {
   if (!VERB[e]) throw new Error(`no phrase for the event type ${e}: add it to VERB`);
   return VERB[e];
-}).join(' or ');
+}).join(', ').replace(/, ([^,]*)$/, ' or $1');
 
 const NUMBER = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'];
 
