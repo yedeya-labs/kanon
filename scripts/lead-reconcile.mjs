@@ -164,6 +164,10 @@ export const NEEDS_INFO = 'qa:needs-info';
  * merge that closes it is a member's merge like any other (`closingMergeShas`).
  */
 export const HUMAN_ACTION = 'qa:human-action';
+
+/** An issue waiting on a person's decision (`K-WORK-24`): never the Implementer's to build, so
+ *  never labelled for it here; the implement lane refuses one too (kanon#1594). */
+export const DECISION_NEEDED = 'decision:needed';
 /** Phase 5's issue title, written in ONE place.
  *
  *  It is a template, not a name — `nextActions` proposes it and `readWorld` recovers by
@@ -1476,6 +1480,8 @@ function nextActionsCore(world, {
       .filter((i) => !i.labels.includes(IMPLEMENT) && !i.labels.includes(NEEDS_INFO))
       // Never an implementer's to do (RA-1301) — see `HUMAN_ACTION`.
       .filter((i) => !i.labels.includes(HUMAN_ACTION))
+      // Waiting on a person's decision, which an agent mustn't make in code (kanon#1594).
+      .filter((i) => !i.labels.includes(DECISION_NEEDED))
       // Too big for one run, and a re-dispatch repeats the cap (RA-1781). The split PR
       // replaces this item; until it merges there is nothing here to build.
       .filter((i) => !i.labels.includes(SPLIT_LABEL))
@@ -1531,6 +1537,7 @@ function nextActionsCore(world, {
         if (i.unfiledDeps?.length) return `#${i.number} names ${i.unfiledDeps.map((k) => `Issue ${k}`).join(', ')}, which no filed issue matches — a brief defect, not a wait`;
         if (i.dependsOn?.length) return `#${i.number} waits on ${i.dependsOn.map((n) => `#${n}`).join(', ')}`;
         if (i.labels.includes(NEEDS_INFO)) return `#${i.number} is parked with \`${NEEDS_INFO}\``;
+        if (i.labels.includes(DECISION_NEEDED)) return `#${i.number} waits on a person's decision (\`${DECISION_NEEDED}\`) — never dispatched until the decision is recorded and the label removed (K-WORK-24, kanon#1594)`;
         if (i.labels.includes(HUMAN_ACTION)) return `#${i.number} awaits a HUMAN action (\`${HUMAN_ACTION}\`) — never dispatched; it closes when a person closes it with its evidence, or when the pull request of a person or a local session merges and closes it (RA-1301, K-PROJ-9)`;
         if (i.labels.includes(SPLIT_LABEL)) return `#${i.number} awaits a SPLIT (\`${SPLIT_LABEL}\`) — its implementer run hit its cap, so the Lead proposes smaller children as a PR against the brief; merging that PR closes it. If no split PR opens within ${SPLIT_STALL_HOURS}h, this tick re-delivers \`${SPLIT_WORKFLOW}\` ONCE, then hands it to \`${NEEDS_INFO}\` (RA-2406)`;
         return `#${i.number} held`;
@@ -3193,11 +3200,14 @@ export function isParkedOnHuman({
  * dispatching it and RA-2038 went on charging it a slot: RA-2038's own bug, surviving
  * in the state named for its condition.
  *
- * `has-pr` is deliberately NOT here — it outranks both in `classify`'s chain and
- * means work is happening — and neither are `answered` or `never-ran`, which are
+ * `decision-held` is here too (kanon#1594): the issue waits on a person's decision, which
+ * the implement and triage lanes refuse, so no run will ever free the slot.
+ *
+ * `has-pr` is deliberately NOT here — it means work is happening — and neither are `answered` or `never-ran`, which are
  * the sweep's two ACTIONABLE states: something is about to run.
  */
-const PARKED_LANE_STATES = new Set(['awaiting-human', 'human-held']);
+// `decision-held` (kanon#1594): the issue waits on a person's decision, and both lanes refuse it.
+const PARKED_LANE_STATES = new Set(['awaiting-human', 'human-held', 'decision-held']);
 
 /**
  * An issue's PR read and whether it is parked on a human, read as `readWorld` reads them

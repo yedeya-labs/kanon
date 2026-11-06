@@ -258,6 +258,16 @@ describe('dispatching', () => {
     expect(nextActions({ ...base, open }, { wip: 5 }).actions).toEqual([]);
   });
 
+  // kanon#1594: an issue waiting on a person's decision is never the Implementer's to build.
+  it('never labels for the Implementer an issue that waits on a decision, and says why it waits', () => {
+    const open = [{ ...base.open[0], labels: ['decision:needed'] }, base.open[1]];
+    const { actions } = nextActions({ ...base, open, blocked: [] });
+    expect(actions.map((a: { number: number }) => a.number)).toEqual([2]);
+    const only = nextActions({ ...base, open: [open[0]!], blocked: [] });
+    expect(only.actions).toEqual([]);
+    expect(String(only.stopped ?? '')).toContain("waits on a person's decision (`decision:needed`)");
+  });
+
   it('skips an issue a human has parked with qa:needs-info', () => {
     const open = [{ ...base.open[0], labels: ['qa:needs-info'] }, base.open[1]];
     const { actions } = nextActions({ ...base, open, blocked: [] });
@@ -5605,6 +5615,9 @@ describe('RA-2038 — an issue parked on a human does not occupy an implementer 
     // condition: the sweep stops dispatching and the slot is held forever.
     // Once STALE (RA-2112) — a fresh `human-held` may be a human replying mid-run.
     expect(isParkedOnHuman({ ...base, laneState: 'human-held', laneLastAt: '2020-01-01T00:00:00Z' })).toBe(true);
+
+    // `decision-held` is parked too (kanon#1594): the lanes refuse the issue, so its run never comes.
+    expect(isParkedOnHuman({ ...base, laneState: 'decision-held' })).toBe(true);
 
     // The sweep's two ACTIONABLE states are not parked — something is about to run.
     expect(isParkedOnHuman({ ...base, laneState: 'answered' })).toBe(false);

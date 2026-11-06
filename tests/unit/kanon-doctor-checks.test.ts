@@ -88,6 +88,16 @@ describe('kanon doctor on what an installation lacks', () => {
     expect(ids(r)).toEqual(['caller.secrets-inherited .github/workflows/agent-review.yml', 'apps-check.secret-stale .github/workflows/apps-check.yml']);
   });
 
+  // kanon#1655: a triage caller from before the decision gate's labels read is named, with its fix.
+  it("names a triage caller granting contents: read alone, which the decision gate's labels read outgrew", async () => {
+    const files = healthyFiles();
+    files['.github/workflows/agent-triage.yml'] = callerFile('agent-triage', REQ.lanes['agent-triage']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }).replace(/^permissions:\n( {2}.*\n)+/m, 'permissions:\n  contents: read\n');
+    const r = await run(checkout(files), fakeGitHub(), ['--json']);
+    const f = r.json.findings.find((x: { id: string }) => x.id === 'caller.grant-missing');
+    expect(f).toMatchObject({ subject: '.github/workflows/agent-triage.yml' });
+    expect(f.fix.commands).toContain('  issues: read');
+  });
+
   it('names a caller granting write-all as what it is, with the lane\'s grant written out as the fix', async () => {
     const files = healthyFiles();
     files['.github/workflows/agent-review.yml'] = files['.github/workflows/agent-review.yml']!.replace(/^permissions:\n( {2}.*\n)+/m, 'permissions: write-all\n');

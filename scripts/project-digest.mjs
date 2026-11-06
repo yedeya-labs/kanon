@@ -251,6 +251,8 @@ export function stopReason(body, max = 80) {
  *  - a human answered it and nothing ran since      → `authorised`
  *  - a human replied to the SWEEP, nothing ran      → `human-held`
  *  - a human parked it with `qa:needs-info`         → `needs-info`
+ *  - it carries `decision:needed`, which the lanes   → `decision-held`: waiting on a person's
+ *    refuse (kanon#1594)                              decision, never a stalled dispatch (kanon#1657)
  *
  * So a bail never clears a bail once it is stale, and
  * the reported wait comes from the Implementer's last comment rather than `updatedAt`,
@@ -259,7 +261,7 @@ export function stopReason(body, max = 80) {
  * @param {{comments?: {login?: string|null, body?: string|null, createdAt?: string}[],
  *          labels?: string[], hasPr?: boolean, prConflicting?: boolean, ageDays?: number,
  *          now?: Date}} input
- * @returns {{disposition: 'conflicting'|'building'|'authorised'|'bail'|'stall'|'dispatched'|'human-held'|'needs-info',
+ * @returns {{disposition: 'conflicting'|'building'|'authorised'|'bail'|'stall'|'dispatched'|'human-held'|'needs-info'|'decision-held',
  *            waitedDays: number, reason?: string, unmarked?: number}}
  */
 export function classifyDispatch({ comments = [], labels = [], hasPr = false, prConflicting = false, ageDays = 0, now = new Date() }) {
@@ -293,6 +295,9 @@ function dispositionOf(v, { conversation, lastAgent, waitedDays, ageDays, quiet 
   switch (v.state) {
     case 'parked': return { disposition: 'needs-info', waitedDays: ageDays };
     case 'human-held': return { disposition: 'human-held', waitedDays: ageDays };
+    // The sweep holds it, and both lanes refuse it, until a person records the decision and
+    // removes the label (kanon#1594): a stall would send the reader to re-dispatch it (kanon#1657).
+    case 'decision-held': return { disposition: 'decision-held', waitedDays: ageDays };
     case 'answered': return { disposition: 'authorised', waitedDays };
     // `in-flight` is the sweep's young `awaiting-human`: the Implementer's word is the last,
     // under the sweep's 48h. A first stop is awaiting the reader at once. One that FOLLOWS
@@ -627,7 +632,7 @@ const STATUS = {
  * move the member. One of them, or a held or unfiled project, makes the message a `warning`
  * (plan 0011 §3.2). `needs-split` is not: the Lead's split pull request is the next move.
  */
-export const STOPPED = new Set(['bail', 'human-held', 'stall', 'conflicting', 'needs-info']);
+export const STOPPED = new Set(['bail', 'human-held', 'stall', 'conflicting', 'needs-info', 'decision-held']);
 
 /**
  * Is this project stopped, for the message's severity?
@@ -671,6 +676,9 @@ function memberLine(m, t, link) {
     // and the sweep holds it rather than dispatching again.
     case 'human-held':
       return `- ${link} ${t} — **held** — a human replied to the dispatch sweep and nothing has run since`;
+    // `decision:needed`: the lanes refuse it until the decision is recorded (kanon#1594, #1657).
+    case 'decision-held':
+      return `- ${link} ${t} — **awaiting a decision** — it carries \`decision:needed\`, so no lane builds it: record the decision on it and remove the label`;
     case 'authorised':
       // NOT "needs a re-dispatch". Without `actions: read` this cannot see a run
       // already in flight, and asserting an action the reader may have taken an

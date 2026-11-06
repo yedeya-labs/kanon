@@ -48,6 +48,7 @@ import { costRowsProblem } from '../actions/qa-store/qa-store.mjs';
 import { artifactRetentionNote, readArtifactCostRows } from './lib/telemetry-artifacts.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
+import { DECISION_LABEL } from './lib/decision-asks.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -888,7 +889,15 @@ export function classify(issue, comments, hasPr, opts = {}) {
   // agent's own prose would be confidently wrong often enough to be worse than
   // useless.
   let state;
-  if (terminalVerdict(issue, lane)) {
+  if ((issue?.labels ?? []).some((l) => (typeof l === 'string' ? l : l?.name) === DECISION_LABEL)) {
+    // WAITS ON A PERSON'S DECISION (kanon#1594). Both lanes refuse an issue labelled
+    // `decision:needed` at their filter, before any token (`scripts/decision-gate.mjs`), and
+    // the refusal is posted on the default token, so the conversation alone reads `never-ran`.
+    // Re-dispatching would only be refused again, and `stop()` would file a decision wait as
+    // `qa:needs-info`. So it outranks every other reading, and `act: null` leaves the label
+    // alone: the issue runs once a person records the decision and removes the label.
+    state = 'decision-held';
+  } else if (terminalVerdict(issue, lane)) {
     // ANSWERED LEAVES, WAITING STAYS (RA-1380). A terminal triage verdict means the
     // question this lane exists to ask has been settled — so the issue must not be
     // treated as an unanswered one. It outranks every signal below including
@@ -971,7 +980,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
   // NOT the states where a person or a PR already owns the issue, nor `running`: a run under
   // way is a re-run, as a re-applied label is (kanon#1410). NOT `stop()`'s
   // `exhausted` either, which is the sweep's own attempt budget running out.
-  const OWNED = ['has-pr', 'human-held', 'running', 'triage-settled', 'parked'];
+  const OWNED = ['decision-held', 'has-pr', 'human-held', 'running', 'triage-settled', 'parked'];
   if (lane.decomposes && Number.isFinite(exhaustedAt) && !OWNED.includes(state)
     && !(Number.isFinite(labeledAt) && labeledAt > exhaustedAt)
     && !conversation.some((c) => Date.parse(c.createdAt) > exhaustedAt && (byAgent(c) || !bot(c.login)))) {
@@ -1188,7 +1197,7 @@ export function actionCell(v, breaker = { tripped: false }) {
   return breaker.tripped && v.act === 'stop' ? 'stop (withheld)' : v.act;
 }
 
-const REPORT_ORDER = ['never-ran', 'answered', 'ran-empty', 'undelivered', 'too-big', 'awaiting-human', 'human-held', 'exhausted', 'running', 'in-flight', 'has-pr', 'triage-settled', 'parked'];
+const REPORT_ORDER = ['never-ran', 'answered', 'ran-empty', 'undelivered', 'too-big', 'awaiting-human', 'human-held', 'decision-held', 'exhausted', 'running', 'in-flight', 'has-pr', 'triage-settled', 'parked'];
 
 /**
  * The step-summary text, pure so it can be asserted on (RA-1260). Takes the breaker's

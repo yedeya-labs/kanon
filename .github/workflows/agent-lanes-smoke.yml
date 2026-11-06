@@ -57,6 +57,7 @@ jobs:
   triage:
     permissions:
       contents: read
+      issues: read
     uses: $/.github/workflows/agent-triage.yml
     with:
       smoke: agent-lanes-smoke

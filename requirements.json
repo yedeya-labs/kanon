@@ -812,7 +812,8 @@
         }
       },
       "grant": {
-        "contents": "read"
+        "contents": "read",
+        "issues": "read"
       },
       "reads": [
         "docs/qa/stack.md",

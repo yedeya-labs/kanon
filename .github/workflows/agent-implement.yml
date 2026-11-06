@@ -86,7 +86,8 @@ concurrency:
   cancel-in-progress: false
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
-# ceiling, and must grant at least this and the crash recovery's job-level grants below, or
+# ceiling, and must grant at least this and the filter's and the crash recovery's job-level
+# grants below (the filter's `issues: write` posts the decision gate's refusal), or
 # the run fails to start; `lane-check` fails a caller that grants less.
 permissions:
   contents: read # the App token carries the real write scope; keep the default token minimal
@@ -99,8 +100,14 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # `issues: write` for the decision gate's one comment on a refused issue (kanon#1594); the
+    # caller grants it already, for this lane's App token.
+    permissions:
+      contents: read
+      issues: write
     outputs:
-      member: ${{ steps.gate.outputs.member }}
+      # A member's event on an issue that awaits a person's decision is refused too (kanon#1594).
+      member: ${{ steps.gate.outputs.member == 'true' && steps.decision.outputs.admit == 'true' && 'true' || 'false' }}
       since: ${{ steps.before.outputs.since }}
     steps:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
@@ -114,6 +121,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
 
+      # THE DECISION GATE (kanon#1594): an issue labelled `decision:needed` waits on a person's
+      # decision, which an agent mustn't make in code (K-WORK-24). Refused here, before any
+      # token is minted, with a comment naming the label; not a dispatch attempt.
+      - name: Does the issue wait on a decision?
+        id: decision
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
+          LABELS: ${{ toJSON(github.event.issue.labels) }}
+          LANE: implement
+          COMMENT: "true"
+        run: node "$KANON/scripts/decision-gate.mjs"
+
       # WHEN THE RUN STARTED (plan 0005 §3.3, step L3), for the implementer status: so
       # `implementer-status` can tell the pull request THIS run opened (after `since`, from a
       # branch the push job moved, at the head it moved it to) from any other. In this job
@@ -124,7 +147,7 @@ jobs:
       # stamps nothing and says why.
       - name: Record when the run started
         id: before
-        if: steps.gate.outputs.member == 'true'
+        if: steps.gate.outputs.member == 'true' && steps.decision.outputs.admit == 'true'
         continue-on-error: true
         run: echo "since=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
