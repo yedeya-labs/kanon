@@ -285,8 +285,10 @@ describe('#73 the release workflow refuses a release PR that changes more than v
     });
   });
 
-  it('runs last, on the workflow token, with no expression in its script', () => {
-    expect(steps.at(-1)?.id).toBe('release-pr-guard');
+  it('runs last but the release-notes check, on the workflow token, with no expression in its script', () => {
+    // The release-notes check (kanon#1662) follows it, and runs even when this fails.
+    expect(steps.at(-2)?.id).toBe('release-pr-guard');
+    expect(steps.at(-1)?.name).toBe('Check every feat and fix reached the release notes');
     expect(guard?.shell).toBe('node {0}');
     expect(guard?.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
     expect(guard?.if).toBeUndefined();

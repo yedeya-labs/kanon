@@ -14,6 +14,7 @@ const CLIS: Array<[string, string[]]> = [
   ['bail-restart', []],
   ['brief-revise-recovery', []],
   ['capability-interlock', []],
+  ['default-branch-red', []],
   ['deploy-diagnose', []],
   ['deploy-gate', ['gate']],
   ['deploy-report', ['environment']],
