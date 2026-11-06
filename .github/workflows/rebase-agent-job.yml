@@ -262,7 +262,9 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           KANON: ${{ steps.kanon.outputs.path }}
-        run: node "$KANON/scripts/ensure-labels.mjs" needs:human
+          KANON_NODE: ${{ steps.kanon.outputs.node }}
+        run: |
+          "$KANON_NODE" "$KANON/scripts/ensure-labels.mjs" needs:human
 
       - uses: $/actions/agent-run
         id: agent

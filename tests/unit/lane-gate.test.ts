@@ -274,6 +274,14 @@ describe('who the actor is', () => {
     expect(triggeringActor('pull_request_target', { action: 'ready_for_review' }, env)).toHaveProperty('refuse');
     expect(triggeringActor('pull_request', { action: 'ready_for_review', sender: { login: 'author' } }, env)).toHaveProperty('refuse');
   });
+  it('an issue comment: the commenter and their author_association, on `created` only (kanon#1649)', () => {
+    expect(triggeringActor('issue_comment', { action: 'created', comment: { user: { login: 'owner' }, author_association: 'OWNER' }, sender: { login: 'someone-else' } }, env))
+      .toEqual({ actor: { login: 'owner', source: 'commenter', association: 'OWNER' } });
+    expect(triggeringActor('issue_comment', { action: 'created', comment: { user: { login: 'stranger' } } }, env))
+      .toEqual({ actor: { login: 'stranger', source: 'commenter', association: '' } });
+    expect(triggeringActor('issue_comment', { action: 'edited', comment: { user: { login: 'owner' }, author_association: 'OWNER' } }, env)).toHaveProperty('refuse');
+    expect(triggeringActor('issue_comment', { action: 'created' }, env)).toHaveProperty('refuse');
+  });
   it('a milestoned pull request (pull_request_target): whoever set the milestone, checked like a label; an issue\'s is refused (kanon#1242)', () => {
     expect(triggeringActor('pull_request_target', { action: 'milestoned', sender: { login: 'triager' } }, env))
       .toEqual({ actor: { login: 'triager', source: 'user who set the milestone' } });

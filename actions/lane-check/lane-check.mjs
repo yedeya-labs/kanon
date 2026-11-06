@@ -523,7 +523,9 @@ for (const f of WORKFLOWS) {
   // reads it: the lane names the types the caller `kanon init` writes takes, an event and its
   // types on each `# CALLER TYPES: <event> <type>...` line (the review lane's `ready_for_review`).
   // An upgrade moves only the pin, so a caller written before keeps its old list, and the lane never
-  // hears of that activity. Only an event the caller takes with a `types:` list is compared. Judged
+  // hears of that activity. An event the caller takes with a `types:` list is compared type by type,
+  // one it takes with GitHub's default types is not, and one it doesn't take at all is reported
+  // whole (kanon#1649: the implement caller's `issue_comment`). Judged
   // only at the release the caller pins, whose lane this is, and a warning that never fails: the
   // lane still runs on the caller's other triggers. Read from the lane, not from `cli/`, which this
   // check, run with a credential by the pin job, does not import.
@@ -531,7 +533,12 @@ for (const f of WORKFLOWS) {
   if (ACTION_REF && callerPin.slice(callerPin.lastIndexOf('@') + 1) === ACTION_REF) {
     for (const line of marked(laneFile, '# CALLER TYPES: ')) {
       const [event = '', ...want] = words([line]);
-      const t = isObject(doc.on) ? doc.on[event] : null;
+      const takes = isObject(doc.on) && Object.hasOwn(doc.on, event);
+      if (!takes) {
+        advise(f, `doesn't take \`${tsv(event)}\`, which the caller \`kanon init\` writes at ${ACTION_REF} takes with \`types: [${want.map(tsv).join(', ')}]\`, so the Kanon lane ${lane} never hears of ${want.length > 1 ? 'those events' : 'that event'}. Add \`${tsv(event)}: { types: [${want.map(tsv).join(', ')}] }\` under \`on:\`, or run \`kanon init\` again (docs/lanes.md; caller.event-types-missing)`);
+        continue;
+      }
+      const t = doc.on[event];
       const have = isObject(t) ? (typeof t.types === 'string' ? [t.types] : Array.isArray(t.types) ? t.types.map(tostring) : null) : null;
       const missing = have ? want.filter((x) => !have.includes(x)) : [];
       if (!have || !missing.length) continue;

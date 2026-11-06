@@ -422,12 +422,13 @@ jobs:
         if: ${{ !inputs.project-setup }}
         env:
           KANON_ROOT: ${{ steps.kanon.outputs.path }}
+          KANON_NODE: ${{ steps.kanon.outputs.node }}
         run: |
           set -euo pipefail
           bin="$RUNNER_TEMP/kanon-bin"
           mkdir -p "$bin"
           for s in brief-guard spec-ids spec-coverage; do
-            printf '#!/usr/bin/env bash\nexec %q %q "$@"\n' "$(command -v node)" "$KANON_ROOT/scripts/$s.mjs" > "$bin/kanon-$s"
+            printf '#!/usr/bin/env bash\nexec %q %q "$@"\n' "$KANON_NODE" "$KANON_ROOT/scripts/$s.mjs" > "$bin/kanon-$s"
             chmod +x "$bin/kanon-$s"
           done
           echo "$bin" >> "$GITHUB_PATH"
@@ -503,10 +504,11 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           KANON: ${{ steps.kanon.outputs.path }}
+          KANON_NODE: ${{ steps.kanon.outputs.node }}
           LABELS: ${{ inputs.labels }}
         run: |
           read -r -a names <<< "$LABELS"
-          node "$KANON/scripts/ensure-labels.mjs" "${names[@]}"
+          "$KANON_NODE" "$KANON/scripts/ensure-labels.mjs" "${names[@]}"
 
       - uses: $/actions/agent-run
         id: agent

@@ -731,6 +731,7 @@ describe('stage 2: Kanon runs the Implementer on itself, through the lanes at it
   it.each([
     ['implement.yml', 'agent-implement', {
       issues: { types: ['labeled'] },
+      issue_comment: { types: ['created'] },
       workflow_dispatch: { inputs: { issue_number: { description: 'Issue number to implement', required: true } } },
     }, { issue_number: '${{ inputs.issue_number }}' }],
     ['implement-revise.yml', 'agent-implement-revise', {

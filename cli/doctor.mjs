@@ -1650,7 +1650,10 @@ export const diagnose = async (deps, opts) => {
     // `ready_for_review`: an upgrade of the pin alone doesn't add it, and the lane never hears of
     // that activity. It blocks nothing: the lane still runs on the caller's other triggers.
     for (const gap of missingEventTypes(c.lane, spec, c.wf.on)) {
-      findItems('caller.event-types-missing', c.file, gap.missing, (xs) => [`starts the lane ${c.lane} on no ${gap.event} event of type ${xs.join(', ')}: its ${gap.event} types don't list ${xs.length > 1 ? 'them' : 'it'}, and the caller kanon init ${kanonRelease()} writes does. This caller's lane never hears of that activity and waits for its other triggers (docs/lanes.md).`, {
+      findItems('caller.event-types-missing', c.file, gap.missing, (xs) => [`starts the lane ${c.lane} on no ${gap.event} event of type ${xs.join(', ')}: ${gap.absent ? `it doesn't take ${gap.event} at all` : `its ${gap.event} types don't list ${xs.length > 1 ? 'them' : 'it'}`}, and the caller kanon init ${kanonRelease()} writes does. This caller's lane never hears of that activity and waits for its other triggers (docs/lanes.md).`, gap.absent ? {
+        text: `Add under the caller's on:, or run kanon init again, which writes the caller with it:`,
+        commands: [`  ${gap.event}:`, `    types: [${xs.join(', ')}]`],
+      } : {
         text: `List ${xs.length > 1 ? 'them' : 'it'} in the ${gap.event} trigger's types:, or run kanon init again, which writes the caller with ${xs.length > 1 ? 'them' : 'it'}:`,
         commands: [`    types: [${[...gap.have, ...xs].join(', ')}]`],
       }]);

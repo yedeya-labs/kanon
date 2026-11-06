@@ -16,6 +16,7 @@ type Trigger = {
   name: string;
   job: string;
   issues?: string[];
+  comments?: string[];
   pr?: string[];
   prTarget?: string[];
   review?: boolean;
@@ -31,7 +32,7 @@ type Trigger = {
 };
 
 /** Every key a `TRIGGERS` entry may carry. A new kind of trigger needs a phrase below first. */
-const KNOWN = new Set(['name', 'job', 'issues', 'pr', 'prTarget', 'review', 'ci', 'openers', 'merged', 'pinMoved', 'schedule', 'dispatch', 'deployRun', 'reask', 'release']);
+const KNOWN = new Set(['name', 'job', 'issues', 'comments', 'pr', 'prTarget', 'review', 'ci', 'openers', 'merged', 'pinMoved', 'schedule', 'dispatch', 'deployRun', 'reask', 'release']);
 
 const VERB: Record<string, string> = { labeled: 'labelled', opened: 'opened', closed: 'closed', milestoned: 'put on a milestone', ready_for_review: 'marked ready for review' };
 const verbs = (events: string[]) => events.map((e) => {
@@ -68,6 +69,8 @@ const phrases = (t: Trigger): string[] => {
   else {
     if (t.pr) out.push(`a pull request ${verbs(t.pr)}`);
     if (t.issues) out.push(`an issue ${verbs(t.issues)}`);
+    // kanon#1649: a reply on an issue, which restarts the Implementer after a scope-first bail.
+    if (t.comments) out.push('an issue commented on');
   }
   // kanon#1190: a release published, a stable release or a pre-release.
   if (t.release) out.push('a release published');
