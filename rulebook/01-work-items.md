@@ -151,7 +151,7 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 | | `qa:needs-info` | `fbca04` | A human owes an answer or parked the issue; parks its project and its implement lane |
 | | `qa:needs-severity` | `fbca04` | Reviewer follow-up filed with no severity; the filer must set one |
 | | `qa:needs-split` | `d4c5f9` | Implementer run hit its cap; the Lead proposes a split; never dispatched |
-| | `qa:human-action` | `c5def5` | Project item a human must do (not a PR); never dispatched, does not park the project |
+| | `qa:human-action` | `c5def5` | Project item a person does: not a PR, or reserved for a person or local session; never dispatched |
 | | `qa:verify` | `0e8a16` | Project verification issue: the Explorer verifies the project's acceptance criteria |
 | Severity | `sev:critical` | `b60205` | Data loss, a security or isolation breach, or an outage |
 | | `sev:high` | `d93f0b` | Core flow broken, no workaround |

@@ -685,10 +685,10 @@ describe('step 4b: Kanon reviews its own pull requests, through the lane at its 
     expect(job.uses).toMatch(releasedUses('.github/workflows/agent-review.yml'));
   });
 
-  it('is started by CI finishing, a review label or a dispatch, and CI is the workflow it names', () => {
+  it('is started by CI finishing, a review label, a draft marked ready or a dispatch, and CI is the workflow it names', () => {
     expect(Object.keys(wf.on).sort()).toEqual(['pull_request_target', 'workflow_dispatch', 'workflow_run']);
     expect(wf.on.workflow_run).toEqual({ workflows: [load('ci.yml').wf.name], types: ['completed'] });
-    expect(wf.on.pull_request_target).toEqual({ types: ['opened', 'labeled'] });
+    expect(wf.on.pull_request_target).toEqual({ types: ['opened', 'labeled', 'ready_for_review'] });
   });
 
   it('passes only the dispatch input, and maps the three secrets by name, never inheriting', () => {

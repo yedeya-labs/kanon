@@ -14,6 +14,7 @@
 
 import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
+import { parseYaml } from './workflow-yaml.mjs';
 
 /**
  * @typedef {{ type: string, description: string }} LaneInput
@@ -129,7 +130,7 @@ export const TRIGGERS = {
   'agent-implement-revise': { name: 'Implement (Implementer) — revise', job: 'revise', review: true, pr: ['labeled'], dispatch: { pr_number: true, reset: false } },
   'agent-lead-revise': { name: 'Lead (Lead) — revise', job: 'revise', review: true, pr: ['labeled'], dispatch: { pr_number: true, reset: false } },
   'agent-merge-reconcile': { name: 'Merge Reconcile (Reviewer)', job: 'reconcile', pr: ['closed'], review: true, dispatch: { pr_number: true } },
-  'agent-review': { name: 'Review (Reviewer)', job: 'review', ci: 'any', prTarget: ['opened', 'labeled'], dispatch: { pr_number: true } },
+  'agent-review': { name: 'Review (Reviewer)', job: 'review', ci: 'any', prTarget: ['opened', 'labeled', 'ready_for_review'], dispatch: { pr_number: true } },
   'agent-verify-acs': { name: 'Verify acceptance criteria (Explorer)', job: 'verify', issues: ['labeled'], dispatch: { project: false, ref: false } },
   'agent-lead': { name: 'Lead (Lead) — brief', job: 'brief', dispatch: { mandate: true, context: true } },
   'agent-lead-split': { name: 'Lead (Lead) — split', job: 'split', issues: ['labeled'], dispatch: { issue: true } },
@@ -268,6 +269,45 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   const secrets = [...mapped.filter((s) => /_APP_(ID|PRIVATE_KEY)$/.test(s)), ...mapped.filter((s) => !/_APP_(ID|PRIVATE_KEY)$/.test(s))];
   for (const s of secrets) out.push(`      ${s}: \${{ secrets.${s} }}`);
   return `${out.join('\n')}\n`;
+};
+
+/** An event's `types:`, as a list, or `null` when it gives none. @param {unknown} v @returns {string[] | null} */
+const typesOf = (v) => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.map(String) : null);
+/** @param {unknown} v @returns {v is Record<string, any>} */
+const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * The activity types a caller's events lack that the caller `kanon init` writes for its lane gives
+ * them (#1652), such as the review caller's `ready_for_review` on `pull_request_target`. A caller
+ * written before the template gained a type keeps its old list, because an upgrade only moves the
+ * pin, and the lane then never hears of that activity. READ FROM THE CALLER `callerFile` WRITES,
+ * never listed here, so a type the template gains later is checked too; `doctor` and `lane-check`
+ * report what this returns. Only an event the caller subscribes to with a `types:` list is compared:
+ * an event it leaves out, or takes with GitHub's default types, is the caller's own choice. None when
+ * the lane has no caller template, or the template can't be written for it.
+ * @param {string} lane @param {Lane} spec @param {unknown} on the caller's `on:`
+ * @returns {Array<{ event: string, have: string[], missing: string[] }>}
+ */
+export const missingEventTypes = (lane, spec, on) => {
+  if (!TRIGGERS[lane] || !isMap(on)) return [];
+  /** @type {unknown} */
+  let written;
+  try {
+    written = parseYaml(callerFile(lane, spec, { release: 'v0.0.0', ciName: 'CI', defaultBranch: 'main' }));
+  } catch {
+    return [];
+  }
+  if (!isMap(written) || !isMap(written.on)) return [];
+  /** @type {Array<{ event: string, have: string[], missing: string[] }>} */
+  const gaps = [];
+  for (const [event, trigger] of Object.entries(written.on)) {
+    const want = isMap(trigger) ? typesOf(trigger.types) : null;
+    const have = isMap(on[event]) ? typesOf(on[event].types) : null;
+    if (!want || !have) continue;
+    const missing = want.filter((x) => !have.includes(x));
+    if (missing.length) gaps.push({ event, have, missing });
+  }
+  return gaps;
 };
 
 /** Where `init` writes the telemetry collector's caller: Kanon's own caller's name (docs/telemetry.md). */

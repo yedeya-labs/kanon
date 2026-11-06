@@ -268,6 +268,12 @@ describe('who the actor is', () => {
     expect(triggeringActor('pull_request_target', { action: 'opened', sender: { login: 'opener' } }, env))
       .toEqual({ actor: { login: 'opener', source: 'user who opened it' } });
   });
+  it('a pull request marked ready for review (pull_request_target): whoever marked it, checked like a label; pull_request\'s is refused (kanon#1652)', () => {
+    expect(triggeringActor('pull_request_target', { action: 'ready_for_review', sender: { login: 'author' } }, env))
+      .toEqual({ actor: { login: 'author', source: 'user who marked it ready for review' } });
+    expect(triggeringActor('pull_request_target', { action: 'ready_for_review' }, env)).toHaveProperty('refuse');
+    expect(triggeringActor('pull_request', { action: 'ready_for_review', sender: { login: 'author' } }, env)).toHaveProperty('refuse');
+  });
   it('a milestoned pull request (pull_request_target): whoever set the milestone, checked like a label; an issue\'s is refused (kanon#1242)', () => {
     expect(triggeringActor('pull_request_target', { action: 'milestoned', sender: { login: 'triager' } }, env))
       .toEqual({ actor: { login: 'triager', source: 'user who set the milestone' } });
