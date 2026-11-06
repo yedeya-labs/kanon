@@ -16,6 +16,10 @@ laneCheck(() => {
       red((t) => t.edit(IMPL, (d) => { delete d.permissions; }), 'grants no explicit permissions'));
     it('refuses a narrower grant', () =>
       red((t) => t.edit(IMPL, (d) => { (d as Caller).permissions = { contents: 'read', 'pull-requests': 'read' }; }), 'grants issues: none; the Kanon lane agent-implement-revise needs issues: read'));
+    // kanon#1655: the triage lane's decision gate reads a dispatched issue's labels, so a triage
+    // caller from before the release, which grants contents: read alone, fails.
+    it("refuses a triage caller from before the decision gate's labels read, granting contents: read alone", () =>
+      red((t) => t.edit(TRIAGE, (d) => { (d as Caller).permissions = { contents: 'read' }; }), 'grants issues: none; the Kanon lane agent-triage needs issues: read'));
     it('refuses read where the lane needs write', () =>
       red((t) => t.edit('.github/workflows/agent-lead-revise.yml', (d) => { (d as Caller).permissions!['pull-requests'] = 'read'; }), 'needs pull-requests: write'));
     // A job-level grant inside a called workflow is held to the caller's ceiling too, so the

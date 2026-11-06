@@ -104,6 +104,11 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'qa:needs-triage'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # `issues: read` for the decision gate's read of a dispatched issue's labels (kanon#1655): a
+    # dispatch carries none, and `contents: read` can't read a private repository's issues.
+    permissions:
+      contents: read
+      issues: read
     outputs:
       # A member's event on an issue that awaits a person's decision is refused too (kanon#1594).
       member: ${{ steps.gate.outputs.member == 'true' && steps.decision.outputs.admit == 'true' && 'true' || 'false' }}
@@ -122,8 +127,8 @@ jobs:
 
       # THE DECISION GATE (kanon#1594): an issue labelled `decision:needed` waits on a person's
       # decision, which an agent mustn't make in code (K-WORK-24). Refused here, before any
-      # token is minted, with a notice and a summary line: this lane's caller grants no
-      # `issues: write`, so no comment. Not a dispatch attempt.
+      # token is minted, with a notice and a summary line: this lane's caller grants
+      # `issues: read`, to read the labels, and no `issues: write`, so no comment. Not a dispatch attempt.
       - name: Does the issue wait on a decision?
         id: decision
         if: steps.gate.outputs.member == 'true'

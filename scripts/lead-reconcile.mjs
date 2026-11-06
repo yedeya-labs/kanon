@@ -3198,8 +3198,7 @@ export function isParkedOnHuman({
  * `decision-held` is here too (kanon#1594): the issue waits on a person's decision, which
  * the implement and triage lanes refuse, so no run will ever free the slot.
  *
- * `has-pr` is deliberately NOT here — it outranks every state but `decision-held` in
- * `classify`'s chain and means work is happening — and neither are `answered` or `never-ran`, which are
+ * `has-pr` is deliberately NOT here — it means work is happening — and neither are `answered` or `never-ran`, which are
  * the sweep's two ACTIONABLE states: something is about to run.
  */
 // `decision-held` (kanon#1594): the issue waits on a person's decision, and both lanes refuse it.

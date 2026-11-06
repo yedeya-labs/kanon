@@ -64,7 +64,9 @@ describe('the lanes run it', () => {
     expect(filter('agent-implement.yml').permissions).toEqual({ contents: 'read', issues: 'write' });
     const req = JSON.parse(readFileSync(join(process.cwd(), 'requirements.json'), 'utf8'));
     expect(req.lanes['agent-implement'].grant.issues).toBe('write');
-    // The triage caller grants no issues: write, so its filter asks for none.
-    expect(filter('agent-triage.yml').permissions).toBeUndefined();
+    // The triage caller grants issues: read, for the labels a dispatch doesn't carry (kanon#1655),
+    // and no issues: write, so its filter reads them and never comments.
+    expect(filter('agent-triage.yml').permissions).toEqual({ contents: 'read', issues: 'read' });
+    expect(req.lanes['agent-triage'].grant).toEqual({ contents: 'read', issues: 'read' });
   });
 });
