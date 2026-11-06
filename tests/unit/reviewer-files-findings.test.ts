@@ -16,10 +16,13 @@ const REVIEW = flat('.github/workflows/review-agent-job.yml');
 const RECONCILE = flat('.github/workflows/merge-reconcile-agent-job.yml');
 
 describe('the Reviewer files what it names (kanon#1595)', () => {
-  it('files a named defect or gap it does not fold in, at sev:low with its reasoning when unlikely', () => {
+  it('files a named defect or gap it does not fold in, at the severity its reachable impact fits', () => {
     expect(REVIEW).toContain('a defect or gap you name in the review and do not fold into this PR is FILED as a `follow-up` issue');
-    expect(REVIEW).toContain('one you judge unlikely is `sev:low`, with that reasoning in the body');
-    expect(REVIEW).toContain('never a reason to file nothing');
+    expect(REVIEW).toContain('one unreachable in practice, by-hand only or of no current impact is `sev:low`, with that reasoning in the body');
+    // Rarity never lowers a reachable impact's level (K-WORK-9): only reach does.
+    expect(REVIEW).toContain('one whose reachable impact fits a higher level keeps that level, however rare you judge it (K-WORK-9)');
+    expect(REVIEW).not.toMatch(/one you judge unlikely is `sev:low`/);
+    expect(REVIEW).toContain('never whether to file it');
   });
 
   it('makes no exception of its own, and none the severity rubric contradicts', () => {
@@ -39,9 +42,15 @@ describe('the Reviewer files what it names (kanon#1595)', () => {
   it("says the same in Kanon's playbook and the baseline adopters read", () => {
     const own = read('docs/qa/reviewer-playbook.md');
     expect(own).toContain("**A defect or gap you name and don't fold in is filed**");
-    expect(own).toMatch(/one you judge unreachable in practice, by-hand only or of no current impact is `sev:low`, with that reasoning in the body/);
+    expect(own).toMatch(/one you judge unreachable in practice, by-hand only or of no current impact is `sev:low`, with that reasoning in the body, and one whose reachable impact fits a higher level keeps that level/);
+    // A cleanup note on an approval stays accepted unapplied (#1136), and "Capturing follow-ups"
+    // says so, so merge reconcile, which ignores only what that section keeps, files nothing for it.
+    expect(own).toMatch(/if the pull request merges unapplied, that is accepted/);
+    expect(own).toContain('a small code cleanup left as a note on an approval: item 11 accepts it unapplied');
     expect(own).not.toMatch(/one you judge not worth doing, say so in the review and file nothing/);
     const baseline = read('rulebook/templates/playbooks/reviewer-playbook.md');
-    expect(baseline).toContain("A defect or gap you name in the review and don't fold in is trackable work: file it, at `sev:low` with your reasoning in the body when you judge it unlikely");
+    expect(baseline).toContain("A defect or gap you name in the review and don't fold in is trackable work: file it, rather than declining it in the review, at the severity its reachable impact fits (`K-WORK-9`)");
+    expect(baseline).not.toMatch(/when you judge it unlikely/);
+    expect(read('docs/lanes.md')).toContain('at the severity its reachable impact fits (`K-WORK-9`)');
   });
 });
