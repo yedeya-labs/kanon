@@ -34,7 +34,7 @@ Every finding cites the rule it rests on.
 
 ## A pull request no lane opened, on a brief item
 
-A pull request that closes a brief item labelled `qa:human-action`, one reserved for a person or a local session rather than the Implementer, opens with a `## Plan` section: the root cause, the approach, and each bail-list item it touches and why (`K-AGENT-13`). The bail list binds whoever implements the item. Read the plan before the code. With no `## Plan` section, request changes asking for it and review nothing else yet. When the plan touches the bail list, check that it names a person who approved it; if it names none, request changes rather than approving code built on an unapproved plan ([#1566](https://github.com/yedeya-labs/kanon/issues/1566)).
+A pull request that closes a brief item labelled `qa:human-action`, one reserved for a person or a local session rather than the Implementer, opens with a `## Plan` section, the plan `K-AGENT-13` asks for. The bail list binds whoever implements the item. Read the plan before the code. With no `## Plan` section, request changes asking for it and review nothing else yet. When the plan touches the bail list, check that it names a person who approved it; if it names none, request changes rather than approving code built on an unapproved plan ([#1566](https://github.com/yedeya-labs/kanon/issues/1566)).
 
 ## Across rounds
 

@@ -42,6 +42,17 @@ describe('the bail list binds whoever implements (kanon#1566)', () => {
     expect(read('docs/projects/_template.md')).toBe(t);
   });
 
+  // The plan's contents live in K-AGENT-13 alone; every other place cites it (K-PRIN-2).
+  it("cites K-AGENT-13 for the plan's contents rather than copying them, and K-LAYOUT-8's bail list binds whoever implements", () => {
+    for (const p of ['rulebook/templates/brief.md', 'docs/projects/_template.md', 'docs/qa/reviewer-playbook.md', 'rulebook/templates/playbooks/reviewer-playbook.md', 'docs/lanes.md']) {
+      const text = read(p);
+      expect(text, p).toContain('the plan `K-AGENT-13` asks for');
+      expect(text, p).not.toMatch(/bail-list items? it touches/);
+    }
+    expect(read('rulebook/11-repository-layout.md')).toContain('one bullet per kind of change whoever implements it stops on and hands off with a plan (`K-AGENT-13`)');
+    expect(read('rulebook/CHANGES.md')).toMatch(/## `K-LAYOUT-8`\n[\s\S]*?- \*\*2026-11-06\.\*\* The bail list binds whoever implements a change/);
+  });
+
   it('has the Reviewer read the plan before the code, in Kanon\'s playbook and the baseline', () => {
     for (const p of ['docs/qa/reviewer-playbook.md', 'rulebook/templates/playbooks/reviewer-playbook.md']) {
       const s = section(read(p), '## A pull request no lane opened, on a brief item');

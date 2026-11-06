@@ -326,6 +326,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-LAYOUT-8`
 
 - **2026-10-12.** The Owner decided that `## Pipeline code` may name a single file, which covers exactly that file, as well as a directory. [#728](https://github.com/yedeya-labs/kanon/issues/728)
+- **2026-11-06.** The bail list binds whoever implements a change, not only the Implementer lane, as `K-AGENT-13` now says (the Owner's decision on #1566). [#1566](https://github.com/yedeya-labs/kanon/issues/1566)
 
 ## `K-LAYOUT-10`
 

@@ -72,7 +72,7 @@ A measurement item's deliverable is the number and the command that produced it,
 
 - **The milestone is required**, chosen by the routing rules (`K-WORK-4`, `K-WORK-5`).
 - **Labels** are applied at creation, and added (never replaced) on adoption. Separate them with `·` and keep prose off the label run.
-- An item whose deliverable is **not a pull request** carries `qa:human-action`. It is never dispatched, does not park the project's other items, and is closed by a human with its evidence recorded on the issue (`K-PROJ-9`). So does an item **reserved for a person or a local session** rather than the Implementer: when it opens a pull request, that pull request's first section is `## Plan`, the plan `K-AGENT-13` asks for (root cause, approach, and which bail-list items it touches and why), and the Reviewer reads the plan before the code.
+- An item whose deliverable is **not a pull request** carries `qa:human-action`. It is never dispatched, does not park the project's other items, and is closed by a human with its evidence recorded on the issue (`K-PROJ-9`). So does an item **reserved for a person or a local session** rather than the Implementer: when it opens a pull request, that pull request's first section is `## Plan`, the plan `K-AGENT-13` asks for, and the Reviewer reads the plan before the code.
 - **`Closes #<n>`** adopts an existing issue instead of filing a new one, and is read **only** from the metadata line. Written anywhere else it is not adopted, and a duplicate is filed.
 - **`Depends on:`** cites items by letter. Only the leading run of `Issue X` references counts.
 
