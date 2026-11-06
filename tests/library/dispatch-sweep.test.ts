@@ -67,6 +67,24 @@ describe('login normalisation', () => {
   });
 });
 
+describe('an issue that waits on a decision (kanon#1594)', () => {
+  // Both lanes refuse `decision:needed` at their filter, and post the refusal on the default
+  // token, so the conversation alone reads `never-ran`. The sweep must neither re-dispatch it
+  // nor, at the cap, stop it as `exhausted` into `qa:needs-info`.
+  const [implement, triage] = LANES;
+  const held = { ...issue, labels: [{ name: 'decision:needed' }, { name: 'agent:implement' }] };
+  const twoSweeps = [sweepComment(300), sweepComment(200)];
+
+  it.each([implement, triage])('is decision-held with no action on the %s lane, silent or at the cap', (lane) => {
+    expect(classify(held, [], false, { now: NOW, lane })).toMatchObject({ state: 'decision-held', act: null });
+    expect(classify(held, twoSweeps, false, { now: NOW, lane })).toMatchObject({ state: 'decision-held', act: null });
+  });
+
+  it('runs again once the label is gone', () => {
+    expect(classify({ ...held, labels: [{ name: 'agent:implement' }] }, [], false, { now: NOW, lane: implement })).toMatchObject({ state: 'never-ran', act: 'dispatch' });
+  });
+});
+
 describe('classify', () => {
   it('is never-ran when the agent has not spoken', () => {
     expect(verdict([])).toMatchObject({ state: 'never-ran', act: 'dispatch' });

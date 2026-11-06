@@ -3199,7 +3199,8 @@ export function isParkedOnHuman({
  * means work is happening — and neither are `answered` or `never-ran`, which are
  * the sweep's two ACTIONABLE states: something is about to run.
  */
-const PARKED_LANE_STATES = new Set(['awaiting-human', 'human-held']);
+// `decision-held` (kanon#1594): the issue waits on a person's decision, and both lanes refuse it.
+const PARKED_LANE_STATES = new Set(['awaiting-human', 'human-held', 'decision-held']);
 
 /**
  * An issue's PR read and whether it is parked on a human, read as `readWorld` reads them
