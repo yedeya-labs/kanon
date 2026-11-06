@@ -51,7 +51,36 @@ export const byId = (a, b) => {
   return pa === pb ? Number(na) - Number(nb) : pa.localeCompare(pb);
 };
 
-export const readLockedSet = () => JSON.parse(readFileSync(LOCKED_SET, 'utf8')).locked;
+/** A locked set that can't be read: missing or malformed, said plainly, with what to do (kanon#1644). */
+export class LockedSetError extends Error {}
+
+/** The command that writes the locked set from the tree, as a lane's PATH names it. */
+const WRITE = '`kanon-spec-coverage --write-locked` (`node "$KANON/scripts/spec-coverage.mjs" --write-locked` from a step)';
+
+/** THE BASELINE, READ STRICTLY (kanon#1644). A missing file is NOT an empty set: the floor is
+ *  a reviewed record, and if its absence read as `[]`, deleting it beside a test title would hide
+ *  the lost citation the ratchet exists to catch. So a missing or malformed file stops the caller
+ *  with a `LockedSetError` that names the file and how to make it; `kanon init` writes the empty
+ *  floor beside the Lead's brief template, and `--write-locked` never reads it. */
+export const readLockedSet = (path = LOCKED_SET) => {
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (e) {
+    if (e?.code === 'ENOENT') throw new LockedSetError(`${path} is missing. Create it with ${WRITE} and commit it: the file records which invariants are locked, the baseline the ratchet compares against.`);
+    throw e;
+  }
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    doc = undefined;
+  }
+  if (!doc || typeof doc !== 'object' || !Array.isArray(doc.locked) || !doc.locked.every((x) => typeof x === 'string')) {
+    throw new LockedSetError(`${path} is not the locked set, a JSON object whose one key, "locked", lists invariant ids (K-LAYOUT-4). Restore it from git, or write it again with ${WRITE} and review the diff before you commit it.`);
+  }
+  return doc.locked;
+};
 
 export const serialiseLockedSet = (ids) =>
   JSON.stringify({ locked: [...ids].sort(byId) }, null, 2) + '\n';
