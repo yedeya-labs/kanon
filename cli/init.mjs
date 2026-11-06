@@ -3531,19 +3531,23 @@ const run = async (deps, opts, req, rep) => {
   // THE FILES AN ANSWER TURNED OFF (#1607 point 11). One exactly as init writes it is init's, and
   // goes; so does one never committed with --replace-uncommitted, the person's word that nobody
   // edited it (#1551). Any other is the project's, never removed on a guess (#1586): a step.
+  // The removals are `removedFiles`', the one test the summary counts by too (#1638), so the
+  // *Files* line can't say a number this loop doesn't remove.
+  const removing = removedFiles({ a, req, read, files, replaces });
+  for (const off of removing) {
+    const have = /** @type {string} */ (read(off.path));
+    if (!dry) deps.removeFile(join(root, off.path));
+    wrote = true;
+    const why = off.ours(have) ? 'exactly as init writes it' : 'never committed (--replace-uncommitted)';
+    change('file', off.path, `${dry ? 'Would remove' : 'Removed'} ${off.path}, ${why}, which ${off.answer} turns off`);
+    const diff = have.replace(/\n$/, '').split('\n').map((l) => `- ${l}`);
+    rep.files.push({ path: off.path, status: 'removed', content: null, diff });
+    out(`${off.path}: ${why}, and ${off.answer} turns it off: ${dry ? 'would remove it' : 'removed it'}.`);
+  }
+  // Every other turned-off file the checkout has, and init doesn't plan, is the project's: a step.
+  const removed = new Set(removing.map((x) => x.path));
   for (const off of turnedOffFiles({ a, req })) {
-    const have = read(off.path);
-    if (have === null || files.has(off.path)) continue;
-    if (off.ours(have) || replaces(off.path)) {
-      if (!dry) deps.removeFile(join(root, off.path));
-      wrote = true;
-      const why = off.ours(have) ? 'exactly as init writes it' : 'never committed (--replace-uncommitted)';
-      change('file', off.path, `${dry ? 'Would remove' : 'Removed'} ${off.path}, ${why}, which ${off.answer} turns off`);
-      const diff = have.replace(/\n$/, '').split('\n').map((l) => `- ${l}`);
-      rep.files.push({ path: off.path, status: 'removed', content: null, diff });
-      out(`${off.path}: ${why}, and ${off.answer} turns it off: ${dry ? 'would remove it' : 'removed it'}.`);
-      continue;
-    }
+    if (removed.has(off.path) || read(off.path) === null || files.has(off.path)) continue;
     const message = `${off.path} is the project's, differing from what init writes, and ${off.answer} turns it off, so init left it: committed, it still says what the earlier answer did.`;
     const text = untracked(off.path)
       ? `Delete it, or keep it and give the answer that writes it. It was never committed: if an earlier kanon init wrote it and nobody has edited it, kanon init --replace-uncommitted removes it.`

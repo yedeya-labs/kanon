@@ -68,7 +68,17 @@ describe('kanon init and a file an answer turns off (#1607 point 11)', () => {
     const kept = parse(await run(dir, fakeGitHub(), json(['--test-database', 'none'])));
     expect(existsSync(join(dir, DB))).toBe(true);
     expect(stale(kept)[0]!.fix).toMatchObject({ commands: [`rm ${DB}`], text: expect.stringContaining('--replace-uncommitted') });
+    expect(kept.summary.find((l) => l.answer === 'Files')?.value).not.toContain('removed');
+    // #1638: the dry run's summary counts the removal the flag makes, as the real run then makes it.
+    const dry = parse(await run(dir, fakeGitHub(), json(['--test-database', 'none', '--replace-uncommitted', '--dry-run'])));
+    expect(dry.summary.find((l) => l.answer === 'Files')?.value).toMatch(/, 1 removed \(an answer turns it off\)$/);
+    expect(fileOf(dry, DB)?.status).toBe('removed');
+    // A file it removes, even in a dry run that leaves it on disk, is no stale step too.
+    expect(stale(dry)).toEqual([]);
     const d = parse(await run(dir, fakeGitHub(), json(['--test-database', 'none', '--replace-uncommitted'])));
+    expect(d.summary.find((l) => l.answer === 'Files')?.value).toMatch(/, 1 removed \(an answer turns it off\)$/);
+    // The count is the loop's: as many as `.files[]` says it removed.
+    expect(d.files.filter((f) => f.status === 'removed')).toHaveLength(1);
     expect(fileOf(d, DB)?.status).toBe('removed');
     expect(existsSync(join(dir, DB))).toBe(false);
   });
