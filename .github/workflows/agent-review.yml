@@ -517,6 +517,9 @@ jobs:
           EVENT_PR: ${{ github.event.pull_request.number }}
           WF_EVENT: ${{ github.event.workflow_run.event }}
           WF_SHA: ${{ github.event.workflow_run.head_sha }}
+          # The PRs GitHub put in CI's own payload (#1567): the fallback when the commit's
+          # PR lookup answers nothing, as it can for a head just force-pushed.
+          WF_PRS: ${{ toJSON(github.event.workflow_run.pull_requests) }}
           PR_SHA: ${{ github.event.pull_request.head.sha }}
           # PROVENANCE FROM THE PAYLOAD, NOT FROM AN API READ (RA-1133). Both are
           # `owner/name` on the repository the head commit lives in. They arrive with
@@ -637,6 +640,15 @@ jobs:
                       --jq '.[] | select(.state == "open") | .number' 2>/dev/null | head -1 || true)" ;;
             *) decide true "unrecognised event $EVENT — review to be safe" ;;
           esac
+          # A HEAD JUST FORCE-PUSHED CAN BELONG TO NO PR YET (#1567). GitHub's commit-to-PR
+          # lookup can answer nothing for a commit it hasn't associated yet, and that skipped
+          # CI's one completion on the final head, the review's only trigger, leaving the PR
+          # unreviewed with no signal. CI's own payload lists the PRs whose head it ran on, so
+          # an empty lookup falls back to the one of those whose head is this commit.
+          if [ "$EVENT" = "workflow_run" ] && [ -z "$PR" ] && [ -n "${WF_PRS:-}" ]; then
+            PR="$(printf '%s' "$WF_PRS" | jq -r --arg sha "$WF_SHA" '[.[]? | select(.head.sha == $sha) | .number] | first // empty' 2>/dev/null || true)"
+            evidence PR_FROM_PAYLOAD "$PR"
+          fi
           evidence PR "$PR"
           case "$PR" in ''|*[!0-9]*) decide false "no open PR resolved for this event" ;; esac
 
@@ -672,7 +684,7 @@ jobs:
               && decide false "PR #$PR's head is on \`$HEAD_REPO\`, not \`$REPO\` — refusing to run a fork's code in a job that holds the pipeline's App key (RA-1117, RA-1133)"
           fi
 
-          META="$(gh pr view "$PR" --repo "$REPO" --json headRefOid,labels,isCrossRepository,headRepositoryOwner 2>/dev/null || true)"
+          META="$(gh pr view "$PR" --repo "$REPO" --json headRefOid,labels,isCrossRepository,headRepositoryOwner,isDraft 2>/dev/null || true)"
           # PROBE FOR THE FIELD, not for the TYPE. `gh` prints its error body to stdout
           # as JSON, so `{"message":"Server Error","status":"500"}` IS an object and
           # `type == "object"` passes — the fail-safe never fires, `.headRefOid` reads
@@ -725,6 +737,14 @@ jobs:
           fi
 
           [ "$IS_DISPATCH" = "true" ] && decide true "workflow_dispatch"
+
+          # A DRAFT IS NOT READY (#1565). A draft PR's checks and diff carry work that isn't
+          # finished, such as a base PR's commits, so a review of it requests changes for
+          # reasons only a draft has, and spends a full run each time. The reconciler's
+          # parked-PR recovery already counts a draft as not ready; this does too. A person
+          # who marks it ready re-applies `review:please`, or the reconciler re-asks.
+          printf '%s' "$META" | jq -e '.isDraft == true' >/dev/null 2>&1 \
+            && decide false "PR #$PR is a draft — a draft is never reviewed: mark it ready for review, then re-apply review:please (#1565)"
 
           # `opened` is subscribed to only so `notify-unlabeled` can run. CI starts on
           # the same event, so reviewing here would race it — exactly what this
