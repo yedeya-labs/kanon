@@ -83,6 +83,6 @@ describe('a red default branch (#1568)', () => {
     expect(job).toMatch(/Still\s+never APPROVE over red/);
     // The verdict when the base's red check is the only block: REQUEST_CHANGES, not an open item.
     expect(job).toMatch(/When the base's\s+red check is your only block, the event is REQUEST_CHANGES/);
-    expect(job).toMatch(/that block is not an open item, so it doesn't count in `qa:open-items`/);
+    expect(job).toMatch(/that block is not an open item, so it doesn't count in `<!-- qa:open-items N -->`/);
   });
 });

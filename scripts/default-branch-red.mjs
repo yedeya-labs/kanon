@@ -137,7 +137,7 @@ export function nextStep({ run, job, open, branch }) {
   return { act: 'none', why: `the latest push run of ${CI_WORKFLOW} on ${branch} is \`${run.conclusion}\`${open ? '' : ', and no issue is open'}` };
 }
 
-/* c8 ignore start — the CLI: `gh` calls around `decide`. */
+/* c8 ignore start — the CLI: `gh` calls around `nextStep`. */
 if (isCliEntry(import.meta.url)) {
   const REPO = process.env.GITHUB_REPOSITORY;
   if (!REPO) {

@@ -779,7 +779,7 @@ jobs:
             red check is your only block, the event is REQUEST_CHANGES all the same (you
             never APPROVE over red, and never post COMMENT): the body says the base
             branch's red run is the only block and that nothing is asked of the author,
-            and that block is not an open item, so it doesn't count in `qa:open-items`:
+            and that block is not an open item, so it doesn't count in `<!-- qa:open-items N -->`:
             the default-branch issue already tracks it. Still NEVER poll, wait for, or
             re-run a check — your run is finite and a backgrounded wait means your
             verdict is never posted. If a check somehow IS still pending, that is an
