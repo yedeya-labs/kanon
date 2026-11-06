@@ -189,7 +189,8 @@ describe('the sweep is the project\'s hook, and its summary is Kanon\'s format (
   const check = (summary: unknown, env: Record<string, string> = {}) => {
     const cwd = mkdtempSync(join(tmpdir(), 'explore-summary-'));
     if (summary !== undefined) writeFileSync(join(cwd, 'qa-explore-summary.json'), typeof summary === 'string' ? summary : JSON.stringify(summary));
-    return runWorkflowStep(byId('summary'), { cwd, env: { KANON: ROOT, COMMIT: SHA, TIER: '', ...env } });
+    // Kanon's Node, as the kanon step's output gives the step (#1667).
+    return runWorkflowStep(byId('summary'), { cwd, env: { KANON: ROOT, KANON_NODE: process.execPath, COMMIT: SHA, TIER: '', ...env } });
   };
   const good = {
     timestamp: '2026-10-04T06:21:42.512Z', trigger: 'schedule', commit: SHA, tier: 'all',
