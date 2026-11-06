@@ -41,3 +41,14 @@ describe('kanon init and the locked set (kanon#1644)', () => {
     expect(existsSync(join(dir, FLOOR))).toBe(false);
   });
 });
+
+// #1645's review: the docs that list what init writes name the locked set, and doctor's sentence
+// beside it is about the brief template, which is what doctor reads.
+describe('the docs on the locked set init writes (#1644)', () => {
+  it('lists it in docs/install.md, and keeps docs/init.md\'s doctor sentence about the template', () => {
+    expect(read('.', 'docs/install.md')).toContain('and the empty locked set, `docs/qa/specs/_locked-floor.json`, unless you have one (`K-LAYOUT-4`)');
+    const init = read('.', 'docs/init.md');
+    expect(init).toContain('Without a brief template, [`kanon doctor`](doctor.md) reports `lead.template-missing`');
+    expect(init).not.toMatch(/locked set the repository has is the project's, `kept` too\. Without one, `kanon-spec-coverage` exits 1[^.]*\. Without one, \[`kanon doctor`\]/);
+  });
+});
