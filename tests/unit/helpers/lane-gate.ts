@@ -24,12 +24,13 @@ export const LANES = readdirSync(WORKFLOWS)
   .sort();
 
 /** The triggers each lane's caller holds (docs/lanes.md), as the event the gate sees. */
-export type Trigger = 'review' | 'issue-label' | 'issue-opened' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-ready' | 'pr-target-merged' | 'schedule' | 'deploy-failed' | 'release-published';
+export type Trigger = 'review' | 'issue-label' | 'issue-opened' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-ready' | 'pr-target-milestoned' | 'pr-target-merged' | 'schedule' | 'deploy-failed' | 'lane-finished' | 'release-published';
 export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-implement-revise.yml': ['review', 'pr-label', 'dispatch'],
   'agent-implement.yml': ['issue-label', 'dispatch'],
   'agent-lead-revise.yml': ['review', 'pr-label', 'dispatch'],
-  'agent-lead-reconcile.yml': ['dispatch', 'merged', 'issue-closed', 'schedule'],
+  // kanon#813: a re-ask, the completion of another lane's run (the caller's `workflow_run`).
+  'agent-lead-reconcile.yml': ['dispatch', 'merged', 'issue-closed', 'schedule', 'lane-finished'],
   'agent-lead-split.yml': ['issue-label', 'dispatch'],
   'agent-lead.yml': ['dispatch'],
   'agent-merge-reconcile.yml': ['merged', 'review', 'dispatch'],
@@ -43,9 +44,9 @@ export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-project-digest.yml': ['schedule', 'dispatch'],
   'agent-weekly-digest.yml': ['schedule', 'dispatch'],
   'agent-explore.yml': ['schedule', 'dispatch'],
-  'agent-dispatch-sweep.yml': ['schedule', 'dispatch'],
-  // kanon#768: an opened issue, judged by who opened it.
-  'agent-issue-backstop.yml': ['issue-opened', 'dispatch'],
+  'agent-dispatch-sweep.yml': ['schedule', 'dispatch', 'lane-finished'],
+  // kanon#768: an opened issue, judged by who opened it; kanon#1242: a milestoned pull request.
+  'agent-issue-backstop.yml': ['issue-opened', 'pr-target-milestoned', 'dispatch'],
   'agent-code-audit.yml': ['schedule', 'dispatch'],
   'agent-explore-telemetry.yml': ['schedule', 'dispatch'],
   // The runtime-version trigger (kanon#423): a merged pull request, judged by who merged it.
@@ -290,6 +291,9 @@ export const eventFor = (trigger: Trigger, actor: Actor): { name: string; payloa
       return { name: 'workflow_dispatch', payload: {}, env: { GITHUB_ACTOR: 'someone-else', GITHUB_TRIGGERING_ACTOR: actor.login } };
     case 'ci-finished':
       return { name: 'workflow_run', payload: { action: 'completed', workflow_run: { head_sha: CI_SHA, triggering_actor: user, actor: { login: 'someone-else' } }, sender: { login: 'someone-else' } }, env: {} };
+    // A lane's run finishing, which re-asks the reconciler or the sweep (kanon#813): judged by who started it.
+    case 'lane-finished':
+      return { name: 'workflow_run', payload: { action: 'completed', workflow_run: { conclusion: 'success', head_sha: CI_SHA, triggering_actor: user, actor: { login: 'someone-else' } }, sender: { login: 'someone-else' } }, env: {} };
     case 'deploy-failed':
       return { name: 'workflow_run', payload: { action: 'completed', workflow_run: { conclusion: 'failure', head_sha: CI_SHA, triggering_actor: user, actor: { login: 'someone-else' } }, sender: { login: 'someone-else' } }, env: {} };
     case 'pr-target-label':
@@ -298,6 +302,8 @@ export const eventFor = (trigger: Trigger, actor: Actor): { name: string; payloa
       return { name: 'pull_request_target', payload: { action: 'opened', sender: user }, env: {} };
     case 'pr-target-ready':
       return { name: 'pull_request_target', payload: { action: 'ready_for_review', sender: user }, env: {} };
+    case 'pr-target-milestoned':
+      return { name: 'pull_request_target', payload: { action: 'milestoned', sender: user }, env: {} };
     case 'pr-target-merged':
       return { name: 'pull_request_target', payload: { action: 'closed', pull_request: { merged: true, merged_by: user }, sender: { login: 'someone-else' } }, env: {} };
     case 'schedule':
