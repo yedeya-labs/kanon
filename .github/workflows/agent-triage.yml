@@ -91,8 +91,9 @@ concurrency:
 # granted by every caller that switches that step on.
 #
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
-# ceiling and must grant at least this, or the run fails to start; `lane-check` fails a
-# caller that grants less.
+# ceiling and must grant at least this and the filter's job-level `issues: read` below (the
+# decision gate's read of a dispatched issue's labels, kanon#1655), or the run fails to start;
+# `lane-check` fails a caller that grants less.
 permissions:
   contents: read # the App token carries the real write scope; keep the default token minimal
 
