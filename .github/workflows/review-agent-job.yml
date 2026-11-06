@@ -775,7 +775,12 @@ jobs:
             your review, naming the base branch's red run and the open issue the
             dispatch sweep files for it (search open issues for
             `kanon:default-branch-red`), and ask nothing of the PR for that check. Still
-            never APPROVE over red; your other findings decide the rest. Still NEVER poll, wait for, or
+            never APPROVE over red; your other findings decide the rest. When the base's
+            red check is your only block, the event is REQUEST_CHANGES all the same (you
+            never APPROVE over red, and never post COMMENT): the body says the base
+            branch's red run is the only block and that nothing is asked of the author,
+            and that block is not an open item, so it doesn't count in `qa:open-items`:
+            the default-branch issue already tracks it. Still NEVER poll, wait for, or
             re-run a check — your run is finite and a backgrounded wait means your
             verdict is never posted. If a check somehow IS still pending, that is an
             anomaly rather than the normal case: say so in your review body and give

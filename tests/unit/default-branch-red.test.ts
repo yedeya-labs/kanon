@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { CI_WORKFLOW, MARKER, decide, declaredWatcher, notedRuns } from '../../scripts/default-branch-red.mjs';
+import { CI_WORKFLOW, MARKER, nextStep, declaredWatcher, notedRuns, ownIssue, ownTexts } from '../../scripts/default-branch-red.mjs';
 
 // kanon#1568 (the Owner's decision of 2026-11-06): two pull requests, each green on its own base,
 // merged minutes apart and turned the default branch red, and nothing said so. A red push run of
@@ -13,7 +13,7 @@ const job = { name: 'Unit tests (shard 2/4)', url: 'https://example.invalid/jobs
 
 describe('a red default branch (#1568)', () => {
   it('files one issue naming the run and its first failing job', () => {
-    const d = decide({ run: red, job, open: null, branch: 'main' });
+    const d = nextStep({ run: red, job, open: null, branch: 'main' });
     expect(d.act).toBe('file');
     if (d.act !== 'file') return;
     expect(d.title).toBe('CI is red on main');
@@ -22,19 +22,19 @@ describe('a red default branch (#1568)', () => {
     expect(d.body).toContain('[run 41](https://example.invalid/runs/41)');
     expect(d.body).toContain('its first failing job is [Unit tests (shard 2/4)](https://example.invalid/jobs/9)');
     expect(d.body).toContain('## What must be true');
-    for (const conclusion of ['timed_out', 'startup_failure']) expect(decide({ run: { ...red, conclusion }, job, open: null, branch: 'main' }).act).toBe('file');
+    for (const conclusion of ['timed_out', 'startup_failure']) expect(nextStep({ run: { ...red, conclusion }, job, open: null, branch: 'main' }).act).toBe('file');
   });
 
   it('notes each new red run on the open issue once, and closes it when the branch is green', () => {
     const open = { number: 7, texts: [`${MARKER}\n<!-- kanon:default-branch-red run=41 -->`] };
-    expect(decide({ run: red, job, open, branch: 'main' }).act).toBe('none');
-    const later = decide({ run: { ...red, id: 43 }, job, open, branch: 'main' });
+    expect(nextStep({ run: red, job, open, branch: 'main' }).act).toBe('none');
+    const later = nextStep({ run: { ...red, id: 43 }, job, open, branch: 'main' });
     expect(later).toMatchObject({ act: 'comment', issue: 7 });
     expect(later.act === 'comment' && later.body).toContain('<!-- kanon:default-branch-red run=43 -->');
-    expect(decide({ run: green, job: null, open, branch: 'main' })).toMatchObject({ act: 'close', issue: 7 });
-    expect(decide({ run: green, job: null, open: null, branch: 'main' }).act).toBe('none');
-    expect(decide({ run: { ...red, conclusion: 'cancelled' }, job, open: null, branch: 'main' }).act).toBe('none');
-    expect(decide({ run: null, job: null, open: null, branch: 'main' }).act).toBe('none');
+    expect(nextStep({ run: green, job: null, open, branch: 'main' })).toMatchObject({ act: 'close', issue: 7 });
+    expect(nextStep({ run: green, job: null, open: null, branch: 'main' }).act).toBe('none');
+    expect(nextStep({ run: { ...red, conclusion: 'cancelled' }, job, open: null, branch: 'main' }).act).toBe('none');
+    expect(nextStep({ run: null, job: null, open: null, branch: 'main' }).act).toBe('none');
     expect([...notedRuns(['<!-- kanon:default-branch-red run=1 --> x <!-- kanon:default-branch-red run=2 -->'])]).toEqual([1, 2]);
   });
 
@@ -43,6 +43,29 @@ describe('a red default branch (#1568)', () => {
     expect(declaredWatcher('# R\n\n## Data\n\n- **Default-branch watcher:** `main-red.yml`\n')).toBeNull();
     expect(declaredWatcher('# R\n\n## Choices\n\n- **Overseer:** `installed`\n\n## Data\n\n- **Default-branch watcher:** `x.yml`\n')).toBeNull();
     expect(declaredWatcher(null)).toBeNull();
+  });
+
+  // K-AGENT-45: an issue a person files that quotes the marker is not the sweep's, so it is never
+  // commented on or closed, and a run marker a person quotes in a comment holds nothing.
+  it("keeps only the Lead's own issue, and the run markers in the Lead's own comments", () => {
+    const lead = 'example-lead';
+    const quoted = { number: 3, body: `About \`${MARKER}\``, author: { login: 'a-person' } };
+    const own = { number: 7, body: `${MARKER}\nred`, author: { login: 'app/example-lead' } };
+    expect(ownIssue([quoted], lead)).toBeNull();
+    expect(ownIssue([quoted, own], lead)?.number).toBe(7);
+    expect(ownIssue([{ ...own, author: { login: 'example-lead[bot]' } }], lead)?.number).toBe(7);
+    expect(ownIssue([{ ...own, body: 'red' }], lead)).toBeNull();
+    const comments = [
+      { body: '<!-- kanon:default-branch-red run=41 -->', author: { login: 'example-lead' } },
+      { body: '<!-- kanon:default-branch-red run=43 -->', author: { login: 'a-person' } },
+    ];
+    expect([...notedRuns(ownTexts(comments, lead))]).toEqual([41]);
+  });
+
+  it('signs every post as the Lead, and refuses to run without GITHUB_REPOSITORY', () => {
+    const src = readFileSync('scripts/default-branch-red.mjs', 'utf8');
+    for (const verb of ['create', 'comment', 'close']) expect(src, verb).toMatch(new RegExp(`'issue', '${verb}'[^\\n]*signed\\(d\\.body, 'Lead', appPersona\\('Lead'\\)\\)`));
+    expect(src).not.toMatch(/GITHUB_REPOSITORY \?\?/);
   });
 
   it('runs from the dispatch sweep on its Lead token, and watches the CI workflow init writes', () => {
@@ -58,5 +81,8 @@ describe('a red default branch (#1568)', () => {
     expect(job).toMatch(/BUT A RED CHECK MAY BE THE BASE BRANCH'S, NOT THIS PR'S \(kanon#1568\)/);
     expect(job).toMatch(/`kanon:default-branch-red`\), and ask nothing of the PR for that check/);
     expect(job).toMatch(/Still\s+never APPROVE over red/);
+    // The verdict when the base's red check is the only block: REQUEST_CHANGES, not an open item.
+    expect(job).toMatch(/When the base's\s+red check is your only block, the event is REQUEST_CHANGES/);
+    expect(job).toMatch(/that block is not an open item, so it doesn't count in `qa:open-items`/);
   });
 });
