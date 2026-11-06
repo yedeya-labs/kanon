@@ -66,10 +66,11 @@ const IMPLEMENT = 'agent:implement';
 
 /**
  * Labels that take an issue out of the feed: dispatched already, owed by a person, awaiting a
- * split, parked with its project, untriaged, a project's verification, or a gate question.
+ * split, parked with its project, untriaged, a project's verification, a gate question, or a
+ * person's decision (`decision:needed`, kanon#1594), which an agent mustn't make in code.
  */
 export const EXCLUDED_LABELS = [
-  IMPLEMENT, 'qa:needs-info', HUMAN_ACTION, SPLIT_LABEL, 'blocked', 'qa:needs-triage', 'qa:verify', GATE_CANDIDATE_LABEL,
+  IMPLEMENT, 'qa:needs-info', HUMAN_ACTION, SPLIT_LABEL, 'blocked', 'qa:needs-triage', 'qa:verify', GATE_CANDIDATE_LABEL, 'decision:needed',
 ];
 
 /** The severities the feeder takes, in the order it takes them. A gate severity is the Stakeholder's. */

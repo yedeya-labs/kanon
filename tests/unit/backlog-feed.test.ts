@@ -67,7 +67,7 @@ describe('ineligibility', () => {
   });
 
   it('refuses each excluded label, a gate severity and a missing severity', () => {
-    for (const l of ['agent:implement', 'qa:needs-info', 'qa:human-action', 'qa:needs-split', 'blocked', 'qa:needs-triage', 'qa:verify', 'gate-candidate']) {
+    for (const l of ['agent:implement', 'qa:needs-info', 'qa:human-action', 'qa:needs-split', 'blocked', 'qa:needs-triage', 'qa:verify', 'gate-candidate', 'decision:needed']) {
       expect(ineligibility(followUp(2, 'sev:low', '2026-09-01T00:00:00Z', { more: [l] }), { milestones: MILESTONES }), l).toContain(l);
     }
     expect(ineligibility(followUp(3, 'sev:high', '2026-09-01T00:00:00Z'), { milestones: MILESTONES })).toContain('sev:high');

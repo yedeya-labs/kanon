@@ -258,6 +258,16 @@ describe('dispatching', () => {
     expect(nextActions({ ...base, open }, { wip: 5 }).actions).toEqual([]);
   });
 
+  // kanon#1594: an issue waiting on a person's decision is never the Implementer's to build.
+  it('never labels for the Implementer an issue that waits on a decision, and says why it waits', () => {
+    const open = [{ ...base.open[0], labels: ['decision:needed'] }, base.open[1]];
+    const { actions } = nextActions({ ...base, open, blocked: [] });
+    expect(actions.map((a: { number: number }) => a.number)).toEqual([2]);
+    const only = nextActions({ ...base, open: [open[0]!], blocked: [] });
+    expect(only.actions).toEqual([]);
+    expect(String(only.stopped ?? '')).toContain("waits on a person's decision (`decision:needed`)");
+  });
+
   it('skips an issue a human has parked with qa:needs-info', () => {
     const open = [{ ...base.open[0], labels: ['qa:needs-info'] }, base.open[1]];
     const { actions } = nextActions({ ...base, open, blocked: [] });

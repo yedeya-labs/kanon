@@ -105,7 +105,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      member: ${{ steps.gate.outputs.member }}
+      # A member's event on an issue that awaits a person's decision is refused too (kanon#1594).
+      member: ${{ steps.gate.outputs.member == 'true' && steps.decision.outputs.admit == 'true' && 'true' || 'false' }}
       since: ${{ steps.before.outputs.since }}
     steps:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
@@ -119,6 +120,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
 
+      # THE DECISION GATE (kanon#1594): an issue labelled `decision:needed` waits on a person's
+      # decision, which an agent mustn't make in code (K-WORK-24). Refused here, before any
+      # token is minted, with a notice and a summary line: this lane's caller grants no
+      # `issues: write`, so no comment. Not a dispatch attempt.
+      - name: Does the issue wait on a decision?
+        id: decision
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
+          LABELS: ${{ toJSON(github.event.issue.labels) }}
+          LANE: triage
+          COMMENT: "false"
+        run: node "$KANON/scripts/decision-gate.mjs"
+
       # WHEN THE RUN STARTED (plan 0005 §3.3, step L3), for the implementer status: so
       # `implementer-status` can tell the pull request THIS run opened (after `since`, from a
       # branch the push job moved, at the head it moved it to) from any other. In this job
@@ -129,7 +147,7 @@ jobs:
       # stamps nothing and says why.
       - name: Record when the run started
         id: before
-        if: steps.gate.outputs.member == 'true'
+        if: steps.gate.outputs.member == 'true' && steps.decision.outputs.admit == 'true'
         continue-on-error: true
         run: echo "since=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 

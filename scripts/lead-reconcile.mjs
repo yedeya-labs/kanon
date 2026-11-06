@@ -159,6 +159,10 @@ export const NEEDS_INFO = 'qa:needs-info';
  * runs on the other members' merges.
  */
 export const HUMAN_ACTION = 'qa:human-action';
+
+/** An issue waiting on a person's decision (`K-WORK-24`): never the Implementer's to build, so
+ *  never labelled for it here; the implement lane refuses one too (kanon#1594). */
+export const DECISION_NEEDED = 'decision:needed';
 /** Phase 5's issue title, written in ONE place.
  *
  *  It is a template, not a name — `nextActions` proposes it and `readWorld` recovers by
@@ -1471,6 +1475,8 @@ function nextActionsCore(world, {
       .filter((i) => !i.labels.includes(IMPLEMENT) && !i.labels.includes(NEEDS_INFO))
       // Never an implementer's to do (RA-1301) — see `HUMAN_ACTION`.
       .filter((i) => !i.labels.includes(HUMAN_ACTION))
+      // Waiting on a person's decision, which an agent mustn't make in code (kanon#1594).
+      .filter((i) => !i.labels.includes(DECISION_NEEDED))
       // Too big for one run, and a re-dispatch repeats the cap (RA-1781). The split PR
       // replaces this item; until it merges there is nothing here to build.
       .filter((i) => !i.labels.includes(SPLIT_LABEL))
@@ -1526,6 +1532,7 @@ function nextActionsCore(world, {
         if (i.unfiledDeps?.length) return `#${i.number} names ${i.unfiledDeps.map((k) => `Issue ${k}`).join(', ')}, which no filed issue matches — a brief defect, not a wait`;
         if (i.dependsOn?.length) return `#${i.number} waits on ${i.dependsOn.map((n) => `#${n}`).join(', ')}`;
         if (i.labels.includes(NEEDS_INFO)) return `#${i.number} is parked with \`${NEEDS_INFO}\``;
+        if (i.labels.includes(DECISION_NEEDED)) return `#${i.number} waits on a person's decision (\`${DECISION_NEEDED}\`) — never dispatched until the decision is recorded and the label removed (K-WORK-24, kanon#1594)`;
         if (i.labels.includes(HUMAN_ACTION)) return `#${i.number} awaits a HUMAN action (\`${HUMAN_ACTION}\`) — never dispatched; close it when the action is done (RA-1301)`;
         if (i.labels.includes(SPLIT_LABEL)) return `#${i.number} awaits a SPLIT (\`${SPLIT_LABEL}\`) — its implementer run hit its cap, so the Lead proposes smaller children as a PR against the brief; merging that PR closes it. If no split PR opens within ${SPLIT_STALL_HOURS}h, this tick re-delivers \`${SPLIT_WORKFLOW}\` ONCE, then hands it to \`${NEEDS_INFO}\` (RA-2406)`;
         return `#${i.number} held`;
