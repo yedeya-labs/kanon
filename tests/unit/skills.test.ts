@@ -1341,8 +1341,8 @@ describe('the adopt skill and the install path (#1607)', () => {
     const body = skill('adopt').body;
     const row = (id: string) => body.split('\n').find((l) => l.startsWith(`| \`${id}\` |`))!;
     expect(row('label.create')).toMatch(/says GitHub limited the rate \(or failed\), the token is fine: you run `kanon init --json --no-apps` again with the same flags/);
-    expect(row('merge.settings')).toMatch(/^\| `merge\.settings` \| person \| As `label\.create` when GitHub limited the rate\./);
-    expect(row('ruleset.create')).toMatch(/^\| `ruleset\.create` \| person \| As `label\.create` when GitHub limited the rate\./);
+    expect(row('merge.settings')).toMatch(/^\| `merge\.settings` \| person \| As `label\.create` when GitHub limited the rate[,.]/);
+    expect(row('ruleset.create')).toMatch(/^\| `ruleset\.create` \| person \| As `label\.create` when GitHub limited the rate[,.]/);
   });
 });
 
@@ -1413,5 +1413,20 @@ describe('the friction log of the adopt and upgrade skills (#1607)', () => {
     expect(doc).toMatch(/rewrites the log into the form Kanon's issues take[^.]*, so what you review is exactly what is filed/);
     expect(doc).toContain('and not through the file-issue skill');
     expect(doc).toMatch(/`<repo>`, `<owner>`, `<person>` and `<app-slug>` by default/);
+  });
+});
+
+// kanon#1633: a write step that quotes GitHub's refusal, or what kanon milestones said, is not the
+// token, so the adopt skill's rows never send the person for a new one there.
+describe("the adopt skill and a write step's quoted refusal (#1633)", () => {
+  const row = (id: string) => rows(skill('adopt').body).find((r) => r[0] === `\`${id}\``)![2]!;
+  it('deals with the cause GitHub or kanon milestones named, and never changes the token for it', () => {
+    expect(row('label.create')).toMatch(/When the message quotes what GitHub refused, after `GitHub refused it:`, it is neither the rate nor the token, and never a reason to change the token/);
+    for (const id of ['merge.settings', 'ruleset.create']) expect(row(id), id).toMatch(/As `label\.create` when GitHub limited the rate, or when the message quotes what GitHub refused\./);
+    expect(row('label.delete-default')).toBe('As `label.create`, for the deletions.');
+    expect(row('milestone.buckets')).toMatch(/When the message quotes what `kanon milestones said:`, it is not the token/);
+    expect(row('milestone.buckets')).toMatch(/whether it should be the bucket is the Stakeholder's call \(`K-WORK-5`\)/);
+    // A closed bucket is reopened, never held for the Stakeholder (K-WORK-4).
+    expect(row('milestone.buckets')).toMatch(/A closed bucket is no one's call, since a bucket never completes \(`K-WORK-4`\): the person reopens it with the command the line gives/);
   });
 });
