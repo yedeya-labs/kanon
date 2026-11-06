@@ -57,6 +57,7 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, briefGuardJob, briefGuardJobs, callerFile, isStubHook, kanonRelease, LEAD_LANES, loadRequirements, setupHookJobs, TRIGGERS, yamlScalar } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
+import { registerAppIds } from './app-register.mjs';
 import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, DEPLOY_CALLER_PATH, deployEnvironmentSecrets, deployTakesTargets, GITHUB_DEFAULT_LABELS, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerOtherApps, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, workflowName } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { AUTO_UPDATE, declaresAutoUpdate, INSTALLED_PLUGINS, installedBehind, KANON_MARKETPLACE_REPO, KNOWN_MARKETPLACES, managedSettingsPaths, pluginsRoot, readMachinePlugin, readMarketplaceEntry, readPluginDeclaration, samePath, SETTINGS_PATH, userSettingsPath } from './plugin.mjs';
@@ -1961,7 +1962,7 @@ export const diagnose = async (deps, opts) => {
           url: s.kind === 'Organization' ? `https://github.com/organizations/${s.owner}/settings/apps/${slug}` : `https://github.com/settings/apps/${slug}`,
         }
         : slug
-        ? { text: `Add ${repoName} to the ${id} App's installation, ${NEW_KEY}, and copy its App ID from the same page. kanon apps is your step: check the token with the first command (it creates nothing), then store the key with the second (it checks the key, stores both secrets and deletes the file):`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}@<App ID>=<downloaded>.pem`] }
+        ? { text: `Add ${repoName} to the ${id} App's installation. kanon apps is your step: check the token with the first command (it creates nothing), then run the second, which opens the App's page for you to ${NEW_KEY}, waits for the key in your Downloads folder, checks it, stores both secrets and deletes the file:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}`] }
         : { text: `Create the ${id} App from this checkout. kanon apps is your step: check the token with the first command (it creates nothing), then create the App with the second, which stores its secrets:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] }];
       });
     }
@@ -2327,6 +2328,16 @@ export const diagnose = async (deps, opts) => {
       let appId = appIdOf.get('releaser');
       /** @type {string | null} */
       let noId = null;
+      // The register records each App's ID (kanon#1607), which a person's token can't read for a
+      // private App on a personal account: the Releaser's row gives it, for the slug it names.
+      if (slug !== undefined && appId === undefined) {
+        const ids = registerAppIds(registerText);
+        const recorded = registerRolesOf('releaser', req).filter((role) => rows.get(role) === slug).map((role) => ids.get(role)).find((x) => x !== undefined);
+        if (recorded !== undefined) {
+          appId = recorded;
+          notes.push(`The Releaser App \`${slug}\`'s id, ${recorded}, is the one ${REGISTER_PATH} records: GitHub shows a private App's id only to the App and its owner's installations, so doctor checks the bypass against that.`);
+        }
+      }
       // A private Releaser's permissions come from apps-check, but not its id: that is the
       // <RELEASER>_APP_ID secret's value, which the run's log masks, and doctor never works
       // around a mask (K-AGENT-47). Its installation, which an organisation's owner can list,

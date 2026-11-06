@@ -4,6 +4,13 @@
 // table outside a fenced block whose header starts `| Role | App slug |`, one row per role,
 // the role matched with or without bold. This module only writes; the awk program stays the
 // one reader the lanes use, and the tests hold what this writes to what it parses.
+//
+// Each row also records its App's ID, in an `App ID` column (kanon#1607): an App ID isn't secret,
+// and GitHub tells a person's token nothing about a private App (#623), so the register is where
+// the next repository's `kanon apps --reuse`, and doctor's Releaser bypass check, find it. Every
+// reader keys on a column's header, the lanes' on the first two, so the column changes nothing
+// for them; a register without it still reads, and gains it when a row with an ID is written.
+// `registerAppIds` is the one reader of the column.
 
 /** GitHub's manifest permission keys, in the register's column order, with their column names. */
 export const PERMISSION_COLUMNS = /** @type {const} */ ([
@@ -30,7 +37,10 @@ export const permissionName = (key) => {
   return words.charAt(0).toUpperCase() + words.slice(1);
 };
 
-/** The columns a new register gets: the five K-LAYOUT-6 names, then one for anything else. */
+/** The column that records each row's App ID (kanon#1607). */
+export const APP_ID_COLUMN = 'App ID';
+
+/** The columns a new register gets: the five K-LAYOUT-6 names, then one for anything else, and the App's ID when a row has one. */
 const NEW_HEADER = ['Role', 'App slug', 'Contents', 'Issues', 'Pull requests', 'Workflows', 'Actions', 'Other'];
 
 /** @param {string | undefined} level */
@@ -79,10 +89,11 @@ const findTable = (lines) => {
 /**
  * Returns the register with `role`'s row written, and a diff of what changed.
  * @param {string | null} text the register's current content, or null when the file doesn't exist
- * @param {{ role: string, slug: string, permissions: Record<string, string> }} app
+ * @param {{ role: string, slug: string, permissions: Record<string, string>, appId?: number | null }} app
+ *   `appId`: the App's ID, recorded in the `App ID` column; without it, the row keeps the one it has
  * @returns {{ text: string, diff: string[] }}
  */
-export const writeRegisterRow = (text, { role, slug, permissions }) => {
+export const writeRegisterRow = (text, { role, slug, permissions, appId = null }) => {
   const known = new Map(/** @type {Array<[string, string]>} */ (PERMISSION_COLUMNS.map(([k, n]) => [n, k])));
 
   /** @param {string[]} header @param {string[] | undefined} old */
@@ -97,12 +108,14 @@ export const writeRegisterRow = (text, { role, slug, permissions }) => {
       const key = known.get(h);
       if (key) return label(permissions[key]);
       if (h === 'Other') return other.length ? other.join(', ') : 'None';
+      if (h === APP_ID_COLUMN && appId !== null) return String(appId);
       return old?.[i] ?? '';
     });
   };
 
   if (text === null || !findTable(text.split('\n'))) {
-    const table = [row(NEW_HEADER), row(NEW_HEADER.map(() => '---')), row(build(NEW_HEADER, undefined))];
+    const fresh = appId === null ? NEW_HEADER : [...NEW_HEADER, APP_ID_COLUMN];
+    const table = [row(fresh), row(fresh.map(() => '---')), row(build(fresh, undefined))];
     const note = 'Every App also holds Metadata: Read (`K-ADOPT-8`).';
     if (text === null) {
       const created = ['# Agent identities', '', ...table, '', note, ''];
@@ -137,6 +150,19 @@ export const writeRegisterRow = (text, { role, slug, permissions }) => {
     }
     header = [...header, 'Other'];
   }
+  // A register from before the App ID column gains it once a row with an ID is written; the rows
+  // already there get an empty cell, an ID not recorded, never a guess.
+  if (appId !== null && !header.includes(APP_ID_COLUMN)) {
+    for (let i = table.header; i < table.end; i++) {
+      const before = lines[i] ?? '';
+      const extra = i === table.header ? APP_ID_COLUMN : i === table.header + 1 ? '---' : '';
+      lines[i] = `${before.trimEnd()} ${extra} |`;
+      const prior = diff.indexOf(`+${before}`);
+      if (prior >= 0) diff[prior] = `+${lines[i]}`;
+      else diff.push(`-${before}`, `+${lines[i]}`);
+    }
+    header = [...header, APP_ID_COLUMN];
+  }
 
   const matches = [];
   for (let i = table.header + 2; i < table.end; i++) {
@@ -160,4 +186,37 @@ export const writeRegisterRow = (text, { role, slug, permissions }) => {
     }
   }
   return { text: lines.join('\n'), diff };
+};
+
+/**
+ * The App ID each role's row records, read from the `App ID` column (kanon#1607): role → ID, for
+ * the rows whose cell holds a positive whole number. Empty for a register without the column, or
+ * without a table; it throws on nothing, so a reader falls back to its other sources. With `slug`,
+ * only the rows that name that App slug: a role's row may name another App than the one a reader
+ * means, and its ID is then that other App's.
+ * @param {string | null} text @param {string} [slug]
+ * @returns {Map<string, number>}
+ */
+export const registerAppIds = (text, slug) => {
+  /** @type {Map<string, number>} */
+  const ids = new Map();
+  if (text === null) return ids;
+  const lines = text.split('\n');
+  /** @type {{ header: number, end: number } | null} */
+  let table;
+  try {
+    table = findTable(lines);
+  } catch {
+    return ids;
+  }
+  if (!table) return ids;
+  const col = cells(lines[table.header] ?? '').indexOf(APP_ID_COLUMN);
+  if (col < 0) return ids;
+  for (let i = table.header + 2; i < table.end; i++) {
+    const c = cells(lines[i] ?? '');
+    const id = /^\d+$/.test(c[col] ?? '') ? Number(c[col]) : 0;
+    if (slug !== undefined && unbold(c[1] ?? '') !== `\`${slug}\``) continue;
+    if (id > 0) ids.set(unbold(c[0] ?? ''), id);
+  }
+  return ids;
 };

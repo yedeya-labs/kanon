@@ -4,10 +4,12 @@ import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeRegisterRow } from '../../cli/app-register.mjs';
+import { APP_ID_COLUMN, registerAppIds, writeRegisterRow } from '../../cli/app-register.mjs';
 import { parseAppRegister, parseOtherApps, registerFootnotes } from '../../scripts/app-register.mjs';
 import { registerRows } from '../../cli/init.mjs';
-import { appRoles, apps, buildManifest, checkoutCheck, loadApps, loadRoles, ownerPages, realDeps, remoteRepo, rotationSteps } from '../../cli/apps.mjs';
+import { appRoles, apps, awaitKeyFile, buildManifest, checkoutCheck, keyFileName, loadApps, loadRoles, ownerPages, parseArgs, realDeps, remoteRepo, rotationSteps } from '../../cli/apps.mjs';
+import { parsePersonas } from '../../scripts/app-register.mjs';
+import { parseRegister as dcoRegister } from '../../actions/dco/dco.mjs';
 import { readAppExtras, withExtras } from '../../scripts/lib/app-extras.mjs';
 import { tokenFix } from '../../cli/gh-token.mjs';
 import { branchRules } from './helpers/branch-rules.js';
@@ -94,6 +96,14 @@ type Scenario = {
   reuse?: { slug: string; id?: string; keySlug?: string; keyText?: string; permissions?: Record<string, string>; notInstalled?: boolean };
   /** Writing the App register fails, as a full disk or a read-only checkout would (#1261). */
   registerWriteFails?: boolean;
+  /** The --reuse value itself, in place of the one `reuse` builds (kanon#1607). */
+  reuseArg?: string;
+  /** What `gh api apps/<slug> --jq .id` answers: a public App's ID; unset, 404, as for a private App. */
+  publicAppId?: string;
+  /** Called when the fake browser opens an App's settings page, where a key is generated (kanon#1607). */
+  onKeyPage?: (url: string) => void;
+  /** Deps that replace the run's own: the clock, the download folder's listing, the question. */
+  deps?: Partial<Parameters<typeof apps>[1]>;
   /** The repository's rulesets, as `gh api` answers them (#49); unset, every such read fails. */
   rulesets?: { list: Array<{ id: number; target: string; name?: string }>; full: Record<number, unknown>; putStatus?: number; unreadable?: number[] };
 };
@@ -165,7 +175,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
   let pending: Promise<unknown> = Promise.resolve();
   let n = 0;
 
-  const argv = [s.ownerFlag ?? '--owner', ORG, '--repo', (s.repoList ?? [REPO]).join(','), ...(s.reuse ? ['--reuse', `judge:${s.reuse.slug}${s.reuse.id === '' ? '' : `@${s.reuse.id ?? '4242'}`}=${keyFile}`] : ['--apps', s.apps ?? 'judge']), ...(s.noDir ? [] : ['--dir', dir]), ...(s.extraArgs ?? [])];
+  const argv = [s.ownerFlag ?? '--owner', ORG, '--repo', (s.repoList ?? [REPO]).join(','), ...(s.reuseArg !== undefined ? ['--reuse', s.reuseArg] : s.reuse ? ['--reuse', `judge:${s.reuse.slug}${s.reuse.id === '' ? '' : `@${s.reuse.id ?? '4242'}`}=${keyFile}`] : ['--apps', s.apps ?? 'judge']), ...(s.noDir ? [] : ['--dir', dir]), ...(s.extraArgs ?? [])];
   const status = await apps(argv, {
     env: s.env ?? {},
     git: (args) => {
@@ -190,7 +200,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
       if (args[0] === 'api' && args[1] === 'user') return s.user ?? { status: 0, stdout: 'octo\n', stderr: '' };
       if (args[0] === 'api' && args[1] === `users/${ORG}`) return { status: 0, stdout: JSON.stringify({ login: ORG, type: s.kind ?? 'Organization' }), stderr: '' };
       // Kanon's Apps are private, and GitHub answers 404 to a person's token for a private App (#623).
-      if (args[0] === 'api' && args[1] === `apps/${s.reuse?.slug}`) return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
+      if (args[0] === 'api' && args[1] === `apps/${s.reuse?.slug}`) return s.publicAppId ? { status: 0, stdout: `${s.publicAppId}\n`, stderr: '' } : { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
       // The rules that apply to the default branch (#1262), as `gh api --paginate --slurp` reads them.
       if (args[0] === 'api' && args[1] === '--paginate' && String(args[3]).startsWith(`repos/${ORG}/${REPO}/rules/branches/`)) {
         return s.rulesets ? { status: 0, stdout: JSON.stringify(branchRules(Object.values(s.rulesets.full), `${ORG}/${REPO}`)), stderr: '' } : { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
@@ -216,6 +226,11 @@ const run = async (s: Scenario = {}): Promise<Run> => {
     // The fake browser.
     open: (url) => {
       r.opened.push(url);
+      // An App's settings page, where the person generates a key (kanon#1607).
+      if (/\/settings\/apps\/[a-z0-9-]+$/.test(url) && !url.endsWith('/new')) {
+        s.onKeyPage?.(url);
+        return;
+      }
       if (url.startsWith('https://github.com/apps/')) {
         installed = true;
         return;
@@ -283,6 +298,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
       if (method === 'DELETE' && u.pathname === '/installation/token') return json(204, null);
       throw new Error(`unexpected GitHub call ${method} ${url}`);
     },
+    ...s.deps,
   });
   await pending;
   r.status = status;
@@ -401,7 +417,7 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     expect(r.status, r.output).toBe(0);
     expect((r.manifest as { default_permissions: Record<string, string> }).default_permissions.deployments).toBe('write');
     const text = readFileSync(join(r.dir, 'docs/qa/agent-identities.md'), 'utf8');
-    expect(text).toMatch(/^\| Reviewer \| `acme-judge` \|.*\| [^|]*Deployments: Read & write[^|]* \|$/m);
+    expect(text).toMatch(/^\| Reviewer \| `acme-judge` \|.*\| [^|]*Deployments: Read & write[^|]* \| 4242 \|$/m);
     // lane-check's and apps-check's reader (the awk program), and doctor's, find the slug on the row.
     expect(parseSlug(r.dir, 'Reviewer').stdout.trim()).toBe(`${ORG}-judge`);
     expect(registerRows(text).get('Merger')).toBe(`${ORG}-judge`);
@@ -500,10 +516,14 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     const r = await run({ register: `# Agent identities\n\n${head}\n${old}\n\nEvery App also holds Metadata: Read (\`K-ADOPT-8\`).\n` });
     expect(r.status, r.output).toBe(0);
     const printed = r.output.split('\n').filter((l) => /^ {3}[-+]\|/.test(l)).map((l) => l.slice(3));
+    // The register gains the App ID column (kanon#1607), so its header and delimiter change too.
     expect(printed).toEqual([
+      ...head.split('\n').map((l) => `-${l}`),
       `-${old}`,
-      `+| Reviewer | \`${ORG}-judge\` | Read & write | Read & write | Read & write | No access | Read & write | Checks: Read, Commit statuses: Read |`,
-      `+| Merger | \`${ORG}-judge\` | Read & write | Read & write | Read & write | No access | Read & write | Checks: Read, Commit statuses: Read |`,
+      '+| Role | App slug | Contents | Issues | Pull requests | Workflows | Actions | Other | App ID |',
+      '+| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      `+| Reviewer | \`${ORG}-judge\` | Read & write | Read & write | Read & write | No access | Read & write | Checks: Read, Commit statuses: Read | 4242 |`,
+      `+| Merger | \`${ORG}-judge\` | Read & write | Read & write | Read & write | No access | Read & write | Checks: Read, Commit statuses: Read | 4242 |`,
     ]);
     rmSync(r.dir, { recursive: true, force: true });
   });
@@ -747,7 +767,7 @@ describe('one App per owner, reused across its repositories (plan 0005 §3.2)', 
     expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT').map((c) => c.args[2])).toEqual(['JUDGE_APP_ID', 'JUDGE_APP_PRIVATE_KEY']);
     expect(r.removed).toEqual([]);
     expect(readFileSync(join(r.dir, 'judge.pem'), 'utf8')).toBe(PEM);
-    expect(r.output).toContain(`The secrets are stored; the file ${join(r.dir, 'judge.pem')} is kept`);
+    expect(r.output).toContain(`The secrets are stored; the file judge.pem is kept`);
     rmSync(r.dir, { recursive: true, force: true });
   });
 
@@ -761,7 +781,7 @@ describe('one App per owner, reused across its repositories (plan 0005 §3.2)', 
     const sets = r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT');
     expect(sets.map((c) => c.args[2])).toEqual(['JUDGE_APP_ID', 'JUDGE_APP_PRIVATE_KEY']);
     expect(sets[0]?.input).toBe('4242');
-    expect(r.output).toContain(`1. ${join(r.dir, 'judge.pem')} is a key of ${ORG}-judge (id 4242), which holds the Judge's permissions.`);
+    expect(r.output).toContain(`1. judge.pem is a key of ${ORG}-judge (id 4242), which holds the Judge's permissions.`);
     expect(r.removed).toEqual([join(r.dir, 'judge.pem')]);
     rmSync(r.dir, { recursive: true, force: true });
   });
@@ -794,7 +814,7 @@ describe('one App per owner, reused across its repositories (plan 0005 §3.2)', 
     expect(r.status).toBe(1);
     expect(r.issuers).toEqual(['9999']);
     expect(r.output).toContain(
-      `kanon apps: GitHub refused the key in ${join(r.dir, 'judge.pem')} as the App 9999's (HTTP 401): either 9999 is not ${ORG}-judge's App ID or Client ID, or the key is not one of its keys. ` +
+      `kanon apps: GitHub refused the key in judge.pem as the App 9999's (HTTP 401): either 9999 is not ${ORG}-judge's App ID or Client ID, or the key is not one of its keys. ` +
         `Both IDs are under "About" on https://github.com/organizations/${ORG}/settings/apps/${ORG}-judge, and its keys under Credentials → Key pairs. Nothing was stored; the file is kept.`,
     );
     expect(r.output).not.toMatch(/Check the slug/);
@@ -806,7 +826,7 @@ describe('one App per owner, reused across its repositories (plan 0005 §3.2)', 
   it('--reuse refuses a key that is another App\'s, stores nothing and keeps the file', async () => {
     const r = await run({ reuse: { slug: `${ORG}-judge`, keySlug: `${ORG}-author` } });
     expect(r.status).toBe(1);
-    expect(r.output).toContain(`kanon apps: the ID 4242 and the key in ${join(r.dir, 'judge.pem')} are the App ${ORG}-author's, not ${ORG}-judge's. Nothing was stored; the file is kept.`);
+    expect(r.output).toContain(`kanon apps: the ID 4242 and the key in judge.pem are the App ${ORG}-author's, not ${ORG}-judge's. Nothing was stored; the file is kept.`);
     expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT')).toEqual([]);
     expect(r.removed).toEqual([]);
     expect(statSync(join(r.dir, 'judge.pem')).isFile()).toBe(true);
@@ -1375,5 +1395,228 @@ describe('the Releaser\'s ruleset bypass (#49, K-MERGE-8)', () => {
     expect(r.status, r.output).toBe(0);
     expect(r.gh.filter((c) => String(c.args[1]).includes('rulesets') || c.args[2] === 'PUT')).toEqual([]);
     expect(r.output).not.toContain('bypass');
+  });
+});
+
+// kanon#1607 points 10 and 18: reusing an owner's Apps took three rounds of a key, an App ID and
+// a path each. `--reuse <app>:<slug>[,…]` takes the ID from the register (which now records it),
+// GitHub or the person, opens each App's page, and waits for the key GitHub downloads, by its
+// exact name, so a near-identical key of another owner's App is never taken.
+describe('kanon apps --reuse without an ID or a key file (#1607)', () => {
+  const SLUG = `${ORG}-judge`;
+  const TODAY = `${SLUG}.2026-11-05.private-key.pem`;
+  /** A download folder with an old key of this App and a new key of another owner's near-identical one. */
+  const downloads = () => {
+    const dl = mkdtempSync(join(tmpdir(), 'kanon-apps-dl-'));
+    realDeps.writeFile(join(dl, `${SLUG}.2026-10-01.private-key.pem`), 'an old key');
+    realDeps.writeFile(join(dl, `${ORG}-org-judge.2026-11-05.private-key.pem`), 'another owner\'s key');
+    realDeps.writeFile(join(dl, `x${SLUG}.2026-11-05.private-key.pem`), 'another key again');
+    return dl;
+  };
+  /** Each file's change time: the old key before the wait starts, the rest after. */
+  const clock = (dl: string, start = 1_000) => ({
+    now: () => start,
+    mtime: (path: string) => (path.endsWith('2026-10-01.private-key.pem') ? start - 1 : path.startsWith(dl) ? start + 1 : null),
+  });
+  const withId = (id: number | null) => {
+    let text: string | null = null;
+    for (const role of ['Reviewer', 'Merger']) text = writeRegisterRow(text, { role, slug: SLUG, permissions: loadApps().judge!.permissions, appId: id }).text;
+    return text!;
+  };
+
+  it('reads a list of Apps, each with or without its ID and file, and never splits a key file\'s path', () => {
+    const o = parseArgs(['--owner', ORG, '--repo', REPO, '--reuse', `author:${ORG}-author,judge:${SLUG}@4242`, '--downloads', '/k', '--no-open'], loadApps());
+    expect(o.reuse).toEqual([{ app: 'author', slug: `${ORG}-author`, id: '', file: '' }, { app: 'judge', slug: SLUG, id: '4242', file: '' }]);
+    expect(o.downloads).toBe('/k');
+    expect(o.open).toBe(false);
+    expect(parseArgs(['--owner', ORG, '--repo', REPO, '--reuse', `judge:${SLUG}@4242=/a,b.pem`], loadApps()).reuse).toEqual([{ app: 'judge', slug: SLUG, id: '4242', file: '/a,b.pem' }]);
+    expect(() => parseArgs(['--owner', ORG, '--repo', REPO, '--reuse', `judge:${SLUG},judge:${SLUG}`], loadApps())).toThrow(/names one App twice/);
+  });
+
+  it('matches the exact name GitHub gives the key, and a browser\'s renamed copy of it, for that slug alone', () => {
+    // kanon#1626: a second key of the same day is saved under a renamed copy, as the browsers name it.
+    for (const f of [TODAY, `${SLUG}.2026-11-05.private-key (1).pem`, `${SLUG}.2026-11-05.private-key(2).pem`, `${SLUG}.2026-11-05.private-key 2.pem`]) expect(keyFileName(SLUG).test(f), f).toBe(true);
+    for (const f of [`${ORG}-org-judge.2026-11-05.private-key.pem`, `x${TODAY}`, `x${SLUG}.2026-11-05.private-key (1).pem`, `${SLUG}.private-key.pem`, `${TODAY}.part`, `${SLUG}.2026-11-05.private-key (1).pem.crdownload`, `${SLUG}.2026-11-05.private-key (x).pem`]) expect(keyFileName(SLUG).test(f), f).toBe(false);
+  });
+
+  it('takes the ID from the register, opens the App\'s page, waits for its new key, and records the ID', async () => {
+    const dl = downloads();
+    const r = await run({
+      reuse: { slug: SLUG },
+      reuseArg: `judge:${SLUG}`,
+      register: withId(4242),
+      extraArgs: ['--downloads', dl],
+      onKeyPage: () => realDeps.writeFile(join(dl, TODAY), PEM),
+      deps: { ...clock(dl), ask: async () => { throw new Error('asked'); } },
+    });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain(`The Judge ${SLUG}'s App ID is 4242, from the App register.`);
+    expect(r.gh.filter((c) => c.args[0] === 'api' && String(c.args[1]).startsWith('apps/'))).toEqual([]);
+    expect(r.opened).toEqual([`https://github.com/organizations/${ORG}/settings/apps/${SLUG}`]);
+    expect(r.issuers).toEqual(['4242']);
+    expect(r.removed).toEqual([join(dl, TODAY)]);
+    // The old key and the other owner's are left where they are.
+    expect(readdirSync(dl).sort()).toEqual([`${ORG}-org-judge.2026-11-05.private-key.pem`, `${SLUG}.2026-10-01.private-key.pem`, `x${TODAY}`].sort());
+    // The key's file name, never its folder.
+    expect(r.output).toContain(`Found ${TODAY}.`);
+    expect(r.output).not.toContain(dl);
+    expect(r.output).not.toContain(KEY_BODY);
+    expect(registerAppIds(readFileSync(join(r.dir, 'docs/qa/agent-identities.md'), 'utf8'))).toEqual(new Map([['Reviewer', 4242], ['Merger', 4242]]));
+    rmSync(r.dir, { recursive: true, force: true });
+    rmSync(dl, { recursive: true, force: true });
+  });
+
+  // #1625's review: a role's row may name another App of the owner's; its ID is that App's.
+  it("never takes the ID of a register row that names another slug", async () => {
+    const dl = downloads();
+    let other: string | null = null;
+    for (const role of ['Reviewer', 'Merger']) other = writeRegisterRow(other, { role, slug: `${SLUG}-old`, permissions: loadApps().judge!.permissions, appId: 9999 }).text;
+    const r = await run({ reuse: { slug: SLUG }, reuseArg: `judge:${SLUG}`, register: other!, publicAppId: '4242', extraArgs: ['--downloads', dl], onKeyPage: () => realDeps.writeFile(join(dl, TODAY), PEM), deps: clock(dl) });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain('App ID is 4242, from GitHub.');
+    expect(r.output).not.toContain('App ID is 9999');
+    expect(r.issuers).toEqual(['4242']);
+    expect(registerAppIds(other!, SLUG)).toEqual(new Map());
+    expect(registerAppIds(other!, `${SLUG}-old`)).toEqual(new Map([['Reviewer', 9999], ['Merger', 9999]]));
+    rmSync(r.dir, { recursive: true, force: true });
+    rmSync(dl, { recursive: true, force: true });
+  });
+
+  it('takes the ID from GitHub for a public App, then from the person, before anything changes', async () => {
+    const dl = downloads();
+    const api = await run({ reuse: { slug: SLUG }, reuseArg: `judge:${SLUG}`, publicAppId: '4242', extraArgs: ['--downloads', dl], onKeyPage: () => realDeps.writeFile(join(dl, TODAY), PEM), deps: clock(dl) });
+    expect(api.status, api.output).toBe(0);
+    expect(api.output).toContain(`App ID is 4242, from GitHub.`);
+    // The register had no ID; it records the one the key was checked against now.
+    expect(registerAppIds(readFileSync(join(api.dir, 'docs/qa/agent-identities.md'), 'utf8'))).toEqual(new Map([['Reviewer', 4242], ['Merger', 4242]]));
+    rmSync(api.dir, { recursive: true, force: true });
+    const asked: string[] = [];
+    const dl2 = downloads();
+    const typed = await run({ reuse: { slug: SLUG }, reuseArg: `judge:${SLUG}`, extraArgs: ['--downloads', dl2], onKeyPage: () => realDeps.writeFile(join(dl2, TODAY), PEM), deps: { ...clock(dl2), ask: async (q: string) => (asked.push(q), '4242') } });
+    expect(typed.status, typed.output).toBe(0);
+    expect(asked).toEqual([`The App ID of ${SLUG}, under "About" on https://github.com/organizations/${ORG}/settings/apps/${SLUG}:`]);
+    expect(typed.output).toContain('App ID is 4242, from you.');
+    // No answer anywhere: refused, with the page, and nothing changed.
+    const none = await run({ reuse: { slug: SLUG }, reuseArg: `judge:${SLUG}`, extraArgs: ['--downloads', dl2], deps: { ...clock(dl2), ask: async () => '' } });
+    expect(none.status).toBe(2);
+    expect(none.output).toContain(`--reuse judge:${SLUG} needs the App's ID`);
+    expect(none.opened).toEqual([]);
+    expect(none.gh.filter((c) => c.args[1] === 'set')).toEqual([]);
+    for (const d of [typed.dir, none.dir, dl, dl2]) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('with --no-open, prints each page and the command with the key files, and changes nothing', async () => {
+    const r = await run({ reuse: { slug: SLUG }, reuseArg: `judge:${SLUG}`, register: withId(4242), extraArgs: ['--no-open'] });
+    expect(r.status, r.output).toBe(0);
+    expect(r.opened).toEqual([]);
+    expect(r.output).toContain(`  the Judge: https://github.com/organizations/${ORG}/settings/apps/${SLUG}`);
+    expect(r.output).toContain(`kanon apps --owner ${ORG} --repo ${REPO} --reuse judge:${SLUG}@4242=<${SLUG}.YYYY-MM-DD.private-key.pem>`);
+    expect(r.gh.filter((c) => c.args[1] === 'set')).toEqual([]);
+    expect(r.writes).toEqual([]);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('gives up after its timeout when no new key appears, storing nothing', async () => {
+    const dl = downloads();
+    let t = 0;
+    const r = await run({ reuse: { slug: SLUG }, reuseArg: `judge:${SLUG}@4242`, extraArgs: ['--downloads', dl], timeoutMs: 60_000, deps: { now: () => (t += 20_000), mtime: () => 0 } });
+    expect(r.status).toBe(1);
+    expect(r.output).toContain(`no new ${SLUG}.<date>.private-key.pem appeared in the download folder in 1 minute.`);
+    expect(r.output).not.toContain(dl);
+    expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT')).toEqual([]);
+    expect(r.removed).toEqual([]);
+    rmSync(r.dir, { recursive: true, force: true });
+    rmSync(dl, { recursive: true, force: true });
+  });
+
+  it('awaitKeyFile takes the newest matching file, and none older than the start', async () => {
+    const deps = { ...realDeps, listDir: () => [`${SLUG}.2026-11-04.private-key.pem`, TODAY, `${SLUG}.2026-11-03.private-key.pem`], mtime: (p: string) => (p.endsWith(TODAY) ? 30 : p.includes('11-04') ? 20 : 5), readFile: () => PEM, now: () => 10, sleep: async () => {}, pollMs: 0, timeoutMs: 1 };
+    expect(await awaitKeyFile({ slug: SLUG, dir: '/dl', since: 10, deps })).toBe(join('/dl', TODAY));
+    // kanon#1626: a file the browser has made but not yet filled is not the key; the filled one is.
+    const filling = { ...deps, readFile: (p: string) => (p.endsWith(TODAY) ? '' : PEM) };
+    expect(await awaitKeyFile({ slug: SLUG, dir: '/dl', since: 10, deps: filling })).toBe(join('/dl', `${SLUG}.2026-11-04.private-key.pem`));
+  });
+
+  // kanon#1626: a failed run keeps the key, so the browser saves the next one under a renamed copy.
+  it('takes the renamed copy a second key of the day is saved as, past the kept one', async () => {
+    const dl = downloads();
+    realDeps.writeFile(join(dl, TODAY), PEM);
+    const COPY = `${SLUG}.2026-11-05.private-key (1).pem`;
+    const r = await run({
+      reuse: { slug: SLUG },
+      reuseArg: `judge:${SLUG}@4242`,
+      extraArgs: ['--downloads', dl],
+      onKeyPage: () => realDeps.writeFile(join(dl, COPY), PEM),
+      deps: { now: () => 1_000, mtime: (path: string) => (path.endsWith(COPY) ? 1_001 : 999) },
+    });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain(`Found ${COPY}.`);
+    expect(r.removed).toEqual([join(dl, COPY)]);
+    expect(readdirSync(dl)).toContain(TODAY);
+    rmSync(r.dir, { recursive: true, force: true });
+    rmSync(dl, { recursive: true, force: true });
+  });
+
+  it('says how the next run uses a key it found and kept, by the file\'s name alone', async () => {
+    const dl = downloads();
+    const r = await run({
+      reuse: { slug: SLUG, keySlug: `${ORG}-author` },
+      reuseArg: `judge:${SLUG}@4242`,
+      extraArgs: ['--downloads', dl],
+      onKeyPage: () => realDeps.writeFile(join(dl, TODAY), PEM),
+      deps: clock(dl),
+    });
+    expect(r.status).toBe(1);
+    expect(r.output).toContain('Nothing was stored; the file is kept.');
+    expect(r.output).toContain(`To use the kept key on the next run, once that is fixed: kanon apps --owner ${ORG} --repo ${REPO} --reuse judge:${SLUG}@4242=<download folder>/${TODAY}`);
+    expect(r.output).not.toContain(dl);
+    expect(readdirSync(dl)).toContain(TODAY);
+    // A store that fails keeps the file too, named by its file name alone.
+    const store = await run({ reuse: { slug: SLUG }, setStatus: { JUDGE_APP_PRIVATE_KEY: 1 } });
+    expect(store.status).toBe(1);
+    expect(store.output).toContain('The key file judge.pem is kept: fix the token and run the command again.');
+    rmSync(store.dir, { recursive: true, force: true });
+    // A key file the person named gets no such line: they know where it is.
+    const named = await run({ reuse: { slug: SLUG, keySlug: `${ORG}-author` } });
+    expect(named.status).toBe(1);
+    expect(named.output).not.toContain('To use the kept key on the next run');
+    for (const d of [r.dir, named.dir, dl]) rmSync(d, { recursive: true, force: true });
+  });
+});
+
+// kanon#1607 point 10: the register records each App's ID in an `App ID` column. Every reader keys
+// on a header, so none mistakes it for a permission, and a register without it still reads.
+describe('the App register\'s App ID column (#1607)', () => {
+  const perms = loadApps().judge!.permissions;
+  const old = writeRegisterRow(writeRegisterRow(null, { role: 'Reviewer', slug: 'acme-judge', permissions: perms }).text, { role: 'Merger', slug: 'acme-judge', permissions: perms }).text;
+  const withIds = writeRegisterRow(old, { role: 'Reviewer', slug: 'acme-judge', permissions: perms, appId: 4242 }).text;
+
+  it('is added to an older register only when a row with an ID is written, the other rows left empty', () => {
+    expect(old).not.toContain(APP_ID_COLUMN);
+    expect(withIds).toMatch(/^\| Role \| App slug \|.*\| Other \| App ID \|$/m);
+    expect(registerAppIds(withIds)).toEqual(new Map([['Reviewer', 4242]]));
+    expect(registerAppIds(old)).toEqual(new Map());
+    // A row written later without an ID keeps the one it has.
+    expect(registerAppIds(writeRegisterRow(withIds, { role: 'Reviewer', slug: 'acme-judge', permissions: perms }).text)).toEqual(new Map([['Reviewer', 4242]]));
+  });
+
+  // #1625's review: the register's format rule names the column, as it names `Persona`.
+  it("is named in K-LAYOUT-6, the register's format rule", () => {
+    const rule = readFileSync('rulebook/11-repository-layout.md', 'utf8').split('\n').find((l) => l.startsWith('**Rule.** `docs/qa/agent-identities.md`'))!;
+    expect(rule).toMatch(/An optional `App ID` column holds the numeric ID GitHub gave the row's App[^.]*; a blank cell, or no column, means none is recorded\./);
+  });
+
+  it('reads alike in every register reader, with or without the column', () => {
+    for (const text of [old, withIds]) {
+      const dir = mkdtempSync(join(tmpdir(), 'kanon-register-'));
+      realDeps.writeFile(join(dir, 'docs/qa/agent-identities.md'), text);
+      expect(parseSlug(dir, 'Reviewer').stdout.trim()).toBe('acme-judge');
+      expect(parseAppRegister(text).get('Merger')).toBe('acme-judge');
+      expect(registerFootnotes(text)).toEqual([]);
+      expect(parsePersonas(text).size).toBe(0);
+      expect(registerRows(text).get('Reviewer')).toBe('acme-judge');
+      expect(dcoRegister(text)).not.toHaveProperty('problem');
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
