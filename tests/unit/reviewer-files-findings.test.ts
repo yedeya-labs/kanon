@@ -4,8 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * kanon#1595 (the Owner's decision of 2026-11-06): a defect or gap the Reviewer names and doesn't
- * fold in is filed, at `sev:low` with its reasoning when judged unlikely, never declined as "not
- * real". Only a question about intent and a nit that asks for nothing stay review-only. The prompts
+ * fold in is filed, never declined as "not real". Its reachable impact decides its severity
+ * (`K-WORK-9`): `sev:low` with its reasoning when it is unreachable in practice, by-hand only or of
+ * no current impact, and a higher level when its reachable impact fits one, however rare it seems.
+ * Only a question about intent and a nit that asks for nothing stay review-only (and, on Kanon, the
+ * small cleanup note on an approval, #1136). The prompts
  * make no exception of their own and defer to the playbook, so they no longer contradict the
  * severity rubric's `sev:low` = cosmetic. Kanon's playbook and the baseline one say the same.
  */
