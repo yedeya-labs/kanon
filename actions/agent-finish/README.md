@@ -30,6 +30,7 @@ Call it with `id: finish`, `if: always()` and `continue-on-error: true`, and han
 | Input | Required | Meaning |
 |---|---|---|
 | `arm` | yes | A human name for the lane, for the classifier's annotation. |
+| `node` | no | The Node its scripts, and the classifier and telemetry actions it calls, run on, by absolute path: the kanon step's `node` output, from a lane whose job ran the project-setup hook first, which may put another Node first on the `PATH` ([#1676](https://github.com/yedeya-labs/kanon/issues/1676)). Defaults to `node` from the `PATH`. |
 | `agent` | yes | The telemetry agent name: the row's `agent` column. |
 | `job-status` | yes | `${{ job.status }}`. |
 | `claude_args` | yes | The same flag block `agent-run` was given. |

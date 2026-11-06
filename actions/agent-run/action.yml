@@ -40,6 +40,13 @@ description: >-
   lane was given, after stamping when the agent started.
 
 inputs:
+  node:
+    description: >-
+      The Node this action runs its scripts on, by absolute path: the kanon step's `node`
+      output (`actions/kanon-path`), from a caller whose job ran the project-setup hook first,
+      which may put another Node first on the PATH (kanon#1676). Defaults to `node` from the PATH.
+    required: false
+    default: node
   prompt:
     description: The agent's instructions.
     required: true
@@ -166,6 +173,7 @@ runs:
       id: turns
       shell: bash -e {0}
       env:
+        KANON_NODE: ${{ inputs.node }}
         CLAUDE_ARGS: ${{ inputs.claude_args }}
         MAX_TURNS: ${{ inputs.max-turns }}
         MAX_TURNS_CEILING: ${{ inputs.max-turns-ceiling }}
@@ -173,7 +181,8 @@ runs:
         # The caller's event, which a called workflow's `github` context is: a raise is taken
         # only on a dispatch.
         EVENT_NAME: ${{ github.event_name }}
-      run: node "$GITHUB_ACTION_PATH/turn-budget.mjs"
+      run: |
+        "$KANON_NODE" "$GITHUB_ACTION_PATH/turn-budget.mjs"
 
     # A LANE'S PRECONDITION, REFUSED BEFORE ANY MODEL CALL (kanon#1558). A lane that can tell
     # before its agent runs that the agent could only stop, such as the brief lane with no
@@ -221,9 +230,11 @@ runs:
       id: credential
       shell: bash -e {0}
       env:
+        KANON_NODE: ${{ inputs.node }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
-      run: node "$GITHUB_ACTION_PATH/credential-check.mjs"
+      run: |
+        "$KANON_NODE" "$GITHUB_ACTION_PATH/credential-check.mjs"
 
     # WHO THE AGENT SPEAKS AS (plan 0005 §3.3, step L3). `agent-setup` resolved the role and
     # exported its header line; this appends one instruction to the lane's prompt: open every
@@ -243,8 +254,10 @@ runs:
       continue-on-error: true
       shell: bash -e {0}
       env:
+        KANON_NODE: ${{ inputs.node }}
         PROMPT: ${{ inputs.prompt }}
-      run: node "$GITHUB_ACTION_PATH/persona-prompt.mjs"
+      run: |
+        "$KANON_NODE" "$GITHUB_ACTION_PATH/persona-prompt.mjs"
 
     # A USER SCOPE THIS JOB MADE, for a lane whose flags load no project settings (kanon#283).
     # `--setting-sources user` still loads `$HOME/.claude/` and `$HOME/.claude.json`, and on a
@@ -257,8 +270,10 @@ runs:
     - name: Give the agent a user scope this job made, if its flags load no project settings
       shell: bash -e {0}
       env:
+        KANON_NODE: ${{ inputs.node }}
         CLAUDE_ARGS: ${{ inputs.claude_args }}
-      run: node "$GITHUB_ACTION_PATH/user-scope.mjs"
+      run: |
+        "$KANON_NODE" "$GITHUB_ACTION_PATH/user-scope.mjs"
 
     # PINNED EXACTLY (plan 0001, decision 14). `@v1` moves under every adopter between two
     # Kanon releases, so the CLI an adopter runs, and the flags Kanon's tests check against
@@ -328,6 +343,7 @@ runs:
       continue-on-error: true
       shell: bash -e {0}
       env:
+        KANON_NODE: ${{ inputs.node }}
         OUTCOME: ${{ steps.agent.outcome }}
         CONCLUSION: ${{ steps.agent.outputs.conclusion }}
         EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
@@ -335,7 +351,8 @@ runs:
         # This job execution's check run, which the marker names (kanon#1499): a matrix's entries
         # share the job id, never the check run.
         KANON_JOB_CHECK_RUN_ID: ${{ job.check_run_id }}
-      run: node "$GITHUB_ACTION_PATH/runtime-check.mjs"
+      run: |
+        "$KANON_NODE" "$GITHUB_ACTION_PATH/runtime-check.mjs"
 
     # A STOP ON A PRECONDITION THE AGENT FOUND MID-RUN (kanon#1564). An agent that finds, once it
     # has started, that something its run needs doesn't hold stops without doing its work, and
@@ -350,5 +367,7 @@ runs:
       continue-on-error: true
       shell: bash -e {0}
       env:
+        KANON_NODE: ${{ inputs.node }}
         EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
-      run: node "$GITHUB_ACTION_PATH/stop-check.mjs"
+      run: |
+        "$KANON_NODE" "$GITHUB_ACTION_PATH/stop-check.mjs"

@@ -52,6 +52,13 @@ name: Agent telemetry
 description: Normalize a claude-code-action execution file into a telemetry row, summarize it, and upload it for the collector to store.
 
 inputs:
+  node:
+    description: >-
+      The Node this action runs its scripts on, by absolute path: the kanon step's `node`
+      output (`actions/kanon-path`), from a caller whose job ran the project-setup hook first,
+      which may put another Node first on the PATH (kanon#1676). Defaults to `node` from the PATH.
+    required: false
+    default: node
   agent:
     description: Which agent this run was (reviewer, implementer, explorer, …). Names the row.
     required: true
@@ -298,6 +305,7 @@ runs:
       id: row
       shell: bash
       env:
+        KANON_NODE: ${{ inputs.node }}
         TELEMETRY_PR: ${{ inputs.pr_number }}
         TELEMETRY_ADDITIONS: ${{ steps.diff.outputs.additions }}
         TELEMETRY_DELETIONS: ${{ steps.diff.outputs.deletions }}
@@ -333,7 +341,7 @@ runs:
         KANON_JOB_CHECK_RUN_ID: ${{ job.check_run_id }}
       run: |
         rm -f kanon-telemetry.json
-        node "${{ github.action_path }}/agent-telemetry.mjs" \
+        "$KANON_NODE" "${{ github.action_path }}/agent-telemetry.mjs" \
           --agent "${{ inputs.agent }}" \
           --execution-file "${{ inputs.execution_file }}" \
           --out qa-agent-telemetry.json \

@@ -162,6 +162,7 @@ describe('agent-run hands the credential to the agent through env only', () => {
     expect(check.env).toEqual({
       CLAUDE_CODE_OAUTH_TOKEN: '${{ inputs.claude-token }}',
       ANTHROPIC_API_KEY: '${{ inputs.anthropic-api-key }}',
+      KANON_NODE: '${{ inputs.node }}',
     });
   });
 
@@ -174,7 +175,7 @@ describe('agent-run hands the credential to the agent through env only', () => {
     expect(steps.indexOf(check)).toBeGreaterThanOrEqual(0);
     expect(steps.indexOf(check)).toBeLessThan(steps.indexOf(agent));
     expect(check['continue-on-error']).toBeUndefined();
-    expect(check.run).toBe('node "$GITHUB_ACTION_PATH/credential-check.mjs"');
+    expect(check.run).toBe('"$KANON_NODE" "$GITHUB_ACTION_PATH/credential-check.mjs"\n');
     expect(action.outputs.auth?.value).toBe('${{ steps.credential.outputs.auth }}');
   });
 });

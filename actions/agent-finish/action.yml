@@ -27,6 +27,13 @@ description: >-
   run's cost row. Never fails the caller.
 
 inputs:
+  node:
+    description: >-
+      The Node this action runs its scripts on, by absolute path: the kanon step's `node`
+      output (`actions/kanon-path`), from a caller whose job ran the project-setup hook first,
+      which may put another Node first on the PATH (kanon#1676). Defaults to `node` from the PATH.
+    required: false
+    default: node
   arm:
     description: Human name for this arm, passed to agent-classify on a red run.
     required: true
@@ -197,6 +204,8 @@ runs:
       uses: $/actions/agent-classify
       with:
         arm: ${{ inputs.arm }}
+        # This action's own Node, passed on (kanon#1676).
+        node: ${{ inputs.node }}
         # The flags the row records, and whether the agent step failed (kanon#1015): a lane
         # that classifies here runs its agent step without `continue-on-error`, so its `agent`
         # stage's conclusion is the step's outcome.
@@ -222,6 +231,7 @@ runs:
       continue-on-error: true
       shell: bash -e {0}
       env:
+        KANON_NODE: ${{ inputs.node }}
         GH_TOKEN: ${{ inputs.github-token }}
         REPO: ${{ github.repository }}
         LABEL: ${{ inputs.quality-pr-label }}
@@ -238,7 +248,7 @@ runs:
         # whole repository at the lane's defining commit for a `$/` reference, so the script
         # beside this block's directory is that commit's copy — where `.github/scripts/` in
         # the workspace is whatever the lane checked out, and whatever its agent left there.
-        node "$GITHUB_ACTION_PATH/agent-quality-prs.mjs" --label "$LABEL" --opened-since "$SINCE" --issue "$ISSUE"
+        "$KANON_NODE" "$GITHUB_ACTION_PATH/agent-quality-prs.mjs" --label "$LABEL" --opened-since "$SINCE" --issue "$ISSUE"
 
     # Record what this run cost (RA-1485). `always()` because a run that FAILED is the one
     # you most want measured — a telemetry step that runs only on success measures
@@ -249,6 +259,8 @@ runs:
       # and the reference adopter's observability doc, §8 (RA-1553). Guarded by tests/unit/agent-telemetry.test.ts.
       continue-on-error: true
       with:
+        # This action's own Node, passed on (kanon#1676).
+        node: ${{ inputs.node }}
         agent: ${{ inputs.agent }}
         issue_number: ${{ inputs.issue-number }}
         pr_number: ${{ inputs.pr-number }}

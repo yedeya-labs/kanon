@@ -267,6 +267,8 @@ jobs:
         env:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           max-turns: ${{ inputs.max_turns }}
           max-turns-ceiling: "240"
           max-turns-reason: ${{ inputs.reason }}
@@ -421,6 +423,8 @@ jobs:
         if: always()
         continue-on-error: true
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           claude-args-ran: ${{ steps.agent.outputs.claude-args }}
           arm: rebase lane
           # ITS OWN NAME, not `implementer`. Every lane this repo measures carries a

@@ -511,6 +511,8 @@ jobs:
         env:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ inputs.claude_args }}
           max-turns: ${{ inputs.max-turns }}
@@ -638,6 +640,8 @@ jobs:
         if: always()
         continue-on-error: true
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           arm: ${{ inputs.arm }}
           agent: ${{ inputs.agent }}
           job-status: ${{ job.status }}

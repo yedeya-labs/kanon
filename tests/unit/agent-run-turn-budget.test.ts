@@ -206,7 +206,7 @@ describe('agent-run checks the limit before the agent, and runs the flags the ch
     expect(at).toBe(1);
     expect(at).toBeLessThan(steps.findIndex((s) => s.id === 'credential'));
     const step = steps[at]!;
-    expect(step.run).toBe('node "$GITHUB_ACTION_PATH/turn-budget.mjs"');
+    expect(step.run).toBe('"$KANON_NODE" "$GITHUB_ACTION_PATH/turn-budget.mjs"\n');
     expect(step['continue-on-error']).toBeUndefined();
     // Through `env:` only, never the run line (K-AGENT-45); the event is the caller's.
     expect(step.env).toEqual({
@@ -215,6 +215,7 @@ describe('agent-run checks the limit before the agent, and runs the flags the ch
       MAX_TURNS_CEILING: '${{ inputs.max-turns-ceiling }}',
       MAX_TURNS_REASON: '${{ inputs.max-turns-reason }}',
       EVENT_NAME: '${{ github.event_name }}',
+      KANON_NODE: '${{ inputs.node }}',
     });
     for (const s of steps) expect(String(s.run ?? '')).not.toMatch(/inputs\.max-turns/);
   });

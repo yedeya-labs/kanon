@@ -205,7 +205,8 @@ describe('the blocks run their scripts from the action cache, never from the wor
   type Step = WorkflowStep & { uses?: string; run?: string; name?: string };
   // The script a `node` call runs — an expression with spaces in it (`${{ github.action_path }}`)
   // included, which a plain `\S+` would stop inside and so never check.
-  const NODE_SCRIPT = /\bnode\s+"?((?:\$\{\{[^}]*\}\}|[^\s"])+\.m?js)/g;
+  // Since kanon#1676 the blocks start their scripts on `"$KANON_NODE"`, their `node` input.
+  const NODE_SCRIPT = /(?:\bnode|"\$KANON_NODE")\s+"?((?:\$\{\{[^}]*\}\}|[^\s"])+\.m?js)/g;
   const ACTION_PATH = /^(\$GITHUB_ACTION_PATH|\$\{\{ github\.action_path \}\})\//;
 
   it.each([...PIPELINE])('%s runs its scripts through its action path, from its own directory', (name) => {

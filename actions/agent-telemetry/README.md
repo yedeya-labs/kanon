@@ -27,6 +27,7 @@ Turns `claude-code-action`'s result file into one telemetry row (cost, turns, to
 | Input | Required | Meaning |
 |---|---|---|
 | `agent` | yes | Names the row. |
+| `node` | no | The Node its script runs on, by absolute path: the kanon step's `node` output, from a lane whose job ran the project-setup hook first, which may put another Node first on the `PATH` ([#1676](https://github.com/yedeya-labs/kanon/issues/1676)). Defaults to `node` from the `PATH`. |
 | `execution_file` | no | The agent step's `execution_file` output. |
 | `claude_args` | no | The same flag block the agent ran with: the only source for the effort and the configuration fingerprint. |
 | `pr_number` | no | The pull request under review. Its diff size is read and stored. On a revise lane, the open items the Reviewer's latest changes-request declares are stored too, as `review_open_items` (run row version 4, [#173](https://github.com/yedeya-labs/kanon/issues/173)). |

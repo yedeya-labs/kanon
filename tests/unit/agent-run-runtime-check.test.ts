@@ -175,7 +175,7 @@ describe("agent-run runs the check after the action, and only after it failed", 
     const s = steps[check]!;
     expect(s.if).toBe("!cancelled() && steps.agent.outcome == 'failure'");
     expect(s['continue-on-error']).toBe(true);
-    expect(s.run).toBe('node "$GITHUB_ACTION_PATH/runtime-check.mjs"');
+    expect(s.run).toBe('"$KANON_NODE" "$GITHUB_ACTION_PATH/runtime-check.mjs"\n');
   });
 
   it("reads the agent step's outcome and outputs and the start stamp, through env only", () => {
@@ -185,6 +185,7 @@ describe("agent-run runs the check after the action, and only after it failed", 
       EXECUTION_FILE: '${{ steps.agent.outputs.execution_file }}',
       STARTED_AT: '${{ steps.started.outputs.at }}',
       KANON_JOB_CHECK_RUN_ID: '${{ job.check_run_id }}',
+      KANON_NODE: '${{ inputs.node }}',
     });
   });
 });

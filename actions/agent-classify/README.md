@@ -25,6 +25,7 @@ The block has no `if:` of its own, because the right gate depends on the lane. G
 | Input | Required | Meaning |
 |---|---|---|
 | `arm` | yes | A human name for the lane, used in the annotation. |
+| `node` | no | The Node its script runs on, by absolute path: the kanon step's `node` output, from a lane whose job ran the project-setup hook first, which may put another Node first on the `PATH` ([#1676](https://github.com/yedeya-labs/kanon/issues/1676)). Defaults to `node` from the `PATH`. |
 | `recover` | no | The command that recovers the run, printed where a re-run is the advice. |
 | `non-fatal` | no | `"true"` for an agent step whose failure leaves the job green. The annotation is then a warning. |
 | `claude-args` | no | The flags the agent ran with: `agent-run`'s `claude-args` output. Only `--max-turns` is read. |

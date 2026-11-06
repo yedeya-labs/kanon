@@ -33,6 +33,13 @@ description: >-
   retry class.
 
 inputs:
+  node:
+    description: >-
+      The Node this action runs its scripts on, by absolute path: the kanon step's `node`
+      output (`actions/kanon-path`), from a caller whose job ran the project-setup hook first,
+      which may put another Node first on the PATH (kanon#1676). Defaults to `node` from the PATH.
+    required: false
+    default: node
   arm:
     description: Human name for this arm, used in the annotation's title and body.
     required: true
@@ -103,6 +110,7 @@ runs:
       id: classify
       shell: bash -e {0}
       env:
+        KANON_NODE: ${{ inputs.node }}
         ARM: ${{ inputs.arm }}
         RECOVER: ${{ inputs.recover }}
         NON_FATAL: ${{ inputs.non-fatal }}
@@ -118,4 +126,4 @@ runs:
         if [ -n "$CLAUDE_ARGS" ]; then set -- "$@" --claude-args "$CLAUDE_ARGS"; fi
         if [ -n "$AGENT_OUTCOME" ]; then set -- "$@" --agent-outcome "$AGENT_OUTCOME"; fi
         if [ "$RAISABLE" = "false" ]; then set -- "$@" --not-raisable; fi
-        node "$GITHUB_ACTION_PATH/classify-agent-result.mjs" "$@"
+        "$KANON_NODE" "$GITHUB_ACTION_PATH/classify-agent-result.mjs" "$@"

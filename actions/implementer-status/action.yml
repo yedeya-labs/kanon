@@ -28,6 +28,13 @@ description: >-
   changes-request filed on that head before the status was. Never fails the caller.
 
 inputs:
+  node:
+    description: >-
+      The Node this action runs its scripts on, by absolute path: the kanon step's `node`
+      output (`actions/kanon-path`), from a caller whose job ran the project-setup hook first,
+      which may put another Node first on the PATH (kanon#1676). Defaults to `node` from the PATH.
+    required: false
+    default: node
   mode:
     description: "`open` (implement, triage) or `carry` (implement-revise, rebase)."
     required: true
@@ -104,6 +111,7 @@ runs:
     - name: Set or carry the implementer status
       shell: bash -e {0}
       env:
+        KANON_NODE: ${{ inputs.node }}
         MODE: ${{ inputs.mode }}
         READ_TOKEN: ${{ steps.read-token.outputs.token }}
         STATUS_TOKEN: ${{ steps.status-token.outputs.token }}
@@ -116,4 +124,5 @@ runs:
         PR: ${{ inputs.pr }}
         START_HEAD: ${{ inputs.start-head }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      run: node "$GITHUB_ACTION_PATH/implementer-status.mjs"
+      run: |
+        "$KANON_NODE" "$GITHUB_ACTION_PATH/implementer-status.mjs"
