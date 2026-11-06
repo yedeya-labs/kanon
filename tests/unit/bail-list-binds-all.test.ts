@@ -17,6 +17,17 @@ const section = (text: string, heading: string) => {
 };
 
 describe('the bail list binds whoever implements (kanon#1566)', () => {
+  // kanon#1660: every definition of `qa:human-action` states the reserved meaning too.
+  it("defines qa:human-action with both its meanings, in K-PROJ-9, K-PROJ-11 and the label's description", () => {
+    const projects = read('rulebook/07-projects.md');
+    expect(projects).toContain('Mark an item reserved for a person or a local session, rather than the Implementer, the same way');
+    expect(projects).toContain('or, for one reserved for a person or a local session, when its pull request merges and closes it');
+    const label = (JSON.parse(read('rulebook/labels.json')) as { labels: Array<{ name: string; description: string }> }).labels.find((l) => l.name === 'qa:human-action')!;
+    expect(label.description).toBe('Project item a person does: not a PR, or reserved for a person or local session; never dispatched');
+    expect(read('rulebook/01-work-items.md')).toContain(`| \`qa:human-action\` | \`c5def5\` | ${label.description} |`);
+    expect(read('scripts/lead-reconcile.mjs')).toContain('or when the pull request of a person or a local session merges and closes it');
+  });
+
   it('says so in K-AGENT-13, with the plan as the pull request\'s first section where no lane runs', () => {
     const rule = section(read('rulebook/03-agents.md'), '### `K-AGENT-13` Assess scope first, and bail with a plan on the bail list')!;
     expect(rule).toContain('The bail list binds whoever implements the change, a lane, a person or a local Claude session alike.');

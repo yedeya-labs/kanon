@@ -234,10 +234,15 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-11-05.** The enforcement says where the brief guard runs: on the Lead's own brief, and on every pull request in a repository's CI, through the `Brief guard` job `kanon init` writes beside a Lead lane, which `kanon doctor` notes the absence of (`ci.brief-guard-missing`). Before, nothing ran it on an adopter's pull requests. [#1608](https://github.com/yedeya-labs/kanon/issues/1608)
 
+## `K-PROJ-9`
+
+- **2026-11-06.** `qa:human-action` also marks an item reserved for a person or a local session rather than the Implementer, the Owner's decision on #1566: never dispatched either, its pull request opens with `## Plan` (`K-AGENT-13`) and closes it. The label's description says so too. [#1660](https://github.com/yedeya-labs/kanon/issues/1660)
+
 ## `K-PROJ-11`
 
 - **2026-10-20.** The dispatch phase can be withheld on its own: with `lead:file-only` on the tracking issue every other phase runs, each tick names the issues it did not dispatch, and removing the label resumes dispatch. Before, the only stop was `needs:human`, which also stopped the filing. [#1113](https://github.com/yedeya-labs/kanon/issues/1113)
 - **2026-10-21.** The Owner decided that a roadmap milestone created for, and filled by, one project is allowed: what stays forbidden is a milestone kind or a bucket of a project's own. Before, the rule forbade a project any milestone of its own, which also ruled out a dated roadmap milestone the Stakeholder created for it. [#853](https://github.com/yedeya-labs/kanon/issues/853)
+- **2026-11-06.** A human-action item reserved for a person or a local session is done when its pull request merges and closes it. [#1660](https://github.com/yedeya-labs/kanon/issues/1660)
 
 ## `K-PROJ-16`
 
