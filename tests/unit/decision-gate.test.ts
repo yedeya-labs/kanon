@@ -83,6 +83,12 @@ describe('the lanes run it', () => {
     expect(calls).toEqual([['api', 'repos/o/r/issues/7', '--jq', '.labels']]);
   });
 
+  it('names the reply, not a dispatch, when it admits a comment it could not read the labels of', () => {
+    const fail = () => { throw new Error('HTTP 502'); };
+    expect(decide({ env: { EVENT: 'issue_comment', REPO: 'o/r', ISSUE: '7', LABELS: '' }, gh: fail }).reason).toContain('admitting this reply to a scope-first bail');
+    expect(decide({ env: { EVENT: 'workflow_dispatch', REPO: 'o/r', ISSUE: '7', LABELS: '' }, gh: fail }).reason).toContain('admitting this dispatch');
+  });
+
   it('gives the implement filter the issues: write its comment needs, which its caller grants', () => {
     expect(filter('agent-implement.yml').permissions).toEqual({ contents: 'read', issues: 'write' });
     const req = JSON.parse(readFileSync(join(process.cwd(), 'requirements.json'), 'utf8'));

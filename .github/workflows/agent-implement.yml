@@ -92,7 +92,9 @@ concurrency:
   # A comment takes a group of its own (kanon#1649): every comment on an issue starts the caller,
   # and in the label's or the dispatch's group the many that skip would queue behind a real run
   # and replace one another, and a reply that restarts the run among them. A restart needs the
-  # bail to be the Implementer's last word, so no run of this issue is going when one starts.
+  # bail to be the Implementer's last word, so no run of this issue is going when one starts, except when
+  # two replies arrive close together and both read `decision:needed` before either takes it off,
+  # which starts two runs (kanon#1677).
   group: qa-implement-${{ github.event.issue.number || inputs.issue_number }}-${{ github.event_name == 'issue_comment' && format('comment-{0}', github.event.comment.id) || github.event.label.name || 'dispatch' }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 

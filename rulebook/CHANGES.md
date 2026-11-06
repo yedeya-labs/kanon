@@ -71,6 +71,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-28.** The Owner decided that each lane gains the capability to post this ask when its escalation needs the Owner's decision, beside its existing `needs:human` and `qa:needs-info` records, which stay. Until it is built the rule binds interactive sessions and their subagents, and the ask's marker may follow an App-run agent's persona header (`K-AGENT-1`), so the two rules hold together. [#1497](https://github.com/yedeya-labs/kanon/pull/1497#issuecomment-6476880831), [#1501](https://github.com/yedeya-labs/kanon/issues/1501)
 - **2026-11-06.** The label now also stops the Implementer: the implement and triage lanes refuse an issue that carries it, and the Lead's reconcile tick and the dispatch sweep's backlog feed never label one `agent:implement`, so an agent never builds an answer to a decision a person owes. [#1594](https://github.com/yedeya-labs/kanon/issues/1594)
+- **2026-11-06.** The Owner decided that the implement lane posts this ask beside a scope-first bail and labels the issue, and that a member's reply to the bail answers it. The Rule no longer calls a lane's ask planned, and "Enforced by" names the restart on that reply, which takes the label off with no answer comment, as the one admission of a labelled issue. [#1649](https://github.com/yedeya-labs/kanon/issues/1649)
 
 ## `K-WORK-25`
 
