@@ -311,6 +311,17 @@ describe('classifyDispatch — the classification the digest must not get wrong'
     expect(readFileSync(join(ROOT, '.github/workflows/agent-implement.yml'), 'utf8')).toMatch(BAIL_RE);
   });
 
+  // kanon#1669: the narrative prompt names the third cause the digest's member line already does.
+  it('the narrative prompt names a decision hold as a third cause of an implement issue with no PR', () => {
+    const flat = readFileSync(join(ROOT, '.github/workflows/agent-project-digest.yml'), 'utf8').replace(/\s+/g, ' ');
+    expect(flat).toContain('with no PR has three causes that look identical and need different responses');
+    expect(flat).toContain('a DECISION HOLD — the issue also carries `decision:needed`');
+    expect(flat).not.toMatch(/has two causes that look identical/);
+    // The prompt quotes the member line's own words, which the digest renders.
+    expect(flat).toContain('its digest line says "awaiting a decision"');
+    expect(renderMember(member({ disposition: 'decision-held' }))).toContain('awaiting a decision');
+  });
+
   // ---- RA-1443 review, finding 2 --------------------------------------------
   it('A BAIL NEVER CLEARS A BAIL — a re-dispatch that bails again still wants a decision', () => {
     // The failure this pins: keying off the FIRST bail made the second bail look

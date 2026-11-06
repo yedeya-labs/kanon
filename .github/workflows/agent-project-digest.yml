@@ -258,7 +258,7 @@ jobs:
             and stop — an honest quiet day beats a padded one.
 
             THE DISTINCTION THAT MATTERS MOST. An issue labelled `agent:implement`
-            with no PR has two causes that look identical and need opposite
+            with no PR has three causes that look identical and need different
             responses:
               - a SCOPE-FIRST BAIL — the implementer posted a plan and stopped,
                 correctly, because `agent-implement.yml` forbids it from
@@ -267,7 +267,13 @@ jobs:
                 DECISION from the developer. Check the issue's comments.
               - a STALLED DISPATCH — the run was skipped or died. It needs a
                 RE-DISPATCH.
-            Never call one the other. If you cannot tell from the comments, say
+              - a DECISION HOLD — the issue also carries `decision:needed`, so
+                the implement and triage lanes refuse it, and a re-dispatch is
+                refused again (kanon#1594). It needs the developer to record the
+                decision on the issue and remove the label. Check its labels;
+                its digest line says "awaiting a decision".
+            Never call one another. If you cannot tell from the comments and
+            labels, say
             which it looks like and why, rather than asserting.
 
             RULES:
