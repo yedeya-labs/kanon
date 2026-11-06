@@ -94,7 +94,7 @@ claude plugin marketplace add --scope project yedeya-labs/kanon#candidate-vX.Y.Z
 claude plugin install --scope project kanon@kanon
 ```
 
-Move back to stable with `/kanon:upgrade`, which offers the move once Kanon has promoted the candidate or a later stable release is out. Until [#1563](https://github.com/yedeya-labs/kanon/issues/1563) is fixed, the upgrade skill run from a candidate plugin targets that candidate's stable release, a tag that exists only once Kanon promotes it, so run it after the promotion.
+Move back to stable with `/kanon:upgrade`, which offers the move once Kanon has promoted the candidate or a later stable release is out. Run from a candidate plugin before the promotion, the upgrade skill moves your pins to that candidate's tag, the one that exists; run it again after the promotion and it offers the candidate's stable release ([#1563](https://github.com/yedeya-labs/kanon/issues/1563)).
 
 ## After merging
 
