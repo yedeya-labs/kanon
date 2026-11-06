@@ -222,7 +222,8 @@ export const samePath = (a, b) => {
 // another source or `ref`, `claude plugin marketplace add --scope project` refuses ("its source
 // doesn't match its extraKnownMarketplaces entry in user or managed settings"), and the install
 // takes the entry's release, for this repository and every other on the machine. So `kanon doctor`
-// reads that one entry of those two files, the Owner's decision of 2026-11-05, which reverses for
+// reads that one entry of each settings file it can read (the managed file and its drop-ins, the
+// checkout's local settings and the user's, #1630), the Owner's decision of 2026-11-05, which reverses for
 // this key alone the rule above that it reads no settings: never another key, since a settings file's
 // `env` can hold a credential, never a message that quotes the file, and it writes nothing there.
 
@@ -241,8 +242,9 @@ export const userSettingsPath = (env) => {
 };
 
 /**
- * The managed settings files Claude Code reads on each system, as its settings documentation lists
- * them (https://code.claude.com/docs/en/settings, "Settings files").
+ * The managed settings file Claude Code reads on each system, as its managed-settings page lists it
+ * (https://code.claude.com/docs/en/managed-settings, "Where each mechanism stores the policy"). The
+ * drop-ins of `managed-settings.d/` beside it are merged after it (`managedSettingFiles`).
  * @type {Record<string, string[]>}
  */
 export const MANAGED_SETTINGS = {
@@ -253,6 +255,37 @@ export const MANAGED_SETTINGS = {
 
 /** The managed settings files of a platform (`process.platform`), none for one the docs don't name. @param {string} platform */
 export const managedSettingsPaths = (platform) => MANAGED_SETTINGS[platform] ?? [];
+
+/**
+ * Every managed settings file of a platform, in the order Claude Code merges them, a later one over
+ * an earlier: `managed-settings.json`, then each `*.json` of `managed-settings.d/` beside it, in
+ * alphabetical order, a hidden one left out as Claude Code leaves it out (#1630). `list` names a directory's entries, none when it isn't there.
+ * @param {string} platform @param {(dir: string) => string[]} list
+ */
+export const managedSettingFiles = (platform, list) =>
+  managedSettingsPaths(platform).flatMap((file) => {
+    const sep = file.includes('\\') ? '\\' : '/';
+    const dir = `${file.slice(0, file.lastIndexOf(sep))}${sep}managed-settings.d`;
+    return [file, ...list(dir).filter((n) => n.endsWith('.json') && !n.startsWith('.')).sort().map((n) => `${dir}${sep}${n}`)];
+  });
+
+/**
+ * The policy sources Claude Code reads that aren't files doctor can read for one key (#1630): the
+ * macOS managed preferences, a property list an MDM writes, and the Windows registry policy. Doctor
+ * reads neither, and says so where it would otherwise call a marketplace "only behind". Server-managed
+ * settings, which an organisation sets in Claude's console, apply on any system and are not read.
+ * @type {Record<string, string[]>}
+ */
+export const UNREAD_POLICY = {
+  darwin: ['the macOS managed preferences (com.anthropic.claudecode)'],
+  win32: ['the registry policy (HKLM and HKCU\\SOFTWARE\\Policies\\ClaudeCode)'],
+};
+
+/** What of Claude Code's settings doctor can't read on a platform, server-managed settings last. @param {string} platform */
+export const unreadSettings = (platform) => [...(UNREAD_POLICY[platform] ?? []), 'server-managed settings'];
+
+/** The project's own local settings, which `claude plugin marketplace add --scope local` writes, beside `.claude/settings.json`. */
+export const LOCAL_SETTINGS_PATH = '.claude/settings.local.json';
 
 /**
  * The marketplace entry `name` of a settings file's text, and nothing else of it: none, for no file,
@@ -271,11 +304,14 @@ export const readMarketplaceEntry = (text, name) => {
     // Never the parser's message: it can quote the file, credentials among it.
     return { status: 'unreadable' };
   }
-  const markets = isMap(doc) && isMap(doc.extraKnownMarketplaces) ? doc.extraKnownMarketplaces : null;
-  const entry = markets && Object.hasOwn(markets, name) ? markets[name] : null;
+  // As `kanonMarketplace` reads the repository's: the `additionalMarketplaces` alias where the
+  // canonical key is absent, and a `ref` trimmed, an empty one none (#1630).
+  const markets = isMap(doc) ? marketplaces(doc) : {};
+  const entry = Object.hasOwn(markets, name) ? markets[name] : null;
   if (!isMap(entry)) return { status: 'none' };
   const source = entry.source;
-  return { status: 'entry', kanon: isKanonSource(source), ref: isMap(source) && typeof source.ref === 'string' ? source.ref : null };
+  const ref = isMap(source) && typeof source.ref === 'string' && source.ref.trim() ? source.ref.trim() : null;
+  return { status: 'entry', kanon: isKanonSource(source), ref };
 };
 
 // ── The marketplace's auto-update (kanon#1578) ────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { appSecrets, appsCheckFile } from '../../cli/callers.mjs';
@@ -114,6 +115,25 @@ describe('kanon doctor and the Releaser\'s ruleset bypass (#49)', () => {
     const missing = privateReleaser([ADMIN]);
     missing.github.st.installations = github.st.installations;
     expect(ids(await run(missing.dir, missing.github, ['--json']))).toContain('ruleset.releaser-bypass-missing main');
+  });
+
+  // kanon#1607 point 18: on a personal account the token can't list the installations, so the
+  // register's App ID column is where the Releaser's id comes from.
+  it("checks a private Releaser's bypass against the App ID the register records (#1607)", async () => {
+    const recorded = (bypass: unknown[]) => {
+      const p = privateReleaser(bypass);
+      const path = join(p.dir, 'docs/qa/agent-identities.md');
+      const text = writeRegisterRow(readFileSync(path, 'utf8'), { role: 'Releaser', slug: 'widgets-releaser', permissions: permissionsOf(REQ, 'releaser'), appId: RELEASER_ID }).text;
+      writeFileSync(path, text);
+      return p;
+    };
+    const ok = recorded([RELEASER]);
+    const r = await run(ok.dir, ok.github, ['--json']);
+    expect(r.json.unchecked).toEqual([]);
+    expect(ids(r)).toEqual([]);
+    expect(r.json.notes.join('\n')).toContain(`The Releaser App \`widgets-releaser\`'s id, ${RELEASER_ID}, is the one docs/qa/agent-identities.md records`);
+    const lacking = recorded([ADMIN]);
+    expect(ids(await run(lacking.dir, lacking.github, ['--json']))).toContain('ruleset.releaser-bypass-missing main');
   });
 
   it('leaves a private Releaser\'s bypass unchecked, and says why, when the token can\'t list the installations or they list no Releaser (#417)', async () => {

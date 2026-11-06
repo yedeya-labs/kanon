@@ -1287,6 +1287,19 @@ describe('the inbox skill', () => {
   });
 });
 
+// kanon#1607 points 10 and 18: the adopt skill hands over init's one `kanon apps --reuse` line,
+// which opens each App's page and waits for the key, and never asks the person for a key's path.
+describe('the adopt skill and reusing the owner\'s Apps (#1607)', () => {
+  it('walks one kanon apps --reuse command through, the key found in the download folder, never by its path', () => {
+    const row = rows(skill('adopt').body).find((r) => r[0] === '`app.reuse`')!;
+    expect(row[2]).toMatch(/one `kanon apps --reuse` command/);
+    expect(row[2]).toContain('`<slug>.<date>.private-key.pem`');
+    expect(row[2]).toMatch(/from the register, then GitHub, then asks them/);
+    expect(row[2]).toContain('Never ask for the key\'s path, and never read the key.');
+    expect(row[2]).not.toMatch(/key file's path/);
+  });
+});
+
 /**
  * kanon#1607: the install path (`claude plugin marketplace add --scope project`, then `claude
  * plugin install --scope project`) leaves `.claude/settings.json` in the checkout, untracked, so
