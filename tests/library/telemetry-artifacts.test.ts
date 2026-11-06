@@ -168,6 +168,8 @@ describe('readArtifactCostRows — the store read\'s shape, from artifacts', () 
     // What `readCostRows` builds from the store item the collector wrote for this run.
     const storeRow = { ts: sweepCostStamp(Date.parse(r.recorded_at)), issue_number: '9', outcome: 'exhausted', run_id: '37000000020' };
     expect(toCostRow(r)).toEqual(storeRow);
+    // kanon#1592: the lines a run committed travel with its row, when it records them.
+    expect(toCostRow({ ...r, produced_lines: 12 })).toEqual({ ...storeRow, produced_lines: 12 });
     expect(costStamp(Date.parse(r.recorded_at))).toBe('20260904T120245Z');
     expect(exhaustedAtByIssue([toCostRow(r)], [9])).toEqual(exhaustedAtByIssue([storeRow], [9]));
   });

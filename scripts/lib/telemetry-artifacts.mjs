@@ -401,7 +401,7 @@ export function queryRunRows(lane, from, to, { repo, api, download, maxPages }) 
 /**
  * One version-2 row as the store query returns it (`readCostRows`).
  * @param {Record<string, any>} row
- * @returns {{ ts: string, issue_number: string | null, outcome: string, run_id: string }}
+ * @returns {{ ts: string, issue_number: string | null, outcome: string, run_id: string, produced_lines?: number }}
  */
 export function toCostRow(row) {
   return {
@@ -409,6 +409,8 @@ export function toCostRow(row) {
     issue_number: row.issue_number == null ? null : String(row.issue_number),
     outcome: row.outcome,
     run_id: String(row.run_id),
+    // The lines the run committed (kanon#1592), which the sweep reads to stop a re-dispatch of work that exists.
+    ...(Number.isInteger(row.produced_lines) ? { produced_lines: row.produced_lines } : {}),
   };
 }
 

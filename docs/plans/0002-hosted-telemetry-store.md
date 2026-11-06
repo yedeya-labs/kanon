@@ -68,7 +68,7 @@ Everything else is a number, a boolean, or a value from a closed list (`outcome`
 |---|---|---|
 | `token-trend.mjs` (the weekly cost report) | Overseer job, Mondays 07:00 | every `COST#<agent>` partition in full: outcome, model, effort, fingerprint, cost, tokens, durations, and the size fields |
 | `cache-ttl-check.mjs` | Overseer job, weekly | every partition: `sk`, `outcome` and the three cache-write fields |
-| `dispatch-sweep.mjs` | daily, 04:40 | the lanes' partitions since a cutoff, projected to `sk`, `issue_number`, `outcome`, `run_id` |
+| `dispatch-sweep.mjs` | daily, 04:40 | the lanes' partitions since a cutoff, projected to `sk`, `issue_number`, `outcome`, `run_id`, `produced_lines` |
 | The Overseer agent | weekly | any partition, ad hoc, through `aws dynamodb query` in its prompt |
 | The weekly and project digests | — | **nothing.** They mention cost rows in comments only. |
 

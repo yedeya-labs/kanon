@@ -305,6 +305,23 @@ on:
         required: false
         type: boolean
         default: false
+      run-summary:
+        description: >-
+          Upload a safe summary of the agent's run as a seven-day artifact (kanon#1593): the final
+          message, each tool call's name and error flag, and the turn and cost counts, never a tool's
+          input or output.
+        required: false
+        type: boolean
+        default: false
+      closing-comment:
+        description: >-
+          With `push`, the agent writes its closing comment to `docs/.kanon-issue-comment.md`, and
+          the push job posts it on `issue-number` with its own token, minted after the run
+          (kanon#1591): the agent's token lives an hour, and a run may take longer. The push job's
+          token then also carries `issues: write`, and the job runs on a comment alone.
+        required: false
+        type: boolean
+        default: false
       quality-pr-label:
         description: >-
           OPT-IN quality column (RA-1627). The label on the PR this lane's agent opens, e.g.
@@ -374,6 +391,11 @@ on:
       push-pr:
         description: The number of the pull request the push job opened, or empty.
         value: ${{ jobs.push.outputs.pr }}
+      # WHETHER THE AGENT'S JOB LEFT COMMITS FOR THE PUSH JOB (kanon#1592): with no pull request
+      # after, the work exists on the run's artifact, and the push job is what to re-run, not the agent.
+      commits:
+        description: "'true' when the agent's job handed commits to the push job."
+        value: ${{ jobs.run.outputs.commits }}
     secrets:
       app-id:
         required: true
@@ -424,6 +446,7 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: ${{ inputs.push-workflows && 'write' || '' }}
+          permission-issues: ${{ inputs.closing-comment && 'write' || '' }}
           permission-actions: read
       - name: Revoke the push probe's token
         if: always() && steps.push-probe.outputs.token != ''
@@ -502,6 +525,8 @@ jobs:
       browsers: ${{ inputs.browsers }}
       project-setup: ${{ inputs.project-setup }}
       push: ${{ inputs.push }}
+      closing-comment: ${{ inputs.closing-comment }}
+      run-summary: ${{ inputs.run-summary }}
       quality-pr-label: ${{ inputs.quality-pr-label }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}
@@ -530,7 +555,7 @@ jobs:
   # it with this job's token, which holds `actions: read` for that alone.
   push:
     needs: [mint, run]
-    if: ${{ !cancelled() && inputs.push && needs.run.outputs.commits == 'true' }}
+    if: ${{ !cancelled() && inputs.push && (needs.run.outputs.commits == 'true' || (inputs.closing-comment && needs.run.outputs.comment == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -552,6 +577,8 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: ${{ inputs.push-workflows && 'write' || '' }}
+          # The agent's closing comment, on a lane that hands it here (kanon#1591).
+          permission-issues: ${{ inputs.closing-comment && 'write' || '' }}
           permission-actions: read
       - uses: actions/download-artifact@v8
         with:
@@ -561,6 +588,7 @@ jobs:
           github-token: ${{ steps.push-token.outputs.token }}
       - name: Push the agent's commits, and open its pull request
         id: push
+        if: needs.run.outputs.commits == 'true'
         env:
           GH_TOKEN: ${{ steps.push-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -573,3 +601,13 @@ jobs:
           in="$RUNNER_TEMP/kanon-push"
           node "$KANON/scripts/lane-push.mjs" --bundle "$in/commits.bundle" --request "$in/request.json" \
             --start "$START" --ref "$REF" --labels "$LABELS" --app-login "$APP_LOGIN"
+      # THE AGENT'S CLOSING COMMENT (kanon#1591), after its commits, so a comment that names the
+      # pull request lands once it exists. Posted even when the push failed: the comment says what
+      # the agent did, and the run's red push says what didn't land.
+      - name: Post the agent's closing comment
+        if: ${{ !cancelled() && inputs.closing-comment && needs.run.outputs.comment == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.push-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue-number }}
+        run: node "$KANON/scripts/lane-comment.mjs" --comment "$RUNNER_TEMP/kanon-push/comment.md" --issue "$ISSUE"
