@@ -97,6 +97,13 @@ name: Review (Reviewer)
 # this expression, as the last token.
 # CALLER RUN-NAME ENDS WITH: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}
 #
+# THE ACTIVITY TYPES THE CALLER `kanon init` WRITES, on the line below (#1652): `lane-check`
+# warns of a caller at this release whose event lists `types:` without one of them, as doctor's
+# `caller.event-types-missing` does from the template itself. A caller written before
+# `ready_for_review` keeps its old list, since an upgrade moves only the pin.
+# tests/unit/lane-check-review-lanes.test.ts holds the line to the caller template.
+# CALLER TYPES: pull_request_target opened labeled ready_for_review
+#
 # `lane-check` also requires the workflow on the line below (K-LAYOUT-18, kanon#207): a review
 # label added while CI runs defers to CI's completion, and the filter asks Actions about that
 # file's runs for the head (`gh run list --workflow ci.yml`).
@@ -139,8 +146,12 @@ name: Review (Reviewer)
 #     # `opened`-with-label event.) `opened` is kept ONLY for `notify-unlabeled`
 #     # below; the `filter` job skips it, because CI is starting as it fires — in its
 #     # job-level `if:` since RA-2596, so the skip costs no runner minute, and in the
-#     # `decide` step as well.
-#     types: [opened, labeled]
+#     # `decide` step as well. `ready_for_review` (#1652) is the other case no CI run
+#     # covers: a draft is never reviewed (#1565), and marking it ready starts no CI run,
+#     # so without it the review waited for a re-applied label or the reconciler's tick.
+#     # The filter takes it as it takes a label event on a PR carrying a review label;
+#     # a PR with none is skipped in the job's `if:`, at no runner minute.
+#     types: [opened, labeled, ready_for_review]
 #   workflow_dispatch             — input `pr_number` (required)
 on:
   workflow_call:
@@ -239,6 +250,8 @@ concurrency:
   # event is `notify-unlabeled`'s, and it stays in `-other` so the `opened` + `labeled`
   # pair still collapses into one comment (RA-893). A review label itself still lands in
   # `-other`, so RA-312's collapse and a re-applied `review:please` are unchanged.
+  # `ready_for_review` (#1652) lands in a group of its own action's name: marking a draft
+  # ready twice collapses into one review, and it cancels no label event's run.
   #
   # `workflow_run` carries NO pull_request payload, so both fallbacks are empty
   # there and the head SHA is what separates one PR's run from another's. Without
@@ -307,6 +320,10 @@ jobs:
     # one event the Reviewer makes here is applying `agent:reviewer`, which is skipped by
     # name, and the decide step skips any other event by the Reviewer's App, by its login
     # from the register.
+    #
+    # `ready_for_review` (#1652) needs no arm of its own: it is neither `opened` nor `labeled`,
+    # so the first half admits it exactly when the PR carries a review label, as it admits a
+    # label event on such a PR, and the decide step reviews it as one.
     if: >-
       !(github.event.action == 'labeled' && github.event.label.name == 'agent:reviewer')
       && ((github.event.action != 'opened'
@@ -741,10 +758,13 @@ jobs:
           # A DRAFT IS NOT READY (#1565). A draft PR's checks and diff carry work that isn't
           # finished, such as a base PR's commits, so a review of it requests changes for
           # reasons only a draft has, and spends a full run each time. The reconciler's
-          # parked-PR recovery already counts a draft as not ready; this does too. A person
-          # who marks it ready re-applies `review:please`, or the reconciler re-asks.
+          # parked-PR recovery already counts a draft as not ready; this does too. Marking it
+          # ready fires `ready_for_review`, which reviews it from here on (#1652): the draft
+          # is read from the PR, not the payload, so that event finds it ready. A caller
+          # written before #1652 lacks the trigger; there a person re-applies `review:please`,
+          # or the reconciler re-asks.
           printf '%s' "$META" | jq -e '.isDraft == true' >/dev/null 2>&1 \
-            && decide false "PR #$PR is a draft — a draft is never reviewed: mark it ready for review, then re-apply review:please (#1565)"
+            && decide false "PR #$PR is a draft — a draft is never reviewed: marking it ready for review starts the review (#1565, #1652)"
 
           # `opened` is subscribed to only so `notify-unlabeled` can run. CI starts on
           # the same event, so reviewing here would race it — exactly what this

@@ -361,6 +361,13 @@ describe('the callers kanon init writes', () => {
     ...(t.deployRun ? [] : [`workflow_dispatch:${Object.keys(t.dispatch).sort().join(',')}`]),
   ];
 
+  // #1652: a draft is never reviewed (#1565), and marking it ready starts no CI run, so the review
+  // caller takes `ready_for_review` too, and the lane reviews a labelled draft once it is ready.
+  it("writes ready_for_review on the review caller's pull_request_target, beside opened and labeled (#1652)", () => {
+    const doc = parseYaml(callerFile('agent-review', REQ.lanes['agent-review']!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'main' })) as Doc;
+    expect((doc.on as Record<string, { types: string[] }>).pull_request_target?.types).toEqual(['opened', 'labeled', 'ready_for_review']);
+  });
+
   it("writes the Overseer's runtime-version trigger on its own file, on the default branch (kanon#423)", () => {
     const text = callerFile('agent-overseer', REQ.lanes['agent-overseer']!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'trunk' });
     expect(text).toContain('  pull_request_target:\n    types: [closed]\n    branches: [trunk]\n    paths:\n      - .github/workflows/agent-overseer.yml\n');
