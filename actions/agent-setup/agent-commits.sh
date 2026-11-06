@@ -34,8 +34,8 @@
 # commit the agent made would be authored by an identity no register lists.
 #
 # Inputs, by environment only: APP_SLUG, GH_TOKEN (to read the bot account and the record),
-# GITHUB_REPOSITORY, GITHUB_ENV, RUNNER_TEMP, and DCO_MJS (the `dco` action's parser, in the
-# same Kanon tree as this block).
+# GITHUB_REPOSITORY, GITHUB_ENV, RUNNER_TEMP, DCO_MJS (the `dco` action's parser, in the
+# same Kanon tree as this block), and KANON_NODE (Kanon's Node; `node` from the PATH without it).
 set -euo pipefail
 
 if [ -z "${APP_SLUG:-}" ]; then
@@ -77,7 +77,9 @@ if ! text="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${record}" -H 'Accept: 
   fi
   nodelegation warning "$record could not be read from the default branch ($(head -c 300 "$err"))"
 fi
-if ! signoff="$(node --input-type=module -e '
+# On Kanon's Node, `KANON_NODE` from agent-setup's `node` input; `node` from the PATH without it
+# (kanon#1676).
+if ! signoff="$("${KANON_NODE:-node}" --input-type=module -e '
   import { pathToFileURL } from "node:url";
   import { readFileSync } from "node:fs";
   // The path comes by environment, not argv: dco.mjs runs its check when argv[1] is itself.

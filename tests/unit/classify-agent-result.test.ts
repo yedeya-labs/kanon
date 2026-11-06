@@ -820,6 +820,8 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS
         CLAUDE_ARGS: inputs.claudeArgs ?? '',
         AGENT_OUTCOME: inputs.agentOutcome ?? '',
         RAISABLE: inputs.raisable ?? 'true',
+        // The block's `node` input, as the runner fills its default (kanon#1676).
+        KANON_NODE: process.execPath,
       },
     });
   };
@@ -832,6 +834,7 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS
       ARM: '${{ inputs.arm }}', RECOVER: '${{ inputs.recover }}', NON_FATAL: '${{ inputs.non-fatal }}',
       CLAUDE_ARGS: '${{ inputs.claude-args }}', AGENT_OUTCOME: '${{ inputs.agent-outcome }}',
       RAISABLE: '${{ inputs.raisable }}', KANON_JOB_CHECK_RUN_ID: '${{ job.check_run_id }}',
+      KANON_NODE: '${{ inputs.node }}',
     });
     expect(String(step.run), 'no input is spliced into the script text').not.toMatch(/\$\{\{/);
     expect(block.outputs?.kind?.value).toBe('${{ steps.classify.outputs.kind }}');
@@ -840,7 +843,7 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS
     // three, because nothing asserted the SET: the third, `code`, was read by no caller and
     // its description sent the reader to `agent-telemetry`, which derives that value itself.
     expect(Object.keys(block.outputs ?? {})).toEqual(['kind', 'retry']);
-    expect(Object.keys(block.inputs ?? {}).sort()).toEqual(['agent-outcome', 'arm', 'claude-args', 'non-fatal', 'raisable', 'recover']);
+    expect(Object.keys(block.inputs ?? {}).sort()).toEqual(['agent-outcome', 'arm', 'claude-args', 'node', 'non-fatal', 'raisable', 'recover']);
     expect(block.inputs?.recover?.default).toBe('');
     expect(block.inputs?.['non-fatal']?.default).toBe('false');
     expect(block.inputs?.['claude-args']?.default).toBe('');

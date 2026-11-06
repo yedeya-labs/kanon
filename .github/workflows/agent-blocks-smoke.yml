@@ -98,6 +98,8 @@ jobs:
         id: classify
         uses: $/actions/agent-classify
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           arm: smoke
           non-fatal: "true"
 
@@ -115,6 +117,8 @@ jobs:
       - name: Set up, without the push probe
         uses: $/actions/agent-setup
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           arm: smoke
           app-slug: github-actions
           push-probe: "false"
@@ -157,6 +161,8 @@ jobs:
         env:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           prompt: never sent
           claude_args: --max-turns 1
           claude-token: unused
@@ -172,6 +178,8 @@ jobs:
         if: always()
         uses: $/actions/agent-finish
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           arm: smoke
           agent: smoke
           job-status: failure

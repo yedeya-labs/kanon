@@ -180,8 +180,9 @@ describe('the role the agent speaks as (agent-setup)', () => {
     expect(names.indexOf('Commit as the App, signed off by the delegate')).toBeGreaterThan(0);
     const step = setup.runs.steps[0]!;
     expect(step.if).toBeUndefined();
-    expect(step.run).toBe('node "$GITHUB_ACTION_PATH/persona.mjs"');
-    expect(step.env).toEqual({ ROLE: '${{ inputs.role }}', APP_SLUG: '${{ inputs.app-slug }}', GH_TOKEN: '${{ inputs.github-token }}' });
+    // On Kanon's Node, the block's `node` input (kanon#1676).
+    expect(step.run).toBe('"$KANON_NODE" "$GITHUB_ACTION_PATH/persona.mjs"\n');
+    expect(step.env).toEqual({ ROLE: '${{ inputs.role }}', APP_SLUG: '${{ inputs.app-slug }}', GH_TOKEN: '${{ inputs.github-token }}', KANON_NODE: '${{ inputs.node }}' });
   });
 });
 

@@ -36,6 +36,7 @@ On the review lane, the restore of the judging inputs takes the playbook default
 | Input | Required | Meaning |
 |---|---|---|
 | `arm` | yes | A human name for the lane, used in error messages. |
+| `node` | no | The Node its scripts run on, by absolute path, the sign-off resolution in `agent-commits.sh` included: the kanon step's `node` output, from a lane whose job ran the project-setup hook first, which may put another Node first on the `PATH` ([#1676](https://github.com/yedeya-labs/kanon/issues/1676)). Defaults to `node` from the `PATH`. |
 | `app-slug` | yes | The minted App's slug, from `actions/create-github-app-token`. |
 | `role` | no | The role the agent speaks as (`Implementer`, `Reviewer`, …). Empty reads it from the App register on the default branch, by the minted App's slug. Pass it when you call the block before your token exists. |
 | `push-probe` | no | `"true"` runs `git push --dry-run` with the checkout's credential. It creates nothing. Default `"false"`. |

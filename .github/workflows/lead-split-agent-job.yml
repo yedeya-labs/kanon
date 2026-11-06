@@ -198,6 +198,8 @@ jobs:
         id: setup
         if: steps.gate.outputs.act == 'split'
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           arm: lead split agent
           app-slug: ${{ steps.app-token.outputs.app-slug }}
           # The role, since the Author and the Judge each hold several (plan 0005 §3.3).
@@ -237,6 +239,8 @@ jobs:
         env:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           max-turns: ${{ inputs.max_turns }}
           max-turns-ceiling: "160"
           max-turns-reason: ${{ inputs.reason }}
@@ -417,6 +421,8 @@ jobs:
         if: always() && steps.gate.outputs.act == 'split'
         continue-on-error: true
         with:
+          # Kanon's Node: the project-setup hook above may have put another first on the PATH (kanon#1676).
+          node: ${{ steps.kanon.outputs.node }}
           claude-args-ran: ${{ steps.agent.outputs.claude-args }}
           arm: lead split agent
           agent: lead-split
