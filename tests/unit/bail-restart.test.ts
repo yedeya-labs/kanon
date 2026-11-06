@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { askStep, bailAsk, isBail, lastWordOf, restartStep } from '../../scripts/bail-restart.mjs';
+import { askStep, bailAsk, callerOf, claimLabel, isBail, lastWordOf, restartStep, takesComments } from '../../scripts/bail-restart.mjs';
 import { DECISION_LABEL, isWholeAsk } from '../../scripts/lib/decision-asks.mjs';
 import { evaluate } from './helpers/expression.js';
 
@@ -55,6 +55,68 @@ describe('a scope-first bail waits where a person sees it (#1649)', () => {
   });
 });
 
+describe('the ask promises a restart only when the caller takes issue_comment (#1678)', () => {
+  it('finds the caller\'s file and ref in github.workflow_ref, for this repository only', () => {
+    expect(callerOf('acme/widgets/.github/workflows/implement.yml@refs/heads/main', 'acme/widgets')).toEqual({ path: '.github/workflows/implement.yml', ref: 'refs/heads/main' });
+    expect(callerOf('Acme/Widgets/.github/workflows/implement.yml@refs/heads/main', 'acme/widgets')).not.toBeNull();
+    expect(callerOf('other/repo/.github/workflows/implement.yml@refs/heads/main', 'acme/widgets')).toBeNull();
+    expect(callerOf('', 'acme/widgets')).toBeNull();
+    expect(callerOf(undefined, 'acme/widgets')).toBeNull();
+  });
+
+  it('reads issue_comment from the caller\'s on:, in block and flow form, never from a comment or an if:', () => {
+    expect(takesComments('on:\n  issues:\n    types: [labeled]\n  issue_comment:\n    types: [created]\n')).toBe(true);
+    expect(takesComments('on: [issues, issue_comment, workflow_dispatch]\n')).toBe(true);
+    expect(takesComments('on:\n  issues:\nenv:\n  log_issue_comment: x\n')).toBe(false);
+    expect(takesComments('on:\n  issues:\n    types: [labeled]\n  workflow_dispatch:\n')).toBe(false);
+    expect(takesComments('on:\n  issues:\n    types: [labeled]\n  # issue_comment:\n  #   types: [created]\n')).toBe(false);
+    expect(takesComments("on:\n  issues:\njobs:\n  a:\n    if: github.event_name != 'issue_comment'\n")).toBe(false);
+  });
+
+  it('says how to restart by hand when a reply restarts nothing, or the lane couldn\'t tell', () => {
+    for (const restarts of [false, null] as const) {
+      const body = bailAsk(bail.html_url, restarts);
+      expect(isWholeAsk(body)).toBe(true);
+      expect(body).toContain(bail.html_url);
+      expect(body).not.toContain('restarts at once');
+      expect(body).toContain('remove `decision:needed` and apply `agent:implement` again, or dispatch the implement lane');
+    }
+    expect(bailAsk(bail.html_url, false)).toContain('takes no `issue_comment`');
+    expect(bailAsk(bail.html_url, null)).toContain('could not read this repository\'s implement caller');
+    const d = askStep({ comments: [bail], implementer: IMPL, labels: [], since: at(0), restarts: false });
+    expect(d.ask && d.body).toBe(bailAsk(bail.html_url, false));
+    const yes = askStep({ comments: [bail], implementer: IMPL, labels: [], since: at(0), restarts: true });
+    expect(yes.ask && yes.body).toContain('restarts at once');
+  });
+});
+
+describe('a reply that asks a question waits on the person again (#1679)', () => {
+  it('asks again for the restarted run\'s answer, and the next reply restarts it', () => {
+    const question = { ...reply, body: 'Why the trust policy and not a new role?' };
+    const answer = { ...bail, id: 5, body: 'SCOPE-FIRST BAIL: a new role needs the same trust edit.\n\nPlan: …', created_at: at(30), html_url: 'https://github.com/o/r/issues/7#issuecomment-5' };
+    // The restart took the label off; the answer, a bail of this run, is asked about again.
+    const d = askStep({ comments: [bail, ask, question, answer], implementer: IMPL, labels: ['agent:implement'], since: at(25) });
+    expect(d.ask && d.body).toContain(answer.html_url);
+    const ask2 = { ...ask, id: 6, body: bailAsk(answer.html_url), created_at: at(31) };
+    const next = { ...reply, id: 7, created_at: at(40) };
+    expect(restartStep({ comments: [bail, ask, question, answer, ask2, next], implementer: IMPL, labels: ['agent:implement', DECISION_LABEL], commentId: 7 })).toMatchObject({ restart: true });
+  });
+});
+
+describe('two replies close together restart one run (#1677)', () => {
+  it('restarts only the run whose removal of the label succeeds', () => {
+    expect(claimLabel(() => '[]')).toBe(true);
+    expect(claimLabel(() => { throw Object.assign(new Error('Command failed: gh api -X DELETE …'), { stderr: 'gh: Label does not exist (HTTP 404)' }); })).toBe(false);
+    expect(() => claimLabel(() => { throw Object.assign(new Error('Command failed'), { stderr: 'gh: Resource not accessible by integration (HTTP 403)' }); })).toThrow('Command failed');
+  });
+
+  it('takes the label off through the endpoint that answers 404, as the claim', () => {
+    const src = readFileSync('scripts/bail-restart.mjs', 'utf8');
+    expect(src).toContain("claimLabel(() => gh(['api', '-X', 'DELETE', `repos/${REPO}/issues/${ISSUE}/labels/${encodeURIComponent(DECISION_LABEL)}`]))");
+    expect(src).not.toContain("'--remove-label', DECISION_LABEL");
+  });
+});
+
 describe('the implement lane on a comment (#1649)', () => {
   const wf = parse(readFileSync('.github/workflows/agent-implement.yml', 'utf8'));
   const filter = wf.jobs.filter;
@@ -102,12 +164,15 @@ describe('the implement lane on a comment (#1649)', () => {
     expect(job.permissions).toMatchObject({ issues: 'write' });
     const step = job.steps.find((s: { run?: string }) => String(s.run ?? '').includes('bail-restart.mjs'));
     expect(step['continue-on-error']).toBe(true);
-    expect(step.env).toMatchObject({ MODE: 'ask', GH_TOKEN: '${{ github.token }}', SINCE: '${{ needs.filter.outputs.since }}' });
+    expect(step.env).toMatchObject({ MODE: 'ask', GH_TOKEN: '${{ github.token }}', SINCE: '${{ needs.filter.outputs.since }}', WORKFLOW_REF: '${{ github.workflow_ref }}' });
+    expect(job.permissions).toMatchObject({ contents: 'read' });
   });
 
   it('tells the Implementer to open a bail with the words the job finds, and that a reply restarts it', () => {
     const text = readFileSync('.github/workflows/agent-implement.yml', 'utf8').replace(/\s+/g, ' ');
     expect(text).toContain('Open that plan-comment with the words `SCOPE-FIRST BAIL` (kanon#1649)');
     expect(text).toContain('this run IS that restart: the reply is the answer');
+    // A reply that asks a question waits on the person again (#1679).
+    expect(text).toContain('answer it in a new plan-comment that opens with `SCOPE-FIRST BAIL` again');
   });
 });

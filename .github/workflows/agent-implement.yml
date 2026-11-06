@@ -92,9 +92,10 @@ concurrency:
   # A comment takes a group of its own (kanon#1649): every comment on an issue starts the caller,
   # and in the label's or the dispatch's group the many that skip would queue behind a real run
   # and replace one another, and a reply that restarts the run among them. A restart needs the
-  # bail to be the Implementer's last word, so no run of this issue is going when one starts, except when
-  # two replies arrive close together and both read `decision:needed` before either takes it off,
-  # which starts two runs (kanon#1677).
+  # bail to be the Implementer's last word, so no run of this issue is going when one starts. Two
+  # replies close together both pass that check, so the restart step's removal of
+  # `decision:needed` is the claim: GitHub answers 404 to every removal but the first, and only
+  # that run restarts (kanon#1677).
   group: qa-implement-${{ github.event.issue.number || inputs.issue_number }}-${{ github.event_name == 'issue_comment' && format('comment-{0}', github.event.comment.id) || github.event.label.name || 'dispatch' }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
@@ -351,10 +352,15 @@ jobs:
         issue `decision:needed` and asks the person, and a member's reply restarts
         you at once. So end the plan with "Reply on this issue: `approved`, with any
         changes, and the Implementer restarts and builds exactly this." If this
-        issue's latest comments are your bail and a person's reply after it, this
-        run IS that restart: the reply is the answer. Build what it approves, with
-        the changes it asks for, and never bail again on the plan it approved; if
-        the reply asks a question or declines, answer it in your comment and STOP.
+        issue's latest comments are your bail and a person's reply after it (with
+        the lane's `github-actions` ask between them), this run IS that restart:
+        the reply is the answer. Build what it approves, with the changes it asks
+        for, and never bail again on the plan it approved. If the reply asks a
+        question, declines, or asks for changes that need a new plan, build
+        nothing: answer it in a new plan-comment that opens with `SCOPE-FIRST
+        BAIL` again, restates the plan as it now stands, and ends with the same
+        reply line, then STOP, so the issue waits on the person again and their
+        next reply restarts you (kanon#1679).
 
         SCHEMA CHANGES (FAIL CLOSED): if you change the schema, follow the stack
         document's `## Schema changes` section exactly, then RUN THE CHECKS its
@@ -450,7 +456,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: read # the App register, read over the API
+      contents: read # the App register and the caller's file, read over the API
       issues: write # the label and the ask
     steps:
       - uses: $/actions/kanon-path
@@ -461,6 +467,9 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
           SINCE: ${{ needs.filter.outputs.since }}
+          # The caller's file and ref: the ask promises a reply restarts the run only when the
+          # caller takes `issue_comment` (kanon#1678).
+          WORKFLOW_REF: ${{ github.workflow_ref }}
           MODE: ask
         run: node "$KANON/scripts/bail-restart.mjs"
 
