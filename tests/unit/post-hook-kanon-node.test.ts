@@ -78,6 +78,26 @@ const postHookCalls = (files: Record<string, Workflow>) =>
 
 /** Does an action start a script of its own: a Node script, or a shell script beside it? */
 const startsScripts = (action: Action) => (action.runs?.steps ?? []).some((s) => runsOwnScript(String(s.run ?? '')) || ownShellScripts(String(s.run ?? '')).length > 0);
+/**
+ * Does an action start Node in any way (kanon#1681)? A step whose `run` calls `node` (an action-path
+ * script, a script under `$KANON/scripts/`, an inline `-e`, or anything else) or already runs
+ * `"$KANON_NODE"`; a shell script beside it that does; or a nested call of another action that does.
+ * `shell` reads a script beside the action.
+ */
+const startsNode = (name: string, shell: (action: string, file: string) => string, actions: Record<string, Action> = ACTIONS, seen = new Set<string>()): boolean => {
+  const action = actions[name];
+  if (!action || seen.has(name)) return false;
+  seen.add(name);
+  return (action.runs?.steps ?? []).some((s) => {
+    const run = String(s.run ?? '');
+    if (bareNode(run) || run.includes('"$KANON_NODE"')) return true;
+    if (ownShellScripts(run).some((sh) => { const text = code(shell(name, sh)); return bareNode(text) || text.includes('KANON_NODE'); })) return true;
+    const nested = /^\$\/actions\/([\w-]+)$/.exec(String(s.uses ?? ''))?.[1];
+    return nested ? startsNode(nested, shell, actions, seen) : false;
+  });
+};
+const besideAction = (action: string, file: string) => { try { return readFileSync(join(ROOT, 'actions', action, file), 'utf8'); } catch { return ''; } };
+
 /** Every `$/actions/<name>` a lane calls after its hook, by name. */
 const calledAfterHook = (files: Record<string, Workflow>) => [...new Set(Object.values(files).flatMap((wf) =>
   Object.values(wf.jobs ?? {}).flatMap((j) => {
@@ -85,6 +105,10 @@ const calledAfterHook = (files: Record<string, Workflow>) => [...new Set(Object.
     const hook = steps.findIndex(isHook);
     return hook < 0 ? [] : steps.slice(hook + 1).flatMap((st) => /^\$\/actions\/([\w-]+)$/.exec(String(st.uses ?? ''))?.[1] ?? []);
   })))].sort();
+
+/** The actions lanes call after their hook that start Node and don't take the input. */
+const owedWithoutInput = (files: Record<string, Workflow>, actions: Record<string, Action> = ACTIONS, shell = besideAction) =>
+  calledAfterHook(files).filter((a) => startsNode(a, shell, actions) && actions[a]?.inputs?.node === undefined);
 
 const WORKFLOWS: Record<string, Workflow> = Object.fromEntries(
   readdirSync(join(ROOT, '.github/workflows')).filter((f) => f.endsWith('.yml')).map((f) => [f, parse(readFileSync(join(ROOT, '.github/workflows', f), 'utf8')) as Workflow]),
@@ -166,9 +190,9 @@ describe("a step after the project-setup hook runs Kanon's scripts on Kanon's No
 });
 
 describe("Kanon's composite actions after the project-setup hook run on Kanon's Node (#1676)", () => {
-  it('every action a lane calls after the hook that starts a script of its own takes the input', () => {
-    const owed = calledAfterHook(WORKFLOWS).filter((a) => ACTIONS[a] && startsScripts(ACTIONS[a]!));
-    expect(owed.filter((a) => !TAKES_NODE.includes(a))).toEqual([]);
+  it('every action a lane calls after the hook that starts Node in any way takes the input (#1681)', () => {
+    expect(owedWithoutInput(WORKFLOWS)).toEqual([]);
+    const owed = calledAfterHook(WORKFLOWS).filter((a) => startsNode(a, besideAction));
     // A floor, so the derivation above can't pass on an empty list.
     expect(owed).toEqual(expect.arrayContaining(['agent-classify', 'agent-finish', 'agent-run', 'agent-setup']));
     // `implementer-status` runs after no hook today; it takes the input all the same.
@@ -208,6 +232,21 @@ describe("Kanon's composite actions after the project-setup hook run on Kanon's 
     expect(startsScripts(sh)).toBe(true);
     expect(startsScripts({ runs: { steps: [{ run: 'echo hi' }] } })).toBe(false);
     expect(calledAfterHook({ 'x.yml': { jobs: { a: { steps: [{ uses: '$/actions/agent-run' }, { uses: './.github/actions/project-setup' }, { uses: '$/actions/agent-setup' }] } } } })).toEqual(['agent-setup']);
+    // #1681: Node started other than by the action's own script line counts too.
+    const after = (name: string) => ({ 'x.yml': { jobs: { a: { steps: [{ uses: './.github/actions/project-setup' }, { uses: `$/actions/${name}` }] } } } });
+    // The real brief-guard runs `node "$KANON/scripts/brief-guard.mjs"`, and takes no input.
+    expect(owedWithoutInput(after('brief-guard'))).toEqual(['brief-guard']);
+    const fake: Record<string, Action> = {
+      inline: { runs: { steps: [{ run: 'echo "$(node -e 1)"' }] } },
+      kanon: { runs: { steps: [{ run: 'node "$KANON/scripts/x.mjs"' }] } },
+      outer: { runs: { steps: [{ uses: '$/actions/inline' }] } },
+      shell: { runs: { steps: [{ run: 'bash "$GITHUB_ACTION_PATH/s.sh"' }] } },
+      quiet: { runs: { steps: [{ run: 'echo hi' }, { uses: 'actions/upload-artifact@v7' }] } },
+      taken: { inputs: { node: { default: 'node' } }, runs: { steps: [{ run: 'node -e 1' }] } },
+    };
+    const besideFake = (_a: string, f: string) => (f === 's.sh' ? 'x="$(node -e 1)"' : '');
+    for (const n of ['inline', 'kanon', 'outer', 'shell']) expect(owedWithoutInput(after(n), fake, besideFake), n).toEqual([n]);
+    for (const n of ['quiet', 'taken']) expect(owedWithoutInput(after(n), fake, besideFake), n).toEqual([]);
     // Only a call after the hook, in the same job, is held.
     const wf = { 'x.yml': { jobs: { a: { steps: [{ uses: '$/actions/agent-run' }, { uses: './.github/actions/project-setup' }, { uses: '$/actions/agent-finish' }] }, b: { steps: [{ uses: '$/actions/agent-run' }] } } } };
     expect(postHookCalls(wf).map((c) => c.key)).toEqual(['x.yml a: agent-finish']);
