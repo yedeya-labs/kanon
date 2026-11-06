@@ -24,10 +24,11 @@ export const LANES = readdirSync(WORKFLOWS)
   .sort();
 
 /** The triggers each lane's caller holds (docs/lanes.md), as the event the gate sees. */
-export type Trigger = 'review' | 'issue-label' | 'issue-opened' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-ready' | 'pr-target-merged' | 'schedule' | 'deploy-failed' | 'release-published';
+export type Trigger = 'review' | 'issue-label' | 'issue-opened' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-ready' | 'issue-comment' | 'pr-target-merged' | 'schedule' | 'deploy-failed' | 'release-published';
 export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-implement-revise.yml': ['review', 'pr-label', 'dispatch'],
-  'agent-implement.yml': ['issue-label', 'dispatch'],
+  // kanon#1649: a reply on the issue, which restarts a run that stopped on a scope-first bail.
+  'agent-implement.yml': ['issue-label', 'issue-comment', 'dispatch'],
   'agent-lead-revise.yml': ['review', 'pr-label', 'dispatch'],
   'agent-lead-reconcile.yml': ['dispatch', 'merged', 'issue-closed', 'schedule'],
   'agent-lead-split.yml': ['issue-label', 'dispatch'],
@@ -278,6 +279,8 @@ export const eventFor = (trigger: Trigger, actor: Actor): { name: string; payloa
       return { name: 'pull_request_review', payload: { action: 'submitted', review: { state: 'changes_requested', user, author_association: actor.association ?? 'NONE' } }, env: {} };
     case 'issue-label':
       return { name: 'issues', payload: { action: 'labeled', sender: user }, env: {} };
+    case 'issue-comment':
+      return { name: 'issue_comment', payload: { action: 'created', issue: { number: 7 }, comment: { user, author_association: actor.association ?? 'NONE' }, sender: user }, env: {} };
     case 'issue-opened':
       return { name: 'issues', payload: { action: 'opened', issue: { number: 7 }, sender: user }, env: {} };
     case 'pr-label':

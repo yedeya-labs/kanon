@@ -353,6 +353,7 @@ describe('the callers kanon init writes', () => {
     ...(t.prTarget ? [`pull_request_target:${[...t.prTarget].sort().join(',')}`] : []),
     ...(t.pinMoved || t.merged ? ['pull_request_target:closed'] : []),
     ...(t.issues ? [`issues:${[...t.issues].sort().join(',')}`] : []),
+    ...(t.comments ? [`issue_comment:${[...t.comments].sort().join(',')}`] : []),
     ...(t.release ? ['release:published'] : []),
     ...(t.deployRun ? ['workflow_run:completed'] : []),
     ...(t.reask ? ['workflow_run:completed'] : []),
@@ -360,6 +361,18 @@ describe('the callers kanon init writes', () => {
     // A `deployRun` caller has no dispatch: the lane reads the failed run from the event (plan 0010 D8).
     ...(t.deployRun ? [] : [`workflow_dispatch:${Object.keys(t.dispatch).sort().join(',')}`]),
   ];
+
+  // #1649: a member's reply to the Implementer's scope-first bail restarts the run, so the implement
+  // caller takes `issue_comment` too; the lane turns every other comment away before a runner starts.
+  it("writes issue_comment's created on the implement caller, beside issues' labeled, and on no other lane's (#1649)", () => {
+    const doc = parseYaml(callerFile('agent-implement', REQ.lanes['agent-implement']!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'main' })) as Doc;
+    const on = doc.on as Record<string, { types: string[] }>;
+    expect(on.issues?.types).toEqual(['labeled']);
+    expect(on.issue_comment?.types).toEqual(['created']);
+    for (const lane of Object.keys(REQ.lanes).filter((l) => l !== 'agent-implement' && TRIGGERS[l])) {
+      expect(callerFile(lane, REQ.lanes[lane]!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'main' }), lane).not.toContain('issue_comment:');
+    }
+  });
 
   // #1652: a draft is never reviewed (#1565), and marking it ready starts no CI run, so the review
   // caller takes `ready_for_review` too, and the lane reviews a labelled draft once it is ready.

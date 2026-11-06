@@ -730,6 +730,17 @@ describe('kanon doctor on a caller whose event lacks an activity type the templa
     expect(f.fix.commands).toEqual(['    types: [opened, labeled, ready_for_review]']);
   });
 
+  it('notes an implement caller from before #1649, which takes no issue_comment, with the trigger to add', async () => {
+    const IMPLEMENT = '.github/workflows/agent-implement.yml';
+    const text = callerFile('agent-implement', REQ.lanes['agent-implement']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }).replace(/ {2}# A reply to the Implementer[^\n]*\n[^\n]*\n {2}issue_comment:\n[^\n]*\n/, '');
+    expect(text).not.toContain('issue_comment');
+    const r = await run(checkout({ ...healthyFiles(), [IMPLEMENT]: text }), fakeGitHub(), ['--json']);
+    expect(ofId(r)).toEqual([expect.objectContaining({ category: 'caller', blocking: false, subject: IMPLEMENT })]);
+    const [f] = ofId(r);
+    expect(f.message).toContain("starts the lane agent-implement on no issue_comment event of type created: it doesn't take issue_comment at all");
+    expect(f.fix.commands).toEqual(['  issue_comment:', '    types: [created]']);
+  });
+
   it('can be waived for the types it lists', async () => {
     const f: Record<string, string> = { ...healthyFiles(), [REVIEW]: before1652() };
     f['docs/qa/adoption.md'] += `- **${WAIVER_LABEL}:** \`${ID}\` on \`${REVIEW}\` for \`ready_for_review\` (drafts are dispatched by hand here)\n`;
@@ -749,8 +760,12 @@ describe('missingEventTypes: the activity types a caller lacks that the template
     expect(missingEventTypes('agent-review', spec, on(['opened', 'labeled', 'ready_for_review']))).toEqual([]);
   });
 
-  it("compares only an event the caller takes with a types list: the rest is the caller's choice", () => {
-    expect(missingEventTypes('agent-review', spec, { workflow_run: { workflows: ['CI'], types: ['completed'] } })).toEqual([]);
+  it("compares an event the caller takes with a types list, and reports one it doesn't take at all, whole (#1649)", () => {
+    expect(missingEventTypes('agent-review', spec, { workflow_run: { workflows: ['CI'], types: ['completed'] } }))
+      .toEqual([{ event: 'pull_request_target', have: [], missing: ['opened', 'labeled', 'ready_for_review'], absent: true }]);
+    expect(missingEventTypes('agent-implement', REQ.lanes['agent-implement']!, { issues: { types: ['labeled'] }, workflow_dispatch: null }))
+      .toEqual([{ event: 'issue_comment', have: [], missing: ['created'], absent: true }]);
+    // GitHub's default types, with no list, are the caller's choice.
     expect(missingEventTypes('agent-review', spec, { pull_request_target: null })).toEqual([]);
     expect(missingEventTypes('agent-review', spec, { pull_request_target: {} })).toEqual([]);
     expect(missingEventTypes('agent-review', spec, 'pull_request_target')).toEqual([]);

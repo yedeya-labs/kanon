@@ -172,7 +172,7 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Why.** A clean hand-off beats a half-finished risky change. The bail list can be relaxed where a fail-closed test makes a class of change safe, which is how additive schema changes came off the reference adopter's list.
 
-**Enforced by.** The agent prompt; the merge gate independently escalates the same paths to a human (chapter 04). For a pull request no lane opened, the Reviewer's playbook has it check the `## Plan` section before the code; that a person or a local session writes it is prose only.
+**Enforced by.** The agent prompt; the merge gate independently escalates the same paths to a human (chapter 04). For a pull request no lane opened, the Reviewer's playbook has it check the `## Plan` section before the code; that a person or a local session writes it is prose only. The implement lane labels a bail `decision:needed` with the ask `K-WORK-24` fixes, and a member's reply restarts the run ([`scripts/bail-restart.mjs`](../scripts/bail-restart.mjs)).
 
 **Class.** split. Scope-first bailing is framework. **The project supplies:** the bail list, kept under `## Bail list` in `docs/qa/escalation-paths.md` (`K-LAYOUT-8`), typically data migrations, security, auth and credential changes, destructive schema changes and cross-cutting refactors.
 
