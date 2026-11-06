@@ -542,3 +542,89 @@ jobs:
             }
           }
           if (failed) process.exit(1);
+
+      # EVERY FEAT AND FIX REACHES THE RELEASE NOTES, OR THE RUN SAYS WHICH DIDN'T (kanon#1662).
+      # release-please skips a commit its conventional-commits parser rejects, such as a squash
+      # body quoting code with an unbalanced parenthesis, and logs it only in its own output, which
+      # no later step can read; the run went green with the commit missing from the changelog. So
+      # this checks the effect instead: each `feat` or `fix` commit on the branch since the last
+      # release (the last commit that changed the manifest) must appear, by its short SHA, in the
+      # release PR's body or its changelog. A missing one is an error annotation naming the
+      # commit, and the step fails, so the push's checks show it. A read that fails is a warning:
+      # the check can't tell, and must not block a release on a flaky read.
+      - name: Check every feat and fix reached the release notes
+        # Last, so a failure here stops no other step of the release, and run even after the
+        # release-PR guard fails, so both are reported (kanon#1662).
+        if: ${{ !cancelled() && steps.release.conclusion == 'success' && steps.release.outputs.release_created != 'true' }}
+        shell: node {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+          PR_JSON: ${{ steps.release.outputs.pr }}
+        run: |
+          const { execFileSync } = require('node:child_process');
+          const { appendFileSync } = require('node:fs');
+
+          const repo = process.env.GITHUB_REPOSITORY;
+          const head = process.env.HEAD_SHA;
+          const api = (path) => JSON.parse(execFileSync('gh', ['api', path], { encoding: 'utf8' }));
+          const summary = (line) => process.env.GITHUB_STEP_SUMMARY && appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${line}\n`);
+          const unsure = (why) => {
+            console.log(`::warning title=Release notes check::${why}`);
+            summary(`**Release notes check:** couldn't run: ${why}`);
+            process.exit(0);
+          };
+          const read = (path, what) => {
+            try {
+              return api(path);
+            } catch (error) {
+              return unsure(`could not read ${what} (${String(error.message).split('\n')[0]}), so whether every feat and fix reached the release notes is unknown`);
+            }
+          };
+          const text = (file) => Buffer.from(file.content ?? '', file.encoding === 'base64' ? 'base64' : 'utf8').toString('utf8');
+
+          // The commits since the last release: after the last commit that changed the manifest.
+          const last = read(`repos/${repo}/commits?sha=${head}&path=.release-please-manifest.json&per_page=1`, 'the manifest\'s history');
+          if (!Array.isArray(last) || !last.length) unsure('no commit on the branch has changed .release-please-manifest.json yet');
+          const range = read(`repos/${repo}/compare/${last[0].sha}...${head}?per_page=250`, 'the commits since the last release');
+          const RELEASABLE = /^(feat|fix)(\([^)]*\))?!?: \S/;
+          const releasable = (range.commits ?? []).filter((c) => RELEASABLE.test(String(c.commit?.message ?? '')));
+          if (!releasable.length) {
+            console.log('No feat or fix commit since the last release.');
+            process.exit(0);
+          }
+
+          // What the release notes hold: the release PR's body and each package's changelog on its branch.
+          let pr = null;
+          try {
+            pr = process.env.PR_JSON ? JSON.parse(process.env.PR_JSON) : null;
+          } catch {
+            pr = null;
+          }
+          let notes = '';
+          if (pr && pr.number) {
+            notes += String(read(`repos/${repo}/pulls/${pr.number}`, `release PR #${pr.number}`).body ?? '');
+            const config = JSON.parse(text(read(`repos/${repo}/contents/release-please-config.json?ref=${head}`, 'release-please-config.json')));
+            const paths = [...new Set(Object.values(config.packages ?? { '.': {} }).map((p) => p['changelog-path'] ?? 'CHANGELOG.md'))];
+            for (const path of paths) {
+              try {
+                notes += `\n${text(api(`repos/${repo}/contents/${path}?ref=${encodeURIComponent(pr.headBranchName)}`))}`;
+              } catch {
+                // A package with no changelog yet holds nothing to find.
+              }
+            }
+          }
+          const missing = releasable.filter((c) => !notes.includes(c.sha.slice(0, 7)));
+          if (!missing.length) {
+            console.log(`All ${releasable.length} feat and fix commit(s) since the last release are in release PR #${pr.number}'s notes.`);
+            process.exit(0);
+          }
+          const where = pr && pr.number ? `release PR #${pr.number}'s notes` : 'any release PR: release-please opened none';
+          for (const c of missing) {
+            console.log(`::error title=Commit missing from the release notes::${c.sha.slice(0, 7)} "${String(c.commit.message).split('\n')[0]}" is not in ${where}. release-please skips a commit its parser can't read, often a squash body that quotes code; its log says "commit could not be parsed".`);
+          }
+          summary(`### Release notes check: ${missing.length} commit(s) missing\n`);
+          summary(`release-please left these \`feat\`/\`fix\` commits out of ${where}, most likely because it could not parse their message (its log says "commit could not be parsed"):\n`);
+          for (const c of missing) summary(`- \`${c.sha.slice(0, 7)}\` ${String(c.commit.message).split('\n')[0]}`);
+          summary(`\nTo fix: append to each merged pull request's body a block release-please reads in place of the commit message, then re-run this workflow's failed run:\n\n\`\`\`\nBEGIN_COMMIT_OVERRIDE\n<the pull request's title>\nEND_COMMIT_OVERRIDE\n\`\`\``);
+          process.exit(1);

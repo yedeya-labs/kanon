@@ -19,6 +19,14 @@ On each push to the main branch it:
 
    It comments once per stale head, and the comment names that head. When a later head passes, which is usual, since release-please's next refresh rebuilds the branch from the newer default branch, it edits each of its earlier comments on that PR into an all-clear naming the head that passed ([#1442](https://github.com/yedeya-labs/kanon/issues/1442)), so the instruction to close the PR never outlives the head it was about. So the PR itself carries the latest verdict: its newest guard comment says whether the guard last found it stale or passed, and the head it judged, which you compare with the PR's own head. A release PR that was never stale has no guard comment. The edit needs no more than the job's `pull-requests: write`, and sends no notification.
 
+6. **Checks every `feat` and `fix` reached the release notes** ([#1662](https://github.com/yedeya-labs/kanon/issues/1662)). release-please skips a commit its conventional-commits parser can't read, such as a squash commit whose body, the pull request's body (`K-SHIP-3`), quotes code with an unbalanced parenthesis, and says so only in its own log ("commit could not be parsed"). So the last step checks the effect: each `feat` or `fix` commit on the default branch since the last release, the last commit that changed `.release-please-manifest.json`, must appear by its short SHA in the release pull request's body or in a package's changelog on its branch. A missing one is an error annotation naming the commit, the run's summary lists them with the fix, and the run fails. A read that fails is a warning, not a failure. It doesn't run on the push that publishes a release. The fix: append to each merged pull request's body a block release-please reads in place of the commit message, then re-run the failed run:
+
+   ```text
+   BEGIN_COMMIT_OVERRIDE
+   <the pull request's title>
+   END_COMMIT_OVERRIDE
+   ```
+
 It takes no inputs ([ADR 0002](decisions/0002-standardise-dont-parameterise.md)). The file names are fixed, the branch is your default branch, and what really differs per repository (release type, package name) already lives in your own release configuration. The workflow's header comment gives the reasoning for each candidate input.
 
 It takes one optional pair of secrets, `RELEASER_APP_ID` and `RELEASER_APP_PRIVATE_KEY`: the optional **Releaser** App (plan 0005 §3.1, [ADR 0013](decisions/0013-personal-accounts-and-two-apps.md)). Map them by name, never through `secrets: inherit`, and release-please runs on a Releaser token narrowed to Contents and Pull requests write. Leave them out and it runs on the workflow's own token, which is the default every section below describes. [With the Releaser](#with-the-releaser) says what changes.
