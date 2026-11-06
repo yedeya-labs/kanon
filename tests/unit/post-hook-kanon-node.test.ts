@@ -20,8 +20,6 @@ type Workflow = { jobs?: Record<string, { steps?: Step[] }> };
 const ROOT = process.cwd();
 const isHook = (s: Step) => /(^|\/)\.github\/actions\/project-setup$/.test(String(s.uses ?? ''));
 const ACTION_PATH = String.raw`(?:\$GITHUB_ACTION_PATH|\$\{\{ github\.action_path \}\})`;
-/** A Node script of the action's own, started by the action's path. */
-const runsOwnScript = (run: string) => new RegExp(`${ACTION_PATH}/[\\w.-]+\\.mjs`).test(run);
 /** A shell script of the action's own, which may start Node itself, by its name. */
 const ownShellScripts = (run: string) => [...run.matchAll(new RegExp(`${ACTION_PATH}/([\\w.-]+\\.sh)`, 'g'))].map((m) => m[1]!);
 const bareNode = (run: string) => /(^|[\s;&|(`])node\s/m.test(run) || /command -v node/.test(run);
@@ -42,14 +40,18 @@ const nodeAction = (uses: string | undefined) => {
 /** A script's lines with its comments dropped. */
 const code = (text: string) => text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 
-/** What is wrong with an action that takes the input; empty when it holds. `shell` reads a script beside it. */
-const actionProblems = (action: Action, shell: (file: string) => string = () => ''): string[] => {
+/**
+ * What is wrong with an action that takes the input; empty when it holds. `shell` reads a script
+ * beside it, `actions` the actions it may call. Every step that starts Node, by the same test
+ * `startsNode` uses (#1681), starts it from `"$KANON_NODE"`, its input.
+ */
+const actionProblems = (action: Action, shell: (file: string) => string = () => '', actions: Record<string, Action> = ACTIONS): string[] => {
   const out: string[] = [];
   const input = action.inputs?.node;
   if (input?.default !== 'node' || input.required === true) out.push('its `node` input is not optional with the default `node`');
   for (const s of action.runs?.steps ?? []) {
     const run = String(s.run ?? '');
-    if (runsOwnScript(run)) {
+    if (bareNode(run) || run.includes('"$KANON_NODE"')) {
       if (bareNode(run)) out.push(`${s.name ?? s.id ?? 'a step'}: starts its script with node from the PATH`);
       if (!run.includes('"$KANON_NODE"') || s.env?.KANON_NODE !== '${{ inputs.node }}') out.push(`${s.name ?? s.id ?? 'a step'}: does not run "$KANON_NODE" from its node input`);
     }
@@ -60,8 +62,11 @@ const actionProblems = (action: Action, shell: (file: string) => string = () => 
       if (bareNode(text)) out.push(`${sh}: starts node from the PATH`);
       if (text.includes('KANON_NODE') && s.env?.KANON_NODE !== '${{ inputs.node }}') out.push(`${s.name ?? s.id ?? 'a step'}: runs ${sh} without its node input in KANON_NODE`);
     }
-    // A nested call of one that takes it passes this action's own on.
+    // A nested call of one that takes it passes this action's own on; one that starts Node and takes
+    // no input can't be given it, so it is refused (#1681).
     if (nodeAction(s.uses) && s.with?.node !== '${{ inputs.node }}') out.push(`${s.uses}: not passed this action's node`);
+    const nested = /^\$\/actions\/([\w-]+)$/.exec(String(s.uses ?? ''))?.[1];
+    if (nested && actions[nested] && actions[nested]!.inputs?.node === undefined && startsNode(nested, besideAction, actions)) out.push(`${s.uses}: starts Node, and takes no node input to pass`);
   }
   return out;
 };
@@ -76,8 +81,6 @@ const postHookCalls = (files: Record<string, Workflow>) =>
       return steps.slice(hook + 1).filter((s) => nodeAction(s.uses)).map((s) => ({ key: `${file} ${job}: ${nodeAction(s.uses)}`, step: s }));
     }));
 
-/** Does an action start a script of its own: a Node script, or a shell script beside it? */
-const startsScripts = (action: Action) => (action.runs?.steps ?? []).some((s) => runsOwnScript(String(s.run ?? '')) || ownShellScripts(String(s.run ?? '')).length > 0);
 /**
  * Does an action start Node in any way (kanon#1681)? A step whose `run` calls `node` (an action-path
  * script, a script under `$KANON/scripts/`, an inline `-e`, or anything else) or already runs
@@ -133,7 +136,9 @@ const postHookSteps = (files: Record<string, Workflow>) =>
       const steps = j.steps ?? [];
       const hook = steps.findIndex(isHook);
       if (hook < 0) return [];
-      return steps.slice(hook + 1).filter((s) => runsKanon(String(s.run ?? ''))).map((s) => ({ key: `${file} ${job}: ${s.name ?? s.id ?? ''}`, step: s }));
+      // A step that starts Node in any way, not only by `$KANON/scripts/` (#1681): `node -e
+      // "import(process.env.KANON + …)"` starts Kanon's script too.
+      return steps.slice(hook + 1).filter((s) => runsKanon(String(s.run ?? '')) || bareNode(String(s.run ?? ''))).map((s) => ({ key: `${file} ${job}: ${s.name ?? s.id ?? ''}`, step: s }));
     }));
 
 /** What is wrong with one such step; empty when it holds. */
@@ -143,8 +148,10 @@ const problems = (step: Step): string[] => {
   if (bareNode(run)) out.push('runs `node` from the PATH');
   if (!run.includes('"$KANON_NODE"')) out.push('does not run "$KANON_NODE"');
   if (step.env?.KANON_NODE !== '${{ steps.kanon.outputs.node }}') out.push("its env's KANON_NODE is not the kanon step's node output");
+  // Kanon's path, where the step reads it: `$KANON/…`, `$KANON_ROOT/…` or `process.env.KANON`.
+  const readsPath = /\$\{?KANON(_ROOT)?\}?\/|process\.env\.KANON(_ROOT)?\b/.test(run);
   const path = step.env?.KANON ?? step.env?.KANON_ROOT;
-  if (path !== '${{ steps.kanon.outputs.path }}') out.push("its env's KANON is not the kanon step's path output");
+  if (readsPath && path !== '${{ steps.kanon.outputs.path }}') out.push("its env's KANON is not the kanon step's path output");
   return out;
 };
 
@@ -186,6 +193,13 @@ describe("a step after the project-setup hook runs Kanon's scripts on Kanon's No
     // Only a step after the hook, in the same job, is held.
     const wf = { 'x.yml': { jobs: { a: { steps: [{ run: 'node "$KANON/scripts/a.mjs"' }, { uses: './.github/actions/project-setup' }, { name: 'after', run: 'node "$KANON/scripts/b.mjs"' }] }, b: { steps: [{ run: 'node "$KANON/scripts/c.mjs"' }] } } } };
     expect(postHookSteps(wf).map((f) => f.key)).toEqual(['x.yml a: after']);
+    // #1681: a step that starts Node another way is held too, and the path is required only where it is read.
+    const inline: Step = { name: 'inline', run: 'node -e "import(process.env.KANON + \'/scripts/x.mjs\')"', env: { KANON: '${{ steps.kanon.outputs.path }}' } };
+    const wf2 = { 'y.yml': { jobs: { a: { steps: [{ uses: './.github/actions/project-setup' }, inline, { name: 'quiet', run: 'echo hi' }] } } } };
+    expect(postHookSteps(wf2).map((f) => f.key)).toEqual(['y.yml a: inline']);
+    expect(problems(inline)).toContain('runs `node` from the PATH');
+    expect(problems({ ...inline, env: {} })).toContain("its env's KANON is not the kanon step's path output");
+    expect(problems({ env: { KANON_NODE: '${{ steps.kanon.outputs.node }}' }, run: '"$KANON_NODE" -e 1' })).toEqual([]);
   });
 });
 
@@ -229,10 +243,14 @@ describe("Kanon's composite actions after the project-setup hook run on Kanon's 
     expect(actionProblems(sh, () => 'x="$(node -e 1)"\n')).toContain('x.sh: starts node from the PATH');
     expect(actionProblems({ ...sh, runs: { steps: [{ ...sh.runs!.steps![0]!, env: {} }] } }, () => '"${KANON_NODE:-node}" -e 1')).toContain('c: runs x.sh without its node input in KANON_NODE');
     expect(actionProblems({ ...sh, runs: { steps: [{ ...sh.runs!.steps![0]!, env: {} }] } }, () => 'echo nothing to start')).toEqual([]);
-    expect(startsScripts(sh)).toBe(true);
-    expect(startsScripts({ runs: { steps: [{ run: 'echo hi' }] } })).toBe(false);
     expect(calledAfterHook({ 'x.yml': { jobs: { a: { steps: [{ uses: '$/actions/agent-run' }, { uses: './.github/actions/project-setup' }, { uses: '$/actions/agent-setup' }] } } } })).toEqual(['agent-setup']);
-    // #1681: Node started other than by the action's own script line counts too.
+    // #1681: an action that takes the input starts Node from it in every step, and calls no action
+    // that starts Node without taking it.
+    expect(actionProblems(step({ run: 'node "$KANON/scripts/x.mjs"', env: { KANON_NODE: '${{ inputs.node }}' } }))).toContain('s: starts its script with node from the PATH');
+    expect(actionProblems(step({ run: 'echo "$(node -e 1)"' }))).toContain('s: starts its script with node from the PATH');
+    expect(actionProblems(step({ run: '"$KANON_NODE" -e 1', env: {} }))).toContain('s: does not run "$KANON_NODE" from its node input');
+    expect(actionProblems({ ...good, runs: { steps: [{ uses: '$/actions/brief-guard' }] } })).toContain('$/actions/brief-guard: starts Node, and takes no node input to pass');
+    // Node started other than by the action's own script line counts too.
     const after = (name: string) => ({ 'x.yml': { jobs: { a: { steps: [{ uses: './.github/actions/project-setup' }, { uses: `$/actions/${name}` }] } } } });
     // The real brief-guard runs `node "$KANON/scripts/brief-guard.mjs"`, and takes no input.
     expect(owedWithoutInput(after('brief-guard'))).toEqual(['brief-guard']);
