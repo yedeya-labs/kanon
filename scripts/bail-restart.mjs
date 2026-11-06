@@ -43,6 +43,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
+import { parseYaml } from '../cli/workflow-yaml.mjs';
 import { parseAppRegister } from './app-register.mjs';
 import { BAIL_RE } from './project-digest.mjs';
 import { DECISION_LABEL, askBody } from './lib/decision-asks.mjs';
@@ -75,14 +76,20 @@ export function callerOf(workflowRef, repo) {
 }
 
 /**
- * Does a caller's `on:` take `issue_comment`? Read from the text: a lane step has no YAML parser
- * (it runs outside any install), and the caller is a short file `kanon init` wrote. Comments are
- * dropped, and a quoted name, as in an `if:`, is not a trigger.
+ * Does a caller's `on:` take `issue_comment`? Read from the caller's top-level `on:` alone, parsed
+ * (kanon#1683): an `issue_comment` anywhere else in the file, such as a `with:` value or a `run:`
+ * line, is no trigger, and a quoted key under `on:` is one. `on:` may be one event, a list of
+ * them, or a map of them. The parser is doctor's (`cli/workflow-yaml.mjs`), which needs nothing
+ * installed, as a lane step can't. A file it can't read throws, and the ask then says the lane
+ * couldn't tell.
  * @param {string} text
  */
 export function takesComments(text) {
-  const bare = String(text).split('\n').map((l) => l.replace(/(^|\s)#.*$/, '')).join('\n');
-  return /(^|[\s[,{])issue_comment\s*(?=[:,\]}]|$)/m.test(bare);
+  const doc = parseYaml(String(text));
+  const on = doc && typeof doc === 'object' && !Array.isArray(doc) ? /** @type {Record<string, unknown>} */ (doc).on : undefined;
+  if (typeof on === 'string') return on === 'issue_comment';
+  if (Array.isArray(on)) return on.includes('issue_comment');
+  return !!on && typeof on === 'object' && Object.hasOwn(on, 'issue_comment');
 }
 
 /**
