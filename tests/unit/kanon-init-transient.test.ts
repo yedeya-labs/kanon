@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { realDeps as initDeps } from '../../cli/init.mjs';
 import { RATE_LINE, realDeps as milestonesDeps } from '../../cli/milestones.mjs';
@@ -51,6 +52,8 @@ describe('init and a transient GitHub failure (#1607)', () => {
       expect(f.fix.text, id).toContain('the same token, once what GitHub refused is fixed');
       expect(`${f.message} ${f.fix.text}`, id).not.toMatch(/a token that has|the token could not/);
     }
+    // docs/init.md says no token avoids such a refusal (#1648's review).
+    expect(readFileSync('docs/init.md', 'utf8')).toContain('the exact step for someone whose token can, or, for a refusal no token would avoid, what GitHub said.');
   });
 
   it("reports kanon milestones' rate limit as GitHub's, not the token's", async () => {

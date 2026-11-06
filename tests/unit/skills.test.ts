@@ -1425,6 +1425,8 @@ describe("the adopt skill and a write step's quoted refusal (#1633)", () => {
     for (const id of ['merge.settings', 'ruleset.create']) expect(row(id), id).toMatch(/As `label\.create` when GitHub limited the rate, or when the message quotes what GitHub refused\./);
     expect(row('label.delete-default')).toBe('As `label.create`, for the deletions.');
     expect(row('milestone.buckets')).toMatch(/When the message quotes what `kanon milestones said:`, it is not the token/);
-    expect(row('milestone.buckets')).toMatch(/A bucket that has a due date, or is closed, is the Stakeholder's call/);
+    expect(row('milestone.buckets')).toMatch(/whether it should be the bucket is the Stakeholder's call \(`K-WORK-5`\)/);
+    // A closed bucket is reopened, never held for the Stakeholder (K-WORK-4).
+    expect(row('milestone.buckets')).toMatch(/A closed bucket is no one's call, since a bucket never completes \(`K-WORK-4`\): the person reopens it with the command the line gives/);
   });
 });

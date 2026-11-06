@@ -3705,7 +3705,7 @@ const run = async (deps, opts, req, rep) => {
       id: 'label.create',
       category: 'label',
       subject: repo,
-      prose: `Create the labels ${failureCause(labelAnswers) === 'permission' || s.tokenCovers === false ? 'the token' : 'init'} could not (${needs('Issues: write', labelAnswers)}):`,
+      prose: `Create the labels ${failureCause(labelAnswers) === 'transient' || (failureCause(labelAnswers) === 'other' && s.tokenCovers !== false) ? 'init' : 'the token'} could not (${needs('Issues: write', labelAnswers)}):`,
       message: `${labelSteps.length} of the taxonomy's labels are missing, and ${couldNot(labelAnswers)} create them (${needs('Issues: write', labelAnswers)}).`,
       text: `Create them with ${tokenWith('Issues: write', labelAnswers)}.`,
       commands: labelSteps,
