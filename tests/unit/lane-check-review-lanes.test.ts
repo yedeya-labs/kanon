@@ -1,6 +1,8 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
+import { callerFile, loadRequirements } from '../../cli/callers.mjs';
 import { ROOT, REGISTER, TRIAGE, adopter, check, red, job, type Tree, type Caller, laneCheck } from './helpers/lane-check.js';
 
 /**
@@ -54,6 +56,32 @@ laneCheck(() => {
       t.edit(TRIAGE, (d) => { d['run-name'] = 'Triage ${{ github.event.issue.number }}'; });
       const r = check(t);
       expect(r.status, r.out).toBe(0);
+    });
+    // #1652: the caller kanon init writes takes `ready_for_review`; one written before keeps its
+    // old list. A warning at the release the caller pins, never a failure.
+    it('warns of a review caller whose pull_request_target lacks a type the template lists, at its pin only', () => {
+      const old = (t: Tree) => { extra(t, REVIEW); roles(t); t.edit(REVIEW, (d) => { (d.on as Record<string, { types: string[] }>).pull_request_target!.types = ['opened', 'labeled']; }); };
+      const t = adopter();
+      old(t);
+      const r = check(t, { ACTION_REF: 'v1.2.3' });
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain("::warning file=.github/workflows/agent-review.yml,title=lane-check::its `pull_request_target` types don't list `ready_for_review`");
+      expect(r.out).toContain('Write `types: [opened, labeled, ready_for_review]` under `pull_request_target:`');
+      // Not judged against another release's template.
+      const other = adopter();
+      old(other);
+      expect(check(other).out).not.toContain("types don't list");
+      // The caller as kanon init writes it is quiet.
+      const now = adopter();
+      extra(now, REVIEW);
+      roles(now);
+      expect(check(now, { ACTION_REF: 'v1.2.3' }).out).not.toContain("types don't list");
+    });
+    it("names on its CALLER TYPES lines exactly the types the caller template writes, for each typed event of the template's", () => {
+      const lines = readFileSync(join(ROOT, REVIEW), 'utf8').split('\n').filter((l) => l.startsWith('# CALLER TYPES: ')).map((l) => l.slice('# CALLER TYPES: '.length).trim().split(/\s+/));
+      const template = parse(callerFile('agent-review', loadRequirements().lanes['agent-review']!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'main' })) as { on: Record<string, { types?: string[] }> };
+      const typed = Object.entries(template.on).filter(([e, t]) => e !== 'workflow_run' && Array.isArray(t?.types)).map(([e, t]) => [e, ...t.types!]);
+      expect(lines).toEqual(typed);
     });
     it('refuses the verify-acs caller while the register has no Explorer', () =>
       red((t) => { extra(t, VERIFY); }, 'lists the role Explorer 0 times'));

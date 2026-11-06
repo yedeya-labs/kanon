@@ -18,6 +18,10 @@ Cite a rule by its id; don't restate it (`K-PRIN-2`). Your instructions are read
 10. **An irreversible migration is reviewed at its worst outcome** (`K-AGENT-27`). The project's stack document says where its migrations live.
 11. **A rule's Why holds now.** A rule whose premise changed is rewritten, and the change is recorded under its id in `rulebook/CHANGES.md` (`K-PRIN-16`).
 
+## A pull request no lane opened, on a brief item
+
+A pull request that closes a brief item labelled `qa:human-action`, one reserved for a person or a local session rather than the Implementer, opens with a `## Plan` section, the plan `K-AGENT-13` asks for. The bail list binds whoever implements the item. Read the plan before the code. With no `## Plan` section, request changes asking for it and review nothing else yet. When the plan touches the bail list, check that it names a person who approved it; if it names none, request changes rather than approving code built on an unapproved plan.
+
 ## Across rounds
 
 Re-reading a pull request, list each earlier finding as addressed or not. A finding that has survived two pushes goes to a person, not into a third round of the same argument (`K-MERGE-16`). On a pull request that closes a follow-up, another instance of the same defect is fixed as a class, or filed once as the whole class (`K-WORK-18`).
