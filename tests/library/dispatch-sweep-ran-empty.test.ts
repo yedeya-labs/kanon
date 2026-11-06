@@ -131,7 +131,7 @@ describe('the run read', () => {
       { ts: 'bad', issue_number: '7', outcome: 'exhausted', run_id: '3' },
       { ts: '20261004T080000Z', issue_number: '8', outcome: 'exhausted', run_id: '4' },
     ];
-    expect(latestRunByIssue(rows, [7, 8]).get(7)).toEqual({ at: RUN_AT, outcome: 'success', runId: '2' });
+    expect(latestRunByIssue(rows, [7, 8]).get(7)).toEqual({ at: RUN_AT, outcome: 'success', runId: '2', produced: null });
     expect([...exhaustedAtByIssue(rows, [7, 8]).keys()]).toEqual([8]);
   });
 });
@@ -146,5 +146,29 @@ describe('the job names the lane reads are the workflow\'s', () => {
     expect(block).not.toBe('');
     expect(block).toMatch(new RegExp(`needs: \\[implement, ${check}\\]`));
     expect(block).toMatch(new RegExp(`needs\\.${check}\\.outputs\\.empty == 'true'`));
+  });
+});
+
+// kanon#1592: an adopter's issue got three implement runs; the last did the work, and only its
+// delivery failed. The sweep re-dispatched it, then blamed its acceptance criteria. A latest run
+// that committed lines and delivered nothing goes to a person with the run, never to a re-dispatch.
+describe('a latest run that committed work and delivered nothing (#1592)', () => {
+  it('stops for a person instead of re-dispatching, naming the run, and never blames the criteria', async () => {
+    const v = run([agent('2026-10-03T12:00:00Z')], { emptyProduced: 9496, emptyRunId: '4242' });
+    expect(v).toMatchObject({ state: 'undelivered', act: 'stop', produced: 9496, runId: '4242' });
+    const { stopBody } = await import('../../scripts/dispatch-sweep.mjs');
+    const body = stopBody({ ...v, lane: implement });
+    expect(body).toContain('committed 9496 lines of work and delivered nothing');
+    expect(body).toMatch(/actions\/runs\/4242/);
+    expect(body).toMatch(/re-run its failed `push` job, which runs no agent/);
+    expect(body).not.toMatch(/acceptance criteria/);
+    // No lines, or unread, keeps the `ran-empty` re-dispatch.
+    expect(run([agent('2026-10-03T12:00:00Z')], { emptyProduced: 0 }).state).toBe('ran-empty');
+    expect(run([agent('2026-10-03T12:00:00Z')], { emptyProduced: null }).state).toBe('ran-empty');
+  });
+
+  it('reads `produced_lines` off the latest row', () => {
+    const rows = [{ ts: '20261004T100000Z', issue_number: '7', outcome: 'ok', run_id: '2', produced_lines: 12 }];
+    expect(latestRunByIssue(rows, [7]).get(7)).toEqual({ at: RUN_AT, outcome: 'ok', runId: '2', produced: 12 });
   });
 });

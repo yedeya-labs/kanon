@@ -151,11 +151,13 @@ export function unmarkedWarning(issue, n) {
  * @param {boolean} i.hasPr     an open PR would close it
  * @param {number} i.crashes    crash markers already on it
  * @param {string} [i.body]     the issue body — read for the split-lineage marker (RA-1781)
+ * @param {boolean} [i.committed] the agent's job handed commits to the push job, and the push job
+ *   moved no branch with them (kanon#1592)
  * @param {number} [i.max]
- * @returns {{act: 'none'|'retry'|'stop', why: string, label?: string}} `label` is where a
- *   `stop` sends the issue
+ * @returns {{act: 'none'|'retry'|'stop', why: string, label?: string, undelivered?: boolean}} `label` is
+ *   where a `stop` sends the issue; `undelivered`, that the work exists and only its delivery failed
  */
-export function decide({ kind, labels, project, spoke, hasPr, crashes, body = '', max = MAX_CRASH_RETRIES }) {
+export function decide({ kind, labels, project, spoke, hasPr, crashes, body = '', committed = false, max = MAX_CRASH_RETRIES }) {
   if (!labels.includes(IMPLEMENT)) return { act: 'none', why: `\`${IMPLEMENT}\` is already off — nothing holds a slot` };
   // A PR EXISTS — work was produced, whatever the run did after.
   if (hasPr) return { act: 'none', why: 'a PR would close this issue — work exists' };
@@ -169,6 +171,14 @@ export function decide({ kind, labels, project, spoke, hasPr, crashes, body = ''
   // the sweep re-dispatches) into `in-flight` and then `awaiting-human`, which it does not.
   // The red run is the signal, and the sweep reads it: the run's jobs show the empty check
   // failed and this recovery ran, and the issue reads `ran-empty` there (kanon#254).
+  // THE WORK EXISTS BUT WAS NOT DELIVERED (kanon#1592). The agent's job handed commits to the
+  // push job, and no pull request closes the issue: the push failed, or never opened one. A retry
+  // would pay for the work again (an adopter's lost three runs, about $55, this way), when it is
+  // the push job, which runs no agent, that is to re-run. A person reads the run and re-runs it.
+  // Before the project check: a hand-labelled issue would otherwise be left to the sweep's retry.
+  if (committed) {
+    return { act: 'stop', label: STOP_LABEL, undelivered: true, why: 'the run committed its work and handed it to the push job, but no pull request closes this issue, so a retry would only redo it. Re-run the failed `push` job on the run above ("Re-run failed jobs"); it runs no agent, and reads the commits this run left' };
+  }
   if (project == null) return { act: 'none', why: 'not a project member, so no tick would re-dispatch it — the dispatch sweep owns its retry' };
   // NEVER REACHED THE MODEL. A cap or an outage is a fact about the pipeline, and an
   // hourly retry into it spends the attempts RA-1517 says must not be charged. The sweep's
@@ -198,20 +208,39 @@ export function decide({ kind, labels, project, spoke, hasPr, crashes, body = ''
   return { act: 'retry', why: `crash ${crashes + 1} of ${max} retried — the next hourly \`lead-reconcile\` tick re-dispatches it` };
 }
 
+/**
+ * Whether the push job moved any branch, from its `heads` output: a JSON array of `{ ref, sha }`.
+ * Anything unreadable counts as moved, so an unknown never stops a retry on a guess.
+ * @param {string | undefined} heads
+ */
+export function pushedHeads(heads) {
+  if (!heads) return false;
+  try {
+    const list = JSON.parse(heads);
+    return !Array.isArray(list) || list.length > 0;
+  } catch {
+    return true;
+  }
+}
+
 /** The comment `main` posts. Exported so the marker's presence is asserted, not assumed. */
-export function renderComment({ act, why, label = STOP_LABEL }, { runUrl, kind }) {
+export function renderComment({ act, why, label = STOP_LABEL, undelivered = false }, { runUrl, kind }) {
   // A GREEN RUN THAT LEFT NOTHING is not called a crash on the issue: the run log says it
   // completed, and a comment contradicting the log sends a human looking for an error
   // that is not there (kanon#181).
-  const what = kind === EMPTY_KIND
-    ? 'The implementer run completed but left no PR, no pushed branch and no comment'
-    : 'The implementer run crashed and produced nothing';
+  const what = undelivered
+    ? 'The implementer run committed its work, but it was not delivered'
+    : kind === EMPTY_KIND
+      ? 'The implementer run completed but left no PR, no pushed branch and no comment'
+      : 'The implementer run crashed and produced nothing';
   return [
     CRASH_MARKER,
     act === 'retry'
       ? `**${what}** — removing \`${IMPLEMENT}\` so this issue stops holding a WIP slot (RA-2118${kind === EMPTY_KIND ? ', kanon#181' : ''}).`
       : label === SPLIT_LABEL
         ? `**The implementer run hit its cap and produced nothing, and retrying will not help** — removing \`${IMPLEMENT}\` and labelling \`${SPLIT_LABEL}\`, so the Lead proposes a split of this issue's brief item (RA-1781).`
+        : undelivered
+        ? `**${what}** — removing \`${IMPLEMENT}\` and labelling \`${label}\` for a human: re-run the push job, not the agent (kanon#1592).`
         : `**${what}, and retrying will not help** — removing \`${IMPLEMENT}\` and labelling \`${label}\` for a human.`,
     '',
     `- run: ${runUrl}`,
@@ -352,6 +381,8 @@ function main() {
     hasPr: Boolean(linkedPrIndex(prs)(Number(issue))),
     crashes: priorCrashes(comments),
     body: view.body,
+    // Handed on, and not pushed: the push job reports each branch it moved (kanon#1592).
+    committed: process.env.COMMITS === 'true' && !pushedHeads(process.env.PUSH_HEADS),
   });
   const unmarked = unmarkedWarning(issue, unmarkedSince(comments, since));
   if (unmarked) console.log(unmarked);

@@ -197,6 +197,15 @@ on:
         required: false
         type: boolean
         default: false
+      closing-comment:
+        description: >-
+          On a lane that sets `push`, hand the push job the agent's closing comment too
+          (kanon#1591): the agent writes it to `docs/.kanon-issue-comment.md` rather than posting
+          it, so the push job posts it with a token minted after the run, however long the run
+          took. Kept out of every commit like the request file.
+        required: false
+        type: boolean
+        default: false
       quality-pr-label:
         description: >-
           OPT-IN quality column (RA-1627). The label on the PR this lane's agent opens, e.g.
@@ -279,7 +288,9 @@ jobs:
       outcome: ${{ steps.agent.outcome }}
       # The checkout's own output, set before any step of the agent's could write one.
       start: ${{ steps.checkout.outputs.commit }}
-      commits: ${{ steps.upload.outcome == 'success' }}
+      commits: ${{ steps.upload.outcome == 'success' && steps.handoff.outputs.commits == 'true' }}
+      # The agent's closing comment, handed to the push job (kanon#1591).
+      comment: ${{ steps.upload.outcome == 'success' && steps.handoff.outputs.comment == 'true' }}
       attempt: ${{ github.run_attempt }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1): a cancelled
@@ -463,6 +474,7 @@ jobs:
           exclude="$(git rev-parse --git-path info/exclude)"
           mkdir -p "$(dirname "$exclude")"
           echo '/docs/.kanon-pull-request.json' >> "$exclude"
+          echo '/docs/.kanon-issue-comment.md' >> "$exclude"
           printf '/%s\n' .agent/starting-map.md .agent/reviewer-playbook-excerpt.md >> "$exclude"
 
       # CREATE-BEFORE-APPLY (plan 0005 §5.3, `K-WORK-12`): each label the lane's agent may apply
@@ -524,6 +536,14 @@ jobs:
       # the agent, so the agent could steer what it writes: the push job trusts none of it, and
       # re-checks each commit and each branch against GitHub. `core.fsmonitor` off, so no hook the
       # agent configured runs here. The request is copied only as a regular file, never a link.
+      #
+      # AND ITS CLOSING COMMENT (kanon#1591). The agent's token was minted when the run started and
+      # lives an hour, while a run may take three, so a comment posted at the end of a long run is
+      # refused as `Bad credentials`. On a lane that sets `closing-comment` the agent writes it to
+      # `docs/.kanon-issue-comment.md` instead, and the push job, whose token is minted after the
+      # run, posts it; on any other lane the push job leaves a stray one alone. A comment with no
+      # commits still goes on, so a question or a bail reaches the issue; with neither, nothing is
+      # handed on and the push job doesn't run.
       - name: Hand the agent's commits to the push job
         id: handoff
         if: always() && inputs.push && steps.agent.outcome != 'skipped'
@@ -534,24 +554,35 @@ jobs:
           out="$RUNNER_TEMP/kanon-push"
           rm -rf "$out"
           mkdir -p "$out"
+          commits=true
           if ! git -c core.fsmonitor=false bundle create "$out/commits.bundle" --branches --not --remotes "$START" 2>"$out/bundle.err"; then
             if grep -q 'empty bundle' "$out/bundle.err"; then
-              rm -rf "$out"
+              rm -f "$out/commits.bundle"
               echo "The agent left no commit GitHub lacks, so there is nothing to push"
-              exit 0
+              commits=false
+            else
+              cat "$out/bundle.err"
+              exit 1
             fi
-            cat "$out/bundle.err"
-            exit 1
           fi
           rm -f "$out/bundle.err"
-          req=docs/.kanon-pull-request.json
-          if [ -f "$req" ] && [ ! -L "$req" ]; then
-            cp "$req" "$out/request.json"
+          if [ "$commits" = true ]; then
+            req=docs/.kanon-pull-request.json
+            if [ -f "$req" ] && [ ! -L "$req" ]; then
+              cp "$req" "$out/request.json"
+            fi
+            echo "commits=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "commits=true" >> "$GITHUB_OUTPUT"
+          note=docs/.kanon-issue-comment.md
+          if [ -f "$note" ] && [ ! -L "$note" ] && [ -s "$note" ]; then
+            cp "$note" "$out/comment.md"
+            echo "comment=true" >> "$GITHUB_OUTPUT"
+            echo "The agent left its closing comment for the push job to post"
+          fi
+          if [ "$commits" != true ] && [ ! -f "$out/comment.md" ]; then rm -rf "$out"; fi
       - name: Upload the agent's commits for the push job
         id: upload
-        if: always() && steps.handoff.outputs.commits == 'true'
+        if: always() && (steps.handoff.outputs.commits == 'true' || steps.handoff.outputs.comment == 'true')
         uses: actions/upload-artifact@v7
         with:
           name: kanon-push-${{ github.run_attempt }}

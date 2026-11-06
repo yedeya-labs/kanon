@@ -756,6 +756,12 @@ export function classify(issue, comments, hasPr, opts = {}) {
     // empty check (`runLeftNothing`). Null is the pre-#254 behaviour, and the bounded one:
     // the issue reads as it did, and nothing is dispatched that was not before.
     emptyAt = null,
+    // HOW MANY LINES THAT EMPTY RUN COMMITTED, and its run id (kanon#1592): the latest `COST#`
+    // row's `produced_lines` and `run_id`. A run that committed work and delivered nothing is
+    // not one to run again: its work exists, so it goes to a person with the run, never to a
+    // re-dispatch that pays for it twice. Null, unread, keeps the `ran-empty` re-dispatch.
+    emptyProduced = null,
+    emptyRunId = null,
     // THIS ISSUE'S LANE RUN STILL QUEUED OR IN PROGRESS, `{ id, status, at }`, or null
     // (kanon#1410): `liveRunsByIssue`'s entry for it. A run writes its cost row only at its
     // end, and the agent may not comment for most of it, so without this a run 15 minutes
@@ -985,6 +991,9 @@ export function classify(issue, comments, hasPr, opts = {}) {
     && !(Number.isFinite(labeledAt) && labeledAt > emptyAt)
     && !agentComments.some((c) => Date.parse(c.createdAt) > emptyAt)) {
     state = 'ran-empty';
+    if (Number.isFinite(emptyProduced) && emptyProduced > 0) {
+      return { ...base, state: 'undelivered', act: 'stop', produced: emptyProduced, runId: emptyRunId };
+    }
   }
   // Only `never-ran`, `answered` and `ran-empty` are actionable. Everything else is either
   // fine or a human's decision.
@@ -1101,7 +1110,29 @@ function stop(v) {
   // A `qa:needs-split` added here rides the Lead App token, so its `labeled` event
   // starts `agent-lead-split.yml` with no further call (RA-1781).
   addLabelOrDie(n, stopLabel, 'stop');
-  const body = v.state === 'too-big'
+  gh(['issue', 'comment', n, '--repo', REPO, '--body', signed(stopBody(v), 'Lead', appPersona('Lead'))]);
+}
+
+/**
+ * The comment `stop()` posts, pure so its wording is asserted (kanon#1592): a run that committed
+ * work it never delivered names the run and the push job to re-run, and never blames the
+ * acceptance criteria.
+ * @param {any} v a verdict whose `act` is `stop`
+ */
+export function stopBody(v) {
+  const { lane } = v;
+  const stopLabel = v.stopLabel ?? lane.stopLabel;
+  return v.state === 'undelivered'
+    ? [
+      MARKER,
+      laneTag(lane),
+      `Removing \`${lane.label}\`: this issue's latest run committed ${v.produced} line${v.produced === 1 ? '' : 's'} of work and delivered nothing, no pull request, branch or comment (kanon#1592).`,
+      '',
+      `Re-dispatching would pay for that work again. Labelled \`${stopLabel}\` for a human: read the run${v.runId ? ` (${/^\d+$/.test(String(v.runId)) ? `https://github.com/${REPO}/actions/runs/${v.runId}` : v.runId})` : ''}, and re-run its failed \`push\` job, which runs no agent; or open the pull request by hand.`,
+      '',
+      `_Filed by \`scripts/dispatch-sweep.mjs\` (RA-912, ${lane.key} lane RA-1336, kanon#1592). To run it again from scratch instead, remove \`${stopLabel}\` and re-add \`${lane.label}\`._`,
+    ].join('\n')
+    : v.state === 'too-big'
     ? [
       MARKER,
       laneTag(lane),
@@ -1120,7 +1151,6 @@ function stop(v) {
       '',
       `_Filed by \`scripts/dispatch-sweep.mjs\` (RA-912, ${lane.key} lane RA-1336)._`,
     ].join('\n');
-  gh(['issue', 'comment', n, '--repo', REPO, '--body', signed(body, 'Lead', appPersona('Lead'))]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1158,7 +1188,7 @@ export function actionCell(v, breaker = { tripped: false }) {
   return breaker.tripped && v.act === 'stop' ? 'stop (withheld)' : v.act;
 }
 
-const REPORT_ORDER = ['never-ran', 'answered', 'ran-empty', 'too-big', 'awaiting-human', 'human-held', 'exhausted', 'running', 'in-flight', 'has-pr', 'triage-settled', 'parked'];
+const REPORT_ORDER = ['never-ran', 'answered', 'ran-empty', 'undelivered', 'too-big', 'awaiting-human', 'human-held', 'exhausted', 'running', 'in-flight', 'has-pr', 'triage-settled', 'parked'];
 
 /**
  * The step-summary text, pure so it can be asserted on (RA-1260). Takes the breaker's
@@ -1354,9 +1384,11 @@ export function exhaustedAtByIssue(rows, issueNumbers) {
  * so the two cannot disagree about which run was the last. A row with no parseable stamp is
  * skipped, so it can neither be the latest nor mask one.
  *
- * @param {Array<{ts?: string|null, issue_number?: string|number|null, outcome?: string|null, run_id?: string|null}>} rows
+ * `produced` is the row's `produced_lines`, the lines the agent committed (kanon#1592), or null.
+ *
+ * @param {Array<{ts?: string|null, issue_number?: string|number|null, outcome?: string|null, run_id?: string|null, produced_lines?: number|null}>} rows
  * @param {number[]} issueNumbers
- * @returns {Map<number, {at: number, outcome: string|null|undefined, runId: string|null|undefined}>}
+ * @returns {Map<number, {at: number, outcome: string|null|undefined, runId: string|null|undefined, produced: number|null}>}
  */
 export function latestRunByIssue(rows, issueNumbers) {
   const wanted = new Set(issueNumbers);
@@ -1367,7 +1399,7 @@ export function latestRunByIssue(rows, issueNumbers) {
     const at = parseCostStamp(row.ts);
     if (at === null) continue;
     const prev = latest.get(n);
-    if (!prev || at > prev.at) latest.set(n, { at, outcome: row.outcome, runId: row.run_id });
+    if (!prev || at > prev.at) latest.set(n, { at, outcome: row.outcome, runId: row.run_id, produced: Number.isFinite(Number(row.produced_lines)) && row.produced_lines !== null ? Number(row.produced_lines) : null });
   }
   return latest;
 }
@@ -1869,7 +1901,7 @@ function main() {
       const latest = latestPerLane.get(lane.key)?.get(issue.number);
       if (!EMPTY_LIFTS.includes(v.state) || !latest || !runLeftNothing(runJobs(latest.runId), lane)) return v;
       const relabeled = labeledAtFor(issue.number, lane.label);
-      return relabeled === undefined ? v : classify(...args, { ...opts, emptyAt: latest.at, labeledAt: relabeled });
+      return relabeled === undefined ? v : classify(...args, { ...opts, emptyAt: latest.at, labeledAt: relabeled, emptyProduced: latest.produced ?? null, emptyRunId: latest.runId ?? null });
     }));
 
   // Decided BEFORE the report (RA-1260), so the summary shows what the run will do rather
