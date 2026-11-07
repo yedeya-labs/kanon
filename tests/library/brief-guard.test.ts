@@ -748,6 +748,41 @@ describe('RA-1732 — an unanswered decision must not merge', () => {
     expect(OPEN_DECISION.test(h) && !ANSWERED_DECISION.test(h)).toBe(false);
   });
 
+  // #1692 — THE RULE'S VOCABULARY, read from `K-LAYOUT-13`'s own "Open" bullet rather than
+  // retyped, so a mark the rule adds and the pattern lacks turns this red. The three
+  // `awaiting the …` phrases were in the rule and the template and not in the pattern.
+  const ruleOpenMarks = (): string[] => {
+    const layout = readFileSync(join(ROOT, 'rulebook/11-repository-layout.md'), 'utf8');
+    const rule = layout.slice(layout.indexOf('### `K-LAYOUT-13`'));
+    const open = /^- \*\*Open\*\* is any of (.*) in the headline\./m.exec(rule);
+    if (!open) throw new Error('K-LAYOUT-13 has no "Open" bullet');
+    return [...open[1].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  };
+
+  it('reads eight open marks from K-LAYOUT-13, the three awaiting phrases among them', () => {
+    expect(ruleOpenMarks()).toEqual([
+      '⛔', 'OPEN', 'PROPOSED', 'TBD', 'UNANSWERED',
+      'awaiting the Owner', 'awaiting the Maintainer', 'awaiting the Stakeholder',
+    ]);
+  });
+
+  it.each(ruleOpenMarks())('counts a decision whose headline carries only %s as open', (mark) => {
+    const [d, ...rest] = openDecisions(`1. **Which store? ${mark}.**\n\nprose`, false);
+    expect(rest).toEqual([]);
+    expect(d.n).toBe(1);
+    expect(d.marker).toBe(mark);
+  });
+
+  it.each(['awaiting the Owner', 'awaiting the Maintainer', 'awaiting the Stakeholder'])(
+    'fails the brief on a decision %s, and passes it once answered', (mark) => {
+      const open = withSection('Decisions', `${PAD}\n\n1. **Which store, ${mark}.** The options follow.\n`);
+      expect(problems(open)).toEqual([expect.stringMatching(/decision 1 is still open/)]);
+      const answered = withSection('Decisions',
+        `${PAD}\n\n1. **Which store, ${mark} until 2026-11-01. ✅ ANSWERED (Owner): the existing one.**\n`);
+      expect(problems(answered)).toEqual([]);
+    },
+  );
+
   it('reads a headline that WRAPS, which is how RA-1019 decision 11 was written', () => {
     // A one-line read missed this exact decision, and it is the incident the check exists
     // for: the marker sat on the SECOND line of a wrapped bold span.
