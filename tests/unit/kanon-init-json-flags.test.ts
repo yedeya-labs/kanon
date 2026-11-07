@@ -565,6 +565,24 @@ describe('kanon init, a flag for each question (#367)', () => {
     const answers = [...parsed].filter((f) => !['--repo', '--dir', '--yes', '--dry-run', '--replace-uncommitted', '--json', '--help'].includes(f));
     expect([...documented].sort()).toEqual(answers.sort());
   });
+
+  // #1698: both defaults grew (#809's callers, #1570's instruction files) and the usage text kept
+  // the old ones, so --help named subscription or none where init picks api-key or hook.
+  it("gives --claude-auth's and --test-database's defaults as docs/init.md and the code do (#1698)", () => {
+    const defaultOf = (flag: string) => {
+      const entry = USAGE.match(new RegExp(`^ {2}${flag} [\\s\\S]*?(?=\\n {2}-|\\n\\n)`, 'm'))![0].replace(/\s+/g, ' ');
+      return entry.slice(entry.indexOf('(default:'));
+    };
+    const documented = (flag: string) => tableColumn('## Answering without a terminal', 2)[tableColumn('## Answering without a terminal', 1).findIndex((c) => c.includes(`\`${flag} `))]!;
+    // claudeAuthOf reads the callers' credential first, then the secrets.
+    for (const said of [defaultOf('--claude-auth'), documented('--claude-auth')]) {
+      expect(said).toMatch(/callers map, when they all map the same one; else `?api-key`? when the repository holds `?ANTHROPIC_API_KEY`? and not `?CLAUDE_CODE_OAUTH_TOKEN`?/);
+    }
+    // testDatabaseSignal reads the agents' instruction files after the compose, environment and migrations signals.
+    for (const said of [defaultOf('--test-database'), documented('--test-database')]) {
+      for (const file of [/\bAGENTS\.md/, /(?<![/\w])CLAUDE\.md/, /\.claude\/CLAUDE\.md/]) expect(said).toMatch(file);
+    }
+  });
 });
 // #376: init offers to declare the kanon plugin in .claude/settings.json, pinned to its release
 // (docs/skills.md), and never rewrites a settings file the project already has.
