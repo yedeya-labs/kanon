@@ -771,10 +771,19 @@ jobs:
             you request changes over a red required check, look up the same check on the
             base branch's latest push run (`gh run list --branch <base> --event push
             --limit 5 --json name,conclusion,url,headSha`, or `gh api` on the base's
-            check runs). When it is red there too, the PR did not cause it: say so in
-            your review, naming the base branch's red run and the open issue the
-            dispatch sweep files for it (search open issues for
-            `kanon:default-branch-red`), and ask nothing of the PR for that check. Still
+            check runs). When it is red there too, compare the FAILURES, not only the
+            check's name (kanon#1671): one check, such as a unit-test shard, holds many
+            tests, and the base can be red for one test while the PR breaks another.
+            Read the failed steps of both runs (`gh run view <run id> --log-failed`, on
+            the PR's run and on the base's) and list the failing tests or steps of each.
+            Only when every failure on the PR is also a failure on the base did the PR
+            not cause it: say so in your review, naming the base branch's red run and
+            the open issue the dispatch sweep files for it (search open issues for
+            `kanon:default-branch-red`), and ask nothing of the PR for that check. A
+            failure the PR's run shows and the base's doesn't is the PR's: name it as
+            a finding against the PR, as for any red check, and it counts as an open
+            item. When the logs don't name the failing tests or steps clearly enough to
+            compare, treat the check as the PR's and say why. Still
             never APPROVE over red; your other findings decide the rest. When the base's
             red check is your only block, the event is REQUEST_CHANGES all the same (you
             never APPROVE over red, and never post COMMENT): the body says the base
