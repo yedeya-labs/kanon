@@ -1002,6 +1002,14 @@ jobs:
         would otherwise take for CI's and diff against the wrong parent. A cite
         left behind turns CI red after you have finished, and no finding names it.
 
+        A FINDING ABOUT THE PR DESCRIPTION IS YOURS TO FIX (kanon#1685). The body
+        is the squash commit's message (K-SHIP-3), so a stale or wrong one blocks
+        the merge as code does. Edit it with `gh pr edit $PR --repo $REPO
+        --body-file <file>`, changing only what the finding names; a body edit
+        needs no push. A suite total that went stale (a test count) is removed,
+        never updated: give the command and the tests this PR adds or changes, and
+        the CI run on the head counts the suite.
+
         WHEN YOU ARE DONE, comment on the PR with what you changed, what you
         verified, and anything you DISAGREED with and why. The comment must
         contain the marker <!-- qa:implement-revise --> on its own line — it is
