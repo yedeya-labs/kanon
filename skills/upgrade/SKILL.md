@@ -17,7 +17,7 @@ Run every `kanon` command in this skill, and every one a finding's fix names, fr
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#candidate-v0.44.0 kanon doctor --json
+npx --yes --package github:yedeya-labs/kanon#candidate-v0.45.0 kanon doctor --json
 ```
 
 <!-- x-release-please-end -->
@@ -158,7 +158,7 @@ Walk the person through it when they come back after the merge, or whenever they
 
 ```sh
 claude plugin marketplace remove kanon
-claude plugin marketplace add --scope project yedeya-labs/kanon#v0.44.0
+claude plugin marketplace add --scope project yedeya-labs/kanon#v0.45.0
 claude plugin install --scope project kanon@kanon
 ```
 
