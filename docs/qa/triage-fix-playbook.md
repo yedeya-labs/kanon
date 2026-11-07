@@ -34,4 +34,5 @@ You are on your own pull request's branch, answering a changes-request.
 - **Verify each finding before you fix it.** Reproduce it against the code. A finding you can't reproduce is answered with the evidence, not "fixed" by a guess.
 - **A finding doesn't widen the issue.** Work beyond the issue's criteria is a follow-up you propose, not something you absorb.
 - **A finding that touches the Owner's list above** is the Owner's: say so in your reply and stop.
+- **A finding about the pull request's description is yours to fix** ([#1685](https://github.com/yedeya-labs/kanon/issues/1685)). The body is the squash commit's message (`K-SHIP-3`), so a wrong or stale one blocks the merge as code does. Edit it with `gh pr edit <n> --body-file <file>`, changing only what the finding names; it needs no push. Remove a stale total, such as a test count, and never update it (item 8).
 - **Leave the lane's marker in a top-level comment** on every exit, as the lane's prompt says. It is how the round cap counts.

@@ -36,6 +36,18 @@ describe('the revise lane fixes a description finding (#1685)', () => {
   });
 });
 
+describe("the playbook's Revise mode says the same as the revise prompt (#1691)", () => {
+  it('a description finding is the agent\'s to fix with gh pr edit, and a stale total is removed', () => {
+    const doc = readFileSync('docs/qa/triage-fix-playbook.md', 'utf8');
+    const section = doc.slice(doc.indexOf('## Revise mode'));
+    const next = section.indexOf('\n## ', 1);
+    const revise = (next === -1 ? section : section.slice(0, next)).replace(/\s+/g, ' ');
+    expect(revise).toContain("A finding about the pull request's description is yours to fix");
+    expect(revise).toContain('`gh pr edit <n> --body-file <file>`');
+    expect(revise).toContain('Remove a stale total, such as a test count, and never update it');
+  });
+});
+
 describe('the Reviewer asks for a stale total to be removed (#1685)', () => {
   it.each([
     ['.github/workflows/review-agent-job.yml', 'A suite total a merge of main made stale (a test count) is asked to be REMOVED, not updated'],
