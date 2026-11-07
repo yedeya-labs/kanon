@@ -186,9 +186,10 @@ The other values, each inferred or defaulted, as the summary shows:
   --stakeholder <who>    the Stakeholder (default: the Owner)
   --claude-auth <which>  the Claude credential every caller maps (docs/init.md): subscription,
                          the subscription's token CLAUDE_CODE_OAUTH_TOKEN, or api-key, an
-                         Anthropic API key ANTHROPIC_API_KEY (default: api-key when the
-                         repository holds ANTHROPIC_API_KEY and not CLAUDE_CODE_OAUTH_TOKEN,
-                         else subscription)
+                         Anthropic API key ANTHROPIC_API_KEY (default: the one the installed
+                         model lanes' callers map, when they all map the same one; else
+                         api-key when the repository holds ANTHROPIC_API_KEY and not
+                         CLAUDE_CODE_OAUTH_TOKEN, else subscription)
   --lanes <list>         comma-separated lanes to install, e.g. review,implement, the
                          Customise choice (default: the feature's lanes; the lanes are
                          listed below)
@@ -196,7 +197,8 @@ The other values, each inferred or defaulted, as the summary shows:
                          (default: suggested from what the repository holds)
   --test-database <how>  none, or hook: the project-setup hook starts one (default: hook
                          when a compose file has a database service, an example environment
-                         file sets DATABASE_URL or a migrations directory exists, else none)
+                         file sets DATABASE_URL, a migrations directory exists, or AGENTS.md,
+                         CLAUDE.md or .claude/CLAUDE.md names a database, else none)
   --delegation           record a sign-off delegation (K-AGENT-44) (the default when a lane
                          runs as the Author and a workflow runs Kanon's DCO check)
   --no-delegation        don't
