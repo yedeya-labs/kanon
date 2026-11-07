@@ -386,6 +386,24 @@ describe('kanon doctor and the waivers under ## Choices (#390)', () => {
     expect(ids(seeing)).toEqual(['waiver.stale docs/qa/adoption.md']);
   });
 
+  // #1696: a workflow that doesn't parse is listed under its own path, not under a waiver's
+  // subject, and its jobs decide the lanes installed, so what every check asks for.
+  it("doesn't call a waiver stale while a workflow can't be read (#1696; mutation: drop the workflow check from the blind spots)", async () => {
+    const releaser = appSecrets('releaser');
+    const github = () => fakeGitHub({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...releaser]) });
+    const files = { ...healthyFiles(), 'docs/qa/adoption.md': record(waiveFor('secret.stale', REPO, releaser, 'kept for the release lane') + waive('caller.misplaced', '.github/workflows/review.yml')) };
+    const seeing = await run(checkout(files), github(), ['--json']);
+    expect(ids(seeing)).toEqual(['waiver.stale docs/qa/adoption.md']);
+    expect(seeing.json.waived.map((w: { id: string }) => w.id)).toEqual(['secret.stale']);
+    const blind = await run(checkout({ ...files, '.github/workflows/broken.yml': 'jobs: [\n' }), github(), ['--json']);
+    expect(blind.status, blind.out).toBe(EXIT.incomplete);
+    expect(ids(blind)).toEqual([]);
+    const notes = blind.json.notes.join('\n');
+    expect(notes).toContain(`doctor lists none of ${releaser.join(', ')} as stale: it could not read .github/workflows/broken.yml`);
+    expect(notes).toContain(`waives secret.stale on ${REPO} for ${releaser.join(', ')}, which doctor did not report; the workflow check could not run, so it can't tell whether the waiver is still needed.`);
+    expect(notes).toContain('waives caller.misplaced on .github/workflows/review.yml, which doctor did not report; the workflow check could not run');
+  });
+
   it('waives a finding that does not block too, and every finding of that id on that subject whose items it names', async () => {
     const github = fakeGitHub({ secrets: new Set() });
     github.st.labels = new Set();
