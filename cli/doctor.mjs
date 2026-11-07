@@ -270,6 +270,9 @@ export const UNWAIVABLE_UNDER = {
 /**
  * The categories of the findings a check that could not run would have reported, by the
  * `unchecked[].check` it is listed under: a waiver of such a finding can't be called stale.
+ * A workflow that could not be read (`workflow`) has none, as it blinds every category: its jobs
+ * decide the lanes installed, and with them what each check asks for, and the release checked
+ * against (#1696).
  * @type {Record<string, string>}
  */
 const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'telemetry-register': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', 'turn-cap-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset', 'notify-secrets': 'secret', 'notify-hook': 'declaration', 'notify-runs': 'caller', 'deploy-hook': 'declaration', 'deploy-ci': 'caller', 'deploy-environments': 'deploy', 'deploy-subject': 'deploy', 'deploy-runs': 'deploy', 'deploy-retention': 'deploy', 'deploy-rulesets': 'deploy', 'deploy-secrets': 'deploy' };
@@ -3516,7 +3519,7 @@ export const diagnose = async (deps, opts) => {
     }
     const hits = findings.filter((f) => f.id === id && f.subject === subject);
     const category = /** @type {{ category: string }} */ (FINDINGS[id]).category;
-    const blind = unchecked.find((u) => u.subject === subject || UNCHECKED_CATEGORY[u.check] === category);
+    const blind = unchecked.find((u) => u.subject === subject || u.check === 'workflow' || UNCHECKED_CATEGORY[u.check] === category);
     if (!ITEMIZED[id]) {
       // A finding that lists no items: its one bullet waives it whole.
       const w = /** @type {(typeof ws)[number]} */ (ws[0]);
