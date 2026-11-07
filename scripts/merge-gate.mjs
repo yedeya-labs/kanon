@@ -1564,10 +1564,18 @@ const QUEUED = 'queued';
 const UNCLOSED = 'issues-unclosed';
 
 // A marker in an old spelling (#53) says the same thing, so it counts as said.
+// Only the Merger's comment counts, by login and role marker, and every page is read, as
+// `handbackOn` reads (kanon#1697). Anyone may comment on a public PR and the head SHA is public,
+// so a quoted marker would stop a re-dispatch or an escalation; and comments come oldest first,
+// so a read of one page misses the Merger's own record on a long thread and says it again.
 const alreadySaid = (number, repo, rule, sha) => {
   try {
-    const bodies = gh(['api', `repos/${repo}/issues/${number}/comments?per_page=100`, '--jq', '.[].body']);
-    return mergerMarkerSpellings(rule, sha).some((m) => bodies.includes(m));
+    const said = gh(['api', `repos/${repo}/issues/${number}/comments?per_page=100`, '--paginate', '--jq',
+      '.[] | {login: .user.login, body: .body} | @json'])
+      .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    const spellings = mergerMarkerSpellings(rule, sha);
+    return said.some((c) => asRole('Merger', { login: c.login, expected: mergerLogin(), body: c.body })
+      && spellings.some((m) => String(c.body).includes(m)));
   } catch {
     // Fail LOUD, not silent: if the check cannot run, say the thing again rather
     // than swallowing an escalation nobody would ever see.
@@ -1765,10 +1773,10 @@ export function apply(pr, verdict, repo, { dryRun = true, json = readJson } = {}
     // for this comment's marker when the label starts it, so a label ahead of the comment would
     // start a run that refuses the head. The comment is also the once-per-head record. A label
     // that fails after it leaves the record, and the sweep after the settle window escalates.
-    // RE-ASKED AS THE VERDICT ASKED IT, by the Merger's own comment and every page (`handbackOn`),
-    // not by `alreadySaid`, which matches anyone's quote of the marker on one page: a forged
-    // marker would then park the PR in this recover for good. Anything but `false` (handed back
-    // already, or unreadable) acts on nothing, and the next sweep's verdict escalates instead.
+    // RE-ASKED AS THE VERDICT ASKED IT, by `handbackOn`, not by `alreadySaid`, which reads an
+    // unreadable thread as not said: here that would hand the head back again. Anything but
+    // `false` (handed back already, or unreadable) acts on nothing, and the next sweep's verdict
+    // escalates instead.
     const mark = marker(HANDBACK, pr.headSha);
     if (handbackOn(pr.number, repo, gh, pr.headSha) !== false) return say(`already handed #${pr.number} back to the revise lane on this commit, or its comments could not be read`);
     say(`hand #${pr.number} back to the Implementer's revise lane: ${verdict.why}`);

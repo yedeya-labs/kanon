@@ -11,6 +11,7 @@ const P = await import('../../scripts/lib/protocol-spellings.mjs');
 const { FOLLOW_UP_MS, MERGER_LOGIN, apply, checkPartition, followQueueMerges, readPr } = await import('../../scripts/merge-gate.mjs');
 const { execute, splitEvidenceRead } = await import('../../scripts/lead-reconcile.mjs');
 const census = await import('../../scripts/protocol-census.mjs');
+const { headerLine } = await import('../../scripts/lib/role-marker.mjs');
 const { censusOf, readWorld } = census;
 const { attemptComment } = await import('../../scripts/rebase-lane.mjs');
 
@@ -112,7 +113,9 @@ esac
   });
 
   it.each([['current', 'merger'], ['old', 'joshua']])('does not repeat an escalation already marked in the %s spelling', (_, m) => {
-    const calls = applyWith(escalate, `<!-- ${m}:escalating-path:${H12} -->`, ['needs:human']);
+    // The Merger's own comment, as the comments read's `--jq` prints it (kanon#1697).
+    const said = JSON.stringify({ login: `${MERGER_LOGIN}[bot]`, body: `${headerLine('Merger')}\n\n<!-- ${m}:escalating-path:${H12} -->` });
+    const calls = applyWith(escalate, said, ['needs:human']);
     expect(calls.some((c) => c.startsWith('pr comment'))).toBe(false);
   });
 
