@@ -73,6 +73,24 @@ describe('the ask promises a restart only when the caller takes issue_comment (#
     expect(takesComments("on:\n  issues:\njobs:\n  a:\n    if: github.event_name != 'issue_comment'\n")).toBe(false);
   });
 
+  it('reads the caller\'s top-level on: alone, quoted keys included (#1683)', () => {
+    // A quoted key under `on:` is a real trigger.
+    expect(takesComments('on:\n  issues:\n    types: [labeled]\n  "issue_comment":\n    types: [created]\n')).toBe(true);
+    expect(takesComments("on:\n  'issue_comment':\n    types: [created]\n")).toBe(true);
+    expect(takesComments('"on":\n  issue_comment:\n')).toBe(true);
+    expect(takesComments('on: issue_comment\n')).toBe(true);
+    // The word anywhere outside `on:` is not.
+    const lane = 'on:\n  issues:\n    types: [labeled]\njobs:\n  implement:\n    uses: o/r/.github/workflows/agent-implement.yml@v1\n';
+    expect(takesComments(`${lane}    with:\n      events: issue_comment\n`)).toBe(false);
+    expect(takesComments(`${lane}  echo:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo issue_comment\n`)).toBe(false);
+    expect(takesComments(`${lane}    with:\n      issue_comment: true\n`)).toBe(false);
+    expect(takesComments('on: [issues, workflow_dispatch]\n')).toBe(false);
+    expect(takesComments('on: issues\n')).toBe(false);
+    expect(takesComments('name: no triggers\n')).toBe(false);
+    // A file the parser can't read throws, so the ask says the lane couldn't tell.
+    expect(() => takesComments('on: &a\n  issue_comment:\n')).toThrow();
+  });
+
   it('says how to restart by hand when a reply restarts nothing, or the lane couldn\'t tell', () => {
     for (const restarts of [false, null] as const) {
       const body = bailAsk(bail.html_url, restarts);
