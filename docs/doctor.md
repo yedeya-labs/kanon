@@ -176,7 +176,7 @@ Some findings your repository has decided to keep. A caller whose lane's file na
   | `qa-store.unmapped` | a secret |
   | `qa-store.variables` | a variable |
 
-- **A waiver that matches nothing is listed as stale** (`waiver.stale`), without blocking, so a waiver doesn't outlive its finding. When the check that would report its finding couldn't run, doctor can't tell, and says so in a note instead.
+- **A waiver that matches nothing is listed as stale** (`waiver.stale`), without blocking, so a waiver doesn't outlive its finding. When the check that would report its finding couldn't run, doctor can't tell, and says so in a note instead. A workflow under `.github/workflows/` it can't read leaves it unable to tell for every waiver, since that workflow's jobs decide which lanes are installed, and so what each check asks for ([#1696](https://github.com/yedeya-labs/kanon/issues/1696)).
 - **A waiver in another shape is malformed, and blocks** (`declaration.malformed`): outside `## Choices`, with nothing in its parentheses, naming an id doctor doesn't report, naming no items of a finding that lists them, naming items of a finding that lists none, waiving one finding twice, or one item of it twice, or waiving a finding that can't be waived.
 - **The person decides.** A waiver is a decision the rulebook gives to the project, in a file on its escalation path (`K-MERGE-4`). An agent may propose one; the person writes it, or accepts it with its reason.
 

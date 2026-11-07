@@ -186,9 +186,10 @@ The other values, each inferred or defaulted, as the summary shows:
   --stakeholder <who>    the Stakeholder (default: the Owner)
   --claude-auth <which>  the Claude credential every caller maps (docs/init.md): subscription,
                          the subscription's token CLAUDE_CODE_OAUTH_TOKEN, or api-key, an
-                         Anthropic API key ANTHROPIC_API_KEY (default: api-key when the
-                         repository holds ANTHROPIC_API_KEY and not CLAUDE_CODE_OAUTH_TOKEN,
-                         else subscription)
+                         Anthropic API key ANTHROPIC_API_KEY (default: the one the installed
+                         model lanes' callers map, when they all map the same one; else
+                         api-key when the repository holds ANTHROPIC_API_KEY and not
+                         CLAUDE_CODE_OAUTH_TOKEN, else subscription)
   --lanes <list>         comma-separated lanes to install, e.g. review,implement, the
                          Customise choice (default: the feature's lanes; the lanes are
                          listed below)
@@ -196,7 +197,8 @@ The other values, each inferred or defaulted, as the summary shows:
                          (default: suggested from what the repository holds)
   --test-database <how>  none, or hook: the project-setup hook starts one (default: hook
                          when a compose file has a database service, an example environment
-                         file sets DATABASE_URL or a migrations directory exists, else none)
+                         file sets DATABASE_URL, a migrations directory exists, or AGENTS.md,
+                         CLAUDE.md or .claude/CLAUDE.md names a database, else none)
   --delegation           record a sign-off delegation (K-AGENT-44) (the default when a lane
                          runs as the Author and a workflow runs Kanon's DCO check)
   --no-delegation        don't
@@ -1715,6 +1717,12 @@ export const askAll = async (deps, opts, ctx) => {
     const note = holdersNote(ctx.holders ?? [], ctx.defaultBranch ?? 'main');
     [sharing, why.consent] = [CONSENT_LEVELS[await choose(deps, `${consentQuestion(ctx.release ?? 'main')}${note ? `\n${note}` : ''}`, CONSENT_OPTIONS, 'yes', 'yes', 'no')], asked];
   }
+  // The telemetry answer's own source (#1695), which only `turnedOffFiles` reads: `--upstream-findings`
+  // alone gives none, so its default turns nothing off; a flag's reason is the flag, which a removal names.
+  if (g.consent) why.telemetry = { source: 'flag', reason: `--consent ${g.consent}` };
+  else if (g.telemetry !== undefined) why.telemetry = { source: 'flag', reason: g.telemetry ? '--telemetry' : '--no-telemetry' };
+  else if (g.upstreamFindings !== undefined) why.telemetry = { source: 'default', reason: 'only an explicit answer sends anything (K-OBS-18)' };
+  else why.telemetry = why.consent;
 
   // The rest, inferred or defaulted (plan 0007 §4), each unless its flag gives it.
   const single = ctx.codeowners?.length === 1 ? ctx.codeowners[0] : undefined;
@@ -1835,7 +1843,7 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
       a.upstreamEvidence = await yesNo(UPSTREAM_EVIDENCE_QUESTION, evidence);
       if (a.upstreamEvidence) a.upstreamFindings = 'sent with evidence';
     }
-    asked('sensitiveData', 'consent');
+    asked('sensitiveData', 'consent', 'telemetry');
   }
   if (picked.has(6)) {
     a.claudeAuth = await choose(deps, CLAUDE_AUTH_QUESTION, CLAUDE_AUTH_OPTIONS, a.claudeAuth, a.claudeAuth);
@@ -2541,8 +2549,9 @@ export const turnedOffFiles = ({ a, req }) => {
   // configuration the repository has are the project's (docs/init.md, "The release workflow"), and
   // where the repository calls Kanon's release workflow, `--no-releaser` only declines the Releaser
   // App. A copy init wrote on an earlier yes calls that workflow too, so it can't be told apart.
-  if (fixed('consent') && a.telemetry !== true) {
-    out.push({ path: TELEMETRY_CALLER_PATH, answer: 'no telemetry (--consent no)', ours: (t) => { const pin = pinOf(t); return pin !== null && t === telemetryCallerFile(pin); } });
+  // The telemetry answer, not the consent answer (#1695): the older flags give the two apart.
+  if (fixed('telemetry') && a.telemetry !== true) {
+    out.push({ path: TELEMETRY_CALLER_PATH, answer: `no telemetry (${a.why.telemetry?.reason || 'your answer'})`, ours: (t) => { const pin = pinOf(t); return pin !== null && t === telemetryCallerFile(pin); } });
   }
   return out;
 };

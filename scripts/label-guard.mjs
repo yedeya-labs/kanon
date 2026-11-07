@@ -24,6 +24,8 @@ import { printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
 import { isAgentActor } from './lib/actors.mjs';
 import { isRoadmapMilestone } from './lib/milestones.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { readCapabilityWatch } from './lib/capability-watch.mjs';
+import { ADOPTION_RECORD } from './lib/reference-deploy.mjs';
 
 const REPO = process.env.REPO ?? process.env.GITHUB_REPOSITORY;
 
@@ -409,6 +411,12 @@ export function liveExplorerOnRoadmap(milestones, repo = REPO, run = ghJson) {
 // READ-ONLY. Nothing here writes a label, and the interlock's query, threshold and
 // cohort (scripts/qa/capability-interlock.mjs) are untouched — this only reports when
 // the projection it counts has drifted from the rows it projects.
+//
+// ONLY WHERE THERE IS A LEDGER (kanon#1694). The ledger exists only where the adoption record
+// turns the capability watch on, off by default (`K-LAYOUT-17`, `K-LAYOUT-10`). Where it doesn't
+// exist and the watch isn't on, there are no rows to project and the check is skipped, saying
+// so, as `lane-check` and `kanon doctor` skip it. Where the watch is on, or the choice is
+// malformed, the ledger is held as needed, as they hold it, and its absence fails by name.
 
 export const LEDGER = 'docs/qa/capability-ledger.md';
 /** What `gh issue view` says for a number that does not resolve (verified live:
@@ -460,8 +468,36 @@ export function cohortDrift(rows, labelled, stateOf) {
   return { undercount, closed, unrowed, unresolved };
 }
 
+/**
+ * The ledger's text, or what to say when it doesn't exist: `skipped` where the capability watch
+ * isn't on, `missing` where it is or the choice can't be read.
+ * @param {string} root
+ * @returns {{ text: string } | { skipped: string } | { missing: string }}
+ */
+export function readLedger(root) {
+  try {
+    return { text: readFileSync(join(root, LEDGER), 'utf8') };
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+  let watch;
+  try { watch = readCapabilityWatch(root); } catch (err) {
+    return { missing: `${LEDGER} is missing, and the capability watch's choice can't be read, so the ledger is held as needed: ${err.message}` };
+  }
+  if (watch === 'on') {
+    return { missing: `${LEDGER} is missing, but ${ADOPTION_RECORD} turns the capability watch on, which needs it (K-LAYOUT-17). Write it, or turn the watch off.` };
+  }
+  return { skipped: `${LEDGER} doesn't exist, which is fine: the capability watch isn't on (K-LAYOUT-10), so there are no \`open #N\` rows for \`${CAPABILITY_LABEL}\` to project. Check 3 is skipped.` };
+}
+
+/**
+ * Check 3's facts, or, where the ledger doesn't exist, `readLedger`'s `skipped` or `missing`.
+ * @returns {ReturnType<typeof cohortDrift> | { skipped: string } | { missing: string }}
+ */
 export function liveCohortDrift(repo = REPO, root = process.cwd(), run = ghJson) {
-  const rows = ledgerOpenRows(readFileSync(join(root, LEDGER), 'utf8'));
+  const ledger = readLedger(root);
+  if (!('text' in ledger)) return ledger;
+  const rows = ledgerOpenRows(ledger.text);
   const list = run(['issue', 'list', '--repo', repo, '--label', CAPABILITY_LABEL, '--state', 'open',
     '--limit', String(ISSUE_READ_CAP), '--json', 'number']);
   assertUntruncated(list.length, ISSUE_READ_CAP, `open ${CAPABILITY_LABEL} issue list`);
@@ -571,21 +607,30 @@ const main = () => {
     }
   } catch (err) { unreadable(`the open ${EXPLORER_LABEL} + ${GATE_CANDIDATE_LABEL} issues`, err); }
 
-  // 3. The capability label still projects the ledger's `open #N` rows (RA-1917).
+  // 3. The capability label still projects the ledger's `open #N` rows (RA-1917), where there is
+  //    a ledger (kanon#1694).
   try {
-    const { undercount, closed, unrowed, unresolved } = liveCohortDrift();
-    if (unresolved.length) {
-      console.error(`\n${LEDGER} marks \`open #N\` for issue(s) that could not be read: ${unresolved.map((n) => `#${n}`).join(', ')} — mistyped, deleted or transferred? The interlock cannot count what does not resolve.`);
+    const drift = liveCohortDrift();
+    if ('skipped' in drift) {
+      console.log(`\n${drift.skipped}`);
+    } else if ('missing' in drift) {
+      console.error(`\nlabel-guard: ${drift.missing}`);
       fail();
-    }
-    for (const n of closed) console.log(`  (${LEDGER} still reads \`open #${n}\`, but #${n} is closed — stale prose; the interlock does not count closed issues either way.)`);
-    if (unrowed.length) console.log(`  (Labelled \`${CAPABILITY_LABEL}\` with no \`open #N\` row: ${unrowed.map((n) => `#${n}`).join(', ')} — in the cohort as labelled (the RA-1423 decision), so reported, not failed.)`);
-    if (!undercount.length) {
-      console.log(`\nEvery open issue the capability ledger marks \`open #N\` carries \`${CAPABILITY_LABEL}\`.`);
     } else {
-      console.error(`\n${undercount.length} open issue(s) the ledger marks \`open #N\` WITHOUT \`${CAPABILITY_LABEL}\`: ${undercount.map((n) => `#${n}`).join(', ')}`);
-      console.error(`The backlog interlock counts the label, so it cannot see these — it under-counts toward unlocking. Label them, or move their rows off \`open #N\`.`);
-      fail();
+      const { undercount, closed, unrowed, unresolved } = drift;
+      if (unresolved.length) {
+        console.error(`\n${LEDGER} marks \`open #N\` for issue(s) that could not be read: ${unresolved.map((n) => `#${n}`).join(', ')} — mistyped, deleted or transferred? The interlock cannot count what does not resolve.`);
+        fail();
+      }
+      for (const n of closed) console.log(`  (${LEDGER} still reads \`open #${n}\`, but #${n} is closed — stale prose; the interlock does not count closed issues either way.)`);
+      if (unrowed.length) console.log(`  (Labelled \`${CAPABILITY_LABEL}\` with no \`open #N\` row: ${unrowed.map((n) => `#${n}`).join(', ')} — in the cohort as labelled (the RA-1423 decision), so reported, not failed.)`);
+      if (!undercount.length) {
+        console.log(`\nEvery open issue the capability ledger marks \`open #N\` carries \`${CAPABILITY_LABEL}\`.`);
+      } else {
+        console.error(`\n${undercount.length} open issue(s) the ledger marks \`open #N\` WITHOUT \`${CAPABILITY_LABEL}\`: ${undercount.map((n) => `#${n}`).join(', ')}`);
+        console.error(`The backlog interlock counts the label, so it cannot see these — it under-counts toward unlocking. Label them, or move their rows off \`open #N\`.`);
+        fail();
+      }
     }
   } catch (err) { unreadable('the capability cohort', err); }
 

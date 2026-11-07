@@ -387,6 +387,10 @@ jobs:
         data-isolation checks. NEVER merge (a human merges).
         GitHub writes new commits when the job pushes yours, so cite no commit id
         from your checkout in the PR body or a comment.
+        STATE NO SUITE TOTAL IN THE BODY (kanon#1685), such as "170 tests pass": it
+        becomes the squash commit's message (K-SHIP-3), and every merge of main
+        makes a total stale. Give the command, list the tests your PR adds or
+        changes, and say the CI run on the head counts the suite.
         NAME YOUR BRANCH `<type>/<issue>-<slug>` (`K-WS-8`), such as
         `fix/42-empty-cart-total`: crash recovery and the dispatch sweep find an
         issue's branch by that name. A new branch only: the job refuses to move
