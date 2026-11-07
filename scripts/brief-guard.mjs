@@ -370,14 +370,20 @@ export const OBS_VOCABULARY = /pagedBusinessEvents|businessEvent|observability\.
  * THE VOCABULARY IS THE CORPUS'S, derived with `git log -p --all -- docs/projects/` rather
  * than chosen: `⛔ OPEN` (4 additions), `PROPOSED` (6), `awaits the developer` (2).
  * `TBD`/`UNANSWERED` never appear and are included only as the obvious next spellings.
+ * `awaiting the Owner`, `awaiting the Maintainer` and `awaiting the Stakeholder` are the rule's
+ * own (`K-LAYOUT-13`, `K-PROJ-5`) and the template tells authors to write them, but the pattern
+ * lacked them until #1692, so a spend decision marked only *awaiting the Owner* read as
+ * answered. A test reads the rule's "Open" bullet and holds each of its marks here.
  *
  * ⚠️ CASE-SENSITIVE, DELIBERATELY, and it is a real gap rather than an oversight. There is
  * no `i` flag, so `Proposed`, `still open` and `tbd` pass silently. That is the right trade
  * — lowercase *"open"* and *"proposed"* are everywhere in brief prose, and a
  * case-insensitive read would flag a headline for the ordinary English word — but it means
  * the marker is a SHOUTED convention, not a vocabulary. `1015.md`'s real open decision was
- * caught only because its author happened to write `⏳ STILL OPEN`. `awaits the developer`
- * is the one lowercase entry and is specific enough to carry no ambiguity.
+ * caught only because its author happened to write `⏳ STILL OPEN`. The lowercase entries,
+ * `awaits the developer` (kept for the briefs written before the rule named a role) and the
+ * three `awaiting the …` phrases, are specific enough to carry no ambiguity, and each is read
+ * in the case the rule writes it, the role capitalised.
  *
  * SCOPED TO THE HEADLINE, which is what keeps it falsifiable in the other direction. A
  * decision's headline is the leading bold span — `N. **…**` — and it MAY WRAP, which is
@@ -393,7 +399,7 @@ export const OBS_VOCABULARY = /pagedBusinessEvents|businessEvent|observability\.
  * catches a DECLARED open question. It cannot catch an undiscovered one, and describing it
  * otherwise would make the first undeclared gap read as the check failing.
  */
-export const OPEN_DECISION = /⛔|\bPROPOSED\b|\bOPEN\b(?!-)|\bTBD\b|\bUNANSWERED\b|awaits the developer/;
+export const OPEN_DECISION = /⛔|\bPROPOSED\b|\bOPEN\b(?!-)|\bTBD\b|\bUNANSWERED\b|awaits the developer|awaiting the (?:Owner|Maintainer|Stakeholder)\b/;
 
 /**
  * An explicit answered mark, which WINS over an open marker in the same headline.
