@@ -80,6 +80,13 @@ describe('a red default branch (#1568)', () => {
     const job = readFileSync('.github/workflows/review-agent-job.yml', 'utf8');
     expect(job).toMatch(/BUT A RED CHECK MAY BE THE BASE BRANCH'S, NOT THIS PR'S \(kanon#1568\)/);
     expect(job).toMatch(/`kanon:default-branch-red`\), and ask nothing of the PR for that check/);
+    // #1671: the same check red on the base clears the PR only when the same tests or steps fail.
+    const text = job.replace(/\s+/g, ' ');
+    expect(text).toContain('compare the FAILURES, not only the check\'s name (kanon#1671)');
+    expect(text).toContain('`gh run view <run id> --log-failed`, on the PR\'s run and on the base\'s');
+    expect(text).toContain('Only when every failure on the PR is also a failure on the base did the PR not cause it');
+    expect(text).toContain('A failure the PR\'s run shows and the base\'s doesn\'t is the PR\'s: name it as a finding against the PR');
+    expect(text).toContain('treat the check as the PR\'s and say why');
     expect(job).toMatch(/Still\s+never APPROVE over red/);
     // The verdict when the base's red check is the only block: REQUEST_CHANGES, not an open item.
     expect(job).toMatch(/When the base's\s+red check is your only block, the event is REQUEST_CHANGES/);
