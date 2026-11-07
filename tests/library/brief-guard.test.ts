@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest';
 import {
   MIN_SECTION_CHARS,
   OBS_DECISION,
-  OBS_VOCABULARY,
   ANSWERED_DECISION,
   DECISION_ITEM,
   OPEN_DECISION,
@@ -241,6 +240,15 @@ describe('the cost section', () => {
     expect(problems(withSection('AWS cost', `${PAD} The delta is $0.`))).toEqual([]);
   });
 
+  // kanon#1693: `K-LAYOUT-13` asks for "a currency sign followed by a digit", not a dollar sign.
+  it('accepts a figure in any currency', () => {
+    // A section that would fail without its figure, so the figure is what passes it.
+    expect(problems(withSection('AWS cost', `${PAD} About forty a month, because of the export job.`))).not.toEqual([]);
+    for (const figure of ['About €40 a month', 'About £40 a month', 'About ¥4000 a month', 'About € 40 a month']) {
+      expect(problems(withSection('AWS cost', `${PAD} ${figure}, because of the export job.`)), figure).toEqual([]);
+    }
+  });
+
   it('accepts the explicit no-cost phrase', () => {
     expect(problems(withSection('AWS cost', `${PAD} There is no AWS cost, because nothing is provisioned.`))).toEqual([]);
   });
@@ -277,21 +285,20 @@ describe('the cost section', () => {
 });
 
 describe('the observability section', () => {
-  it('reports a decision word with no observability vocabulary behind it', () => {
-    // Either half alone is trivially satisfiable by prose — "adds" appears in almost any
-    // paragraph — so a section that never names what it is deciding about does not pass.
-    expect(
-      problems(withSection('Observability', `${PAD} This project adds a lot of value.`)).join('\n'),
-    ).toContain('does not state an add-or-skip decision');
+  // kanon#1693: the guard checks what `K-LAYOUT-13` says, a decision in one of its words, in the
+  // project's own terms, and no stack's vocabulary.
+  it("accepts a decision in another stack's terms", () => {
+    const datadog = 'We add one signal, a Datadog monitor on the export job, and page nobody on it: the export already retries itself, and a failure shows in the job list the next morning, which is soon enough for a report nobody reads before noon.';
+    expect(datadog.length).toBeGreaterThan(MIN_SECTION_CHARS);
+    expect(problems(withSection('Observability', datadog))).toEqual([]);
+    expect(problems(withSection('Observability', `${PAD} None needed: the change emits nothing a person must act on.`))).toEqual([]);
   });
 
-  it('reports observability vocabulary with no decision in it', () => {
+  it('reports a section with no decision in it, in any vocabulary', () => {
     // THIS TEST DID NOT TEST WHAT IT SAID (RA-1658 review). Its body was 57 characters, so
-    // `MIN_SECTION_CHARS` tripped first and `checkBrief` never evaluated the decision
-    // half at all — the assertion's `|nothing to say/` alternation is what let it pass on
-    // the wrong branch. Isolating it needs a body that is BOTH over 200 characters and
-    // free of every decision word, and `PAD` cannot be used because it contains the word
-    // "nothing".
+    // `MIN_SECTION_CHARS` tripped first and `checkBrief` never evaluated the decision at all.
+    // Isolating it needs a body that is BOTH over 200 characters and free of every decision
+    // word, and `PAD` cannot be used because it contains the word "nothing".
     const noDecision =
       'The CloudWatch alarm inventory for this area is listed in `docs/observability.md` ' +
       '§6.2, and the existing metric-filter clauses there remain exactly as they were ' +
@@ -300,24 +307,16 @@ describe('the observability section', () => {
     expect(noDecision.length).toBeGreaterThan(MIN_SECTION_CHARS);
     const found = problems(withSection('Observability', noDecision)).join('\n');
     expect(found).toContain('does not state an add-or-skip decision');
-    // And it is failing for the RIGHT reason: not the length rule wearing the other
-    // rule's name, which is the defect this replaced.
+    // And it is failing for the RIGHT reason: not the length rule wearing the other rule's name.
     expect(found).not.toContain('nothing to say');
+    // Cloud-neutral: it names the rule's words, not a stack's artefacts.
+    expect(found).toContain('add, skip, page, none needed or nothing');
+    expect(found).not.toMatch(/CloudWatch|businessEvent|§6\.2/);
   });
 
-  it('is honest that the decision half is a weak backstop, not a second gate', () => {
-    // Writing the test above took real effort, and that difficulty IS a finding. A
-    // 200-character observability section containing none of add/skip/page/nothing is
-    // close to unreachable in natural prose, so `OBS_DECISION` catches almost anything
-    // while `OBS_VOCABULARY` does the actual work. Recorded as a test rather than only a
-    // comment, so that widening the vocabulary later cannot quietly make the pair
-    // unfalsifiable without someone reading this.
-    const vocabularyOnly = 'This project changes no CloudWatch alarm whatsoever.';
-    const decisionOnly = 'We add a great deal of value and skip a lot of toil.';
-    expect(OBS_VOCABULARY.test(vocabularyOnly)).toBe(true);
-    expect(OBS_DECISION.test(vocabularyOnly)).toBe(false);
-    expect(OBS_DECISION.test(decisionOnly)).toBe(true);
-    expect(OBS_VOCABULARY.test(decisionOnly)).toBe(false);
+  it("reads the rule's words, in any case and inflection, and only those", () => {
+    for (const w of ['Adds', 'skipped', 'PAGED', 'pages', 'none needed', 'Nothing']) expect(OBS_DECISION.test(`We ${w} it.`), w).toBe(true);
+    expect(OBS_DECISION.test('This project changes no CloudWatch alarm whatsoever.')).toBe(false);
   });
 
   it('accepts a deliberate skip stated in the repo\'s terms', () => {

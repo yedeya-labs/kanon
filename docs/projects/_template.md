@@ -84,7 +84,7 @@ A measurement item's deliverable is the number and the command that produced it,
 
 ## 4. Cost
 
-**Price it, or declare that there is nothing to price.** A dollar figure, including `$0`, is the commonest answer; an explicit `no delta`, with the reason, is the other acceptable form (`K-PROJ-6`). The Owner's agreement comes *before* spend (`K-OBS-9`), and a number nobody wrote cannot be agreed to.
+**Price it, or declare that there is nothing to price.** A figure in any currency, including `$0`, is the commonest answer; an explicit `no delta`, with the reason, is the other acceptable form (`K-PROJ-6`). The Owner's agreement comes *before* spend (`K-OBS-9`), and a number nobody wrote cannot be agreed to.
 
 Price each environment the change reaches, then multiply by the number of environments it is deployed to. A new alarm or custom metric has a price. Any recurring schedule that wakes a scale-to-zero resource carries its own estimate: tick frequency, extra wakes per day, and the monthly delta (`K-OBS-10`).
 
