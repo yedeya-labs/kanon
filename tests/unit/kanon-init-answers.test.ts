@@ -111,6 +111,36 @@ describe('kanon init and a file an answer turns off (#1607 point 11)', () => {
     }
   });
 
+  // #1695: the older flags set the three sharing answers one by one, so --upstream-findings alone
+  // gives no telemetry answer, and the one init defaults turns nothing off; a removal names the
+  // flag that was given.
+  const TELEMETRY = '.github/workflows/telemetry.yml';
+  const removal = (d: Doc) => d.changes.map((c) => String(c.message)).find((m) => m.startsWith(`Removed ${TELEMETRY}`));
+  it('keeps the telemetry caller on --upstream-findings alone, whose telemetry answer is only defaulted', async () => {
+    for (const findings of ['filed-here', 'drafted']) {
+      const dir = checkout();
+      await run(dir, fakeGitHub(), json(['--consent', 'yes']));
+      commit(dir);
+      const d = parse(await run(dir, fakeGitHub(), json(['--upstream-findings', findings])));
+      expect(existsSync(join(dir, TELEMETRY)), findings).toBe(true);
+      expect(fileOf(d, TELEMETRY), findings).toBeUndefined();
+      expect(stale(d), findings).toEqual([]);
+    }
+  });
+
+  it('removes the telemetry caller on --no-telemetry beside --upstream-findings, naming --no-telemetry', async () => {
+    const dir = checkout();
+    await run(dir, fakeGitHub(), json(['--consent', 'yes']));
+    const d = parse(await run(dir, fakeGitHub(), json(['--no-telemetry', '--upstream-findings', 'filed-here'])));
+    expect(fileOf(d, TELEMETRY)?.status).toBe('removed');
+    expect(removal(d)).toContain('--no-telemetry');
+    expect(removal(d)).not.toContain('--consent');
+    // And --consent no is named where it was given.
+    const again = checkout();
+    await run(again, fakeGitHub(), json(['--consent', 'yes']));
+    expect(removal(parse(await run(again, fakeGitHub(), json(['--consent', 'no']))))).toContain('--consent no');
+  });
+
   // #1624's review: where the repository calls Kanon's release workflow, --no-releaser declines
   // the Releaser App only, and a release workflow or configuration of the project's own is never
   // init's (docs/init.md, "The release workflow"), so neither is removed or reported.
