@@ -306,7 +306,7 @@ export const REQUIRED_SECTIONS = [
 export const MIN_SECTION_CHARS = 200;
 
 /**
- * A dollar figure, or an explicit no-delta DECLARATION. Read across the section's
+ * A figure in any currency, or an explicit no-delta DECLARATION. Read across the section's
  * heading AND its body, which is where the first version of this was wrong.
  *
  * WIDENED BY A FALSE POSITIVE, measured rather than imagined. PR RA-1656's brief opens
@@ -329,25 +329,25 @@ export const MIN_SECTION_CHARS = 200;
  * still passes (kanon#142), but the finding no longer suggests them: `K-PROJ-6` names
  * "no delta", which says the same thing on any cloud.
  */
-const COST_FIGURE = /\$\s?\d|\bno (?:new )?AWS (?:cost|spend)\b|\bno delta\b/i;
+// ANY CURRENCY SIGN (kanon#1693). `K-LAYOUT-13` asks for "a currency sign followed by a digit",
+// so `€40` and `£40` are figures as `$40` is: `\p{Sc}` is Unicode's currency-symbol class, `$`
+// among them. A `$`-only figure failed a brief that met the rule, in any adopter's CI.
+const COST_FIGURE = /\p{Sc}\s?\d|\bno (?:new )?AWS (?:cost|spend)\b|\bno delta\b/iu;
 
 /**
- * The observability decision, in the repo's own vocabulary. Two halves: a DECISION word
- * (this project adds a signal, or skips one) and a term from the paging contract, so a
- * section that never mentions what it is deciding about cannot pass by containing the
- * word "add".
+ * The observability decision: one of the words `K-LAYOUT-13` fixes, *add*, *skip*, *page*, *none
+ * needed* or *nothing*, in any case and any inflection (`K-OBS-1`). The brief template asks for the
+ * decision "in the project's own terms", so the guard reads the decision and nothing else.
  *
- * THE VOCABULARY HALF CARRIES THE WEIGHT, and saying so is the honest description
- * (RA-1658 review). `OBS_DECISION`'s words — add, skip, page, nothing — are common enough
- * English that a 200-character section lacking every one of them is close to
- * unreachable: constructing one for the test took deliberate effort, and `PAD` itself
- * fails because it contains "nothing". So the decision half is a cheap backstop rather
- * than a second gate. It is kept because it costs nothing and does exclude the
- * degenerate case, and `brief-guard.test.ts` pins BOTH halves independently so that
- * widening either one later cannot quietly make the pair unfalsifiable.
+ * WHAT THE RULE ASKS, AND NOTHING MORE (kanon#1693). Until then the guard also required a term from
+ * the reference adopter's paging vocabulary (`businessEvent`, `pagedBusinessEvents`, `§6.2`,
+ * `metric-filter`, CloudWatch, `alarm`), which the rule never named. It failed a brief that met
+ * the rule on any other stack: "we add a Datadog monitor" was refused. The RA-1658 review's point
+ * stands, and is said here rather than enforced past the rule: these words are common English, so
+ * the check catches little more than a section with no decision in it (`Observability: N/A` is
+ * the length rule's). A stronger check is a change to `K-LAYOUT-13` first, never to the guard alone.
  */
 export const OBS_DECISION = /\b(?:add|adds|adding|added|skip|skips|skipped|skipping|pages?|paged|none needed|nothing)\b/i;
-export const OBS_VOCABULARY = /pagedBusinessEvents|businessEvent|observability\.md|§\s?6\.2|metric[- ]filter|CloudWatch|alarm/i;
 
 /** `## `-level sections, with the body that hangs under each. */
 /**
@@ -1044,7 +1044,7 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
         at: at(matching[0].line),
         problem:
           'the **cost** section neither prices the change nor declares that there is ' +
-          'nothing to price. State the delta as a figure — `$0` is a figure and the commonest ' +
+          'nothing to price. State the delta as a figure in any currency — `$0` or `€0` is a figure and the commonest ' +
           'answer — or declare it in the heading or the body as "no delta", and say why. ' +
           'Agreement comes before spend (`K-PROJ-6`, `K-OBS-9`), and a number nobody ' +
           'wrote cannot be agreed to',
@@ -1110,14 +1110,14 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
         }
       }
     }
-    if (req.key === 'observability' && !(OBS_DECISION.test(body) && OBS_VOCABULARY.test(body))) {
+    if (req.key === 'observability' && !OBS_DECISION.test(body)) {
       findings.push({
         at: at(matching[0].line),
         problem:
-          'the **observability** section does not state an add-or-skip decision in the ' +
-          "repo's terms. Name what is decided (a `businessEvent`, a `pagedBusinessEvents` " +
-          'clause, a CloudWatch alarm, a `docs/observability.md` §6.2 row) and whether it ' +
-          'is added or skipped. Deciding NOT to page is a decision and has a home (RA-1291)',
+          'the **observability** section does not state an add-or-skip decision. Say, in ' +
+          "the project's own terms, what signal you add or skip and whether anything pages, " +
+          'with one of the words add, skip, page, none needed or nothing (`K-LAYOUT-13`, ' +
+          '`K-OBS-1`). Deciding NOT to page is a decision and has a home (RA-1291)',
       });
     }
   }
