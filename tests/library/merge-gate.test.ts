@@ -10,7 +10,7 @@ import { ESCALATE_PATHS } from './helpers/escalations.js';
 import { ROOT } from './helpers/adopter.js';
 const { specPromotions } = await import('../../scripts/lib/spec-promotions.mjs');
 const { IMPLEMENTER_STATUS, headerLine } = await import('../../scripts/lib/role-marker.mjs');
-const { FIX_COMMANDS_MARKER } = await import('../../scripts/lib/protocol-spellings.mjs');
+const { FIX_COMMANDS_MARKER, mergerMarker, mergerMarkerSpellings } = await import('../../scripts/lib/protocol-spellings.mjs');
 /** A value of the untyped library, as the reference adopter's helper named it. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type LibraryValue = any;
@@ -1287,6 +1287,73 @@ printf '%s\\n' "$*" >> "${dir}/calls"
   });
 });
 
+describe('the once-per-head record counts only the Merger\'s own comments, on every page (kanon#1697)', () => {
+  // `apply` dedupes its re-dispatch, its escalation comment, its lift comment and its
+  // unclosed-issues note on the Merger's marker for (rule, head). Anyone may comment on a public
+  // PR and the head SHA is public, so a marker from another account must not stop a re-dispatch;
+  // and comments are listed oldest first, so the Merger's own marker past the first page must
+  // still be found, or each sweep says it again.
+  const MERGER = headerLine('Merger');
+  const STRANGER = { login: 'someone', body: `a quote: ${mergerMarker('no-review-on-head', HEAD)}` };
+  const applyWith = (verdict: Record<string, unknown>, { page1 = [] as unknown[], page2 = [] as unknown[] } = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'apply-said-'));
+    const lines = (cs: unknown[]) => cs.map((c) => JSON.stringify(c)).join('\n');
+    writeFileSync(join(dir, 'page1'), `${lines(page1)}\n`);
+    writeFileSync(join(dir, 'page2'), `${lines(page2)}\n`);
+    // The second page is served only to a read that asks for every page.
+    writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${dir}/calls"
+case "$*" in
+  *"/comments"*)
+    cat "${dir}/page1"
+    case "$*" in *--paginate*) cat "${dir}/page2" ;; esac ;;
+esac
+`);
+    const prev = process.env.PATH;
+    process.env.PATH = `${dir}:${prev}`;
+    const json = () => ({ data: { repository: { workflows: { entries: [] }, record: null } } });
+    try {
+      apply({ number: 7, headSha: HEAD, labels: [] }, verdict, 'o/r', { dryRun: false, json });
+    } finally {
+      process.env.PATH = prev;
+    }
+    let calls: string;
+    try { calls = readFileSync(join(dir, 'calls'), 'utf8'); } catch { calls = ''; }
+    return calls;
+  };
+  const recover = { action: 'recover', rule: 'no-review-on-head', why: 'no review on this head' };
+  const escalate = { action: 'escalate', rule: 'escalating-path', quiet: false, why: 'touches .github/' };
+  const merger = (rule: string, spelling = mergerMarker(rule, HEAD), header = MERGER) =>
+    ({ login: `${MERGER_LOGIN}[bot]`, body: `${header}\n\nsaid\n\n${spelling}` });
+
+  it('re-dispatches the review when the marker is another account\'s comment', () => {
+    expect(applyWith(recover, { page1: [STRANGER] })).toContain('workflow run');
+  });
+
+  it('re-dispatches when the Merger App\'s comment carries another role\'s marker', () => {
+    expect(applyWith(recover, { page1: [merger('no-review-on-head', undefined, headerLine('Reviewer'))] })).toContain('workflow run');
+  });
+
+  it('does not re-dispatch on the Merger\'s own marker, in any spelling (#53)', () => {
+    expect(applyWith(recover, { page1: [merger('no-review-on-head')] })).not.toContain('workflow run');
+    for (const spelling of mergerMarkerSpellings('no-review-on-head', HEAD)) {
+      expect(applyWith(recover, { page1: [merger('no-review-on-head', spelling)] }), spelling).not.toContain('workflow run');
+    }
+  });
+
+  it('finds the Merger\'s own marker past the first page', () => {
+    const calls = applyWith(recover, { page1: [STRANGER], page2: [merger('no-review-on-head')] });
+    expect(calls).toContain('--paginate');
+    expect(calls).not.toContain('workflow run');
+  });
+
+  it('still posts the escalation when the marker is another account\'s comment', () => {
+    const forged = { login: 'someone', body: mergerMarker('escalating-path', HEAD) };
+    expect(applyWith(escalate, { page1: [forged] })).toContain('pr comment');
+    expect(applyWith(escalate, { page1: [merger('escalating-path')] })).not.toContain('pr comment');
+  });
+});
+
 describe('the sweep summary shows the skip distribution (RA-1201)', () => {
   // A skip is invisible on every surface a human reads: `skip()` sets `quiet`, so
   // nothing is posted on the PR, and the summary counted only merges and escalations.
@@ -2225,6 +2292,9 @@ describe('readPr reads who holds needs:human, and only when it is on (RA-2097)',
   });
 });
 
+/** The Merger's comment holding `body`, as the comments read's `--jq` prints it (kanon#1697). */
+const mergerSaid = (body: string) => JSON.stringify({ login: `${MERGER_LOGIN}[bot]`, body: `${headerLine('Merger')}\n\n${body}` });
+
 describe('apply: a release, and a label the marker used to swallow', () => {
   const run = (verdict: Record<string, unknown>, { said = '', labels = [] as string[], dryRun = false } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'apply-release-'));
@@ -2257,7 +2327,7 @@ esac
   });
 
   it('does not repeat itself, but still lifts, when the marker is already there', () => {
-    const calls = run(release, { labels: ['needs:human'], said: `<!-- merger:escalation-lapsed:${HEAD.slice(0, 12)} -->` });
+    const calls = run(release, { labels: ['needs:human'], said: mergerSaid(`<!-- merger:escalation-lapsed:${HEAD.slice(0, 12)} -->`) });
     expect(calls.some((c) => c.startsWith('pr comment'))).toBe(false);
     expect(calls.some((c) => c.includes('--remove-label needs:human'))).toBe(true);
   });
@@ -2268,7 +2338,7 @@ esac
 
   it('re-applies the label on an already-announced escalation that lost it', () => {
     const escalate = { action: 'escalate', rule: 'escalating-path', why: 'x', quiet: false };
-    const mark = `<!-- merger:escalating-path:${HEAD.slice(0, 12)} -->`;
+    const mark = mergerSaid(`<!-- merger:escalating-path:${HEAD.slice(0, 12)} -->`);
     const off = run(escalate, { labels: ['agent:implement'], said: mark });
     expect(off.some((c) => c.startsWith('pr comment')), 'the marker still dedupes the comment').toBe(false);
     expect(off.some((c) => c.includes('--add-label needs:human'))).toBe(true);
@@ -2925,7 +2995,7 @@ esac
 printf '%s\\n' "$*" >> "${dir}/calls"
 case "$*" in
   *"issues/1049"*)  printf '%s' 'open' ;;
-  *"/7/comments"*)  printf '%s' '${said}' ;;
+  *"/7/comments"*)  printf '%s' ${JSON.stringify(said)} ;;
 esac
 `);
       const prev = process.env.PATH;
@@ -2940,7 +3010,7 @@ esac
     };
 
     it('verifyClosed says a miss once per PR, not once per sweep', () => {
-      const { told, calls } = unclosed(`<!-- merger:issues-unclosed:${HEAD.slice(0, 12)} -->`);
+      const { told, calls } = unclosed(mergerSaid(`<!-- merger:issues-unclosed:${HEAD.slice(0, 12)} -->`));
       expect(calls, 'it said the miss again').not.toContain('pr comment');
       expect(told.some((m) => m.includes('did not close'))).toBe(true);
     });
