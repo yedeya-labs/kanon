@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
-import { auditCitations, codeSpans, resolvePath, tokensOf, clauseAt, enclosingDeclarations, anchorsFor, coordinatesIn, codeOnly, isOracleSpec, namesIdentifier, topLevelDeclarations, declarationShift, strongNames, BLOCK_MIN, discardedPhrase, gitIgnored, externalSuspicion, suspectExternalLines, selfCheck, DOC_PATTERNS, docPatternsFrom, globToRegExp, selectDocs } from '../../scripts/citation-guard.mjs';
+import { auditCitations, quotedTexts, quoteOutside, MIN_QUOTE, codeSpans, resolvePath, tokensOf, clauseAt, enclosingDeclarations, anchorsFor, coordinatesIn, codeOnly, isOracleSpec, namesIdentifier, topLevelDeclarations, declarationShift, strongNames, BLOCK_MIN, discardedPhrase, gitIgnored, externalSuspicion, suspectExternalLines, selfCheck, DOC_PATTERNS, docPatternsFrom, globToRegExp, selectDocs } from '../../scripts/citation-guard.mjs';
 import { STATUSES } from '../../scripts/spec-lib.mjs';
 import { ROOT } from './helpers/adopter.js';
 
@@ -62,6 +62,64 @@ describe('a coordinate that moved is caught (RA-658)', () => {
   it('flags a file that does not exist (RA-919)', () => {
     const r = audit(doc('See `src/gone.ts:1`.'), { 'src/a.ts': 'x\n' });
     expect(r.findings[0].problem).toMatch(/no such file/);
+  });
+});
+
+describe('a range that drifted off the text its sentence quotes is caught (kanon#1708)', () => {
+  // Plan 0013's row, as it stood: the claim quotes the smoke entry's string in one cell, and the
+  // next cell cites the object by name. Two lines above it moved the object down; the range
+  // still held `const DEPLOY_HOOK_DOES = {`, and stopped one line short of the string.
+  const init = [
+    '// two lines',
+    '// added above',
+    '/** What each deploy hook does. */',
+    'const DEPLOY_HOOK_DOES = {',
+    "  '.github/actions/build/action.yml': 'Builds what every environment deploys.',",
+    "  '.github/actions/smoke/action.yml': 'Checks the deployed system answers as the release expects.',",
+    '};',
+    '',
+  ].join('\n');
+  const row = (range: string) => doc(`| \`init\`'s smoke stub says only "Checks the deployed system answers as the release expects" | \`DEPLOY_HOOK_DOES\` (\`cli/init.mjs:${range}\`) | — |\n`);
+
+  it('reports a range that holds the name but not the quoted text, naming the line that does', () => {
+    const r = audit(row('2-5'), { 'cli/init.mjs': init });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].problem).toContain('the sentence quotes "Checks the deployed system answers as the release expects", which cli/init.mjs holds at line 6, outside the range 2-5');
+  });
+
+  it('passes the range that covers it', () => {
+    expect(audit(row('4-7'), { 'cli/init.mjs': init }).findings).toEqual([]);
+  });
+
+  it('never judges a quotation the file holds nowhere: a paraphrase, a message, a person', () => {
+    const r = audit(
+      doc('| The body says "deployed, but its smoke check failed" | `FILE_OUTCOMES` (`src/a.ts:1`) |\n'),
+      { 'src/a.ts': "export const FILE_OUTCOMES = ['failed'];\nconst what = `its smoke check failed`;\n" },
+    );
+    expect(r.findings).toEqual([]);
+  });
+
+  it('reads a quotation only from the clause that introduces the coordinate', () => {
+    // The quote belongs to the first coordinate; the second answers for its own clause.
+    const r = audit(
+      doc('The smoke entry says "Checks the deployed system answers" in `DEPLOY_HOOK_DOES` (`cli/init.mjs:4-7`), and the build entry is in `DEPLOY_HOOK_DOES` (`cli/init.mjs:4-5`).\n'),
+      { 'cli/init.mjs': init },
+    );
+    expect(r.findings).toEqual([]);
+  });
+
+  it('takes double and curly quotes outside code spans, long enough to mean something', () => {
+    expect(quotedTexts('says "Checks the `deployed` system answers." and “a curly quoted phrase here”')).toEqual(['Checks the deployed system answers', 'a curly quoted phrase here']);
+    expect(quotedTexts('`"a quote inside a code span, not prose"` and "too short"')).toEqual([]);
+    expect(quotedTexts(`"${'x'.repeat(MIN_QUOTE - 1)}" "${'y'.repeat(MIN_QUOTE)}"`)).toEqual(['y'.repeat(MIN_QUOTE)]);
+  });
+
+  it('finds the quoted text across a line break, inside the range or not at all', () => {
+    // The same text on one line below the range: found only if the range's line break reads as a space.
+    const t = ['a', "'Checks the deployed", "system answers'", 'b', "'Checks the deployed system answers'"];
+    expect(quoteOutside(t, 2, 3, ['Checks the deployed system answers'])).toBeNull();
+    expect(quoteOutside(['x', 'Checks the deployed system answers', 'y'], 1, 1, ['Checks the deployed system answers'])).toEqual({ quote: 'Checks the deployed system answers', line: 2 });
+    expect(quoteOutside(['x'], 1, 1, ['Checks the deployed system answers'])).toBeNull();
   });
 });
 

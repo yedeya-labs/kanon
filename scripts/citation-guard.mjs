@@ -673,6 +673,50 @@ export const codeOnly = (text) =>
     .map((l) => l.replace(/(^|\s)\/\/.*$/, '$1').replace(/^\s*\*.*$/, ''))
     .join('\n');
 
+/**
+ * THE TEXT A SENTENCE QUOTES (kanon#1708). Plan 0013 cited `DEPLOY_HOOK_DOES`
+ * (`cli/init.mjs:2426-2430`) for "Checks the deployed system answers as the release expects",
+ * the smoke entry's string. After an insertion of 2 lines above it, the range still held
+ * `const DEPLOY_HOOK_DOES = {` and stopped one line short of the string, and the anchor passed
+ * it. So a double-quoted run of prose ("…" or “…”) of at least `MIN_QUOTE` characters, outside
+ * any code span, is held to the range too, with comments left in: the quoted text may be a
+ * string literal or a comment. Backticks inside it are dropped, as is a trailing full stop or
+ * comma, and whitespace is compared collapsed.
+ *
+ * ONLY TEXT THE FILE HOLDS IS JUDGED. Prose quotes a person, a message or a paraphrase as often
+ * as it quotes code, so a quotation the cited file holds nowhere says nothing about the range
+ * and is never a finding (`quoteOutside`). One the file holds, but only outside the cited
+ * range, is: that is the drift.
+ * @param {string} text
+ * @returns {string[]}
+ */
+export const MIN_QUOTE = 16;
+export const quotedTexts = (text) => {
+  // A code span holding a double quote is code (`"x"`), never prose; one without stays, so a
+  // quotation that names `a word` in backticks keeps it.
+  const prose = text.replace(/(`+)[\s\S]*?\1/g, (m) => (m.includes('"') ? ' ' : m));
+  return [...prose.matchAll(/"([^"]+)"|\u201c([^\u201d]+)\u201d/g)]
+    .map((m) => (m[1] ?? m[2]).replace(/`/g, '').replace(/[.,;:]+$/, '').replace(/\s+/g, ' ').trim())
+    .filter((q) => q.length >= MIN_QUOTE);
+};
+
+/**
+ * The first quoted text the cited file holds but the range `a`-`b` doesn't, with the line the
+ * file holds it on; null when every quotation the file holds is inside the range.
+ * @param {string[]} target @param {number} a @param {number} b @param {string[]} quotes
+ * @returns {{ quote: string, line: number } | null}
+ */
+export const quoteOutside = (target, a, b, quotes) => {
+  const flat = (/** @type {string} */ t) => t.replace(/\s+/g, ' ');
+  const range = flat(target.slice(a - 1, b).join('\n'));
+  for (const q of quotes) {
+    if (range.includes(q)) continue;
+    const line = target.findIndex((l) => flat(l).includes(q));
+    if (line !== -1) return { quote: q, line: line + 1 };
+  }
+  return null;
+};
+
 export const anchorsFor = (line, index, inherited) => {
   // SCOPED TO THE TEXT BEFORE THIS CITATION, back to the previous one. Prose names a
   // thing and then cites it, and a sentence often chains several: "note bodies are
@@ -692,6 +736,9 @@ export const anchorsFor = (line, index, inherited) => {
   const prev = [...before.matchAll(CITATION), ...before.matchAll(BARE), ...before.matchAll(LINE_AFTER)].sort((x, y) => x.index - y.index);
   const last = prev[prev.length - 1];
   let segment = last ? before.slice(last.index + last[0].length) : before;
+  // A quotation answers for the coordinate after it across the row's cells (kanon#1708): a
+  // table states the claim in one cell, quoting the code, and cites it in the next.
+  const quotes = quotedTexts(segment);
   // A MARKDOWN TABLE CELL IS ITS OWN CLAUSE. These docs put the whole transition table
   // in one line, so without this the anchor pooled every column's identifiers onto a
   // coordinate in a later column: `| ... | pending_payment | earlier read (`:1358`
@@ -724,11 +771,11 @@ export const anchorsFor = (line, index, inherited) => {
   // "unanchored citation" finding (kanon#387) that asks for the identifier to be named
   // again, rather than a wrong verdict on a correct coordinate.
   const brokeClause = /[—;]|,\s+(?:and|so|but|which|where)\b/.test(segment);
-  if (brokeClause) return { anchors, anchorTokens: [...new Set(anchors.flatMap(tokensOf))], clauseBroken: true };
+  if (brokeClause) return { anchors, anchorTokens: [...new Set(anchors.flatMap(tokensOf))], clauseBroken: true, quotes };
   if (!anchors.length && inherited?.length) {
-    return { anchors: inherited, anchorTokens: [...new Set(inherited.flatMap(tokensOf))], inheritedAnchors: true };
+    return { anchors: inherited, anchorTokens: [...new Set(inherited.flatMap(tokensOf))], inheritedAnchors: true, quotes };
   }
-  return { anchors, anchorTokens: [...new Set(anchors.flatMap(tokensOf))] };
+  return { anchors, anchorTokens: [...new Set(anchors.flatMap(tokensOf))], quotes };
 };
 
 /**
@@ -1044,6 +1091,19 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
             problem:
               `the range names none of what its sentence does ` +
               `(${anchors.slice(0, 3).map((x) => `\`${x}\``).join(', ')})`,
+          });
+          continue;
+        }
+        // THE ANCHOR WAS FOUND, BUT THE TEXT THE SENTENCE QUOTES WAS LEFT BEHIND (kanon#1708).
+        const left = quoteOutside(target, a, b, a0.quotes ?? []);
+        if (left) {
+          findings.push({
+            at,
+            citation: whole,
+            clause,
+            problem:
+              `the sentence quotes "${left.quote}", which ${resolved.path} holds at line ${left.line}, ` +
+              `outside the range ${a}-${b}. Re-point the range so it covers the text it quotes`,
           });
           continue;
         }
