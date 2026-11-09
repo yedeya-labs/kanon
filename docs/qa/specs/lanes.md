@@ -65,7 +65,7 @@ Seeded by project [#1718](https://github.com/yedeya-labs/kanon/issues/1718)'s br
 ### Review, revision and merge
 
 - `[LANE-32]` `[seed]` On a pull request that closes an upgrade issue, the Reviewer reads the release notes of each release after the base's pin up to the target and the pull request's `Lane check`, and requests changes for a caller change a release asks for that the diff lacks, and for any change outside the pins, the plugin `ref`, the callers and the declarations the target asks for.
-- `[LANE-33]` `[seed]` A change request on an upgrade pull request, which the revise lane's own triggers refuse because the pull request moves the pin (`K-MERGE-17`), is revised by a dispatch of the revise lane from the default branch, made at most once per change request by a fixed step with a token narrowed to what that step uses; no agent's token holds Actions write.
+- `[LANE-33]` `[seed]` A change request on an upgrade pull request, which the revise lane's own triggers refuse because the pull request moves the pin (`K-MERGE-17`), is revised by a dispatch of the revise lane from the default branch, made at most once per change request by a fixed step that runs no model, with a token narrowed to what that step uses; no token a model session can read holds Actions write, and no step but that one and the merge gate's mints a token with it.
 - `[LANE-34]` `[seed]` The merge gate never merges an upgrade pull request: its pins are under `.github/` and `.claude/` (`K-MERGE-4`), and the sweep's summary names it as waiting for a person.
 
 ### Install and checks
