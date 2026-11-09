@@ -271,6 +271,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-20.** The Owner decided (plan 0009 decision 10) that a run row may name the kind of Claude credential it ran on, `subscription` or `api-key`, chosen by which secret the caller mapped and never from anything the secret holds. [Plan 0009 §12](../docs/plans/0009-release-channels-and-api-key.md#12-cost-what-was-paid), [#579](https://github.com/yedeya-labs/kanon/issues/579)
 - **2026-10-20.** The Owner decided (plan 0013 decisions 7 and 12) a sixth row kind, the smoke-check row, which records one smoke run outside a deploy by the environment's role and position, never its name, a release, a commit, a URL or anything the hooks print; and that the deploy row records the reset hook's stage and duration. [ADR 0007](../docs/decisions/0007-data-boundary.md) was amended to match. [Plan 0013 §8](../docs/plans/0013-smoke-lifecycle.md#8-telemetry), [#1147](https://github.com/yedeya-labs/kanon/issues/1147)
 
+## `K-SELF-3`
+
+- **2026-11-09.** The citation guard also fails a range that holds the identifier its sentence names but has drifted off the text the sentence quotes, when the cited file holds that text elsewhere. A quotation the file holds nowhere, such as a paraphrase, is not judged. Plan 0013's range for the smoke hook's description had drifted two lines and still passed. [#1708](https://github.com/yedeya-labs/kanon/issues/1708)
+
 ## `K-SELF-14`
 
 - **2026-10-21.** The Owner decided that a review finding's class is the rule id it cites, in place of the six named classes, which almost no review recorded and nothing read; findings and follow-ups are counted per rule id by `scripts/finding-counts.mjs`, and a gate's baseline is recorded in its mechanism row. The count was backfilled for the four gates switched on that day. [#1253](https://github.com/yedeya-labs/kanon/issues/1253)
