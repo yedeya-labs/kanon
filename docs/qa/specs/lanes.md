@@ -43,7 +43,7 @@ Seeded by project [#1718](https://github.com/yedeya-labs/kanon/issues/1718)'s br
 ### The choice and the target
 
 - `[LANE-22]` `[seed]` The adoption record opts a repository in with one bullet under `## Choices`, ``- **Kanon upgrades:** `stable` `` or `` `candidates` ``, read from the default branch by one reader that the upgrade lane, `lane-check` and `kanon doctor` share. `off`, a record without the bullet, and no record all mean off. A bullet outside `## Choices`, written twice, or with any other value is malformed: the lane files nothing and names it, and `lane-check` fails it.
-- `[LANE-23]` `[seed]` Under `stable`, the upgrade's target is Kanon's latest stable release, as GitHub's latest release of Kanon's repository names it. Under `candidates`, it is the later of that release and the newest `candidate-vX.Y.Z` whose commit carries a completed, successful `kanon-e2e` check run; a candidate without one is never a target. A target is always later than the one release the callers pin, and a candidate is never a target once its own `vX.Y.Z` exists. With no exact pin, or more than one, there is no target, and the lane says why.
+- `[LANE-23]` `[seed]` Under `stable`, the upgrade's target is Kanon's latest stable release, as GitHub's latest release of Kanon's repository names it. Under `candidates`, it is the later of that release and the newest `candidate-vX.Y.Z` whose commit carries a completed, successful `kanon-e2e` check run created by the Reporter App, matched by the App id the App register records; a `kanon-e2e` check run from any other App is ignored, and a candidate without the Reporter's is never a target. A target is always later than the one release the callers pin, and a candidate is never a target once its own `vX.Y.Z` exists. With no exact pin, or more than one, there is no target, and the lane says why.
 - `[LANE-24]` `[seed]` No part of the upgrade lane, its choice's reader or its target reads the repository's name or owner. Kanon's own repository is held to the same code, and its pin job and Dependabot entry are unchanged by this project.
 
 ### The lane
@@ -65,7 +65,7 @@ Seeded by project [#1718](https://github.com/yedeya-labs/kanon/issues/1718)'s br
 ### Review, revision and merge
 
 - `[LANE-32]` `[seed]` On a pull request that closes an upgrade issue, the Reviewer reads the release notes of each release after the base's pin up to the target and the pull request's `Lane check`, and requests changes for a caller change a release asks for that the diff lacks, and for any change outside the pins, the plugin `ref`, the callers and the declarations the target asks for.
-- `[LANE-33]` `[seed]` A change request on an upgrade pull request, which the revise lane's own triggers refuse because the pull request moves the pin (`K-MERGE-17`), is revised by a dispatch of the revise lane from the default branch, which the upgrade lane makes at most once per change request.
+- `[LANE-33]` `[seed]` A change request on an upgrade pull request, which the revise lane's own triggers refuse because the pull request moves the pin (`K-MERGE-17`), is revised by a dispatch of the revise lane from the default branch, made at most once per change request by a fixed step with a token narrowed to what that step uses; no agent's token holds Actions write.
 - `[LANE-34]` `[seed]` The merge gate never merges an upgrade pull request: its pins are under `.github/` and `.claude/` (`K-MERGE-4`), and the sweep's summary names it as waiting for a person.
 
 ### Install and checks
