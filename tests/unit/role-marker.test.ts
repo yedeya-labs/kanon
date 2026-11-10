@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -152,19 +152,48 @@ describe('the agent is asked to open every post with its header (agent-run)', SP
 });
 
 describe('the role the agent speaks as (agent-setup)', () => {
-  const REGISTER = '| Role | App slug |\n|---|---|\n| Implementer | `acme-implementer` |\n| Reviewer | `acme-reviewer` |\n';
-
-  it('takes the lane\'s role, or the default branch register\'s row for the minted slug', () => {
+  it('takes the lane\'s role', () => {
     expect(resolveRole({ role: 'reviewer' })).toEqual({ role: 'Reviewer' });
-    expect(resolveRole({ slug: 'acme-implementer', register: () => REGISTER })).toEqual({ role: 'Implementer' });
   });
 
   it('names what it could not resolve, and never guesses', () => {
     expect(resolveRole({ role: 'Releaser' })).toMatchObject({ problem: expect.stringMatching(/not an agent role/) });
-    expect(resolveRole({})).toMatchObject({ problem: expect.stringMatching(/no role and no App slug/) });
-    expect(resolveRole({ slug: 'acme-other', register: () => REGISTER })).toMatchObject({ problem: expect.stringMatching(/no agent role/) });
-    expect(resolveRole({ slug: 'acme-implementer', register: () => 'no table' })).toMatchObject({ problem: expect.stringMatching(/no App register table/) });
-    expect(resolveRole({ slug: 'acme-implementer', register: () => { throw new Error('HTTP 404'); } })).toMatchObject({ problem: 'HTTP 404' });
+    expect(resolveRole({})).toMatchObject({ problem: expect.stringMatching(/no role/) });
+  });
+
+  // kanon#1725. `K-LAYOUT-6` puts the Author's four roles on one slug and the Judge's two on
+  // another, so no agent role has a slug of its own and the slug never says which role a run
+  // is. A run with an App and no role fails, naming the fix.
+  it('never reads the role by the App\'s slug, which a K-LAYOUT-6 register never makes unique', () => {
+    for (const slug of ['acme-author', 'acme-judge']) {
+      expect(resolveRole({ slug })).toEqual({ problem: `the lane passed no role, and the App \`${slug}\` doesn't say which: since L4 its roles share it (\`K-LAYOUT-6\`)` });
+    }
+  });
+
+  it('documents `role` as required for a run that mints an App, and shows it in the example', () => {
+    const readme = readFileSync('actions/agent-setup/README.md', 'utf8');
+    const action = parse(readFileSync('actions/agent-setup/action.yml', 'utf8')) as { inputs: Record<string, { description: string }> };
+    for (const text of [readme, action.inputs.role!.description]) expect(text).not.toMatch(/reads it from the App register/);
+    expect(readme).toMatch(/^\| `role` \| when `app-slug` names an App \|/m);
+    expect(readme.match(/```yaml\n([\s\S]*?)```/)?.[1]).toMatch(/^ {4}role: \w+$/m);
+  });
+
+  it('is passed by every call of the block that mints an App, in Kanon\'s workflows and its direct-lane fixture', () => {
+    const files = [...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => `.github/workflows/${f}`), 'tests/fixtures/agent-direct-lane.yml'];
+    let minting = 0;
+    for (const file of files) {
+      const doc = parse(readFileSync(file, 'utf8')) as { jobs?: Record<string, { steps?: { uses?: string; with?: Record<string, string> }[] }> };
+      for (const [name, job] of Object.entries(doc.jobs ?? {})) {
+        for (const step of job.steps ?? []) {
+          if (!String(step.uses).endsWith('actions/agent-setup')) continue;
+          const slug = step.with?.['app-slug'] ?? '';
+          if (!slug || slug === 'github-actions') continue;
+          minting++;
+          expect(step.with?.role, `${file}: job ${name}`).toBeTruthy();
+        }
+      }
+    }
+    expect(minting, 'the walk found the calls that mint an App').toBeGreaterThan(3);
   });
 
   it('exports the role, the persona (the role, while none is declared) and the header line', () => {
@@ -331,7 +360,7 @@ describe('personas live in the App register\'s optional Persona column', SPAWNS,
       const envFile = join(dir, 'env');
       writeFileSync(envFile, '');
       const r = spawnSync(process.execPath, ['actions/agent-setup/persona.mjs'], { encoding: 'utf8',
-        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_ENV: envFile, GITHUB_REPOSITORY: 'acme/widgets', ROLE: '', APP_SLUG: 'acme-implementer' } });
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_ENV: envFile, GITHUB_REPOSITORY: 'acme/widgets', ROLE: 'Implementer', APP_SLUG: 'acme-author' } });
       expect(r.status, r.stderr).toBe(0);
       expect(readFileSync(envFile, 'utf8')).toBe(`${personaEnv('Implementer', 'The Builder').join('\n')}\n`);
     } finally {
@@ -352,7 +381,7 @@ describe('personas live in the App register\'s optional Persona column', SPAWNS,
           env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_ENV: envFile, GITHUB_REPOSITORY: 'acme/widgets', ROLE, APP_SLUG } });
         return { status: r.status, out: r.stdout + r.stderr, env: readFileSync(envFile, 'utf8') };
       };
-      for (const [role, slug] of [['Releaser', ''], ['', 'acme-unregistered']] as const) {
+      for (const [role, slug] of [['Releaser', ''], ['', 'acme-unregistered'], ['', 'acme-author']] as const) {
         const r = step(role, slug);
         expect(r.status, `${role}/${slug}: ${r.out}`).toBe(1);
         expect(r.out).toMatch(/::error title=agent-setup::cannot tell which role this agent speaks as: /);
