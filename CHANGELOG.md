@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.45.1](https://github.com/yedeya-labs/kanon/compare/candidate-v0.45.0...candidate-v0.45.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-setup:** require the role for a run that mints an App ([#1735](https://github.com/yedeya-labs/kanon/issues/1735)) ([24956f9](https://github.com/yedeya-labs/kanon/commit/24956f93998e3a6571d7282612472660cebec473))
+* **citation-guard:** count a file's lines without its trailing newline ([#1732](https://github.com/yedeya-labs/kanon/issues/1732)) ([43661e9](https://github.com/yedeya-labs/kanon/commit/43661e9d6248a094bd7c63a9392b93a2f5db57e5))
+* **digest:** name the Stakeholder as the gate candidates' decider ([#1736](https://github.com/yedeya-labs/kanon/issues/1736)) ([52bd723](https://github.com/yedeya-labs/kanon/commit/52bd7233babbe6781ffba8ccad537186e1f36fc7))
+* **rulebook:** K-LAYOUT-6 no longer says an agent's commits are authored under its persona ([#1733](https://github.com/yedeya-labs/kanon/issues/1733)) ([31beb4f](https://github.com/yedeya-labs/kanon/commit/31beb4f996ff268dcc5818d24cf06cda1de69466))
+* **spec:** read .jsx, .cjs, .mts and .cts suffixed files as tests ([#1734](https://github.com/yedeya-labs/kanon/issues/1734)) ([cb77bde](https://github.com/yedeya-labs/kanon/commit/cb77bde54ec8115bd223e74d17a0a64c654cfc5d))
+* **sweep:** hold an issue whose run a reply to a bail restarted ([#1731](https://github.com/yedeya-labs/kanon/issues/1731)) ([656833b](https://github.com/yedeya-labs/kanon/commit/656833bbe2741113b0a0c944e441f65c732cd4dd))
+
+
+### Documentation
+
+* **metrics:** refresh the public metrics page ([#1712](https://github.com/yedeya-labs/kanon/issues/1712)) ([2597f8d](https://github.com/yedeya-labs/kanon/commit/2597f8dc94694856a7089beb255f5b5c4c242167))
+
+
+### CI
+
+* **deps:** Bump anthropics/claude-code-action from 1.0.267 to 1.0.269 in /actions/agent-run in the github-actions group across 1 directory ([#1711](https://github.com/yedeya-labs/kanon/issues/1711)) ([3e3dc82](https://github.com/yedeya-labs/kanon/commit/3e3dc8238c6292bf2bb5b32e478677571a1716fd))
+* **deps:** run Kanon on candidate v0.45.0 ([#1739](https://github.com/yedeya-labs/kanon/issues/1739)) ([2a87d89](https://github.com/yedeya-labs/kanon/commit/2a87d89f5170467df13cc3ab5ab2e45b94f85ad2))
+
 ## [0.45.0](https://github.com/yedeya-labs/kanon/compare/candidate-v0.44.0...candidate-v0.45.0) (2026-11-09)
 
 
