@@ -74,6 +74,7 @@ jobs:
         with:
           arm: direct-block fixture
           app-slug: ${{ steps.app-token.outputs.app-slug }}
+          role: Implementer
 
       # A step of the lane's OWN between the stages — the reason a lane calls the blocks
       # directly rather than handing its job to the spine.

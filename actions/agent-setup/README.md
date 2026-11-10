@@ -28,6 +28,7 @@ On the review lane, the restore of the judging inputs takes the playbook default
   with:
     arm: lead agent
     app-slug: ${{ steps.app-token.outputs.app-slug }}
+    role: Lead
     push-probe: "true"
 ```
 
@@ -38,7 +39,7 @@ On the review lane, the restore of the judging inputs takes the playbook default
 | `arm` | yes | A human name for the lane, used in error messages. |
 | `node` | no | The Node its scripts run on, by absolute path, the sign-off resolution in `agent-commits.sh` included: the kanon step's `node` output, from a lane whose job ran the project-setup hook first, which may put another Node first on the `PATH` ([#1676](https://github.com/yedeya-labs/kanon/issues/1676)). Defaults to `node` from the `PATH`. |
 | `app-slug` | yes | The minted App's slug, from `actions/create-github-app-token`. |
-| `role` | no | The role the agent speaks as (`Implementer`, `Reviewer`, …). Empty reads it from the App register on the default branch, by the minted App's slug. Pass it when you call the block before your token exists. |
+| `role` | when `app-slug` names an App | The role the agent speaks as (`Implementer`, `Reviewer`, …). The App's slug never says which: the Author's four roles share one App and the Judge's two another (`K-LAYOUT-6`). Pass it too when you call the block before your token exists. Empty, with no `app-slug` or `github-actions`, the agent speaks as no role. |
 | `push-probe` | no | `"true"` runs `git push --dry-run` with the checkout's credential. It creates nothing. Default `"false"`. |
 | `github-token` | no | Reads the App's bot account and the default branch's delegation record. Pass the minted App token; the default, the workflow token, is enough for a public repository or a caller that grants `contents: read`. |
 

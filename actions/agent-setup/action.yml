@@ -63,8 +63,10 @@ inputs:
   role:
     description: >-
       The role the agent speaks as (plan 0005 §3.3): `Implementer`, `Reviewer`, `Lead`, …
-      Empty reads it from the App register on the default branch, by the minted App's slug.
-      A lane that calls this block before its App token exists (the review lane) passes it.
+      Required when `app-slug` names an App: since L4 the Author's and the Judge's roles each
+      share their App's slug (`K-LAYOUT-6`), so the slug never says which role (kanon#1725).
+      A lane that calls this block before its App token exists (the review lane) passes it
+      too. Empty, with no `app-slug` or `github-actions`, the agent speaks as no role.
     required: false
     default: ""
   github-token:

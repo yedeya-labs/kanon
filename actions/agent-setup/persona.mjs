@@ -2,12 +2,11 @@
 // `agent-setup` before the commit identity, so `agent-commits.sh` can author the agent's
 // commits with the persona's name.
 //
-// THE ROLE. The lane's `role` input when it gives one (the review lane, whose App token
-// doesn't exist yet when it calls the block). Otherwise the register row whose slug is the
-// minted App's, read from the DEFAULT branch, as `agent-commits.sh` reads the delegation: a
-// pull request's checkout must not choose the role its own agent speaks as. That lookup is
-// unambiguous while each role has its own App; at L4, when roles share an App, every lane
-// passes `role` and the lookup goes.
+// THE ROLE. The lane's `role` input, which every lane that mints an App passes. It used to
+// fall back to the register row whose slug is the minted App's, but since L4 the Author's four
+// roles share one slug and the Judge's two another (`K-LAYOUT-6`), so a slug never says which
+// role a run is and that lookup could never resolve one (kanon#1725). A run with an App and no
+// `role` fails, naming the fix.
 //
 // WHAT IT WRITES, to `$GITHUB_ENV` for the steps after it, the agent's included:
 //   KANON_ROLE         the role, as the roles table spells it
@@ -31,32 +30,23 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 
-import { APP_REGISTER, parseAppRegister, parsePersonas } from '../../scripts/app-register.mjs';
+import { APP_REGISTER, parsePersonas } from '../../scripts/app-register.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 import { MARKED_ROLES, headerLine } from '../../scripts/lib/role-marker.mjs';
 
 /**
- * The role to speak as, from the lane's input or the register.
- * @param {{ role?: string, slug?: string, register?: () => string }} input
+ * The role to speak as, from the lane's input. The App's slug only names the App, which since
+ * L4 holds several roles (`K-LAYOUT-6`), so it is never read for the role.
+ * @param {{ role?: string, slug?: string }} input
  * @returns {{ role: string } | { problem: string }}
  */
-export function resolveRole({ role = '', slug = '', register = () => '' }) {
+export function resolveRole({ role = '', slug = '' }) {
   if (role) {
     const r = MARKED_ROLES.find((x) => x.toLowerCase() === role.toLowerCase());
     return r ? { role: r } : { problem: `the lane's role \`${role}\` is not an agent role (${MARKED_ROLES.join(', ')})` };
   }
   if (!slug) return { problem: 'the lane passed no role and no App slug' };
-  let rows;
-  try {
-    rows = parseAppRegister(register(), `${APP_REGISTER} on the default branch`);
-  } catch (e) {
-    return { problem: e instanceof Error ? e.message : String(e) };
-  }
-  const roles = [...rows].filter(([, s]) => s === slug).map(([r]) => r).filter((r) => MARKED_ROLES.includes(/** @type {any} */ (r)));
-  if (roles.length !== 1) {
-    return { problem: `${APP_REGISTER} on the default branch gives the App \`${slug}\` ${roles.length ? `${roles.length} agent roles (${roles.join(', ')})` : 'no agent role'}, not one` };
-  }
-  return { role: /** @type {string} */ (roles[0]) };
+  return { problem: `the lane passed no role, and the App \`${slug}\` doesn't say which: since L4 its roles share it (\`K-LAYOUT-6\`)` };
 }
 
 /** The workflow token's own login: a run that mints no App and posts as no role. */
@@ -103,14 +93,15 @@ export function personaEnv(role, persona = null) {
 if (isCliEntry(import.meta.url) && speaksAsNoRole({ role: process.env.ROLE ?? '', slug: process.env.APP_SLUG ?? '' })) {
   console.log('No role and no App slug were passed, so the agent speaks as no persona (plan 0005 §3.3).');
 } else if (isCliEntry(import.meta.url)) {
-  // Read once, from the default branch, for both the role and the persona.
+  // The persona, read from the default branch: a pull request's checkout must not choose the
+  // name its own agent speaks under.
   /** @type {string | undefined} */
   let text;
   const register = () => (text ??= execFileSync('gh', ['api', `repos/${process.env.GITHUB_REPOSITORY}/contents/${APP_REGISTER}`,
     '-H', 'Accept: application/vnd.github.raw'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
-  const r = resolveRole({ role: process.env.ROLE ?? '', slug: process.env.APP_SLUG ?? '', register });
+  const r = resolveRole({ role: process.env.ROLE ?? '', slug: process.env.APP_SLUG ?? '' });
   if ('problem' in r) {
-    console.log(`::error title=agent-setup::cannot tell which role this agent speaks as: ${r.problem.split('\n')[0]}. Its posts would carry no role marker, and since plan 0005's L4 no reader counts an unmarked post as any role's, so its work would stall with no signal. Pass the lane's \`role\` to agent-setup, or fix the App register (plan 0005 §3.3, kanon#336).`);
+    console.log(`::error title=agent-setup::cannot tell which role this agent speaks as: ${r.problem.split('\n')[0]}. Its posts would carry no role marker, and since plan 0005's L4 no reader counts an unmarked post as any role's, so its work would stall with no signal. Pass the lane's \`role\` to agent-setup (plan 0005 §3.3, kanon#336, kanon#1725).`);
     process.exitCode = 1;
   } else {
     const p = resolvePersona(r.role, register);
