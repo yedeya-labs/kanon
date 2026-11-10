@@ -126,8 +126,8 @@ import { TABLE_EXT, conventionFor } from './lib/test-conventions.mjs';
 // merge. An adopter whose workflow scripts ARE its pipeline code declares them under
 // `## Pipeline code`, and the exclusion below applies to them as to any other tree.
 // The languages of the per-language table (`scripts/lib/test-conventions.mjs`, kanon#20),
-// whose comment syntax this file knows, plus `cjs`, which is JavaScript too.
-const CODE_EXT = new RegExp(`\\.(?:${TABLE_EXT}|cjs)$`);
+// whose comment syntax this file knows.
+const CODE_EXT = new RegExp(`\\.(?:${TABLE_EXT})$`);
 
 /**
  * Is this code file read for comment coordinates? Everything in the declared code areas EXCEPT

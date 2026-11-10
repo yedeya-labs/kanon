@@ -312,7 +312,13 @@ export const goMentions = (text) => scanGo(text).uncommented;
 export const goTestFunctions = (text) =>
   [...scanGo(text).code.matchAll(GO_TEST_FUNC)].map((m) => m[1] ?? '');
 
+/** The extensions a declared `tests` tree holds (ADR 0012). */
 const JS_EXT = ['ts', 'tsx', 'mjs', 'js'];
+
+/** Every extension Vitest, Jest and Playwright discover a suffixed test in by default: the
+ *  tree's four, and `jsx`, `cjs`, `mts` and `cts` (kanon#1727). The row is picked by these, so a
+ *  `Button.test.jsx` reaches the suffix test rather than reading as a language Kanon lacks. */
+const JS_SUFFIX_EXT = [...JS_EXT, 'jsx', 'cjs', 'mts', 'cts'];
 
 /**
  * The runners a declared `tests` tree may name: the JavaScript row's, the only row whose runner
@@ -334,11 +340,14 @@ const treeOf = (path, trees) =>
 export const CONVENTIONS = [
   {
     language: 'JavaScript and TypeScript',
-    extensions: JS_EXT,
-    // Every source file in a declared `tests` tree, fixtures and helpers included, as a runner
-    // configured on that tree sees them; with none declared, a `*.test.*` or `*.spec.*` file
-    // wherever it is.
-    isTest: (p, trees) => (trees.length ? treeOf(p, trees) !== undefined : JS_SUFFIX.test(basename(p))),
+    extensions: JS_SUFFIX_EXT,
+    // Every `.ts`, `.tsx`, `.mjs` or `.js` file in a declared `tests` tree, fixtures and helpers
+    // included, as a runner configured on that tree sees them; with none declared, a `*.test.*`
+    // or `*.spec.*` file wherever it is.
+    isTest: (p, trees) =>
+      trees.length
+        ? JS_EXT.some((e) => p.endsWith(`.${e}`)) && treeOf(p, trees) !== undefined
+        : JS_SUFFIX.test(basename(p)),
     titleConvention: "the first argument of `describe`, `it` or `test`: `it('[ORD-1] …')`",
     // The JavaScript scanner predates this table and lives in `spec-coverage.mjs`
     // (`titlesIn`, `outsideStrings`), where its long history is recorded; null sends a

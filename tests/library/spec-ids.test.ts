@@ -367,7 +367,8 @@ describe("titlesIn is checked against an independent parser, not against the sha
   // assertion (`<Foo>x`) parse as JSX — no file does that today, so the difference is
   // unobservable and that is exactly why it should be right rather than lucky.
   const kindOf = (f: string) => f.endsWith('.tsx') ? ts.ScriptKind.TSX
-    : f.endsWith('.ts') ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+    : /\.[mc]?ts$/.test(f) ? ts.ScriptKind.TS
+    : f.endsWith('.jsx') ? ts.ScriptKind.JSX : ts.ScriptKind.JS;
 
   const oracleTitles = (file: string, src: string): string[] => {
     const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, kindOf(file));

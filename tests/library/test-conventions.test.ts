@@ -62,6 +62,19 @@ describe("the JavaScript row reads the adopter's declared test trees (ADR 0012 a
     }
   });
 
+  it('with none declared, the suffix holds for every extension the runners discover by default, `.jsx`, `.cjs`, `.mts` and `.cts` too (kanon#1727)', () => {
+    for (const p of ['src/Button.test.jsx', 'a.test.cjs', 'a.test.mts', 'a.test.cts', 'b.spec.jsx', 'b.spec.cts']) {
+      expect(conventionFor(p)?.language, p).toBe('JavaScript and TypeScript');
+      expect(isTestFile(p, []), p).toBe(true);
+      expect(runnerFor(p, []), p).toBe('unknown');
+    }
+    for (const p of ['src/Button.jsx', 'scripts/a.cjs', 'src/a.mts', 'src/a.cts']) expect(isTestFile(p, []), p).toBe(false);
+  });
+
+  it('declared, a tree still holds only `.ts`, `.tsx`, `.mjs` and `.js` files, as ADR 0012 says', () => {
+    for (const p of ['tests/unit/a.test.jsx', 'tests/setup.cjs', 'tests/a.test.mts', 'e2e/a.spec.cts']) expect(isTestFile(p, TREES), p).toBe(false);
+  });
+
   it('declared, every JavaScript file in a tree is a test, fixtures included, and nothing outside one is', () => {
     for (const p of ['tests/unit/a.test.ts', 'tests/helpers/db.ts', 'e2e/checkout.ts', 'tests/contract/api.ts']) expect(isTestFile(p, TREES), p).toBe(true);
     for (const p of ['src/a.test.ts', 'e2e2/a.spec.ts', 'scripts/tests/a.ts']) expect(isTestFile(p, TREES), p).toBe(false);
