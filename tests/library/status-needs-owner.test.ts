@@ -172,6 +172,17 @@ describe('the needs-the-Owner view', () => {
     expect(none.seen.some((s) => s.includes('event=issues')), 'and not without one').toBe(false);
   });
 
+  it('[STAT-10] a run restarted by a reply to a bail is going, so its issue waits on nobody (kanon#1720)', async () => {
+    const restarted = { ...liveRun(10, 'Add search', '2026-10-25T11:30:00Z'), event: 'issue_comment' };
+    const w = world({ live: [liveRun(9, 'Add reviews', '2026-10-25T11:30:00Z'), restarted] });
+    const v: Any = await needsOwnerView({ reader: w.reader, repo: w.repo, now: READ_AT });
+    expect(v.stops.map((s: Any) => s.number)).not.toContain(33);
+    expect(w.seen.some((s) => s.includes('event=issue_comment')), 'the comment-fired runs are read').toBe(true);
+    // MUTATION: without that run, #33 is the sweep's awaiting-human, as it was before.
+    const before: Any = await needsOwnerView({ reader: world().reader, repo: REPO, now: READ_AT });
+    expect(before.stops.map((s: Any) => s.number)).toContain(33);
+  });
+
   it('[STAT-1] reads only through its reader, asking REST GETs and GraphQL queries, and writes nothing while it reads', async () => {
     const w = world();
     const v: Any = await needsOwnerView({ reader: w.reader, repo: w.repo, now: READ_AT });

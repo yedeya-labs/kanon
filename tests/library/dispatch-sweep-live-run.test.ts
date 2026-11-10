@@ -8,7 +8,7 @@ import { SPAWNS } from '../unit/helpers/spawns.js';
 import { asAgent } from './helpers/sign.js';
 import { ROOT } from './helpers/adopter.js';
 import {
-  agentLogin, LANES, LIVE_RUN_STATUSES, MARKER, classify, laneTag, liveRunsByIssue, makeLiveRunsReader, renderReport,
+  agentLogin, LANES, LIVE_RUN_EVENTS, LIVE_RUN_STATUSES, MARKER, classify, laneTag, liveRunsByIssue, makeLiveRunsReader, renderReport,
 } from '../../scripts/dispatch-sweep.mjs';
 
 const AGENT_LOGIN = agentLogin();
@@ -85,6 +85,15 @@ describe('a lane run still queued or in progress is matched to its issue', () =>
     expect(live([run({ event: 'workflow_dispatch', display_title: issue.title })]).size).toBe(0);
   });
 
+  it('a run restarted by a reply to a scope-first bail is the issue\'s too: GitHub titles it with the issue (kanon#1720)', () => {
+    expect([...LIVE_RUN_EVENTS].sort()).toEqual(['issue_comment', 'issues']);
+    expect(live([run({ event: 'issue_comment' })]).get(1355)).toMatchObject({ id: 40168273113, status: 'in_progress' });
+    // The comments the lane turns away end in seconds, and a run that has ended holds nothing.
+    expect(live([run({ event: 'issue_comment', status: 'completed', conclusion: 'skipped' })]).size).toBe(0);
+    // An event the lane does not start on names no issue.
+    expect(live([run({ event: 'pull_request' })]).size).toBe(0);
+  });
+
   it('a run left unfinished for longer than any run lasts is not believed, nor one with no stamp', () => {
     expect(live([run({ created_at: '2026-10-24T18:26:28Z' })], [issue], implement, { hours: 12 }).has(1355)).toBe(true);
     expect(live([run({ created_at: '2026-10-24T18:26:26Z' })], [issue], implement, { hours: 12 }).size).toBe(0);
@@ -123,6 +132,14 @@ describe('an issue with a live run reads `running`, never `never-ran`, and is no
       expect(v.state, `#${i.number}`).toBe('running');
       expect(v.act, `#${i.number}`).toBeNull();
     }
+  });
+
+  it('a reply to a bail, while the run it restarted is going, reads `running`, not `answered` (kanon#1720)', () => {
+    const bail = [agent('2026-10-25T05:00:00Z'), human('2026-10-25T06:20:00Z')];
+    // MUTATION: with no live run read, as when only `issues`-fired runs were listed, the reply dispatches again.
+    expect(classify(issue, bail, false, { now: SWEPT, lane: implement })).toMatchObject({ state: 'answered', act: 'dispatch' });
+    const m = live([run({ event: 'issue_comment', created_at: '2026-10-25T06:20:03Z' })]);
+    expect(classify(issue, bail, false, { now: SWEPT, lane: implement, liveRun: m.get(1355) ?? null })).toMatchObject({ state: 'running', act: null });
   });
 
   it('it outranks the other dispatching states, `answered` and `ran-empty`', () => {
@@ -169,22 +186,27 @@ describe('an issue with a live run reads `running`, never `never-ran`, and is no
   });
 });
 
-describe('the run list is read once, every live status, from issue-fired runs', () => {
-  it('asks for each status with `event=issues`, every page, and joins them', () => {
+describe('the run list is read once, every live status, from issue-fired and comment-fired runs', () => {
+  it('asks for each status with each lane event, every page, and joins them', () => {
     const asked: string[][] = [];
     const read = makeLiveRunsReader({
       json: (args: string[]) => {
         asked.push(args);
-        const status = /status=([a-z_]+)/.exec(args.at(-1) ?? '')?.[1];
+        const [, status, event] = /status=([a-z_]+)&event=([a-z_]+)/.exec(args.at(-1) ?? '') ?? [];
+        if (event === 'issue_comment') return status === 'in_progress' ? [{ workflow_runs: [run({ id: 4, event })] }] : [{ total_count: 0, workflow_runs: [] }];
         return status === 'in_progress' ? [{ workflow_runs: [run({ id: 1 })] }, { workflow_runs: [run({ id: 2 })] }]
           : status === 'pending' ? [{ workflow_runs: [run({ id: 3, status: 'pending' })] }] : [{ total_count: 0, workflow_runs: [] }];
       },
     });
-    expect(read()?.map((r) => r.id)).toEqual([3, 1, 2]);
-    expect(asked).toHaveLength(LIVE_RUN_STATUSES.length);
+    expect(read()?.map((r) => r.id)).toEqual([3, 1, 2, 4]);
+    expect(asked).toHaveLength(LIVE_RUN_STATUSES.length * 2);
     for (const a of asked) {
       expect(a.slice(0, 3)).toEqual(['api', '--paginate', '--slurp']);
-      expect(a.at(-1)).toMatch(/^repos\/[^/]+\/[^/]+\/actions\/runs\?status=[a-z_]+&event=issues&per_page=100$/);
+      expect(a.at(-1)).toMatch(/^repos\/[^/]+\/[^/]+\/actions\/runs\?status=[a-z_]+&event=(issues|issue_comment)&per_page=100$/);
+    }
+    // kanon#1720: a run restarted by a reply to a bail is fired by `issue_comment`.
+    for (const status of LIVE_RUN_STATUSES) {
+      for (const event of ['issues', 'issue_comment']) expect(asked.some((a) => a.at(-1)?.includes(`status=${status}&event=${event}&`)), `${status} ${event}`).toBe(true);
     }
   });
 
@@ -206,14 +228,14 @@ describe('the sweep, run end to end, holds an issue whose run is going', SPAWNS,
   afterEach(() => rmSync(bin, { recursive: true, force: true }));
 
   const ISSUE = JSON.stringify([{ number: 7, title: 'Add the release view', createdAt: '2026-10-25T06:00:00Z', labels: [{ name: 'agent:implement' }], body: '' }]);
-  /** `gh` answering the sweep's reads; `runs` is the in-progress page of `actions/runs`, or a failure. */
-  const sweep = (runs: string | null) => {
-    const live = runs === null ? 'echo "HTTP 403" >&2; exit 1' : `case "$*" in *status=in_progress*) echo '[${runs}]';; *) echo '[{"total_count":0,"workflow_runs":[]}]';; esac`;
+  /** `gh` answering the sweep's reads; `runs` is the in-progress page of `actions/runs` fired by `event`, or a failure. */
+  const sweep = (runs: string | null, { event = 'issues', comments = [] as Array<Record<string, unknown>> } = {}) => {
+    const live = runs === null ? 'echo "HTTP 403" >&2; exit 1' : `case "$*" in *status=in_progress\\&event=${event}\\&*) echo '[${runs}]';; *) echo '[{"total_count":0,"workflow_runs":[]}]';; esac`;
     writeStub(join(bin, 'gh'), `#!/usr/bin/env bash\n${[
       'case "$1 $2" in',
       `  "issue list") case "$*" in *agent:implement*) echo '${ISSUE}';; *) echo '[]';; esac;;`,
       '  "pr list") echo \'[]\';;',
-      '  "issue view") echo \'{"comments":[]}\';;',
+      `  "issue view") echo '${JSON.stringify({ comments })}';;`,
       `  "api --paginate") ${live};;`,
       '  *) echo "unexpected: gh $*" >&2; exit 1;;',
       'esac',
@@ -237,6 +259,20 @@ describe('the sweep, run end to end, holds an issue whose run is going', SPAWNS,
   it('MUTATION: the same sweep with no live run of the issue reads `never-ran`, as it did on 2026-10-25', () => {
     const r = sweep(page('Another issue'));
     expect(r.summary).toContain('| `never-ran` | dispatch |');
+  });
+
+  it('a run restarted by a reply to a bail reads `running`, and the reply dispatches nothing (kanon#1720)', () => {
+    const ago = (m: number) => new Date(Date.now() - m * 60_000).toISOString().slice(0, 19) + 'Z';
+    const comments = [
+      { author: { login: AGENT_LOGIN }, createdAt: ago(120), body: asAgent(AGENT_LOGIN, 'Scope first: this needs a decision.') },
+      { author: { login: 'maintainer' }, createdAt: ago(15), body: 'Go ahead with the first option.' },
+    ];
+    const restarted = JSON.stringify({ total_count: 1, workflow_runs: [run({ id: 98, event: 'issue_comment', display_title: 'Add the release view', created_at: ago(14) })] });
+    const r = sweep(restarted, { event: 'issue_comment', comments });
+    expect(r.summary).toContain('| `running` (run 98, in_progress) | — |');
+    expect(r.summary).not.toContain('answered');
+    // MUTATION: the same reply with no run going is answered, and dispatched.
+    expect(sweep(page('Another issue'), { event: 'issue_comment', comments }).summary).toContain('| `answered` | dispatch |');
   });
 
   it('a failed read of the runs is said, on the run and in the summary, and classifies as before', () => {

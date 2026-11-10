@@ -1491,6 +1491,13 @@ export function makeLabeledAtReader({ json = ghJson } = {}) {
  *  waiting on its concurrency group, which is where a second run of one issue sits. */
 export const LIVE_RUN_STATUSES = ['requested', 'waiting', 'pending', 'queued', 'in_progress'];
 
+/** The events that start a lane run on an issue, and so the runs read as live (kanon#1410). An
+ *  `issue_comment` run is a member's reply to the Implementer's scope-first bail, which restarts
+ *  the implement run (kanon#1649): without it the sweep reads the issue `answered` while that run
+ *  is going, and dispatches it again underneath itself (kanon#1720). The comments the lane turns
+ *  away start runs too, but each ends in seconds, so it holds its issue no longer than that. */
+export const LIVE_RUN_EVENTS = ['issues', 'issue_comment'];
+
 /** How long a run may stay unfinished and still be believed (kanon#1410). The implement job's
  *  ceiling is 180 minutes, and one more run may queue behind it in the issue's concurrency
  *  group, so a live run older than this is stuck, not working: GitHub has kept a `queued` run
@@ -1503,10 +1510,11 @@ export const LIVE_RUN_HOURS = Number(process.env.QA_SWEEP_LIVE_RUN_HOURS || 12);
  *
  * A run is the lane's when its `referenced_workflows` name the lane's file, which is how the
  * caller's run records the reusable workflow it called, whatever the caller is named. It is the
- * issue's when it was fired by an `issues` event and its `display_title` is the issue's title,
- * which is what GitHub titles such a run. A `workflow_dispatch` run is titled for its workflow
- * and names no issue, so it is never attributed. Two open issues with one title would both
- * read `running` while one runs, which holds the other for that run's life and no longer.
+ * issue's when it was fired by one of `LIVE_RUN_EVENTS` and its `display_title` is the issue's
+ * title, which is what GitHub titles such a run, a comment's as an issue's (kanon#1720). A
+ * `workflow_dispatch` run is titled for its workflow and names no issue, so it is never
+ * attributed. Two open issues with one title would both read `running` while one runs, which
+ * holds the other for that run's life and no longer.
  *
  * @param {Array<{id?: number, event?: string, status?: string, display_title?: string, created_at?: string|null,
  *   referenced_workflows?: Array<{path?: string}>}>|null|undefined} runs the repository's live runs
@@ -1525,7 +1533,7 @@ export function liveRunsByIssue(runs, issues, lane, { now = Date.now(), hours = 
     .some((w) => new RegExp(`(^|/)\\.github/workflows/${lane.workflow.replace(/\./g, '\\.')}@`).test(String(w?.path ?? '')));
   const out = new Map();
   for (const r of runs ?? []) {
-    if (r?.event !== 'issues' || !LIVE_RUN_STATUSES.includes(r.status) || !callsLane(r)) continue;
+    if (!LIVE_RUN_EVENTS.includes(r?.event) || !LIVE_RUN_STATUSES.includes(r.status) || !callsLane(r)) continue;
     const at = Date.parse(r.created_at ?? '');
     if (!Number.isFinite(at) || hoursSince(r.created_at, now) >= hours) continue;
     for (const n of byTitle.get(r.display_title) ?? []) {
@@ -1535,18 +1543,18 @@ export function liveRunsByIssue(runs, issues, lane, { now = Date.now(), hours = 
   return out;
 }
 
-/** Reads the repository's live `issues`-fired runs, every page of each live status; `null` when
- *  any read fails, which the sweep warns about and classifies as before kanon#1410. INJECTABLE.
- *  Needs `actions: read`, which the sweep's token holds. */
+/** Reads the repository's live runs fired by each of `LIVE_RUN_EVENTS`, every page of each live
+ *  status; `null` when any read fails, which the sweep warns about and classifies as before
+ *  kanon#1410. INJECTABLE. Needs `actions: read`, which the sweep's token holds. */
 export function makeLiveRunsReader({ json = ghJson, onPage = () => {} } = {}) {
   return () => {
     try {
-      return LIVE_RUN_STATUSES.flatMap((status) =>
-        [].concat(json(['api', '--paginate', '--slurp', `repos/${REPO}/actions/runs?status=${status}&event=issues&per_page=100`]))
+      return LIVE_RUN_EVENTS.flatMap((event) => LIVE_RUN_STATUSES.flatMap((status) =>
+        [].concat(json(['api', '--paginate', '--slurp', `repos/${REPO}/actions/runs?status=${status}&event=${event}&per_page=100`]))
           .flatMap((page) => {
             onPage(page);
             return page?.workflow_runs ?? [];
-          }));
+          })));
     } catch {
       return null;
     }

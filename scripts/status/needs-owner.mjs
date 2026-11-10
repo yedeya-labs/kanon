@@ -35,7 +35,7 @@
 // docs/status.md says. INCOMPLETE IS AN ERROR (`[STAT-3]`), as in every view.
 
 import { leadComments, HELD, HELD_MARKER, NEEDS_INFO, issueComments } from '../lead-reconcile.mjs';
-import { LANES, classify as classifyLane, commentRows, linkedPrIndex, liveRunsByIssue, LIVE_RUN_STATUSES, norm, registerBotLogins } from '../dispatch-sweep.mjs';
+import { LANES, classify as classifyLane, commentRows, linkedPrIndex, liveRunsByIssue, LIVE_RUN_EVENTS, LIVE_RUN_STATUSES, norm, registerBotLogins } from '../dispatch-sweep.mjs';
 import { asRole } from '../lib/role-marker.mjs';
 import { BAIL_RE } from '../project-digest.mjs';
 import { DECISION_LABEL, askState } from '../lib/decision-asks.mjs';
@@ -286,14 +286,16 @@ function closingOf(pr, repo, reader) {
 }
 
 /**
- * The repository's queued and in-progress runs fired by an issue, every page of each status the
- * sweep counts as live, as its `makeLiveRunsReader` reads them.
+ * The repository's queued and in-progress runs fired by an issue or a comment on one, every page of
+ * each status the sweep counts as live, as its `makeLiveRunsReader` reads them (kanon#1720).
  * @param {import('./reader.mjs').Reader} reader @param {string} repo
  */
 async function liveRuns(reader, repo) {
   const out = [];
-  for (const status of LIVE_RUN_STATUSES) {
-    out.push(...await listing(reader, `repos/${repo}/actions/runs?status=${status}&event=issues&per_page=100`, (p) => p?.workflow_runs, (p) => p?.total_count));
+  for (const event of LIVE_RUN_EVENTS) {
+    for (const status of LIVE_RUN_STATUSES) {
+      out.push(...await listing(reader, `repos/${repo}/actions/runs?status=${status}&event=${event}&per_page=100`, (p) => p?.workflow_runs, (p) => p?.total_count));
+    }
   }
   return out;
 }
