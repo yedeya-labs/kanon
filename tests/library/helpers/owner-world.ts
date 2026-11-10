@@ -73,9 +73,9 @@ export function ownerWorld({
       seen.push(`PAGES ${path}`);
       const own = overrides.pages?.(path);
       if (own !== undefined) return own;
-      const status = new RegExp(`^${base}/actions/runs\\?status=(\\w+)&event=issues&per_page=100$`).exec(path)?.[1];
+      const [, status, event] = new RegExp(`^${base}/actions/runs\\?status=(\\w+)&event=(\\w+)&per_page=100$`).exec(path) ?? [];
       if (status) {
-        const found = live.filter((r) => r.status === status);
+        const found = live.filter((r) => r.status === status && r.event === event);
         return [{ total_count: found.length, workflow_runs: found }];
       }
       if (isLane(path)) return lanes.reader.pages(path);
