@@ -627,9 +627,9 @@ export async function collectMilestones(allMilestones, { closedByMilestone, week
 /**
  * Since RA-1616, a `sev:critical` / `sev:high` reviewer follow-up is no longer
  * routed onto the gate automatically: it is labelled `gate-candidate` and the
- * developer decides whether it joins. Without this section a critical candidate
- * surfaces only in a manual query, so the one decision the pipeline hands a
- * human would have no scheduled surface at all.
+ * Stakeholder decides whether it joins (`K-WORK-10`). Without this section a
+ * critical candidate surfaces only in a manual query, so the one decision the
+ * pipeline hands a human would have no scheduled surface at all.
  *
  * Three states, and each renders VISIBLY:
  *  - candidates → one line each, severity then age;
@@ -733,7 +733,7 @@ export function renderGateCandidates(result) {
     return `- **The gate-candidate list could not be read this week** (${literal(reason)}). ` +
       `This is NOT an empty list — check \`${GATE_CANDIDATE_QUERY}\` by hand.`;
   }
-  const lines = ['_Whether any of these joins the gate milestone is the developer’s call._'];
+  const lines = ['_Whether any of these joins the gate milestone is the Stakeholder’s call._'];
   if (!result.candidates.length) lines.push('- none');
   for (const c of result.candidates) {
     const age = `opened ${c.ageDays} ${c.ageDays === 1 ? 'day' : 'days'} ago`;
