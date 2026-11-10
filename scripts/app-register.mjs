@@ -389,9 +389,9 @@ export function appLoginAtLoad(role, path = APP_REGISTER) {
 // ── PERSONAS (plan 0005 §3.3; decided by the Owner, 2026-10-05) ───────────────────────────
 //
 // An optional `Persona` column, anywhere after `App slug`, gives a role the display name its
-// posts open with (`**<persona> (<Role>)**`) and its agent's commits are authored under. A
-// blank cell, or no column at all, means the role's own name. Read only where a persona is
-// written (the agent-setup block, the fixed steps that post, lane-check), never by code that
+// posts open with (`**<persona> (<Role>)**`); its agent's commits are the App's bot account's
+// (`K-AGENT-1`). A blank cell, or no column at all, means the role's own name. Read only where
+// a persona is written (the agent-setup block, the fixed steps that post, lane-check), never by code that
 // compares a login, so a malformed persona can't stop a lane deciding who is who: lane-check
 // fails it by name on the adopter's pull request, and a writer falls back to the role.
 
