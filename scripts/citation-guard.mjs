@@ -673,6 +673,12 @@ export const codeOnly = (text) =>
     .map((l) => l.replace(/(^|\s)\/\/.*$/, '$1').replace(/^\s*\*.*$/, ''))
     .join('\n');
 
+/** How many lines a file's `split('\n')` holds. A trailing newline ends the last line and
+ *  starts none, so the empty element after it is not a line: counting it passed a citation
+ *  one line past the end, whose empty range the enclosing scope then anchored (kanon#1722).
+ *  `citation-shift`'s `lengthOf` counts the same way. */
+export const lineCount = (lines) => lines.length - (lines[lines.length - 1] === '' ? 1 : 0);
+
 /**
  * THE TEXT A SENTENCE QUOTES (kanon#1708). Plan 0013 cited `DEPLOY_HOOK_DOES`
  * (`cli/init.mjs:2426-2430`) for "Checks the deployed system answers as the release expects",
@@ -1054,7 +1060,7 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
         }
         const rangeOf = (path) => {
           const t = readFile(path).split('\n');
-          return b > t.length ? null : codeOnly(t.slice(a - 1, b).join('\n'));
+          return b > lineCount(t) ? null : codeOnly(t.slice(a - 1, b).join('\n'));
         };
         const rangeHasAnchor = (path) => {
           const r = rangeOf(path);
@@ -1068,8 +1074,8 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
         }
         citationsByFile.set(resolved.path, (citationsByFile.get(resolved.path) ?? 0) + 1);
         const target = readFile(resolved.path).split('\n');
-        if (b > target.length) {
-          findings.push({ at, citation: whole, problem: `line ${b} is beyond ${resolved.path} (${target.length} lines)`, clause });
+        if (b > lineCount(target)) {
+          findings.push({ at, citation: whole, problem: `line ${b} is beyond ${resolved.path} (${lineCount(target)} lines)`, clause });
           continue;
         }
         if (a > b) {
