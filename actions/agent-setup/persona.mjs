@@ -1,6 +1,6 @@
 // Which role the agent speaks as, and how it says so (plan 0005 §3.3, step L3). Run by
-// `agent-setup` before the commit identity, so `agent-commits.sh` can author the agent's
-// commits with the persona's name.
+// `agent-setup`. The persona is only ever in a post: `agent-commits.sh` authors the agent's
+// commits as the App's bot account, whatever persona this resolves (`K-AGENT-1`).
 //
 // THE ROLE. The lane's `role` input when it gives one (the review lane, whose App token
 // doesn't exist yet when it calls the block). Otherwise the register row whose slug is the

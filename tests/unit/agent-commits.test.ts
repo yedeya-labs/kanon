@@ -145,6 +145,19 @@ describe("an agent's commits pass the adopter's dco check (agent-commits.sh, K-A
       expect(checkCommit(named, TRUST)).toEqual({ ok: true, delegated: SLUG });
     }));
 
+  // kanon#1726: `K-LAYOUT-6` and two comments still said the persona authors the commits after
+  // `K-AGENT-1` was amended, so an adopter who set a persona expected commits under its name.
+  it('[K-AGENT-1] no rule or comment beside it says an agent\'s commits are authored under the persona', () => {
+    const layout = readFileSync(join(ROOT, 'rulebook/11-repository-layout.md'), 'utf8');
+    const rule = layout.slice(layout.indexOf('### `K-LAYOUT-6`'), layout.indexOf('### `K-LAYOUT-7`'));
+    expect(rule).toMatch(/Persona/);
+    for (const [name, text] of [
+      ['K-LAYOUT-6', rule],
+      ['persona.mjs', readFileSync(join(ROOT, 'actions/agent-setup/persona.mjs'), 'utf8')],
+      ['app-register.mjs', readFileSync(join(ROOT, 'scripts/app-register.mjs'), 'utf8')],
+    ]) expect(text, name).not.toMatch(/commits\s+(?:are\s+)?authored\s+under|commits\s+with\s+the\s+persona/);
+  });
+
   it('a commit without the delegate\'s sign-off still fails', () =>
     within(run({ env: { KANON_PERSONA: 'Implementer' }, record: null }), (r) => {
       expect(r.status, r.out).toBe(0);
