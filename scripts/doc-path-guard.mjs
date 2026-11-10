@@ -103,7 +103,7 @@ const TEXT_PATH = /(?<![\w./@~-])((?:docs|scripts|\.github)\/[\w./[\]-]*[\w\]]\.
 /** Source files rule 2 reads outside `docs/`: workflows, shell, and the languages of the
  *  per-language table (`scripts/lib/test-conventions.mjs`, kanon#20), so a Python or Go
  *  project's source is read as a JavaScript project's is. */
-const CODE = new RegExp(`\\.(?:${TABLE_EXT}|cjs|yml|yaml|sh)$`);
+const CODE = new RegExp(`\\.(?:${TABLE_EXT}|yml|yaml|sh)$`);
 
 // Trees whose files are fixtures by construction, never read by rule 2 (see header): the test
 // trees the stack document declares under `## Code areas`, or, when it declares none, each
