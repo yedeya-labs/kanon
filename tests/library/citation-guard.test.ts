@@ -59,6 +59,25 @@ describe('a coordinate that moved is caught (RA-658)', () => {
     expect(r.findings[0].problem).toMatch(/beyond/);
   });
 
+  // kanon#1722: a file's trailing newline is not a line, so its last line plus one is past the
+  // end. Counting `split('\n')` let it through, empty, to the enclosing-scope fallback.
+  const lastFn = 'export const one = 1;\nexport function lastThing() {\nreturn 2;\n}\n';
+
+  it('flags the line just past the end of a file that ends in a newline (kanon#1722)', () => {
+    const r = audit(doc('`lastThing` (`src/x.ts:5`).'), { 'src/x.ts': lastFn });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].problem).toBe('line 5 is beyond src/x.ts (4 lines)');
+  });
+
+  it('still passes the last line of a file that ends in a newline (kanon#1722)', () => {
+    expect(audit(doc('`lastThing` (`src/x.ts:2`).'), { 'src/x.ts': lastFn }).findings).toEqual([]);
+  });
+
+  it('counts the last line of a file with no trailing newline (kanon#1722)', () => {
+    const r = audit(doc('See `src/x.ts:5`.'), { 'src/x.ts': lastFn.slice(0, -1) });
+    expect(r.findings[0].problem).toBe('line 5 is beyond src/x.ts (4 lines)');
+  });
+
   it('flags a file that does not exist (RA-919)', () => {
     const r = audit(doc('See `src/gone.ts:1`.'), { 'src/a.ts': 'x\n' });
     expect(r.findings[0].problem).toMatch(/no such file/);
