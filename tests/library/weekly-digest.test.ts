@@ -1372,7 +1372,7 @@ describe('emit (plan 0011 §4)', () => {
 
 // RA-2399: the gate-candidate list. Since RA-1616 a sev:critical/high reviewer
 // follow-up is labelled `gate-candidate` rather than routed onto the gate, and
-// the digest is the only scheduled place the developer sees it.
+// the digest is the only scheduled place the Stakeholder sees it.
 describe('gate candidates (RA-2399)', () => {
   const NOW = new Date('2026-09-28T08:00:00Z');
   const daysAgo = (d: number) => new Date(NOW.getTime() - d * 86_400_000).toISOString();
@@ -1437,7 +1437,9 @@ describe('gate candidates (RA-2399)', () => {
   describe('renderGateCandidates', () => {
     it('lists every candidate with number, title, severity and age, under the decision line', () => {
       const out = renderGateCandidates({ ok: true, candidates: gateCandidatesFrom([issue(7, 'critical', 12), issue(8, null, 1)], NOW) });
-      expect(out).toMatch(/developer’s call/);
+      // `K-WORK-10` and the roles table give the decision to the Stakeholder (#1729).
+      expect(out).toContain('_Whether any of these joins the gate milestone is the Stakeholder’s call._');
+      expect(out).not.toMatch(/developer/i);
       expect(out).toContain('- [#7](https://github.com/o/r/issues/7) `sev:critical` Candidate 7 — opened 12 days ago');
       expect(out).toContain('- [#8](https://github.com/o/r/issues/8) `sev:?` Candidate 8 — opened 1 day ago');
     });
