@@ -36,7 +36,7 @@ You need Node 24, Claude Code, `gh` signed in as a repository admin, and a CI wo
 <!-- x-release-please-start-version -->
 
 ```sh
-claude plugin marketplace add --scope project yedeya-labs/kanon#v0.42.0
+claude plugin marketplace add --scope project yedeya-labs/kanon#v0.45.0
 claude plugin install --scope project kanon@kanon
 ```
 
