@@ -26,7 +26,7 @@ The way to pin it is in the repository, in its `.claude/settings.json`, which Cl
 {
   "extraKnownMarketplaces": {
     "kanon": {
-      "source": { "source": "github", "repo": "yedeya-labs/kanon", "ref": "v0.42.0" },
+      "source": { "source": "github", "repo": "yedeya-labs/kanon", "ref": "v0.45.0" },
       "autoUpdate": true
     }
   },
@@ -56,7 +56,7 @@ Without a declaration yet, each person installs the plugin from their own checko
 <!-- x-release-please-start-version -->
 
 ```sh
-claude plugin marketplace add --scope project yedeya-labs/kanon#v0.42.0
+claude plugin marketplace add --scope project yedeya-labs/kanon#v0.45.0
 claude plugin install --scope project kanon@kanon
 ```
 
@@ -85,7 +85,7 @@ These are the steps that moved the plugin in a check on Claude Code v2.1.316, wi
 
 ```sh
 claude plugin marketplace remove kanon
-claude plugin marketplace add --scope project yedeya-labs/kanon#v0.42.0
+claude plugin marketplace add --scope project yedeya-labs/kanon#v0.45.0
 claude plugin install --scope project kanon@kanon
 ```
 

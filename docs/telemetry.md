@@ -272,7 +272,7 @@ permissions:
   pull-requests: read
 jobs:
   collect:
-    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.45.0
     with:
       window_minutes: ${{ inputs.window_minutes }}
       erase: ${{ inputs.erase }}
