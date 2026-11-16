@@ -281,6 +281,21 @@ describe('the report is recorded before the job is judged (RA-504, RA-846)', () 
     const partial = JSON.stringify({ complete: false, areas_scanned: ['scripts/'], filed: [], deduped: [], citations: [], files_read: 6, turns: 20, notes: 'In progress.' });
     const ran = (turns: number) => `--model claude-opus-5-5\n--effort high\n--max-turns ${turns}\n--max-budget-usd 40\n`;
 
+    // LINES CITED IS COUNTED FROM `citations` ONLY (kanon#1756), as the prompt tells the agent:
+    // a `path:line` in `areas_scanned`, `notes`, `deduped` or `filed` explains the run and cites
+    // no bug, so a run that filed nothing stores 0, never the count of what its notes quote.
+    it('machine-counts `lines_cited` from `citations` alone, never a `path:line` elsewhere in the report', () => {
+      const elsewhere = {
+        complete: true, turns: 30, lines_cited: 99,
+        areas_scanned: ['tests/ — a tested exemption in tests/unit/role-marker.test.ts:244'],
+        filed: [], deduped: ['scripts/a.mjs:12 — already #1'], notes: 'Read scripts/b.mjs:3-9 and docs/lanes.md:839.',
+      };
+      expect(stamp('success', JSON.stringify({ ...elsewhere, citations: [] })).stored.lines_cited).toBe(0);
+      expect(stamp('success', JSON.stringify(elsewhere)).stored.lines_cited).toBe(0);
+      const cited = stamp('success', JSON.stringify({ ...elsewhere, citations: ['scripts/c.mjs:42', 'scripts/c.mjs:42', 'actions/d/e.sh:88-95', 'https://example.com/x.html:443'] }));
+      expect(cited.stored.lines_cited).toBe(2);
+    });
+
     it('hands the stamp step the agent step\'s outcome, which is `success` only when it ended its own turn', () => {
       expect(byId('stamp').env?.AGENT_OUTCOME).toBe('${{ steps.agent.outcome }}');
     });
