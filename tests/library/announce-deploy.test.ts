@@ -32,8 +32,11 @@ const RELEASES = [release(1), release(2), release(3), release(4, { draft: true }
 
 const ENV = { GITHUB_TOKEN: 't', GITHUB_REPOSITORY: REPO, STAGE: 'production', VERSION: 'v0.1.3', OUTCOME: 'ok', GITHUB_RUN_ID: '7', GITHUB_OUTPUT: 'out.txt' };
 
-/** One deployment of the environment, newest first in the list, with its latest status. */
-type Deployment = { id: number; ref: string; sha: string; state: string; run?: string };
+/**
+ * One deployment of the environment, newest first in the list, with its latest status, or with its
+ * whole status history, newest first, as GitHub returns it (`states`, kanon#1754).
+ */
+type Deployment = { id: number; ref: string; sha: string; state: string; states?: string[]; run?: string };
 const SHA = (n: number) => String(n).repeat(40).slice(0, 40);
 /** This run's own deployment, which just succeeded: its status links run 7. */
 const OWN: Deployment = { id: 100, ref: 'v0.1.3', sha: SHA(3), state: 'success', run: '7' };
@@ -50,7 +53,10 @@ function fakeGithub(deployments: Deployment[] = [OWN]) {
       const statuses = /\/deployments\/(\d+)\/statuses/.exec(url);
       if (statuses) {
         const d = deployments.find((x) => x.id === Number(statuses[1]))!;
-        return json(200, [{ state: d.state, log_url: `https://github.com/${REPO}/actions/runs/${d.run ?? '1'}/job/9` }]);
+        // GitHub pages the statuses newest first, `per_page` at a time (30 when unset).
+        const perPage = Number(new URL(url).searchParams.get('per_page') ?? 30);
+        const log = `https://github.com/${REPO}/actions/runs/${d.run ?? '1'}/job/9`;
+        return json(200, (d.states ?? [d.state]).slice(0, perPage).map((state) => ({ state, log_url: log })));
       }
       if (url.includes('/deployments?')) return json(200, deployments.map(({ id, ref, sha }) => ({ id, ref, sha })));
       if (url.includes('/tags')) return json(200, [1, 2, 3, 5].map((n) => ({ name: `v0.1.${n}`, commit: { sha: SHA(n) } })));
@@ -157,6 +163,26 @@ describe('a landed deploy announces the releases since the environment\'s previo
     const back = fakeGithub([OWN, { id: 99, ref: 'v0.1.5', sha: SHA(5), state: 'success' }]);
     expect(await produce({ env: ENV, io: back.io, out: back.out })).toBe(0);
     expect(message(back).title).toBe('v0.1.3 is live on production');
+  });
+
+  it("reads a deployment GitHub marked `inactive` after a later one succeeded as a successful one (kanon#1754)", async () => {
+    // GitHub's own sequence on a non-production environment, read live from an Actions deployment:
+    // once a later deployment succeeds, the earlier one's newest status is `inactive`, after its `success`.
+    const superseded = ['inactive', 'success', 'in_progress', 'queued', 'queued', 'waiting'];
+    const staging = { ...ENV, STAGE: 'staging', ROLE: 'pre-production' };
+    const range = fakeGithub([OWN, { id: 99, ref: 'v0.1.1', sha: SHA(1), state: 'inactive', states: superseded }]);
+    expect(await produce({ env: staging, io: range.io, out: range.out })).toBe(0);
+    expect(message(range).title).toBe('v0.1.2 to v0.1.3 (2 releases) are live on staging');
+    const same = fakeGithub([OWN, { id: 99, ref: 'v0.1.3', sha: SHA(3), state: 'inactive', states: superseded }]);
+    expect(await produce({ env: staging, io: same.io, out: same.out })).toBe(0);
+    expect(same.files['out.txt']).toBe('message=\n');
+  });
+
+  it('still skips a deployment marked `inactive` that never succeeded', async () => {
+    // GitHub adds `inactive` only after a `success`, but anyone with `deployments: write` can post one.
+    const g = fakeGithub([OWN, { id: 98, ref: 'v0.1.2', sha: SHA(2), state: 'inactive', states: ['inactive', 'failure', 'in_progress'] }, { id: 97, ref: 'v0.1.1', sha: SHA(1), state: 'success' }]);
+    expect(await produce({ env: ENV, io: g.io, out: g.out })).toBe(0);
+    expect(message(g).title).toBe('v0.1.2 to v0.1.3 (2 releases) are live on production');
   });
 
   it("reads a deployment another run made as the previous one, so this run's is told apart by its run", async () => {
