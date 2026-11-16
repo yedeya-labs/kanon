@@ -14,13 +14,15 @@
 //   - a BUCKET milestone, only on an issue that still has none on the re-read just before the
 //     write (`K-WORK-5`: `decide()` proposes nothing but `BUCKET_MILESTONES`, and this file
 //     refuses anything else, so a change there can't make the lane place roadmap work);
-//   - `gate-candidate`, added, on a gate-severity reviewer follow-up that lacks it;
+//   - `gate-candidate`, added, on a gate-severity reviewer follow-up that lacks it and that the
+//     Stakeholder has not declined (`K-WORK-10`, read by the exit's `gateCandidateDecision`);
 //   - `qa:needs-severity`, added, with the rubric comment, on a reviewer follow-up with no
 //     `sev:*`, unless it already carries `qa:needs-severity`. The comment opens with the Lead's
 //     header line (plan 0005 §3.3), its persona read from the App register in the checkout.
 // So a second run on the same issue (a re-run, or a dispatch) writes nothing new: the milestone
-// is there, and each label is only added when missing. It never removes a label, never changes
-// a milestone an issue has, and never reads the issue's title or body.
+// is there, each label is only added when missing, and a candidate the exit took off for a
+// decline or a placement is no candidate here (kanon#1753). It never removes a label, never
+// changes a milestone an issue has, and never reads the issue's title or body.
 //
 // ── AND A PULL REQUEST'S MILESTONE, TAKEN OFF (`K-WORK-7`, kanon#1242) ─────────
 // A pull request never carries a milestone: GitHub counts it in the milestone's open and closed
@@ -43,6 +45,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { BUCKET_MILESTONES, GATE_CANDIDATE_LABEL, NEEDS_SEVERITY_LABEL, decide, needsSeverityComment, shadow, shadowLine } from './issue-triage-defaults.mjs';
 import { appPersona } from './app-register.mjs';
+import { gateCandidateDecision } from './gate-candidate-exit.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
 import { signed } from './lib/role-marker.mjs';
@@ -76,7 +79,11 @@ export function plannedWrites(number, repo, live) {
     if (!BUCKET_MILESTONES.includes(decision.milestone)) throw new Error(`refusing to write "${decision.milestone}", which is not a bucket (K-WORK-5)`);
     writes.push({ what: `milestone "${decision.milestone}" (${decision.reason})`, args: ['issue', 'edit', String(number), ...R, '--milestone', decision.milestone] });
   }
-  if (decision.addGateCandidate) {
+  // A decline is the Stakeholder's, and the exit has taken the label off for it: a re-run or a
+  // dispatch must not put the issue back in the queue (`K-WORK-10`, kanon#1753). The exit's own
+  // predicate reads the decline, so the label is named in one file. Only the labels are passed:
+  // a placed issue is no candidate to `decide()`, so the milestone has nothing to add here.
+  if (decision.addGateCandidate && gateCandidateDecision({ number, labels: live.labels }) !== 'declined') {
     writes.push({ what: `label ${GATE_CANDIDATE_LABEL} (${decision.severity} reviewer follow-up, K-WORK-10)`, args: ['issue', 'edit', String(number), ...R, '--add-label', GATE_CANDIDATE_LABEL] });
   }
   if (decision.needsSeverity && !live.labels.includes(NEEDS_SEVERITY_LABEL)) {

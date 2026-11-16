@@ -46,6 +46,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-20.** The planning module's `plan` refuses a reviewer follow-up with no severity, so the Lead's reconcile tick stops on such a brief item, and the brief guard reports it on the brief's pull request. [#164](https://github.com/yedeya-labs/kanon/issues/164)
 
+## `K-WORK-10`
+
+- **2026-11-16.** The issue backstop also runs on a dispatch with `apply`, not on `opened` only, and it now reads a decline with the exit's own predicate, so it never re-adds `gate-candidate` to an issue the Stakeholder declined. Before, a dispatch put a declined follow-up back in the Stakeholder's queue after the sweep had taken the label off. [#1753](https://github.com/yedeya-labs/kanon/issues/1753)
+
 ## `K-WORK-11`
 
 - **2026-10-20.** No longer prose only for pipeline work: `plan`, which the filing skill runs, refuses it on a roadmap milestone and never makes it a candidate, so the Lead's reconcile tick stops on such a brief item, and the brief guard reports it on the brief's pull request. [#164](https://github.com/yedeya-labs/kanon/issues/164), [#1163](https://github.com/yedeya-labs/kanon/issues/1163)
