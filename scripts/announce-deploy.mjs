@@ -81,6 +81,11 @@ export const LANDED = Object.freeze(['ok', 'smoke_failed']);
 export const FAILED = Object.freeze(['failed']);
 /** How many deployments, newest first, are read for the previous successful one. */
 const DEPLOYMENTS_READ = 30;
+/**
+ * How many of a deployment's statuses, newest first, are read for its `success`: an Actions
+ * deployment has about six, so 100, GitHub's largest page, holds every one.
+ */
+const STATUSES_READ = 100;
 
 /**
  * @typedef {{ fetch: typeof fetch, writeFile: (path: string, text: string) => void, appendFile: (path: string, text: string) => void }} Io
@@ -280,7 +285,8 @@ function github(io, repo, token) {
 
 /**
  * The release of the environment's previous successful deployment, or null: the newest deployment
- * to `stage` whose latest status is `success` and which this run (`runId`) didn't make, read as the
+ * to `stage` whose latest status is `success`, or `success` followed only by the `inactive` GitHub
+ * adds when a later deployment succeeds (kanon#1754), and which this run (`runId`) didn't make, read as the
  * release tag its ref names, else a release tag on its commit; only a release of the deployed tag's
  * line (`tag`) counts, since another component's version never compares (kanon#1039).
  * @param {(path: string) => Promise<any>} gh a GET on the repository's API path
@@ -291,7 +297,11 @@ export async function previousRelease(gh, { stage, runId, releases, tag }) {
   const list = await gh(`/deployments?environment=${encodeURIComponent(stage)}&per_page=${DEPLOYMENTS_READ}`);
   const ownRun = new RegExp(`/actions/runs/${runId}(?:/|$)`);
   for (const d of Array.isArray(list) ? list : []) {
-    const [status] = /** @type {any[]} */ (await gh(`/deployments/${d.id}/statuses?per_page=1`));
+    // Newest first. Once a later deployment succeeds, GitHub marks an earlier one's newest status
+    // `inactive` (kanon#1754), so a deployment succeeded when it holds a `success` and nothing has
+    // superseded it except GitHub's `inactive`.
+    const statuses = /** @type {any[]} */ (await gh(`/deployments/${d.id}/statuses?per_page=${STATUSES_READ}`));
+    const status = Array.isArray(statuses) ? statuses.find((s) => s?.state !== 'inactive') : undefined;
     if (status?.state !== 'success') continue;
     // This run's own deployment of the environment, which just succeeded: its status links the run.
     if (runId && [status.log_url, status.target_url].some((u) => ownRun.test(String(u ?? '')))) continue;
