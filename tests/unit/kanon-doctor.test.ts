@@ -797,8 +797,21 @@ describe('the JSON contract (ADR 0014, docs/doctor.md)', () => {
     }
   });
 
-  it('documents every exit code', () => {
-    for (const [name, code] of Object.entries(EXIT)) expect(doc, name).toMatch(new RegExp(`^\\| ${code} \\| \`${name}\` \\|`, 'm'));
+  // #1755: the table gives each code the `status` the document carries with it, not the name of
+  // its `EXIT` key. A report's status is its key (`exitCode: EXIT[status]`), but a usage error's
+  // document, like any that can't run, is the error document, whose status is `error`
+  // (docs/cli-json.md): code 2 and code 3 share it, and `.exitCode` tells them apart. So the two
+  // error rows are read off what doctor prints, and the skill's table follows this one
+  // (tests/unit/skills.test.ts).
+  it('documents every exit code with the status its document carries', async () => {
+    const dir = checkout(healthyFiles());
+    const usage = await run(dir, fakeGitHub(), ['--to', 'latest', '--json']);
+    const error = await run(dir, fakeGitHub(), ['--to', 'v0.1.0', '--json']);
+    expect([usage.status, usage.json.exitCode]).toEqual([EXIT.usage, EXIT.usage]);
+    expect([error.status, error.json.exitCode]).toEqual([EXIT.error, EXIT.error]);
+    const status: Record<number, string> = { ...Object.fromEntries(Object.entries(EXIT).map(([name, code]) => [code, name])), [EXIT.usage]: usage.json.status, [EXIT.error]: error.json.status };
+    expect(Object.keys(status).map(Number).sort()).toEqual(Object.values(EXIT).sort());
+    for (const [code, s] of Object.entries(status)) expect(doc, `exit ${code}`).toMatch(new RegExp(`^\\| ${code} \\| \`${s}\` \\|`, 'm'));
   });
 });
 

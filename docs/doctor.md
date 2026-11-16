@@ -244,13 +244,13 @@ Each of these is reported as before, whatever the record says, and a waiver of o
 
 ## Exit codes
 
-The same in both outputs.
+The same in both outputs. Codes 2 and 3 share the status `error`, the error document's ([`docs/cli-json.md`](cli-json.md)); the exit code tells them apart.
 
 | Code | Status | Meaning |
 |---|---|---|
 | 0 | `healthy` | Every check ran, and nothing blocking was found, or only findings the adoption record waives. |
 | 1 | `findings` | At least one blocking finding that isn't waived, an id-token holder neither accepted nor narrowed included. |
-| 2 | `usage` | A usage error: an unknown argument; a value flag followed by another flag where its value belongs (`--dir --json`, as an unset, unquoted variable leaves it: a value that begins with `-` is given as `--dir=<value>`); `--to` that is not an exact release; or `--help` with `--json`, since the usage text is no document. |
+| 2 | `error` | A usage error: an unknown argument; a value flag followed by another flag where its value belongs (`--dir --json`, as an unset, unquoted variable leaves it: a value that begins with `-` is given as `--dir=<value>`); `--to` that is not an exact release; or `--help` with `--json`, since the usage text is no document. |
 | 3 | `error` | It could not run: no checkout, the repository or a release's requirements file could not be read, nothing pins Kanon, or it stopped on an error it didn't expect. |
 | 4 | `incomplete` | Nothing blocking was found, but at least one check could not run (the token can't list the secrets, say), so health can't be claimed. |
 
