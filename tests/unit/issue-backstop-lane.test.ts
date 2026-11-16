@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { BUCKET_MILESTONES, DEFAULT_MILESTONE, GATE_CANDIDATE_LABEL, NEEDS_SEVERITY_LABEL, PIPELINE_MILESTONE } from '../../scripts/issue-triage-defaults.mjs';
+import { GATE_DECLINED_LABEL } from '../../scripts/gate-candidate-exit.mjs';
 import { liveOf, plannedWrites, pullReadArgs, run, runPull, unmilestoneArgs } from '../../scripts/issue-backstop.mjs';
 import { realGroup } from './helpers/smoke-group.js';
 import { writeStub } from './helpers/stub-bin.js';
@@ -61,6 +62,24 @@ describe('the writes the backstop makes (K-WORK-1, K-WORK-4, K-WORK-5, K-WORK-9,
   it('writes nothing new on an issue it has already handled: a re-run is idempotent', () => {
     expect(writesFor(reviewer(NEEDS_SEVERITY_LABEL), DEFAULT_MILESTONE)).toEqual([]);
     expect(writesFor(reviewer('sev:high', GATE_CANDIDATE_LABEL), DEFAULT_MILESTONE)).toEqual([]);
+  });
+
+  // kanon#1753: a dispatch with `apply` re-runs the backstop on an issue the exit has already
+  // taken `gate-candidate` off. A decline is the Stakeholder's decision, and the backstop must not
+  // put the issue back in the queue (`K-WORK-10`).
+  it('never re-adds gate-candidate to a follow-up the Stakeholder declined, in any case', () => {
+    for (const declined of [GATE_DECLINED_LABEL, GATE_DECLINED_LABEL.toUpperCase()]) {
+      expect(writesFor(reviewer('sev:high', declined), DEFAULT_MILESTONE)).toEqual([]);
+      expect(writesFor(reviewer('sev:critical', declined))).toEqual([edit('--milestone', DEFAULT_MILESTONE)]);
+    }
+    // The other exit: a placed follow-up, on a roadmap milestone, is no candidate either.
+    expect(writesFor(reviewer('sev:high'), 'Launch')).toEqual([]);
+  });
+
+  it('a declined follow-up still gets the severity rubric: the decline only holds the candidacy', () => {
+    const writes = writesFor(reviewer(GATE_DECLINED_LABEL), DEFAULT_MILESTONE);
+    expect(writes[0]).toEqual(edit('--add-label', NEEDS_SEVERITY_LABEL));
+    expect(writes).toHaveLength(2);
   });
 });
 
