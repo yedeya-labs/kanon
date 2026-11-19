@@ -619,12 +619,18 @@ describe('the check fails each way a row can be wrong', () => {
       expect(redTestAreas(root, fromDefault)).toEqual([]);
       // Dropping the refusal is drift too.
       expect(redTestAreas(root, fromDefault.replace('is refused, red,', 'is held')).join('\n')).toMatch(/must say a pull request that changes them is refused, red/);
+      // So is keeping the refusal but dropping where the areas come from.
+      const unsourced = fromDefault.replace(' from the default branch, never from the pull request,', '');
+      expect(redTestAreas(root, unsourced)).toEqual([expect.stringMatching(/must say the verifier reads `## Code areas` from the default branch: the CHANGELOG lists #1183 at or below 0\.43\.0/)]);
     });
 
     it('fails the new sentence while the pin predates #1183, and passes the old one', () => {
       const root = repo(pinned('v0.42.0'));
       expect(redTestAreas(root, fromDefault).join('\n')).toMatch(/says the verifier reads `## Code areas` from the default branch, but the CHANGELOG lists #1183 at no release up to 0\.42\.0/);
       expect(redTestAreas(root, own)).toEqual([]);
+      // A row that says neither is drift too.
+      const unsourced = own.replace(" the pull request's own `## Code areas`", ' `## Code areas`');
+      expect(redTestAreas(root, unsourced)).toEqual([expect.stringMatching(/must say the verifier reads the pull request's own `## Code areas`: the CHANGELOG lists #1183 at no release up to 0\.42\.0/)]);
     });
 
     it('fails a record with no red-test row', () => {
