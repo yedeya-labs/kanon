@@ -398,7 +398,43 @@ export const problems = (root: string, recordText: string, detectors: Array<[str
   return out;
 };
 
+/**
+ * WHERE THE RED-TEST CHECK READS ITS CODE AREAS (#1766). The red-test row says which `## Code
+ * areas` the verifier at the release Kanon pins judges with. From #1183 it reads the default
+ * branch's, never the pull request's (`K-MERGE-17`), and refuses, red, a pull request that changes
+ * them; before #1183 it read the pull request's own. Only the pinned release decides, so the row's
+ * sentence is read against the CHANGELOG (`shipped`), as a status is: the pin that moves past
+ * #1183 fails here, not on a reader of the record.
+ */
+const RED_TEST_ROW = 'The red-test check on agent-authored pull requests';
+const AREAS_FROM_DEFAULT_BRANCH = 1183;
+const SAYS_OWN = /the verifier reads the pull request's own `## Code areas`/;
+const SAYS_DEFAULT = /the verifier reads `## Code areas` from the default branch/;
+const SAYS_REFUSED = /a pull request that changes them is refused, red,/;
+
+export const redTestAreas = (root: string, recordText: string): string[] => {
+  const row = mechanismRows(recordText).find((r) => r.mechanism.startsWith(RED_TEST_ROW));
+  if (!row) return [`${RECORD} has no row beginning "${RED_TEST_ROW}"`];
+  const where = `${RECORD}:${row.line} "${short(row.mechanism)}"`;
+  const pin = shipped(AREAS_FROM_DEFAULT_BRANCH);
+  const result = pin.kind === 'detect' ? pin.detect(readRepo(root)) : { runs: false, evidence: 'not a detector' };
+  const out: string[] = [];
+  if (result.runs) {
+    if (SAYS_OWN.test(row.mechanism)) out.push(`${where} says the verifier reads the pull request's own \`## Code areas\`, but ${result.evidence}, so it reads the default branch's`);
+    if (!SAYS_DEFAULT.test(row.mechanism)) out.push(`${where} must say the verifier reads \`## Code areas\` from the default branch: ${result.evidence}`);
+    if (!SAYS_REFUSED.test(row.mechanism)) out.push(`${where} must say a pull request that changes them is refused, red, by the check: ${result.evidence}`);
+  } else {
+    if (SAYS_DEFAULT.test(row.mechanism)) out.push(`${where} says the verifier reads \`## Code areas\` from the default branch, but ${result.evidence}`);
+    if (!SAYS_OWN.test(row.mechanism)) out.push(`${where} must say the verifier reads the pull request's own \`## Code areas\`: ${result.evidence}`);
+  }
+  return out;
+};
+
 describe("Kanon's adoption record says what runs here (K-ADOPT-9, #1236)", () => {
+  it("says where the pinned red-test check reads its code areas (#1766)", () => {
+    expect(redTestAreas(ROOT, readFileSync(join(ROOT, RECORD), 'utf8'))).toEqual([]);
+  });
+
   it('has a detector for every mechanism row, and every status agrees with the checkout', () => {
     expect(problems(ROOT, readFileSync(join(ROOT, RECORD), 'utf8'), DETECTORS)).toEqual([]);
   });
@@ -567,6 +603,32 @@ describe('the check fails each way a row can be wrong', () => {
       expect(problems(repo({ ...soak, '.claude/settings.json': settings('v0.42.0') }), rows('installed 2026-11-04'), inbox).join('\n')).toMatch(/at no release up to 0\.42\.0, the plugin's ref/);
       expect(problems(repo({ ...soak, 'skills/inbox/SKILL.md': skill('candidate-v0.42.0') }), rows('installed 2026-11-04'), inbox).join('\n')).toMatch(/at no release up to 0\.42\.0, the one skills\/inbox's npx line runs/);
       expect(problems(repo({ ...soak, '.claude/settings.json': '{}' }), rows('installed 2026-11-04'), inbox).join('\n')).toMatch(/declares Kanon's plugin at no release/);
+    });
+  });
+
+  describe('the red-test row says where the pinned verifier reads its code areas (#1766)', () => {
+    const LOG = '# Changelog\n\n## [0.43.0](https://x) (2026-10-28)\n\n* **red-test:** default branch ([#1183](https://github.com/yedeya-labs/kanon/issues/1183))\n\n## [0.42.0](https://x) (2026-10-19)\n\n* older\n';
+    const pinned = (v: string) => ({ ...files, 'CHANGELOG.md': LOG, '.github/workflows/digest.yml': CALLER.replace('@v0.42.0', `@${v}`) });
+    const head = `| ${RED_TEST_ROW}, called by \`red-test-check.yml\` at a released version.`;
+    const own = record(`${head} At the release Kanon pins, the verifier reads the pull request's own \`## Code areas\`, and a pull request that changes them is held (\`K-MERGE-4\`). | \`K-MERGE-13\` | installed 2026-10-21 |`);
+    const fromDefault = record(`${head} At the release Kanon pins, the verifier reads \`## Code areas\` from the default branch, never from the pull request, and a pull request that changes them is refused, red, by the check. | \`K-MERGE-13\` | installed 2026-10-21 |`);
+
+    it('fails the old sentence once the pin ships #1183, and passes the new one', () => {
+      const root = repo(pinned('candidate-v0.43.0'));
+      expect(redTestAreas(root, own).join('\n')).toMatch(/says the verifier reads the pull request's own `## Code areas`, but the CHANGELOG lists #1183 at or below 0\.43\.0/);
+      expect(redTestAreas(root, fromDefault)).toEqual([]);
+      // Dropping the refusal is drift too.
+      expect(redTestAreas(root, fromDefault.replace('is refused, red,', 'is held')).join('\n')).toMatch(/must say a pull request that changes them is refused, red/);
+    });
+
+    it('fails the new sentence while the pin predates #1183, and passes the old one', () => {
+      const root = repo(pinned('v0.42.0'));
+      expect(redTestAreas(root, fromDefault).join('\n')).toMatch(/says the verifier reads `## Code areas` from the default branch, but the CHANGELOG lists #1183 at no release up to 0\.42\.0/);
+      expect(redTestAreas(root, own)).toEqual([]);
+    });
+
+    it('fails a record with no red-test row', () => {
+      expect(redTestAreas(repo(pinned('candidate-v0.43.0')), good)).toEqual([`${RECORD} has no row beginning "${RED_TEST_ROW}"`]);
     });
   });
 
