@@ -36,6 +36,12 @@ const job = (w: Record<string, Workflow>, file: string, name: string): Job => {
   return j;
 };
 const grant = (j: Job) => { j.permissions = { ...(typeof j.permissions === 'object' ? j.permissions : {}), 'id-token': 'write' }; };
+// A doc's one paragraph that starts with `start`, or a throw when there is none or more than one.
+const paragraph = (file: string, start: string) => {
+  const found = readFileSync(file, 'utf8').split('\n').filter((l) => l.startsWith(start));
+  if (found.length !== 1) throw new Error(`${file} has ${found.length} paragraphs starting ${JSON.stringify(start)}, not one`);
+  return found[0]!;
+};
 
 describe('every Kanon workflow', () => {
   it('passes the guard: only the jobs it admits, and the callers that grant them id-token, hold it', () => {
@@ -128,11 +134,6 @@ describe('every Kanon workflow', () => {
   it('every listing of the holders in the docs names each one ID_TOKEN_HOLDERS lists (kanon#531)', () => {
     // Each listing is one paragraph, found by how it starts. The template's comment on the store's
     // role is held the same way in qa-store-aws.test.ts.
-    const paragraph = (file: string, start: string) => {
-      const found = readFileSync(file, 'utf8').split('\n').filter((l) => l.startsWith(start));
-      if (found.length !== 1) throw new Error(`${file} has ${found.length} paragraphs starting ${JSON.stringify(start)}, not one`);
-      return found[0]!;
-    };
     const listings = {
       "docs/qa-store.md's store job": paragraph('docs/qa-store.md', '- **A store job** declares'),
       "docs/qa-store.md's guard": paragraph('docs/qa-store.md', '`tests/unit/helpers/store-jobs.ts` checks this shape'),
@@ -144,6 +145,20 @@ describe('every Kanon workflow', () => {
     for (const [where, text] of Object.entries(listings)) {
       for (const h of ID_TOKEN_HOLDERS) expect(text, `${where} names ${h.says}`).toContain(h.cited);
     }
+  });
+
+  it("docs/qa-store.md's two listings, which speak of every holder in Kanon's workflows, name the deploy lane's two too, as assuming the deploy roles and not the store's (kanon#1773)", () => {
+    // These two say which jobs are the only holders, and which the guard fails, in all of Kanon's
+    // workflows, so they name DEPLOY_ID_TOKEN_HOLDERS as well. The stores' own listings above don't.
+    const storeJob = paragraph('docs/qa-store.md', '- **A store job** declares');
+    const guard = paragraph('docs/qa-store.md', '`tests/unit/helpers/store-jobs.ts` checks this shape');
+    for (const [where, text] of Object.entries({ 'the store job': storeJob, 'the guard': guard })) {
+      for (const h of DEPLOY_ID_TOKEN_HOLDERS) expect(text, `${where} names ${h.says}`).toContain(h.cited);
+    }
+    // The store's role admits the store's holders, never the deploy lane's: those assume the
+    // adopter's deploy roles, and the doc says so rather than "each of them".
+    expect(storeJob).not.toContain("The store's role admits each of them too");
+    expect(storeJob).toContain("assume the adopter's deploy roles, not the store's");
   });
 });
 
