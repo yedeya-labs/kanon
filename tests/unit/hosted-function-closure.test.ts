@@ -119,4 +119,15 @@ describe('moduleLoads', () => {
     expect(moduleLoads('x.mjs', text)).toEqual({ specifiers: ['./a.mjs', './side.mjs', '../b.mjs', './c.mjs', './d.mjs', './e.mjs', './f.json', 'node:fs', 'yaml'], unreadable: [] });
     expect(moduleLoads('x.mjs', text, { dynamicImports: false }).specifiers).not.toContain('./d.mjs');
   });
+
+  it('with fileUrls off, follows a worker\'s script but not a file a module names by URL (kanon#1771)', () => {
+    const text = [
+      "const dir = new URL('..', import.meta.url);",
+      "const f = new URL('./f.json', import.meta.url);",
+      "const w = new Worker(new URL('./w.mjs', import.meta.url));",
+      "const n = readFileSync(new URL(name, import.meta.url));",
+    ].join('\n');
+    expect(moduleLoads('x.mjs', text, { fileUrls: false })).toEqual({ specifiers: ['./w.mjs'], unreadable: [] });
+    expect(moduleLoads('x.mjs', text).specifiers).toEqual(['..', './f.json', './w.mjs']);
+  });
 });

@@ -55,10 +55,15 @@ const urlSpecifier = (node: ts.Node | undefined): string | null => (isModuleUrl(
 /**
  * One module's local loads, one step on: the specifiers it links, and what it loads by a
  * specifier this can't read. `dynamicImports: false` stops following `import()`, which only a
- * mutation check of the guard asks for.
+ * mutation check of the guard asks for. `fileUrls: false` reads only what Node loads as a
+ * module (an import, a `require()`, a worker's script) and not every file a module names by
+ * `new URL(…, import.meta.url)`, which may be a directory or a file it reads as text: the
+ * built-ins guard asks for that (`K-SELF-8`, kanon#1771).
  */
-export function moduleLoads(file: string, text: string, options: { dynamicImports?: boolean } = {}): { specifiers: string[]; unreadable: string[] } {
+export type LoadOptions = { dynamicImports?: boolean; fileUrls?: boolean };
+export function moduleLoads(file: string, text: string, options: LoadOptions = {}): { specifiers: string[]; unreadable: string[] } {
   const followDynamic = options.dynamicImports ?? true;
+  const followUrls = options.fileUrls ?? true;
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, /\.ts$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS);
   const specifiers: string[] = [];
   const unreadable: string[] = [];
@@ -79,7 +84,8 @@ export function moduleLoads(file: string, text: string, options: { dynamicImport
       const arg = node.arguments?.[0];
       if (urlSpecifier(arg) === null && literal(arg) === null) unreadable.push(`${where(node)}: a new Worker() whose script isn't a literal new URL(…, import.meta.url)`);
       else if (literal(arg) !== null) specifiers.push(literal(arg)!);
-    } else if (isModuleUrl(node)) {
+      else if (!followUrls) specifiers.push(urlSpecifier(arg)!);
+    } else if (followUrls && isModuleUrl(node)) {
       const s = urlSpecifier(node);
       if (s === null) unreadable.push(`${where(node)}: a new URL(…, import.meta.url) whose specifier isn't a literal`);
       else specifiers.push(s);
@@ -96,7 +102,7 @@ const rel = (abs: string) => relative(ROOT, abs).split(sep).join('/');
  * Every local module the entries link, the entries included, sorted, with what the walk could
  * not follow. A specifier that isn't relative (`node:fs`, `yaml`) is the runtime's or a package's.
  */
-export function importClosure(entries: readonly string[], options: { tree?: Tree; dynamicImports?: boolean } = {}): Closure {
+export function importClosure(entries: readonly string[], options: LoadOptions & { tree?: Tree } = {}): Closure {
   const tree = options.tree ?? treeOf();
   const seen = new Set<string>();
   const problems: string[] = [];
