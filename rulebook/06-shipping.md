@@ -46,7 +46,7 @@ This chapter governs what happens between "the code works in my worktree" and "i
 | `fix`, `perf`, `refactor`, `build`, `revert` | patch |
 | `docs`, `style`, `test`, `ci`, `chore` | patch |
 
-Every type releases, and a release deploys whatever its types (`K-SHIP-7`): no type keeps a merge out of production. A `!` after the type, or a `BREAKING CHANGE` footer, marks a breaking change. `chore` means no runtime effect: a change that alters live behaviour is never `chore`. Dependency updates are `build(deps)`, and CI action updates `ci(deps)`. Never end a title with `(#n)`. Validate the title with CI's own validator before creating the PR, and don't infer the convention from the commit log.
+Every type releases, and Kanon's deploy lane deploys a release whatever its types (`K-SHIP-7`). A `!` after the type, or a `BREAKING CHANGE` footer, marks a breaking change. `chore` means no runtime effect: a change that alters live behaviour is never `chore`. Dependency updates are `build(deps)`, and CI action updates `ci(deps)`. Never end a title with `(#n)`. Validate the title with CI's own validator before creating the PR, and don't infer the convention from the commit log.
 
 **Why.** The release tool silently drops commits with an unknown type: no version, and eventually no deploy. The platform appends the PR number at squash time, so a title that already ends in one gets a double reference, which the release tool also drops. The commit log shows those platform-added numbers, which is why copying its style teaches the wrong rule.
 

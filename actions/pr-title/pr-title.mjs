@@ -14,8 +14,9 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 /**
- * Types the release tool recognises, and the version bump each one makes. Every type releases
- * and every release deploys (K-SHIP-7), so the table records nothing about deploying.
+ * Types the release tool recognises, and the version bump each one makes. Every type releases,
+ * and Kanon's deploy lane deploys a release whatever its types (K-SHIP-7), so the table records
+ * nothing about deploying.
  */
 export const TYPES = /** @type {const} */ ({
   feat: { bump: 'minor' },

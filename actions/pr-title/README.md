@@ -8,7 +8,7 @@ Fails a pull request whose title isn't a conventional commit with one of Kanon's
 | `fix`, `perf`, `refactor`, `build`, `revert` | patch |
 | `docs`, `style`, `test`, `ci`, `chore` | patch |
 
-Every type is a changelog section of the release configuration, none hidden, so a merge of any type releases, and the deploy lane deploys each release without reading its types: there is no type that skips production.
+Every type is a changelog section of the release configuration, none hidden, so a merge of any type releases, and Kanon's deploy lane deploys each release without reading its types: on that lane, no type skips production.
 
 On failure it prints the reason and the recognised types.
 
