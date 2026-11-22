@@ -593,12 +593,14 @@ export function isDeployEnvJob(file: string | undefined, name: string, j: Job): 
 /**
  * The deploy lane's two holders (plan 0010 D4), admitted in their shapes beside `ID_TOKEN_HOLDERS`.
  * They are not among those: they reach no store of Kanon's (Kanon's repository calls neither
- * workflow), so the listings of the stores' holders don't name them; the guard's message names
- * them for a job of the deploy lane's own files.
+ * workflow, and each assumes the adopter's deploy role), so the listings of the stores' holders
+ * don't name them; the guard's message names them for a job of the deploy lane's own files. The
+ * listings that speak of every holder in Kanon's workflows, `docs/qa-store.md`'s two, cite each
+ * (kanon#1773, `tests/unit/id-token-guard.test.ts`).
  */
-export const DEPLOY_ID_TOKEN_HOLDERS: Array<Omit<IdTokenHolder, 'cited'>> = [
-  { is: isDeployProbeJob, says: "deploy-release.yml's probe" },
-  { is: isDeployEnvJob, says: "deploy.yml's deploy" },
+export const DEPLOY_ID_TOKEN_HOLDERS: IdTokenHolder[] = [
+  { is: isDeployProbeJob, says: "deploy-release.yml's probe", cited: "`deploy-release.yml`'s `probe`" },
+  { is: isDeployEnvJob, says: "deploy.yml's deploy", cited: "`deploy.yml`'s `deploy`" },
 ];
 const MAY_HOLD_DEPLOY = `in the deploy lane only ${DEPLOY_ID_TOKEN_HOLDERS.map((h) => h.says).join(' and ')} may, each in its shape (plan 0010 D4)`;
 
