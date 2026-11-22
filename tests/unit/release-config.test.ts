@@ -39,6 +39,42 @@ describe("K-SHIP-4 the check's types agree with the release tool's", () => {
   });
 });
 
+/**
+ * #1769: every type releases (no hidden section, above) and the deploy lane deploys every published
+ * release, reading no commit type. So the type table may say only what a type does to the version:
+ * a column claiming a type doesn't deploy describes a behaviour nothing delivers. Each copy of the
+ * table is held to the action's `TYPES`, and `TYPES` holds the bump and nothing else.
+ */
+describe("K-SHIP-4 the type table says only what the release does with each type", () => {
+  /** The `| Type | … |` table in a markdown file: its header cells, and each row's type→cells. */
+  const tableIn = (path: string) => {
+    const text = readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
+    const lines = text.split('\n');
+    const start = lines.findIndex((l) => /^\|\s*Type\s*\|/.test(l));
+    expect(start, `${path} has a type table`).toBeGreaterThanOrEqual(0);
+    const cells = (l: string) => l.split('|').slice(1, -1).map((c) => c.trim());
+    const header = cells(lines[start] as string);
+    const rows: Record<string, string[]> = {};
+    for (const line of lines.slice(start + 2)) {
+      if (!line.startsWith('|')) break;
+      const [types, ...rest] = cells(line);
+      for (const t of (types ?? '').matchAll(/`([a-z]+)`/g)) rows[t[1] as string] = rest;
+    }
+    return { header, rows };
+  };
+  const expected = Object.fromEntries(Object.entries(TYPES).map(([type, t]) => [type, [t.bump]]));
+
+  it.each(['rulebook/06-shipping.md', 'actions/pr-title/README.md'])('%s: one row per type, with its bump alone', (path) => {
+    const { header, rows } = tableIn(path);
+    expect(header).toEqual(['Type', 'Version bump']);
+    expect(rows).toEqual(expected);
+  });
+
+  it('TYPES holds each type\'s bump and nothing the release tool or the deploy lane would have to read', () => {
+    for (const [type, entry] of Object.entries(TYPES)) expect(Object.keys(entry), type).toEqual(['bump']);
+  });
+});
+
 describe('K-SHIP-7 the first release is 0.1.0', () => {
   // The manifest holds the last released version, so it changes with every release: pin
   // the invariants that hold across releases, not a value that the first release changes.

@@ -2,11 +2,13 @@
 
 Fails a pull request whose title isn't a conventional commit with one of Kanon's fixed types, or that ends in an issue reference such as `(#12)`. This enforces [`K-SHIP-4`](../../rulebook/06-shipping.md). The type table is Kanon's and isn't configurable:
 
-| Type | Version bump | Deploys |
-|---|---|---|
-| `feat` | minor | yes |
-| `fix`, `perf`, `refactor`, `build`, `revert` | patch | yes |
-| `docs`, `style`, `test`, `ci`, `chore` | patch | no |
+| Type | Version bump |
+|---|---|
+| `feat` | minor |
+| `fix`, `perf`, `refactor`, `build`, `revert` | patch |
+| `docs`, `style`, `test`, `ci`, `chore` | patch |
+
+Every type is a changelog section of the release configuration, none hidden, so a merge of any type releases, and the deploy lane deploys each release without reading its types: there is no type that skips production.
 
 On failure it prints the reason and the recognised types.
 

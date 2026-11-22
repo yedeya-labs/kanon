@@ -41,12 +41,10 @@ describe('K-SHIP-4 the PR-title check', () => {
     expect(result.ok === false && result.reason).toContain('"feature"');
   });
 
-  it("recognises exactly the types in Kanon's fixed table, and marks exactly the deploying ones", () => {
+  it("recognises exactly the types in Kanon's fixed table, and bumps the minor version for feat alone", () => {
     expect(Object.keys(TYPES).sort()).toEqual(
       ['build', 'chore', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'revert', 'style', 'test'],
     );
-    const deploying = Object.entries(TYPES).filter(([, t]) => t.deploys).map(([name]) => name).sort();
-    expect(deploying).toEqual(['build', 'feat', 'fix', 'perf', 'refactor', 'revert']);
     const minor = Object.entries(TYPES).filter(([, t]) => t.bump === 'minor').map(([name]) => name);
     expect(minor).toEqual(['feat']);
   });
