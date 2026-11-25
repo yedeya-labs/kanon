@@ -348,6 +348,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 - **2026-10-21.** The mechanism list takes a third status, `not applicable`, and `## Choices` its reason, one `Mechanism not applicable` bullet per such mechanism, naming its row's rules. [#1236](https://github.com/yedeya-labs/kanon/issues/1236)
 - **2026-10-29.** The sentence on which findings can't be waived names every kind of reason doctor gives, production and a finding `lane-check` fails whatever a waiver says among them, and points to `docs/doctor.md` for each finding's own; it had named only the record, independent review and the repository's secrets. A test fails a reason in the code that falls under no kind the rule names. [#1515](https://github.com/yedeya-labs/kanon/issues/1515)
 - **2026-11-02.** The Owner decided that a finding about one person's machine can't be waived: the repository's record can't speak for it. The first is `plugin.behind`, the kanon plugin Claude Code installed there older than the pin. [#1552](https://github.com/yedeya-labs/kanon/issues/1552)
+- **2026-11-25.** The waiver's shape names the `for` items a waiver of a finding that lists items must give, as doctor has read it since #406, with an example of one, and the malformed cases follow: such a bullet naming no items, and one item waived twice, where before any second bullet of a finding read as malformed. A test holds the rule's examples to the parser. [#1790](https://github.com/yedeya-labs/kanon/issues/1790)
 
 ## `K-LAYOUT-12`
 

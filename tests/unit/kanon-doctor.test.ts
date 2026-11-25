@@ -636,6 +636,26 @@ describe('kanon doctor and the waiver of a finding that lists items (#406)', () 
     }
   });
 
+  // #1790: K-LAYOUT-10 gave the waiver no `for` part, so a waiver of an itemized finding written
+  // as the rule showed was malformed, and it called any second waiver of a finding malformed,
+  // where the parser takes several bullets that name different items. The rule's examples are
+  // held to the parser, and its shape and malformed cases to what the parser refuses.
+  it('K-LAYOUT-10 writes the waiver as the parser reads it: `for` items for a finding that lists them (#1790)', () => {
+    const rule = readFileSync(join(ROOT, 'rulebook/11-repository-layout.md'), 'utf8').split('### `K-LAYOUT-10`')[1]!.split('\n### ')[0]!;
+    const examples = rule.split('\n').filter((l) => l.startsWith(`- **${WAIVER_LABEL}:**`));
+    const read = readWaivers(`## Choices\n\n${examples.join('\n')}\n`);
+    expect(read.errors).toEqual([]);
+    expect(read.waivers.some((w) => !ITEMIZED[w.id] && w.items === null), 'an example of a finding that lists no items').toBe(true);
+    expect(read.waivers.some((w) => ITEMIZED[w.id] && w.items?.length), 'an example of a finding that lists items, naming them').toBe(true);
+    const shape = rule.split('\n').find((l) => l.startsWith('A finding of `kanon doctor` that the project keeps'))!;
+    expect(shape).toMatch(/for a finding that lists items, `for` and the items it waives, each as a code span/);
+    const malformed = rule.split('\n').find((l) => l.startsWith('A waived finding no longer sets'))!;
+    expect(malformed).toContain('docs/doctor.md#waiving-a-finding');
+    expect(malformed).not.toContain('or waiving one finding twice is malformed');
+    expect(malformed).toContain('naming no items of a finding that lists them');
+    expect(malformed).toContain('waiving a finding that lists none twice, or one item of a finding twice, is malformed');
+  });
+
   it('lists every finding id that lists items in ITEMIZED and in docs/doctor.md, and nothing else', () => {
     const source = readFileSync(join(ROOT, 'cli/doctor.mjs'), 'utf8');
     const built = [...new Set([...source.matchAll(/findItems\('([a-z-]+\.[a-z-]+)'/g)].map((m) => m[1]))].sort();
