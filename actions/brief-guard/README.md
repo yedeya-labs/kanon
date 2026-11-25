@@ -22,7 +22,7 @@ The action is in Kanon from 0.45.0.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: yedeya-labs/kanon/actions/brief-guard@v0.42.0
+      - uses: yedeya-labs/kanon/actions/brief-guard@v0.45.0
 ```
 
 <!-- x-release-please-end -->
