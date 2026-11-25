@@ -50,13 +50,13 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 
 ## Steps
 
-1. **Run it.** `kanon doctor --json`, or `kanon doctor --to vX.Y.Z --json` when the person is about to move the pin to that release (the upgrade skill passes it). On the first run, before you explain or change anything, confirm the token it used, as "Confirming the token" says. Read `.exitCode` and `.status`:
+1. **Run it.** `kanon doctor --json`, or `kanon doctor --to vX.Y.Z --json` when the person is about to move the pin to that release (the upgrade skill passes it). On the first run, before you explain or change anything, confirm the token it used, as "Confirming the token" says. Read `.exitCode` and `.status`; codes 2 and 3 share the status `error`, so go by `.exitCode`:
 
    | Code | Status | What you do |
    |---|---|---|
    | 0 | `healthy` | Nothing blocks. Say so, and list `.notes` and `.waived`. When `.findings` lists a finding you haven't explained yet (none blocks), go on to step 2 for it, as for code 4; otherwise stop. |
    | 1 | `findings` | Go on to step 2. |
-   | 2 | `usage` | This skill passed something the command refused: show `.error`, and stop. It is a bug in the skill, not the repository. |
+   | 2 | `error` | This skill passed something the command refused: show `.error`, and stop. It is a bug in the skill, not the repository. |
    | 3 | `error` | Show `.error` in plain words. Usually: not a checkout, a release's requirements file that can't be read, or nothing pins Kanon yet, which is the adopt skill's job. |
    | 4 | `incomplete` | Nothing blocking was found, but a check couldn't run. List each of `.unchecked`, with `.unchecked[].check`, `.unchecked[].subject` and `.unchecked[].reason`, and say what would let it run, as "When a check couldn't run" below says. Then go on to step 2 for any finding that doesn't block. |
 
