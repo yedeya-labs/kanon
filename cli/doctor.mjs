@@ -1730,15 +1730,19 @@ export const diagnose = async (deps, opts) => {
       });
     }
   }
-  // An Other App row names an App no role's row names ([REG-2], issue #990): every role's, not only
-  // the lanes' in use here, as the lanes' own parser reads it.
+  // An Other App row names an App no other row names ([REG-2], issue #990; issue #1792):
+  // no role's row, every role's and not only the lanes' in use here, and no other Other App row,
+  // as the lanes' own parser reads it (parseAppRegister).
   const reLabelled = [...new Set(otherApps)].flatMap((slug) => {
     const roles = [...rows].filter(([, s]) => s === slug).map(([r]) => r);
-    return roles.length ? [`\`${slug}\` on an Other App row and the ${roles.join(', ')} row${roles.length > 1 ? 's' : ''}`] : [];
+    const others = otherApps.filter((s) => s === slug).length;
+    if (!roles.length && others < 2) return [];
+    const on = others > 1 ? `on ${others} Other App rows` : 'on an Other App row';
+    return [`\`${slug}\` ${on}${roles.length ? ` and the ${roles.join(', ')} row${roles.length > 1 ? 's' : ''}` : ''}`];
   });
   if (reLabelled.length) {
-    find('register.other-app-slug', REGISTER_PATH, `names ${reLabelled.join(', and ')}. An Other App row is an App that isn't an agent, so it names an App no role's row names: one naming an agent's App would re-label it, and the lanes refuse the register (K-LAYOUT-6).`, {
-      text: `Remove the Other App row of an App that already has a role's row; if it is another App, write that App's own slug.`,
+    find('register.other-app-slug', REGISTER_PATH, `names ${reLabelled.join(', and ')}. An Other App row is an App that isn't an agent, so it names an App no other row names: one naming an agent's App would re-label it, two naming one App say one thing twice, and the lanes refuse the register (K-LAYOUT-6).`, {
+      text: `Keep one row per App: remove an Other App row of an App that already has a role's row or another Other App row; if it is another App, write that App's own slug.`,
     });
   }
   // GitHub shows a private App only to the App itself: GET /apps/<slug> answers 404 to a person's

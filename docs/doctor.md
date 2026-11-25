@@ -352,7 +352,7 @@ It is the finding, whole, as it would have been listed, with the waiver's reason
 | `register.missing-row` | `app` | yes | The App register has no row for a role an App's lanes read their slug from. |
 | `register.split-slug` | `app` | yes | An App's roles name more than one slug. |
 | `register.shared-slug` | `app` | yes | Two Apps name one slug. |
-| `register.other-app-slug` | `app` | yes | An `Other App` row, an App installed that isn't an agent (`K-AGENT-3`), names the slug of a role's row. The message names each such slug and the rows that name it; `lane-check` and the lanes refuse the register too. |
+| `register.other-app-slug` | `app` | yes | An `Other App` row, an App installed that isn't an agent (`K-AGENT-3`), names the slug another row names: a role's row, or another `Other App` row ([#1792](https://github.com/yedeya-labs/kanon/issues/1792)). The message names each such slug and the rows that name it; `lane-check` and the lanes refuse the register too. |
 | `app.permission-missing` | `app` | yes | An App holds less than the release grants it, with any extra permission the adoption record declares for it. |
 | `app.permission-extra` | `app` | no | An App holds more than the release grants it. It blocks nothing, since each lane narrows its token, though `apps-check` fails it. |
 | `app.unused` | `app` | no | An App the App register's history on the checkout once named, and its current copy doesn't, is still installed for the owner: a per-role App left from before the two-App move, say. Its fix gives the uninstall and delete steps. |
