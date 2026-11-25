@@ -178,9 +178,20 @@ const headContent = (f) => {
   }
 };
 
-/** Every open PR's claims, via the `gh` CLI. Throws when `gh` cannot be run or answered. */
+/**
+ * Every open PR's claims, via the `gh` CLI. Throws when `gh` cannot be run or answered.
+ *
+ * EVERY open PR, paged (#1785). The listing comes newest first, so a capped one (this
+ * read `gh pr list --limit 200`) drops the OLDEST PRs, which are the ones a newer PR must
+ * yield to; the allocator then mints their ids and this check passes the collision, and
+ * the PR under test, being the newest, is always listed, so the CLI's not-finding-itself
+ * guard cannot see the loss. The cost is one files read per open PR, as it was up to 200.
+ */
 export const openPrClaims = () => {
-  const prs = JSON.parse(gh(['pr', 'list', '--state', 'open', '--limit', '200', '--json', 'number,title,headRefName']));
+  const prs = gh([
+    'api', '--paginate', 'repos/{owner}/{repo}/pulls?state=open&per_page=100',
+    '--jq', '.[] | {number, title, headRefName: .head.ref}',
+  ]).split('\n').filter(Boolean).map((l) => JSON.parse(l));
   return prs.map((pr) => {
     const out = gh([
       'api', '--paginate', `repos/{owner}/{repo}/pulls/${pr.number}/files?per_page=100`,

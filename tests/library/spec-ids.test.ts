@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { DECL, SPEC_DIR, STATUSES, idPattern, loadPrefixes, parseAll } from '../../scripts/spec-lib.mjs';
 import { check, DUP_MIN_WORDS } from '../../scripts/spec-guard.mjs';
 import { allocate, report } from '../../scripts/spec-ids.mjs';
-import { claimsIn, claimedFloor, collisionsWith } from '../../scripts/spec-id-claims.mjs';
+import { claimsIn, claimedFloor, collisionsWith, openPrClaims } from '../../scripts/spec-id-claims.mjs';
+import { writeStub } from '../unit/helpers/stub-bin.js';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { titlesIn, outsideStrings, citationOptOut, declaredUnlockable, failures } from '../../scripts/spec-coverage.mjs';
@@ -666,6 +667,47 @@ describe('spec-ids allocates above every open PR\'s claim (RA-2071)', () => {
       { id: 'STORE-113', pr: 2056, title: 'late', yields: false },
     ]);
     expect(collisionsWith({ number: 2053, ids: ['STORE-114'] }, others)).toEqual([]);
+  });
+
+  it('reads EVERY open PR, so the oldest of more than 200 still holds its claim (#1785)', () => {
+    // 250 open PRs, listed newest first as GitHub does. A listing capped at 200 drops
+    // #1..#50, the very PRs a newer one must yield to; #1 claims STORE-120. The stub
+    // answers a capped `gh pr list` with the newest `--limit` of them, and the REST pulls
+    // listing with one page of 100, or all 250 when `--paginate` joins the pages.
+    const dir = mkdtempSync(join(tmpdir(), 'spec-claims-'));
+    const claim = '{"filename":"docs/qa/specs/storefront.md","status":"modified","patch":"@@ -1,0 +1,1 @@\\n+- `[STORE-120]` `[seed]` An old claim."}';
+    writeStub(join(dir, 'gh'), [
+      '#!/usr/bin/env bash',
+      'case "$*" in',
+      '  "pr list "*)',
+      '    LIMIT=30; prev=; for a in "$@"; do [ "$prev" = --limit ] && LIMIT=$a; prev=$a; done',
+      '    out=; n=0; for ((i=250; i>=1 && n<LIMIT; i--)); do out+="${out:+,}{\\"number\\":$i,\\"title\\":\\"PR $i\\",\\"headRefName\\":\\"b-$i\\"}"; n=$((n+1)); done',
+      '    printf \'[%s]\\n\' "$out" ;;',
+      '  *"pulls?state=open"*)',
+      // One page of 100 unless the caller asks `gh` to follow the pages.
+      '    LAST=151; case " $* " in *" --paginate "*) LAST=1 ;; esac',
+      '    for ((i=250; i>=LAST; i--)); do printf \'{"number":%d,"title":"PR %d","headRefName":"b-%d"}\\n\' $i $i $i; done ;;',
+      `  *"pulls/1/files"*) printf '%s\\n' '${claim}' ;;`,
+      '  *"/files"*) ;;',
+      '  *) echo "unexpected gh $*" >&2; exit 1 ;;',
+      'esac',
+      '',
+    ].join('\n'));
+    const prev = process.env.PATH;
+    process.env.PATH = `${dir}:${prev}`;
+    let open: { number: number; title: string; headRefName: string; ids: string[] }[];
+    try {
+      open = openPrClaims();
+    } finally {
+      process.env.PATH = prev;
+    }
+    expect(open).toHaveLength(250);
+    expect(open.find((p) => p.number === 1)).toMatchObject({ title: 'PR 1', headRefName: 'b-1', ids: ['STORE-120'] });
+    // What the allocator starts above, and what fails the newer PR that took the same id.
+    expect(claimedFloor(open)).toEqual({ STORE: 120 });
+    expect(collisionsWith({ number: 250, ids: ['STORE-120'] }, open)).toEqual([
+      { id: 'STORE-120', pr: 1, title: 'PR 1', yields: true },
+    ]);
   });
 
 });
