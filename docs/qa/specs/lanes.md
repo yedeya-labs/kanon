@@ -36,6 +36,44 @@ Seeded by project [#1373](https://github.com/yedeya-labs/kanon/issues/1373)'s br
 
 - `[LANE-21]` `[seed]` `docs/lanes.md` says how an Author lane commits: the agent commits locally, and a push job re-creates each commit through the API. It gives an adopter's upgrade steps for the release that brings this. `SECURITY.md` no longer lists the implementer status's mid-run re-fetch gap as an accepted exposure.
 
+## The upgrade lane
+
+Seeded by project [#1718](https://github.com/yedeya-labs/kanon/issues/1718)'s brief, [`docs/projects/1718.md`](../../projects/1718.md). An adopter that opts in has each new Kanon release carried to its repository as an Implementer pull request: the pins, the plugin's `ref` and the callers, with what only a person can do held under `decision:needed`. The Reviewer reviews it, and a person, never the Merger, merges it.
+
+### The choice and the target
+
+- `[LANE-22]` `[seed]` The adoption record opts a repository in with one bullet under `## Choices`, ``- **Kanon upgrades:** `stable` `` or `` `candidates` ``, read from the default branch by one reader that the upgrade lane, `lane-check` and `kanon doctor` share. `off`, a record without the bullet, and no record all mean off. A bullet outside `## Choices`, written twice, or with any other value is malformed: the lane files nothing and names it, and `lane-check` fails it.
+- `[LANE-23]` `[seed]` Under `stable`, the upgrade's target is Kanon's latest stable release, as GitHub's latest release of Kanon's repository names it. Under `candidates`, it is the later of that release and the newest `candidate-vX.Y.Z` whose commit carries a completed, successful `kanon-e2e` check run created by the Reporter App, matched by the App id the App register records; a `kanon-e2e` check run from any other App is ignored, and a candidate without the Reporter's is never a target. A target is always later than the one release the callers pin, and a candidate is never a target once its own `vX.Y.Z` exists. With no exact pin, or more than one, there is no target, and the lane says why.
+- `[LANE-24]` `[seed]` No part of the upgrade lane, its choice's reader or its target reads the repository's name or owner. Kanon's own repository is held to the same code, and its pin job and Dependabot entry are unchanged by this project.
+
+### The lane
+
+- `[LANE-25]` `[seed]` The upgrade lane runs no model. It runs on a daily schedule and on dispatch, behind the membership gate (`K-AGENT-45`). When the repository opts in and a target exists, it files one issue titled `Upgrade Kanon to <target>`, carrying a marker that names the target, on the Development Automation milestone, and labels it `agent:implement`. When it doesn't opt in, the lane files, labels and closes nothing, and its summary says so.
+- `[LANE-26]` `[seed]` The upgrade lane keeps at most one open upgrade issue. On a newer target, it retargets an open upgrade issue that no open pull request closes (its title, its marker and a comment), and on one that a pull request already closes, it comments once naming the newer release and changes nothing else. It never labels an issue that carries `decision:needed`.
+
+### The Implementer's upgrade
+
+- `[LANE-27]` `[seed]` On an issue carrying the upgrade marker, the Implementer moves every Kanon pin and the declared plugin `ref` to the marker's target with the edit `scripts/move-pins.mjs` makes, and applies each caller change that `kanon doctor --to <target> --json` and the target's `lane-check` name and that a file edit makes: a secret mapping, a `permissions:` block, an input, a trigger, a notify hook's pin, a declaration bullet that moved. It changes no other file, and no other line of those it edits.
+- `[LANE-28]` `[seed]` A step only a person can do (a secret's value, an App's permission or installation, an intake deploy, an answer to a question the target's `kanon init` adds) is never done or guessed by the Implementer. One needed before the merge stops the run as a scope-first bail that lists every such step, so the issue waits under `decision:needed` (`K-AGENT-13`, `K-WORK-24`), and the run a member's reply restarts reads that reply as the answer. One that waits for the merge goes in the pull request's `## After merging`. A caller change the target's doctor or `lane-check` names is not on its own a reason to bail.
+- `[LANE-29]` `[seed]` The upgrade pull request is titled `ci(deps): upgrade Kanon to <target>`. Its body closes the upgrade issue, links the release notes of each release after the pin up to the target, lists under `## Left to do` each person's step skipped and under `## After merging` each that waits for the merge, names any Dependabot pull request it replaces, and says that a person merges it.
+
+### Dependabot
+
+- `[LANE-30]` `[seed]` With the repository opted in, an open Dependabot pull request that only moves Kanon's references, as `lane-check` tells one, is named on the upgrade issue for its release, which the lane files if none is open. Once an upgrade pull request for that release or a later one is open, the lane closes Dependabot's with a comment linking it. The lane and the Implementer never push to Dependabot's branch.
+- `[LANE-31]` `[seed]` With the repository opted in, `lane-check` and `kanon doctor` accept a `github-actions` entry that ignores every Kanon update in place of the Kanon entry `K-ADOPT-11` requires, and doctor notes, without blocking, an entry that still proposes Kanon beside the opt-in, with the `ignore` that turns it off. Without the opt-in, both hold the entry exactly as before.
+
+### Review, revision and merge
+
+- `[LANE-32]` `[seed]` On a pull request that closes an upgrade issue, the Reviewer reads the release notes of each release after the base's pin up to the target and the pull request's `Lane check`, and requests changes for a caller change a release asks for that the diff lacks, and for any change outside the pins, the plugin `ref`, the callers and the declarations the target asks for.
+- `[LANE-33]` `[seed]` A change request on an upgrade pull request, which the revise lane's own triggers refuse because the pull request moves the pin (`K-MERGE-17`), is revised by a dispatch of the revise lane from the default branch, made at most once per change request by a fixed step that runs no model, with a token narrowed to what that step uses; no token a model session can read holds Actions write, and no step but that one and the merge gate's mints a token with it.
+- `[LANE-34]` `[seed]` The merge gate never merges an upgrade pull request: its pins are under `.github/` and `.claude/` (`K-MERGE-4`), and the sweep's summary names it as waiting for a person.
+
+### Install and checks
+
+- `[LANE-35]` `[seed]` `kanon init` asks whether to follow Kanon's releases (off, stable, or stable and candidates), off unless chosen, offered only with the implement and review lanes. On a yes it writes the upgrade lane's caller and the `Kanon upgrades` bullet. The upgrade skill asks it as a new question, as it asks every answer an earlier install never gave.
+- `[LANE-36]` `[seed]` `lane-check` and `kanon doctor` hold the choice and the callers to each other: `stable` or `candidates` with no caller of the upgrade lane, or a caller with the choice off, fails `lane-check` and is a blocking doctor finding, each naming the bullet and the caller.
+- `[LANE-37]` `[seed]` `docs/lanes.md`, `docs/install.md` and the upgrade skill say what the upgrade lane does, how to opt in and choose candidates, that a person merges its pull request, how it treats Dependabot's pull request and how to turn Dependabot's `kanon` group off.
+
 ## Retired: the test-only choices
 
 Project [#902](https://github.com/yedeya-labs/kanon/issues/902)'s draft brief seeded these for three adoption-record choices that would have let the end-to-end tier stub the model, lower a lane's ceiling and tag its rows. The Owner's no-leak rule of 2026-10-14 dropped all three: the tier adds no test-only switch to Kanon's product (plan 0012, decisions 6, 7 and 8). The clauses keep their ids, and nothing cites them.
