@@ -256,6 +256,18 @@ describe('kanon doctor and Apps that are not agents', () => {
     expect(r.json.findings[0].message).toMatch(/an Other App row and the Reviewer, Merger rows/);
     expect(r.status).toBe(EXIT.findings);
   });
+
+  // Issue #1792: two Other App rows naming one App say one thing twice, which parseAppRegister
+  // refuses, so doctor reports it under the same id even when no role's row names that App.
+  it('[REG-3] reports two Other App rows that name one App, and blocks', async () => {
+    const github = fakeGitHub();
+    github.st.installations = [{ id: 41, app_slug: 'widgets-reporter', account: { login: 'acme' } }];
+    const r = await run(withOthers('widgets-reporter', 'widgets-reporter'), github, ['--json']);
+    expect(ids(r)).toEqual(['register.other-app-slug docs/qa/agent-identities.md']);
+    expect(r.json.findings[0]).toMatchObject({ category: 'app', blocking: true });
+    expect(r.json.findings[0].message).toContain('`widgets-reporter` on 2 Other App rows');
+    expect(r.status).toBe(EXIT.findings);
+  });
 });
 
 // The Owner, 2026-10-07 (#440, #437): apps-check names each App's secrets literally, so on Kanon's
