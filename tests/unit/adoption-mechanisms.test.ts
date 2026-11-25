@@ -348,7 +348,7 @@ export const DETECTORS: Array<[string, Detector]> = [
   ['The notification contract and the `notify` job', all(calls('agent-project-digest.yml'), test('tests/unit/notify-guard.test.ts'), test('tests/library/notify-contract.test.ts'))],
   ['The hosted telemetry store: the collector', calls('telemetry-collect.yml')],
   ["The hosted telemetry store's quality columns", all(runs('agent-quality-columns.mjs'), runs('overseer-telemetry.mjs'))],
-  ['The fallback-model test and the fallback lists', unbuilt('no test holds the verdict lanes to having no fallback model')],
+  ['The fallback-model test and the fallback lists', unbuilt('the checked-output lanes are not yet held to a fallback of the same tier or cheaper; tests/unit/verdict-fallback-model.test.ts holds only the no-fallback half')],
   ['The lint chain runner, the flag guard and the permissions guard', unbuilt('Kanon ships none of the three')],
   ['The path guard', runs('doc-path-guard.mjs')],
   ["The citation guard on Kanon's own `docs/`", all(runs('citation-guard.mjs'), runs('citation-shift.mjs'))],
