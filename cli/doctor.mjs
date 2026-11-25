@@ -1730,7 +1730,7 @@ export const diagnose = async (deps, opts) => {
       });
     }
   }
-  // An Other App row names an App no other row names ([REG-2], issue #990; [REG-3], issue #1792):
+  // An Other App row names an App no other row names ([REG-2], issue #990; issue #1792):
   // no role's row, every role's and not only the lanes' in use here, and no other Other App row,
   // as the lanes' own parser reads it (parseAppRegister).
   const reLabelled = [...new Set(otherApps)].flatMap((slug) => {

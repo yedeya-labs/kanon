@@ -259,7 +259,7 @@ describe('kanon doctor and Apps that are not agents', () => {
 
   // Issue #1792: two Other App rows naming one App say one thing twice, which parseAppRegister
   // refuses, so doctor reports it under the same id even when no role's row names that App.
-  it('[REG-3] reports two Other App rows that name one App, and blocks', async () => {
+  it('reports two Other App rows that name one App, and blocks', async () => {
     const github = fakeGitHub();
     github.st.installations = [{ id: 41, app_slug: 'widgets-reporter', account: { login: 'acme' } }];
     const r = await run(withOthers('widgets-reporter', 'widgets-reporter'), github, ['--json']);
