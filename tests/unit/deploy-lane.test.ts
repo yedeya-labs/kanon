@@ -480,6 +480,25 @@ describe('the deploy lane holds its shape', () => {
     expect(JSON.stringify(b)).not.toMatch(/secrets|id-token/);
   });
 
+  // K-AGENT-47's Enforced-by line says which secret references this guard admits (kanon#1789). It
+  // read "references any secret but KANON_DEPLOY_SECRET" while the guard also admits the notify
+  // step's KANON_CHAT_DEPLOY. Every secret the lane references, which a green guard admits, is named
+  // in that clause, with the step that reads it. Mutations, each red: drop "and `KANON_CHAT_DEPLOY`"
+  // from the clause; drop "the deploy hook step's `env:`"; drop "the `notify` step"; or reference
+  // a third secret from either workflow.
+  it("K-AGENT-47's Enforced-by names every secret reference the guard admits, and the step that reads it", () => {
+    const rule = readFileSync('rulebook/03-agents.md', 'utf8');
+    const section = rule.split(/^### /m).find((s) => s.startsWith('`K-AGENT-47`'));
+    const enforced = section?.split('\n').find((l) => l.startsWith('**Enforced by.**'));
+    const clause = enforced?.match(/references any secret but (.*?)\.(?: |$)/)?.[1];
+    if (!clause) throw new Error("K-AGENT-47's Enforced-by no longer has its \"references any secret but …\" clause: re-anchor this test");
+    const referenced = new Set(LANE.flatMap((f) => [...JSON.stringify(PARSED[f]).matchAll(SECRET)].map((m) => m[1])));
+    expect([...referenced].sort()).toEqual(['KANON_CHAT_DEPLOY', 'KANON_DEPLOY_SECRET']);
+    for (const name of referenced) expect(clause, name).toContain(`\`${name}\``);
+    expect(clause).toMatch(/deploy hook step's `env:`/);
+    expect(clause).toMatch(/`notify` step/);
+  });
+
   describe('the mutations plan 0010 D4 names each turn it red', () => {
     const red = (change: (w: Record<string, Workflow>) => void, problem: RegExp) => {
       const found = mutate(change);
