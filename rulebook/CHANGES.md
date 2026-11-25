@@ -194,6 +194,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-22.** The Owner decided that the branch name is a recommended convention for a person's branch, not a framework rule, and that no check holds a branch's name. The Why no longer rests on the worktree script, which Kanon doesn't ship; it rests on readability, and on the lanes' own branches, which crash recovery and the dispatch sweep read. The implement, triage and Lead lanes' prompts now name their branches this way. Re-classed split. [#1243](https://github.com/yedeya-labs/kanon/issues/1243)
 
+## `K-SHIP-4`
+
+- **2026-11-22.** The type table no longer has a **Deploys** column. It said `docs`, `style`, `test`, `ci` and `chore` don't deploy, but every type is a changelog section of the release configuration, so every type releases, and Kanon's deploy lane deploys every release without reading its types. The rule now says so, scoped to that lane: an adopter's own deploy workflow may still gate by type. The `pr-title` action's `TYPES` drops its `deploys` field, which nothing read, and a unit test now fails when a copy of the table says more than each type's bump. [#1769](https://github.com/yedeya-labs/kanon/issues/1769)
+
 ## `K-SHIP-7`
 
 - **2026-10-12.** The Owner decided that a project whose releases other repositories pin may declare a release cadence, and that a project which declares none releases on every merge. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)

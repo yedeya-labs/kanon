@@ -13,19 +13,23 @@
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-/** Types the release tool recognises, and whether each one deploys. */
+/**
+ * Types the release tool recognises, and the version bump each one makes. Every type releases,
+ * and Kanon's deploy lane deploys a release whatever its types (K-SHIP-7), so the table records
+ * nothing about deploying.
+ */
 export const TYPES = /** @type {const} */ ({
-  feat: { bump: 'minor', deploys: true },
-  fix: { bump: 'patch', deploys: true },
-  perf: { bump: 'patch', deploys: true },
-  refactor: { bump: 'patch', deploys: true },
-  build: { bump: 'patch', deploys: true },
-  revert: { bump: 'patch', deploys: true },
-  docs: { bump: 'patch', deploys: false },
-  style: { bump: 'patch', deploys: false },
-  test: { bump: 'patch', deploys: false },
-  ci: { bump: 'patch', deploys: false },
-  chore: { bump: 'patch', deploys: false },
+  feat: { bump: 'minor' },
+  fix: { bump: 'patch' },
+  perf: { bump: 'patch' },
+  refactor: { bump: 'patch' },
+  build: { bump: 'patch' },
+  revert: { bump: 'patch' },
+  docs: { bump: 'patch' },
+  style: { bump: 'patch' },
+  test: { bump: 'patch' },
+  ci: { bump: 'patch' },
+  chore: { bump: 'patch' },
 });
 
 const SHAPE = /^(?<type>[a-z]+)(?:\((?<scope>[a-z0-9._/-]+)\))?!?: (?<description>\S.*)$/;
